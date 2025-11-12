@@ -2,6 +2,8 @@ StainID: stain segmentation and analysis
 
 Quickly calibrate thresholds, batch‑segment stains (Hematoxylin, Eosin, DAB), and analyze features for TMA cores.
 
+![StainID UI](docs/screenshot.png)
+
 Install
 - Create/activate an environment.
 - Install packages: `pip install numpy scipy pandas scikit-image opencv-python-headless pyyaml streamlit matplotlib pillow`
