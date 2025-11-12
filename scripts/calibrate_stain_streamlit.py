@@ -8,12 +8,12 @@ import streamlit as st
 import sys
 import pathlib
 
-# Ensure repository root on sys.path so absolute import works when running via Streamlit
-ROOT = pathlib.Path(__file__).resolve().parents[2]
+# Ensure repository root on sys.path so absolute import works when launching via Streamlit from other CWDs
+ROOT = pathlib.Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from script.utils import (
+from scripts.utils import (
     discover_images,
     parse_image_type,
     ensure_dir,
@@ -246,7 +246,7 @@ def main():
     s_idx = st.selectbox("Sample image", options=list(range(len(sample_names))), format_func=lambda i: sample_names[i], index=0)
     sel_path = sample_paths[s_idx]
 
-    st.caption("For very large images, consider generating previews with scripts/stainID/make_previews.py to speed up UI.")
+    st.caption("For very large images, consider generating previews with scripts/make_previews.py to speed up UI.")
     use_preview = st.checkbox("Use JPEG preview if available", value=True, key="use_prev_main")
     downsample_factor = int(st.number_input("Downsample factor (fallback)", min_value=1, max_value=32, value=8, key="ds_factor_main"))
 
@@ -527,7 +527,7 @@ def main():
         st.pyplot(fig_crop)
 
     st.markdown("---")
-    st.write("Tip: tweak parameters on the left and click 'Save config'. Then run the batch CLI: `python -m scripts.stainID.segment_stain --types", t, "` .")
+    st.write("Tip: tweak parameters on the left and click 'Save config'. Then run the batch CLI: `python -m scripts.segment_stain --types", t, "` .")
 
 
 if __name__ == "__main__":

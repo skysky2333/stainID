@@ -5,7 +5,7 @@ Multi-level differential analysis for stain segmentation results.
 Inputs
 - Features (site-level): results_stainID/features/<TYPE>/*_sites.csv
 - Image-level summary: results_stainID/summary/*_image_metrics.csv or all_types_image_metrics.csv
-- Phenotypes: origianl_data/brain_summary.csv (columns: Region, Label, C, B, r, c)
+- Phenotypes: data/brain_summary.csv (columns: Region, Label, C, B, r, c)
 
 Outputs
 - Per-stain, per-phenotype tables with test stats and FDR q-values

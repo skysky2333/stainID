@@ -88,9 +88,24 @@ def ensure_dir(path: str) -> None:
 
 
 def parse_image_type(filename: str) -> str:
+    """Parse the image 'type' as the first number that appears after an underscore.
+
+    Example:
+      'Image_212.vsi - 20x_BF_01_col03_row07_core.png' -> '212'
+
+    Fallbacks:
+      - If no underscore+digits is found, returns the token before the first underscore.
+      - If no underscore exists, returns the full base name without extension.
+    """
     base = os.path.basename(filename)
-    prefix = base.split("_")[0]
-    return prefix
+    import re
+    m = re.search(r"_(\d+)", base)
+    if m:
+        return m.group(1)
+    # Fallbacks for unusual names
+    if "_" in base:
+        return base.split("_")[0]
+    return os.path.splitext(base)[0]
 
 
 def discover_images(input_dir: str, exts=(".png", ".jpg", ".jpeg", ".tif", ".tiff")) -> List[str]:

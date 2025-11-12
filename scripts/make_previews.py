@@ -10,7 +10,7 @@ from .utils import discover_images, parse_image_type, ensure_dir, read_image_rgb
 
 def main():
     p = argparse.ArgumentParser(description="Generate downsampled JPEG previews for calibration.")
-    p.add_argument("--input_dir", default="origianl_data/out_seg/matched_output", help="Input image directory")
+    p.add_argument("--input_dir", default="data/TMA_core_exports", help="Input image directory")
     p.add_argument("--out_root", default="results_stainID", help="Output root for previews")
     p.add_argument("--max_per_type", type=int, default=6, help="Max images per type to preview")
     p.add_argument("--longest_side", type=int, default=2048, help="Preview longest side in pixels")
@@ -45,4 +45,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

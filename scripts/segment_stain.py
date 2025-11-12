@@ -169,7 +169,7 @@ def process_image(path: str, out_root: str, cfg, pixel_width_um: float, pixel_he
 
 def main():
     p = argparse.ArgumentParser(description="Batch segmentation of DAB/brown stain via HED deconvolution.")
-    p.add_argument("--input_dir", default="origianl_data/out_seg/matched_output", help="Input image directory")
+    p.add_argument("--input_dir", default="data/TMA_core_exports", help="Input image directory")
     p.add_argument("--out_root", default="results_stainID", help="Output root directory")
     p.add_argument("--types", nargs="*", help="Optional list of numeric type prefixes to process")
     p.add_argument("--pixel_width_um", type=float, default=DEFAULT_PIXEL_WIDTH_UM, help="Pixel width in micrometers")
