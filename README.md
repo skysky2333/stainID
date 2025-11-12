@@ -8,9 +8,7 @@ Install
 - Create/activate an environment.
 - Install packages: `pip install numpy scipy pandas scikit-image opencv-python-headless pyyaml streamlit matplotlib pillow`
 
-Input Prep (QuPath)
-
-How To Use
+Quick Start Guide
 - 1) Prepare input
   - Install QuPath.
   - Open each TMA slide and run TMA → Dearray. Increase core diameter by 1 mm until it succeeds.
@@ -32,8 +30,7 @@ How To Use
   - `python -m scripts.analyze_results --out_root results_stainID --types 212 213 214 --metadata data/brain_summary.csv`
   - Produces per‑phenotype tables and top plots under `results_stainID/analysis/`.
 
-Shortcuts
-- You can follow the example pipeline in `scripts/driver.sh`.
+You can follow the example pipeline in `scripts/driver.sh`.
 
 Folder Layout
 - Input images default: `data/TMA_core_exports`
