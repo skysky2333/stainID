@@ -44,6 +44,7 @@ Folder Layout
 
 Notes
 - “Type” is parsed as the first number after an underscore in the filename. Example: `Image_212.vsi - 20x_BF_01_col03_row07.png` → type `212`.
+- Analysis matches images to metadata rows by parsing the core position from filenames. Supported patterns include `r2_c4` and `col02_row04` (row and column are 1‑based).
 - Multi‑channel segmentation is supported; outputs are saved per channel and combined preview overlays are also created.
 - Gating lets you restrict one channel’s detections by another (e.g., DAB touching Hematoxylin).
 - See docs for complete options and tuning: `docs/features_and_options.md`.

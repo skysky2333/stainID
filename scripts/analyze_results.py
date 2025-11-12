@@ -65,13 +65,30 @@ def read_metadata(path: str) -> pd.DataFrame:
 
 
 def parse_image_to_rc(image: str) -> Tuple[int, int]:
-    # Expected like '212_r2_c4' or 'r2_c4'. Use last rXX_cYY occurrence.
-    m = re.search(r"r(\d+)_c(\d+)", image)
-    if not m:
-        raise ValueError(f"Cannot parse r/c from image name: {image}")
-    r = int(m.group(1))
-    c = int(m.group(2))
-    return r, c
+    """Parse (row, col) indices from an image identifier.
+
+    Supports multiple naming patterns:
+    - '..._r2_c4...' (preferred if present)
+    - '..._col02_row07...' or '..._row07_col02...'
+
+    Returns (r, c) as 1-based integers.
+    """
+    # rX_cY pattern anywhere
+    m = re.search(r"r(\d+)_c(\d+)", image, flags=re.IGNORECASE)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    # Look for col/row tokens (order-agnostic)
+    m_col_row = re.search(r"col(\d+).*row(\d+)", image, flags=re.IGNORECASE)
+    if m_col_row:
+        c = int(m_col_row.group(1))
+        r = int(m_col_row.group(2))
+        return r, c
+    m_row_col = re.search(r"row(\d+).*col(\d+)", image, flags=re.IGNORECASE)
+    if m_row_col:
+        r = int(m_row_col.group(1))
+        c = int(m_row_col.group(2))
+        return r, c
+    raise ValueError(f"Cannot parse row/col from image name: {image}")
 
 
 def load_all_types_summary(out_root: str) -> pd.DataFrame:
