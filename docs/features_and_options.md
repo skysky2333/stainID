@@ -2,6 +2,8 @@ Features and Options
 
 This document lists all pipeline features, configuration options, and tuning guidance. Configuration files are saved under `results_stainID/configs/<TYPE>.yaml` and are created/edited via the Streamlit UI (`scripts/calibrate_stain_streamlit.py`).
 
+For the exhaustive feature catalog, naming rules, and interpretation guide, see `docs/feature_reference.md`.
+
 Pipeline Overview
 - Multi‑channel HED segmentation: Hematoxylin (H), Eosin (E), DAB (D).
 - Per‑channel thresholding with raw or normalized intensity.
@@ -122,20 +124,40 @@ Outputs
 
 Per‑Site Feature Columns
 - Identifiers and geometry
-  - `label`, `centroid_row`, `centroid_col`
-  - `area_px`, `area_um2` (uses `--pixel_width_um`, `--pixel_height_um`)
-  - `perimeter_px`, `equivalent_diameter_px`, `major_axis_length_px`, `minor_axis_length_px`
-  - `eccentricity`, `solidity`, `extent`, `circularity`, `feret_diameter_approx_px`
+  - `label`, `centroid_row_um`, `centroid_col_um`
+  - `area_um2` (uses `--pixel_width_um`, `--pixel_height_um`)
+  - `perimeter_um`, `equivalent_diameter_um`
+  - `major_axis_length_um`, `minor_axis_length_um`
+  - `eccentricity`, `solidity`, `extent`, `circularity`, `roughness`
+  - `feret_diameter_um`, `bbox_area_um2`, `bbox_fill_ratio`, `bbox_aspect_ratio`, `elongation`
+  - `filled_area_um2`, `convex_area_um2`
+  - `hole_area_um2`, `hole_fraction`, `euler_number`, `orientation_deg`
 - Intensity (normalized, oriented so higher = stronger stain)
   - `intensity_mean`, `intensity_std`, `intensity_median`, `intensity_iqr`, `intensity_integrated`
+  - `intensity_min`, `intensity_max`, `intensity_skew`, `intensity_kurtosis`
 - Intensity (raw OD‑oriented, absolute across images)
   - `intensity_raw_mean`, `intensity_raw_std`, `intensity_raw_median`, `intensity_raw_iqr`, `intensity_raw_integrated`
+  - `intensity_raw_min`, `intensity_raw_max`, `intensity_raw_skew`, `intensity_raw_kurtosis`
 
 Image‑Level Metrics
-- Aggregates of site features (counts, areas, intensity summaries) plus spatial stats:
-  - Nearest neighbor: `nn_mean_px`, `nn_sd_px`, and if pixel sizes provided, `nn_mean_um`, `nn_sd_um`.
-  - Clark–Evans: `clark_evans_R`, `clark_evans_z`.
-  - Grid dispersion: uniformity indices across a regular grid.
+- Aggregates of selected object-level features use robust summaries: `<feature>_median` and `<feature>_iqr`.
+- Burden and scoring:
+  - `positive_fraction_in_tissue`, `tissue_area_um2`, `positive_area_um2`, `num_sites_per_mm2_tissue`
+  - Pixel and object H-score style summaries such as `pixel_norm_positive_hscore` and `object_norm_mean_hscore`
+- Texture and granularity:
+  - Masked Haralick/GLCM-style features on tissue and positive regions such as `texture_tissue_norm_s0p274um_contrast_mean`
+  - Granularity features such as `granularity_tissue_norm_s0p274um`
+- Spatial stats:
+  - Nearest neighbor and density in physical units: `nn_mean_um`, `nn_sd_um`, `density_per_mm2`
+  - kNN: `knn_k1_mean_um`, `knn_k3_mean_um`, `knn_k5_mean_um`
+  - Clark–Evans: `clark_evans_R`, `clark_evans_z`
+  - Grid dispersion: `grid_vmr`, `grid_cv`
+  - Graph features: Delaunay edge/triangle summaries, MST edge summaries, graph degree/components
+- Topology and heterogeneity:
+  - Component counts/densities, hole burden, boundary length in microns, and fractal dimension
+  - Tile heterogeneity features such as `tile_g4_mass_entropy` and `tile_g8_positive_frac_cv`
+- Cross-channel features:
+  - Pairwise overlap/touching, nearest distances to another channel, channel correlations, and annular intensity summaries
 - Each row includes: `image`, `type`, `channel`, and `threshold_used` for that channel.
 
 Analysis (`scripts/analyze_results.py`)
@@ -146,13 +168,13 @@ Analysis (`scripts/analyze_results.py`)
 - Behavior
   - Excludes r1_c1 (KC control) automatically.
   - Matches images to metadata by parsing `r` and `c` from image names (e.g., `..._r2_c4...`).
-  - Aggregates site‑level numeric columns per image (`mean`, `sd`, `iqr`, `median`).
+  - Aggregates site‑level numeric columns per image (default: `iqr`, `median`; configurable with `--agg`).
   - Runs per‑feature tests by phenotype; applies Benjamini–Hochberg FDR (q‑values).
-  - By default, excludes normalized intensity features (`intensity_*`) from testing; raw intensity features (`intensity_raw_*`) are tested.
+  - By default, excludes normalized object-intensity columns whose names contain `intensity` but not `intensity_raw`; raw intensity features (`intensity_raw_*`) are tested. Other feature families, including texture/graph/topology/cross-channel summaries, remain available for testing.
 - Options
   - `--alpha`: FDR threshold (default 0.05).
   - `--min_per_group`: minimum samples per group to run a test (default 2).
-  - `--agg`: which aggregations to compute at site level (default: mean sd iqr median).
+  - `--agg`: which aggregations to compute at site level (default: iqr median).
   - `--plots_dir`: custom output for plots (defaults under `<out_root>/analysis/plots`).
 
 Performance & UI Tips

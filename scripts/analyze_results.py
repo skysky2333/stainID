@@ -14,7 +14,7 @@ Outputs
 Notes
 - Excludes KC control at r1_c1 (first row in phenotype CSV) from all analyses and plots.
 - Matches images to phenotypes using parsed r,c from image names like '<TYPE>_r2_c4'.
-- Site-level aggregation per image supports: mean, sd, iqr, median.
+- Site-level aggregation per image supports: mean, sd, iqr, median. Default: iqr + median.
 """
 
 import argparse
@@ -44,7 +44,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--types", nargs="*", help="Optional list of stain types to include (e.g., 212 213)")
     p.add_argument("--alpha", type=float, default=0.05, help="FDR threshold for significance")
     p.add_argument("--min_per_group", type=int, default=2, help="Minimum samples per group for a test to run")
-    p.add_argument("--agg", nargs="*", default=["mean", "sd", "iqr", "median"],
+    p.add_argument("--agg", nargs="*", default=["iqr", "median"],
                    help="Site-level aggregations per numeric column")
     p.add_argument("--plots_dir", default=None, help="Custom plots output dir; default: <out_root>/analysis/plots")
     return p.parse_args()
@@ -114,9 +114,41 @@ def load_all_types_summary(out_root: str) -> pd.DataFrame:
     return df
 
 
+def detect_legacy_outputs(out_root: str, df_summary: pd.DataFrame) -> List[str]:
+    warnings: List[str] = []
+    summary_cols = set(df_summary.columns.astype(str))
+    if any(is_legacy_pixel_feature(c) for c in summary_cols):
+        warnings.append("summary CSV still contains legacy pixel-unit columns")
+    feat_root = os.path.join(out_root, "features")
+    if os.path.isdir(feat_root):
+        sample_paths = []
+        for root, _, files in os.walk(feat_root):
+            for fn in files:
+                if fn.endswith("_sites.csv"):
+                    sample_paths.append(os.path.join(root, fn))
+                    if len(sample_paths) >= 3:
+                        break
+            if len(sample_paths) >= 3:
+                break
+        for path in sample_paths:
+            try:
+                cols = pd.read_csv(path, nrows=1).columns.astype(str)
+            except Exception:
+                continue
+            if any(is_legacy_pixel_feature(c) for c in cols):
+                warnings.append("site-level CSVs still contain legacy pixel-unit columns")
+                break
+    return warnings
+
+
 def numeric_columns(df: pd.DataFrame, exclude: Iterable[str]) -> List[str]:
     num_cols = [c for c in df.columns if c not in exclude and pd.api.types.is_numeric_dtype(df[c])]
     return num_cols
+
+
+def is_legacy_pixel_feature(col: str) -> bool:
+    name = str(col).lower()
+    return ("_px" in name) or ("density_per_px" in name)
 
 
 def is_normalized_intensity_col(col: str) -> bool:
@@ -134,8 +166,8 @@ def aggregate_sites_for_image(df_sites: pd.DataFrame, aggs: List[str]) -> Dict[s
     # Compute aggregations for all numeric columns at site level
     out: Dict[str, float] = {}
     # Exclude identifiers and coordinates
-    exclude_cols = {"image", "label", "centroid_row", "centroid_col"}
-    cols = numeric_columns(df_sites, exclude_cols)
+    exclude_cols = {"image", "label", "centroid_row", "centroid_col", "centroid_row_um", "centroid_col_um"}
+    cols = [c for c in numeric_columns(df_sites, exclude_cols) if not is_legacy_pixel_feature(c)]
     for col in cols:
         vals = df_sites[col].values
         vals = vals[np.isfinite(vals)]
@@ -343,12 +375,16 @@ def run_for_type(t: str, df_summary: pd.DataFrame, metadata: pd.DataFrame, out_r
     # Identify feature columns to test
     exclude_cols = set(["image", "type", "threshold_used", "r", "c", "channel"] + PHENOTYPE_COLS)
     feat_cols_all = [c for c in df.columns if (c not in exclude_cols and pd.api.types.is_numeric_dtype(df[c]))]
+    removed_px = [c for c in feat_cols_all if is_legacy_pixel_feature(c)]
+    feat_cols_all = [c for c in feat_cols_all if c not in removed_px]
     # Exclude normalized intensity features; keep only raw intensity ones
     removed_intensity = [c for c in feat_cols_all if is_normalized_intensity_col(c)]
     feat_cols = [c for c in feat_cols_all if c not in removed_intensity]
     if not feat_cols:
         print(f"[warn] No numeric features to test for type {t}")
         return
+    if removed_px:
+        print(f"[info] Excluding {len(removed_px)} legacy pixel-unit features for type {t}")
     if removed_intensity:
         print(f"[info] Excluding {len(removed_intensity)} normalized intensity features for type {t}")
 
@@ -413,6 +449,9 @@ def main() -> None:
     # Load metadata and summary
     meta = read_metadata(args.metadata)
     summ = load_all_types_summary(out_root)
+    legacy_warnings = detect_legacy_outputs(out_root, summ)
+    for msg in legacy_warnings:
+        print(f"[warn] {msg}; rerun segment_stain into a clean out_root to pick up the newer feature schema")
 
     # Select types
     all_types = sorted(summ["type"].astype(str).unique().tolist())

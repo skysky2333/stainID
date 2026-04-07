@@ -83,6 +83,20 @@ class GatingRule:
     min_overlap_frac: float = 0.0
 
 
+@dataclass
+class PreparedChannelData:
+    raw_oriented: np.ndarray
+    norm_oriented: np.ndarray
+    invert_inferred: bool
+
+
+@dataclass
+class SegmentationContext:
+    valid_mask: np.ndarray
+    hed: Optional[np.ndarray] = None
+    oriented_channels: Dict[str, PreparedChannelData] = field(default_factory=dict)
+
+
 def ensure_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
 
@@ -167,7 +181,8 @@ def normalize_channel_on_mask(x: np.ndarray, mask: Optional[np.ndarray]) -> np.n
 
 def compute_oriented_channel(image_rgb: np.ndarray,
                              cfg: "SegmentationConfig",
-                             channel: str = "dab") -> Tuple[np.ndarray, np.ndarray, bool, np.ndarray]:
+                             channel: str = "dab",
+                             context: Optional[SegmentationContext] = None) -> Tuple[np.ndarray, np.ndarray, bool, np.ndarray]:
     """Compute oriented channel (raw + normalized) for one of H/E/D.
 
     Returns (raw_oriented, norm_oriented, invert_inferred, valid_mask)
@@ -175,18 +190,37 @@ def compute_oriented_channel(image_rgb: np.ndarray,
     ch = str(channel).lower()
     if ch not in HED_CHANNELS:
         raise ValueError(f"Unsupported channel: {ch}")
-    valid = compute_valid_mask(image_rgb, cfg)
-    hed = rgb2hed(image_rgb)
+    if context is not None:
+        cached = context.oriented_channels.get(ch)
+        if cached is not None:
+            return cached.raw_oriented, cached.norm_oriented, cached.invert_inferred, context.valid_mask
+        valid = context.valid_mask
+    else:
+        valid = compute_valid_mask(image_rgb, cfg)
+
+    hed = context.hed if context is not None else None
     if ch == "dab":
         # Use optional Macenko for DAB
         mode = cfg.channels.get("dab", ChannelConfig()).threshold.stain_estimation or "default"
         if mode == "macenko":
             raw = dab_od_via_macenko(image_rgb)
         else:
+            if hed is None:
+                hed = rgb2hed(image_rgb)
+                if context is not None:
+                    context.hed = hed
             raw = hed[:, :, 2]
     elif ch == "hematoxylin":
+        if hed is None:
+            hed = rgb2hed(image_rgb)
+            if context is not None:
+                context.hed = hed
         raw = hed[:, :, 0]
     else:  # eosin
+        if hed is None:
+            hed = rgb2hed(image_rgb)
+            if context is not None:
+                context.hed = hed
         raw = hed[:, :, 1]
 
     norm_for_orient = normalize_channel_on_mask(raw, valid)
@@ -197,13 +231,22 @@ def compute_oriented_channel(image_rgb: np.ndarray,
         invert_inferred = bool(invert)
         norm_oriented = 1.0 - norm_for_orient if invert_inferred else norm_for_orient
     raw_oriented = raw if not invert_inferred else -raw
-    return raw_oriented.astype(np.float32), norm_oriented.astype(np.float32), invert_inferred, valid
+    raw_oriented = raw_oriented.astype(np.float32)
+    norm_oriented = norm_oriented.astype(np.float32)
+    if context is not None:
+        context.oriented_channels[ch] = PreparedChannelData(
+            raw_oriented=raw_oriented,
+            norm_oriented=norm_oriented,
+            invert_inferred=invert_inferred,
+        )
+    return raw_oriented, norm_oriented, invert_inferred, valid
 
 
 def compute_oriented_dab_channels(image_rgb: np.ndarray,
-                                  cfg: "SegmentationConfig") -> Tuple[np.ndarray, np.ndarray, bool, np.ndarray]:
+                                  cfg: "SegmentationConfig",
+                                  context: Optional[SegmentationContext] = None) -> Tuple[np.ndarray, np.ndarray, bool, np.ndarray]:
     # Backward-compatibility helper
-    return compute_oriented_channel(image_rgb, cfg, channel="dab")
+    return compute_oriented_channel(image_rgb, cfg, channel="dab", context=context)
 
 
 def choose_dab_orientation(dab: np.ndarray, expected_fg_frac: Tuple[float, float] = (0.005, 0.35),
@@ -300,9 +343,19 @@ def morph_cleanup(mask: np.ndarray,
                   clear_border_flag: bool = False) -> np.ndarray:
     m = mask.astype(bool)
     if open_radius and open_radius > 0:
-        m = opening(m, footprint=disk(open_radius))
+        m = cv2.morphologyEx(
+            m.astype(np.uint8),
+            cv2.MORPH_OPEN,
+            disk(open_radius).astype(np.uint8),
+            borderType=cv2.BORDER_REFLECT,
+        ) > 0
     if close_radius and close_radius > 0:
-        m = closing(m, footprint=disk(close_radius))
+        m = cv2.morphologyEx(
+            m.astype(np.uint8),
+            cv2.MORPH_CLOSE,
+            disk(close_radius).astype(np.uint8),
+            borderType=cv2.BORDER_REFLECT,
+        ) > 0
     if remove_small and remove_small > 0:
         m = remove_small_objects(m, remove_small)
     if fill_holes_flag:
@@ -591,6 +644,10 @@ def compute_valid_mask(image_rgb: np.ndarray, cfg: SegmentationConfig) -> np.nda
     return valid
 
 
+def prepare_segmentation_context(image_rgb: np.ndarray, cfg: SegmentationConfig) -> SegmentationContext:
+    return SegmentationContext(valid_mask=compute_valid_mask(image_rgb, cfg))
+
+
 def label_and_measure(mask: np.ndarray,
                       dab_norm: np.ndarray,
                       pixel_width_um: float = DEFAULT_PIXEL_WIDTH_UM,
@@ -859,14 +916,15 @@ def _remove_very_large(mask_bin: np.ndarray, morph: MorphologyConfig) -> np.ndar
 
 def segment_channel_hed(image_rgb: np.ndarray,
                         cfg: SegmentationConfig,
-                        channel: str) -> Tuple[np.ndarray, np.ndarray, float, np.ndarray]:
+                        channel: str,
+                        context: Optional[SegmentationContext] = None) -> Tuple[np.ndarray, np.ndarray, float, np.ndarray]:
     """Segment a single HED channel with its per-channel config.
 
     Returns (mask, norm_oriented, used_threshold, raw_oriented)
     """
     name = str(channel).lower()
     ch_cfg = cfg.channels.get(name, ChannelConfig())
-    raw_oriented, norm_oriented, _inv, valid = compute_oriented_channel(image_rgb, cfg, channel=name)
+    raw_oriented, norm_oriented, _inv, valid = compute_oriented_channel(image_rgb, cfg, channel=name, context=context)
     if not valid.any():
         shape = image_rgb.shape[:2]
         return np.zeros(shape, dtype=bool), np.zeros(shape, dtype=np.float32), 0.0, raw_oriented
@@ -975,7 +1033,8 @@ def segment_image(image_rgb: np.ndarray, cfg: SegmentationConfig) -> Tuple[np.nd
     if cfg.engine == 'hsv':
         return segment_image_hsv(image_rgb, cfg)
     # HED: legacy single-channel path using DAB config
-    m, norm, t, _raw = segment_channel_hed(image_rgb, cfg, channel="dab")
+    context = prepare_segmentation_context(image_rgb, cfg)
+    m, norm, t, _raw = segment_channel_hed(image_rgb, cfg, channel="dab", context=context)
     return m, norm, t
 
 
