@@ -43,6 +43,14 @@ Folder Layout
   - `summary/<TYPE>_image_metrics.csv`, `summary/all_types_image_metrics.csv`
   - `previews/<TYPE>/source/*_preview.jpg` (optional)
 
+Feature Families
+- Per-site morphology and intensity: physical-size shape features are exported in microns or square microns, alongside dimensionless shape descriptors and normalized/raw stain statistics.
+- Per-image burden and scoring: stained fraction, tissue-normalized burden, object and pixel H-score style bins.
+- Texture and granularity: multi-scale masked GLCM/Haralick-style summaries and granulometry-style features on tissue and positive regions, with scale labels reported in microns.
+- Spatial organization: nearest-neighbor, kNN, Clark-Evans, grid dispersion, Delaunay/MST, and proximity-graph summaries reported in physical units.
+- Topology and heterogeneity: component counts, hole burden, boundary complexity, fractal dimension, and tile-level heterogeneity/entropy.
+- Cross-channel relationships: overlap, touching fractions, nearest distances, channel correlations, and annular intensity features around other channels.
+
 Notes
 - “Type” is parsed as the first number after an underscore in the filename. Example: `Image_212.vsi - 20x_BF_01_col03_row07.png` → type `212`.
 - Analysis matches images to metadata rows by parsing the core position from filenames. Supported patterns include `r2_c4` and `col02_row04` (row and column are 1‑based).
