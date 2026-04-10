@@ -888,6 +888,16 @@ def save_mask_png(path: str, mask: np.ndarray) -> None:
     cv2.imwrite(path, mask_u8)
 
 
+def save_grayscale_png(path: str, image: np.ndarray, scaling_mask: Optional[np.ndarray] = None) -> None:
+    ensure_dir(os.path.dirname(path))
+    arr = np.asarray(image, dtype=np.float32)
+    if arr.ndim != 2:
+        raise ValueError(f"Expected a 2D grayscale image, got shape {arr.shape}")
+    mask = None if scaling_mask is None else np.asarray(scaling_mask, dtype=bool)
+    disp = normalize_channel_on_mask(arr, mask)
+    cv2.imwrite(path, img_as_ubyte(np.clip(disp, 0.0, 1.0)))
+
+
 def save_overlay_jpg(path: str, overlay_rgb: np.ndarray, quality: int = 90) -> None:
     ensure_dir(os.path.dirname(path))
     bgr = cv2.cvtColor(overlay_rgb, cv2.COLOR_RGB2BGR)

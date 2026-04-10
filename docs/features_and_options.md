@@ -9,7 +9,7 @@ Pipeline Overview
 - Per‑channel thresholding with raw or normalized intensity.
 - Per‑channel morphology cleanup and optional watershed splitting.
 - Optional gating: restrict detections in one channel by another.
-- Batch outputs: binary masks, overlay images, per‑site CSV features, image‑level metrics, and spatial statistics.
+- Batch outputs: binary masks, raw grayscale H/E/D channel renders, overlay images, per‑site CSV features, image‑level metrics, and spatial statistics.
 - Optional differential analysis over metadata using `scripts/analyze_results.py`.
 
 CLI Entry Points
@@ -36,7 +36,7 @@ Streamlit UI Walkthrough
     - `Saturation min` (0..1): exclude low‑saturation background; raise to remove gray/white.
     - `Value min` / `Value max` (0..1): constrain brightness; lowering `Value max` removes very bright regions.
   - Channels to output (Engine = hed)
-    - Multiselect `dab`, `hematoxylin`, `eosin`. Selected channels will be exported during batch segmentation (masks, overlays, features, metrics).
+    - Multiselect `dab`, `hematoxylin`, `eosin`. Selected channels will be exported during batch segmentation for masks, overlays, features, and metrics. Raw grayscale H/E/D channel renders are also saved for every processed image.
   - Per‑channel settings (repeat for each channel)
     - `Normalize channel [0..1]`
       - On: thresholds operate on a normalized intensity in [0,1] computed robustly (1–99th percentile), reducing local lighting effects.
@@ -118,6 +118,7 @@ Tuning Guidelines
 
 Outputs
 - Masks: `results_stainID/masks/<TYPE>/<channel>/<image>_mask.png` (binary PNG).
+- Raw grayscale channels: `results_stainID/raw_channels/<TYPE>/<channel>/<image>_raw_gray.png` (robustly scaled from the raw oriented H/E/D channel for viewing).
 - Overlays: per‑channel and combined previews under `results_stainID/overlays/...`.
 - Per‑site features: `results_stainID/features/<TYPE>/<channel>/<image>_sites.csv` containing object‑level measurements.
 - Image‑level summary: `results_stainID/summary/<TYPE>_image_metrics.csv` and combined `summary/all_types_image_metrics.csv`.

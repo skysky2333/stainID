@@ -38,6 +38,7 @@ Folder Layout
 - Output root: `results_stainID`
   - `configs/<TYPE>.yaml`
   - `masks/<TYPE>/<channel>/<image>_mask.png`
+  - `raw_channels/<TYPE>/<channel>/<image>_raw_gray.png`
   - `overlays/<TYPE>/<channel>/<image>_overlay.jpg` and `overlays/<TYPE>/<image>_overlay_all.jpg`
   - `features/<TYPE>/<channel>/<image>_sites.csv`
   - `summary/<TYPE>_image_metrics.csv`, `summary/all_types_image_metrics.csv`
@@ -54,5 +55,5 @@ Feature Families
 Notes
 - “Type” is parsed as the first number after an underscore in the filename. Example: `Image_212.vsi - 20x_BF_01_col03_row07.png` → type `212`.
 - Analysis matches images to metadata rows by parsing the core position from filenames. Supported patterns include `r2_c4` and `col02_row04` (row and column are 1‑based).
-- Multi‑channel segmentation is supported; outputs are saved per channel and combined preview overlays are also created.
+- Multi‑channel segmentation is supported; masks/overlays are saved per selected channel, combined preview overlays are created, and raw grayscale H/E/D channel renders are written for every processed image.
 - Gating lets you restrict one channel’s detections by another (e.g., DAB touching Hematoxylin).
