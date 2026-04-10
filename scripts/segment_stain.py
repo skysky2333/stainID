@@ -18,11 +18,14 @@ except ImportError:
 
 from .features import compute_channel_summary, measure_channel_sites
 from .utils import (
+    HED_CHANNELS,
+    compute_oriented_channel,
     discover_images,
     parse_image_type,
     load_or_create_config,
     overlay_mask,
     overlay_multi_masks,
+    save_grayscale_png,
     save_mask_png,
     save_overlay_jpg,
     ensure_dir,
@@ -63,6 +66,15 @@ def process_image(path: str, out_root: str, cfg, pixel_width_um: float, pixel_he
         norm_by_channel[ch] = norm
         raw_by_channel[ch] = raw
         used_thr[ch] = thr
+
+    # Save robustly scaled raw H/E/D grayscale renders for every processed image.
+    for ch in HED_CHANNELS:
+        raw = raw_by_channel.get(ch)
+        if raw is None:
+            raw, _norm, _inv, _valid = compute_oriented_channel(img_rgb, cfg, channel=ch, context=context)
+            raw_by_channel[ch] = raw
+        raw_path = os.path.join(out_root, "raw_channels", t, ch, f"{base}_raw_gray.png")
+        save_grayscale_png(raw_path, raw, scaling_mask=valid_mask)
 
     # Optional gating rules — apply only if enabled
     if bool(getattr(cfg, 'gating_enabled', False)) and getattr(cfg, 'gating_rules', None):
