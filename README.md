@@ -128,3 +128,19 @@ cd webapp && npm run dev      # hot-reloading UI, proxies /api to `stainid serve
 ```
 
 See [docs/development.md](docs/development.md).
+
+## Acknowledgements
+
+`stainid/stains/amyloid/wong_consensus.py` is copied from the consensus-learning code of
+Wong et al. (Keiser lab, [keiserlab/consensus-learning-paper](https://github.com/keiserlab/consensus-learning-paper)).
+stainID uses the following published models; their weights are not redistributed here:
+
+- Wong DR, Tang Z, Mew NC, et al. Deep learning from multiple experts improves identification of amyloid neuropathologies. *Acta Neuropathol Commun* 10, 66 (2022).
+- Tang Z, Chuang KV, DeCarli C, et al. Interpretable classification of Alzheimer's disease pathologies with a convolutional neural network pipeline. *Nat Commun* 10, 2173 (2019).
+- Pachitariu M, Rariden M, Stringer C. Cellpose-SAM: superhuman generalization for cellular segmentation. *bioRxiv* (2025).
+- Kirillov A, Mintun E, Ravi N, et al. Segment Anything. *ICCV* (2023).
+- Filiot A, Ghermi R, Olivier A, et al. Scaling self-supervised learning for histopathology with masked image modeling (Phikon). *medRxiv* (2023).
+
+## License
+
+BSD 2-Clause, see [LICENSE](LICENSE). Vendored third-party code keeps its original attribution.

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,6 +7,8 @@ name = "stainid"
 version = "2.0.0.dev0"
 description = "Stain-level morphology for brain tissue microarrays: NeuN neurons, 6E10 amyloid plaques and AT8 tau pathology."
 readme = "README.md"
+license = "BSD-2-Clause"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=2.0",

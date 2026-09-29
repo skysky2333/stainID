@@ -1,4 +1,9 @@
-"""Model classes from the Wong et al. (2022) amyloid consensus CNNs (Keiser lab), kept verbatim so the published weights unpickle."""
+"""Model classes from the amyloid consensus CNNs, kept verbatim so the published weights unpickle.
+
+Source: https://github.com/keiserlab/consensus-learning-paper
+Wong DR, Tang Z, Mew NC, et al. Deep learning from multiple experts improves identification of
+amyloid neuropathologies. Acta Neuropathol Commun 10, 66 (2022).
+"""
 import math
 
 import torch
