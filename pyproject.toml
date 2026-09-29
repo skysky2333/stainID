@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stainid"
+version = "2.0.0.dev0"
+description = "Stain-level morphology for brain tissue microarrays: NeuN neurons, 6E10 amyloid plaques and AT8 tau pathology."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=2.0",
+    "scipy>=1.15",
+    "pandas>=2.2",
+    "scikit-image>=0.25",
+    "scikit-learn>=1.7",
+    "opencv-python-headless>=4.10",
+    "pillow>=11.0",
+    "joblib>=1.4",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+slides = ["aicsimageio>=4.14", "bioformats_jar"]
+deep = ["torch>=2.8", "torchvision>=0.23", "cellpose==4.2.1", "segment-anything>=1.0", "transformers>=4.57"]
+tangle-tracer = ["ultralytics==8.0.199"]
+app = ["fastapi>=0.115", "uvicorn[standard]>=0.30", "python-multipart>=0.0.9"]
+dev = ["pytest>=8", "ruff>=0.6", "httpx>=0.27"]
+
+[project.scripts]
+stainid = "stainid.cli:main"
+stainid-dearray = "stainid.slides.dearray:main"
+stainid-core-qc = "stainid.qc.core_qc:main"
+stainid-core-sheets = "stainid.slides.core_sheets:main"
+stainid-export-cores = "stainid.slides.cli:export_main"
+stainid-audit-exports = "stainid.slides.export_audit:main"
+stainid-attach-layout = "stainid.slides.cli:layout_main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+stainid = ["api/static/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 150
+target-version = "py310"
+extend-exclude = ["workspace", "webapp", "data"]
+
+[tool.ruff.lint]
+select = ["E9", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/stainid/stains/amyloid/wong_consensus.py" = ["F821"]  # vendored from Wong et al. 2022, kept verbatim for unpickling

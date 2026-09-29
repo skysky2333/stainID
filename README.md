@@ -1,59 +1,130 @@
-StainID: stain segmentation and analysis
+# stainID
 
-Quickly calibrate thresholds, batch‑segment stains (Hematoxylin, Eosin, DAB), and analyze features for TMA cores.
+Stain-level morphology for brain tissue microarrays (TMAs). stainID takes scanned
+immunohistochemistry slides, cuts out every core, and measures object-level pathology on
+calibrated, artifact-masked native-resolution fields:
 
-![StainID UI](docs/screenshot.png)
+| Stain | What is measured |
+|---|---|
+| **NeuN** | NeuN-positive neuronal profiles: density, positive fraction, soma size and shape |
+| **6E10** | Amyloid plaques: burden, density, compact / diffuse morphotype, dense cores, vascular/edge amyloid, peri-plaque nuclei |
+| **AT8** | Tau pathology: positive area, tau+ neurons (nucleus-ring and dense-body), neuropil thread network |
 
-Install
-- Create/activate an environment.
-- Install packages: `pip install numpy scipy pandas scikit-image opencv-python-headless pyyaml streamlit matplotlib pillow`
+Everything runs from one command-line tool (`stainid`) or from a local web app that
+browses the cohort, launches and monitors pipeline jobs, inspects detections on the tissue, and
+collects blinded reference labels.
 
-Quick Start Guide
-- 1) Prepare input
-  - Install QuPath.
-  - Open each TMA slide and run TMA → Dearray. Increase core diameter by 1 mm until it succeeds.
-  - Go to Automate → Script editor. Drag `scripts/export_core.groovy` into the editor and run it.
-  - Repeat step 2-3 for each slide.
-  - Exports will default to `TMA_core_exports/<SlideName>/.../*.png` inside your QuPath project folder.
-  - Ensure exported core images are available under `data/TMA_core_exports` or set `--input_dir` accordingly.
-- 2) (Optional) Make previews for faster UI
-  - `python -m scripts.make_previews --input_dir data/TMA_core_exports --out_root results_stainID --max_per_type 6 --longest_side 2048`
-- 3) Calibrate per type (UI)
-  - `streamlit run scripts/calibrate_stain_streamlit.py`
-  - Pick a type (numeric prefix), select channels (DAB/Hematoxylin/Eosin), adjust thresholds and morphology, optionally enable gating. Once satisfied, click “Save config”.
-  - For full tuning guidelines, reference `docs/features_and_options.md`.
-  - Repeate and make sure to save config for each stain types.
-- 4) Batch segment
-  - `python -m scripts.segment_stain --input_dir data/TMA_core_exports --out_root results_stainID --types 212 213 214`
-  - Optional pixel size (µm): `--pixel_width_um 0.2738 --pixel_height_um 0.2738` (defaults. This value can be acquired from QuPath).
-- 5) Analyze results (optional)
-  - `python -m scripts.analyze_results --out_root results_stainID --types 212 213 214 --metadata data/brain_summary.csv`
-  - Produces per‑phenotype tables and top plots under `results_stainID/analysis/`.
+![Field viewer](docs/images/viewer.jpg)
 
-You can follow the example pipeline in `scripts/driver.sh`.
-See docs for complete options and tuning: `docs/features_and_options.md`.
+## Install
 
-Folder Layout
-- Input images default: `data/TMA_core_exports`
-- Output root: `results_stainID`
-  - `configs/<TYPE>.yaml`
-  - `masks/<TYPE>/<channel>/<image>_mask.png`
-  - `raw_channels/<TYPE>/<channel>/<image>_raw_gray.png`
-  - `overlays/<TYPE>/<channel>/<image>_overlay.jpg` and `overlays/<TYPE>/<image>_overlay_all.jpg`
-  - `features/<TYPE>/<channel>/<image>_sites.csv`
-  - `summary/<TYPE>_image_metrics.csv`, `summary/all_types_image_metrics.csv`
-  - `previews/<TYPE>/source/*_preview.jpg` (optional)
+Python ≥ 3.10.
 
-Feature Families
-- Per-site morphology and intensity: physical-size shape features are exported in microns or square microns, alongside dimensionless shape descriptors and normalized/raw stain statistics.
-- Per-image burden and scoring: stained fraction, tissue-normalized burden, object and pixel H-score style bins.
-- Texture and granularity: multi-scale masked GLCM/Haralick-style summaries and granulometry-style features on tissue and positive regions, with scale labels reported in microns.
-- Spatial organization: nearest-neighbor, kNN, Clark-Evans, grid dispersion, Delaunay/MST, and proximity-graph summaries reported in physical units.
-- Topology and heterogeneity: component counts, hole burden, boundary complexity, fractal dimension, and tile-level heterogeneity/entropy.
-- Cross-channel relationships: overlap, touching fractions, nearest distances, channel correlations, and annular intensity features around other channels.
+```bash
+git clone <this repo> stainID && cd stainID
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[app,deep,slides]"
+```
 
-Notes
-- “Type” is parsed as the first number after an underscore in the filename. Example: `Image_212.vsi - 20x_BF_01_col03_row07.png` → type `212`.
-- Analysis matches images to metadata rows by parsing the core position from filenames. Supported patterns include `r2_c4` and `col02_row04` (row and column are 1‑based).
-- Multi‑channel segmentation is supported; masks/overlays are saved per selected channel, combined preview overlays are created, and raw grayscale H/E/D channel renders are written for every processed image.
-- Gating lets you restrict one channel’s detections by another (e.g., DAB touching Hematoxylin).
+Extras: `slides` reads Olympus `.vsi` scans (aicsimageio / Bio-Formats; needs a Java runtime), `deep` adds PyTorch,
+Cellpose-SAM, Segment Anything and Hugging Face transformers, `app` adds the web server,
+`dev` adds pytest and ruff. The core package (numpy / scikit-image / scikit-learn / OpenCV)
+installs without any of them.
+
+The web app ships prebuilt inside the package once built. To build it from source you need
+Node ≥ 20:
+
+```bash
+cd webapp && npm ci && npm run build   # writes src/stainid/api/static/
+```
+
+## Quick start
+
+```bash
+stainid init --project path/to/study        # writes path/to/study/stainid.yaml
+stainid --project path/to/study info        # shows every resolved input, model and output path
+stainid --project path/to/study serve       # web app at http://127.0.0.1:8765
+```
+
+A project is any folder with a `stainid.yaml`; all paths in it are relative to that folder. See
+[docs/project.md](docs/project.md) for the configuration, required input tables and models.
+
+## Pipeline
+
+```
+slides ──dearray──▶ core manifest ──export──▶ native core PNGs ──core QC──▶ select fields
+                                                                                │
+             ┌──────────────── calibrate (one DAB threshold per slide) ◀────────┘
+             ▼
+   nuclei (Cellpose-SAM) ──▶ neun │ fields (6E10, AT8) ──▶ masks (SAM outlines) ──▶ aggregate
+```
+
+| Step | Command |
+|---|---|
+| Find cores on each slide (affine lattice fit) | `stainid-dearray <slides_dir>` |
+| Attach the TMA map (donor, region, group) | `stainid-attach-layout` |
+| Export native-resolution cores | `stainid-export-cores` |
+| Core tissue / focus QC and contact sheets | `stainid-core-qc`, `stainid-core-sheets` |
+| Select analysis fields | `stainid select` |
+| Per-slide DAB threshold | `stainid calibrate` |
+| Nuclei on the hematoxylin counterstain | `stainid nuclei --stain AT8 --stain 6E10` |
+| NeuN neurons | `stainid neun`, then `stainid neun --merge` |
+| 6E10 plaques and AT8 tau | `stainid fields` |
+| Object outlines | `stainid masks --stain NeuN` (and `6E10`, `AT8`) |
+| Core / donor-region tables | `stainid aggregate fields`, `stainid aggregate masks` |
+
+Every step is resumable (finished cores and fields are skipped) and heavy steps take
+`--shard-index/--shard-count` so they can be spread over processes or machines. Method details
+and parameters for each stain are in [docs/pipelines.md](docs/pipelines.md).
+
+## Web app
+
+| | |
+|---|---|
+| ![Overview](docs/images/overview.png) | ![Cohort](docs/images/cohort.jpg) |
+| **Overview**: cohort size and per-stain pipeline progress | **Cohort & cores**: TMA layout by group; click a core to open it |
+| ![Pipelines](docs/images/pipelines.png) | ![Labelling](docs/images/labelling.jpg) |
+| **Pipelines & jobs**: run any step, at most two heavy jobs at once, live logs | **Review & annotate**: blinded, keyboard-driven reference labelling |
+| ![Analysis](docs/images/analysis.png) | ![Calibration](docs/images/calibration.png) |
+| **Analysis**: any output feature by group and region | **Calibration**: per-slide DAB thresholds |
+
+The field viewer overlays detections, SAM outlines, above-threshold DAB, excluded
+regions and traced tau threads on the native image, with light and dark themes. See
+[docs/webapp.md](docs/webapp.md).
+
+## Repository layout
+
+```
+src/stainid/
+  project.py        stainid.yaml loading and path resolution
+  cli.py            the `stainid` command
+  workflows/        end-to-end steps used by the CLI and the job runner
+  slides/           .vsi reading, dearraying, core export, TMA layout
+  qc/               core QC, focus, artifact exclusions
+  sampling/         field selection and review sampling frames
+  imaging/          colour deconvolution, tissue / fold / artifact masks, calibration
+  nuclei.py         Cellpose-SAM nuclei
+  stains/           neun/, amyloid/, tau/ stain-specific detection and classifiers
+  masks/            Segment Anything outlines and shape features
+  analysis/         core / donor-region aggregation
+  registration/     cross-stain core registration
+  review/           blinded review sets (sampling, storage)
+  api/              FastAPI backend for the web app
+webapp/             React + TypeScript front end (Vite)
+tools/qupath/       QuPath scripts for TMA grids and core export
+tests/              pytest suite (synthetic data only)
+```
+
+Study data, models, results and analysis scripts live in `data/` and `workspace/` next to the
+code and are not part of the repository.
+
+## Development
+
+```bash
+pip install -e ".[dev,app,slides]"
+pytest
+ruff check src tests
+cd webapp && npm run dev      # hot-reloading UI, proxies /api to `stainid serve`
+```
+
+See [docs/development.md](docs/development.md).
