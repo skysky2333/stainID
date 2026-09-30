@@ -12,7 +12,7 @@ from stainid.project import load_project
 from stainid.review.store import create_set, save_label
 from stainid.slides.layout import attach_layout, read_layout
 from stainid.slides.table import guess, save_slides, scan_slides
-from stainid.training.sets import LABELS, choose, pick_fields
+from stainid.training.sets import LABELS, choose, pick_fields, unused_fields
 from stainid.training.train import activate, train_model, trained_models
 
 
@@ -78,6 +78,16 @@ def _training_set(project, stain: str, name: str, n: int = 60) -> None:
     for review_id, is_positive, p90 in zip(key["review_id"], positive[key["item"]], features["soma_dab_p90"]):
         label = ("tau+ neuron: tangle" if p90 > 0.17 else "tau+ neuron: pretangle") if is_positive else "not a tau+ neuron"
         save_label(project.output("reviews"), f"training/{name}", review_id, label)
+
+
+def test_unused_fields_skips_fields_of_earlier_sets(tmp_path):
+    project = load_project(tmp_path)
+    tiles = [{"tile_id": "T"}, {"tile_id": "U"}]
+    assert unused_fields(project, "AT8", tiles) == tiles
+    _training_set(project, "AT8", "r1")
+    assert unused_fields(project, "AT8", tiles) == [{"tile_id": "U"}]
+    assert unused_fields(project, "NeuN", tiles) == tiles
+    assert unused_fields(project, "AT8", [{"tile_id": "T"}]) == [{"tile_id": "T"}]
 
 
 def test_train_report_and_activate(tmp_path):
