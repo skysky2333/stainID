@@ -37,6 +37,10 @@ class Resource:
     description: str
     path: Callable[[Project], Path]
     ready: Callable[[Project], bool] | None = None
+    download: str = ""
+    template: str = ""
+    setting: str = ""
+    format: str = ""
 
 
 @dataclass(frozen=True)
@@ -179,7 +183,11 @@ def _trained_status(project: Project) -> dict:
 
 
 RESOURCES = {r.id: r for r in (
-    Resource("slides_dir", "Slide scans folder", "The folder holding your whole-slide scans (.vsi, .svs, .ndpi, …).", lambda p: p.input("slides_dir")),
+    Resource("slides_dir", "Slide scans folder", "The folder holding your whole-slide scans (.vsi, .svs, .ndpi, …).", lambda p: p.input("slides_dir"),
+             setting="inputs.slides_dir",
+             format="A folder with one whole-slide scan per TMA and stain, for example:\n  TMA 1 NeuN.vsi (+ its _TMA 1 NeuN_ folder)\n  TMA 1 AT8.vsi\n"
+                    "  TMA 2 6E10.svs\nOlympus .vsi, Aperio .svs, Hamamatsu .ndpi, Leica .scn, Zeiss .czi and pyramidal .tif all work. "
+                    "Putting the TMA number and the stain in each file name lets stainID fill in the slides table for you."),
     Resource("slides_table", "Slides table", "Which scan is which TMA and stain.", lambda p: p.input("slides_table")),
     Resource("core_manifest", "Core table", "One row per core position on each slide: where it is, which donor it belongs to, its QC.",
              lambda p: p.input("core_manifest")),
@@ -188,7 +196,12 @@ RESOURCES = {r.id: r for r in (
     Resource("core_quality", "Core quality measures", "Tissue coverage and focus per core, in the core table.", lambda p: p.input("core_manifest"),
              _column_filled("tissue_status")),
     Resource("grid_images", "Grid check images", "One picture per slide with the fitted core grid drawn on it.", lambda p: p.output("qc") / "grids"),
-    Resource("tma_layout", "TMA map", "Which donor, brain region and diagnostic group sits at each core position.", lambda p: p.input("tma_layout")),
+    Resource("tma_layout", "TMA map", "Which donor, brain region and diagnostic group sits at each core position.", lambda p: p.input("tma_layout"),
+             template="tma_layout", setting="inputs.tma_layout",
+             format="A CSV table (save from Excel as CSV) with one row per core position:\n"
+                    "  tma,core_label,donor_id,region,disease_group\n  1,A-1,,,\n  1,B-1,1141,frontal,AD\n  1,B-2,1141,occipital,AD\n  1,C-1,0698,frontal,CT\n"
+                    "core_label is column letter + row number. Leave donor_id empty for orientation or control cores. "
+                    "Optional columns: cerad, braak, sample_region_id. The template lists every position already."),
     Resource("core_images", "Core images", "Every core cut out of the slide at full resolution (PNG).", lambda p: p.input("core_manifest").parent / "cores"),
     Resource("core_qc_images", "Core QC images", "Tissue and focus overlays for every core.", lambda p: p.input("core_manifest").parent / "qc" / "cores"),
     Resource("tile_manifest", "Analysis fields", "The fields (about 560 µm squares) measured in every core.", lambda p: p.input("tile_manifest")),
@@ -199,12 +212,18 @@ RESOURCES = {r.id: r for r in (
     Resource("mask_results", "Object outlines", "An outline and shape measurements for every detected object.", lambda p: p.output("masks")),
     Resource("results", "Results table", "One row per donor and brain region with every measurement (results_donor_region.csv).",
              lambda p: p.output("tables") / "results_donor_region.csv"),
-    Resource("model_neun", "NeuN model", "Decides which candidate objects are neurons.", lambda p: p.model("neun")),
-    Resource("model_amyloid", "6E10 model", "Decides which deposits are plaques and whether they are compact or diffuse.", lambda p: p.model("amyloid")),
-    Resource("model_tau", "AT8 model", "Decides which candidates are tau+ neurons.", lambda p: p.model("tau")),
-    Resource("model_cellpose", "Cellpose-SAM weights", "Finds cells and nuclei.", lambda p: p.model("cellpose")),
-    Resource("model_sam", "Segment Anything weights", "Draws object outlines.", lambda p: p.model("sam")),
-    Resource("model_phikon", "Phikon weights", "Image features used by the 6E10 model.", lambda p: p.model("huggingface_home")),
+    Resource("model_neun", "NeuN model", "Decides which candidate objects are neurons.", lambda p: p.model("neun"),
+             setting="models.neun", format="A model bundle file (.joblib) made by stainID's training. Train one on the Models page from objects you label, "
+                                        "or choose a bundle someone shared with you (for example the one used for a published study)."),
+    Resource("model_amyloid", "6E10 model", "Decides which deposits are plaques and whether they are compact or diffuse.", lambda p: p.model("amyloid"),
+             setting="models.amyloid", format="A model bundle file (.joblib) made by stainID's training. Train one on the Models page from objects you label, "
+                                        "or choose a bundle someone shared with you (for example the one used for a published study)."),
+    Resource("model_tau", "AT8 model", "Decides which candidates are tau+ neurons.", lambda p: p.model("tau"),
+             setting="models.tau", format="A model bundle file (.joblib) made by stainID's training. Train one on the Models page from objects you label, "
+                                        "or choose a bundle someone shared with you (for example the one used for a published study)."),
+    Resource("model_cellpose", "Cellpose-SAM weights", "Finds cells and nuclei.", lambda p: p.model("cellpose"), download="cellpose"),
+    Resource("model_sam", "Segment Anything weights", "Draws object outlines.", lambda p: p.model("sam"), download="sam"),
+    Resource("model_phikon", "Phikon weights", "Image features used by the 6E10 model.", lambda p: p.model("huggingface_home"), download="huggingface_home"),
     Resource("training_sets", "Training sets", "Candidate objects you label to train a model.", lambda p: p.output("reviews") / "training"),
     Resource("trained_models", "Trained models", "Models you trained, with their accuracy reports.", lambda p: p.output("trained_models")),
 )}
@@ -355,7 +374,10 @@ def resource_info(project: Project, resource_id: str) -> dict:
     resource = RESOURCES[resource_id]
     path = resource.path(project)
     exists = resource.ready(project) if resource.ready else path.exists() and (path.is_file() or any(path.iterdir()))
-    return {"id": resource.id, "label": resource.label, "description": resource.description, "path": project.relative(path), "exists": exists}
+    maker = next((s for s in STEPS if resource_id in s.produces), None) if not resource.download else None
+    return {"id": resource.id, "label": resource.label, "description": resource.description, "path": project.relative(path), "exists": exists,
+            "made_by": {"id": maker.id, "title": maker.title} if maker else None, "download": resource.download,
+            "template": resource.template, "setting": resource.setting, "format": resource.format}
 
 
 def describe(project: Project) -> list[dict]:

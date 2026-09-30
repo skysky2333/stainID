@@ -111,3 +111,12 @@ def test_tma_map_upload_fills_groups(client):
     good = b"tma,core_label,donor_id,region,disease_group\n1,B-2,0001,frontal,AD\n1,C-2,0002,frontal,CT\n"
     assert client.post("/api/upload/tma_layout", files={"file": ("map.csv", good)}).status_code == 200
     assert [g["code"] for g in client.get("/api/project").json()["groups"]] == ["AD", "CT"]
+
+
+def test_missing_inputs_say_how_to_get_them(client, tmp_path):
+    client.post("/api/project/create", json={"path": str(tmp_path / "fresh")})
+    needs = {n["id"]: n for s in client.get("/api/steps").json() for n in s["needs"]}
+    assert needs["core_manifest"]["made_by"]["title"] == "Find cores"
+    assert needs["model_cellpose"]["download"] == "cellpose" and needs["model_cellpose"]["made_by"] is None
+    assert needs["tma_layout"]["template"] == "tma_layout" and "core_label" in needs["tma_layout"]["format"]
+    assert needs["model_neun"]["setting"] == "models.neun" and needs["slides_table"]["made_by"]["id"] == "slides"

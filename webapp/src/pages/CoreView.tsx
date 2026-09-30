@@ -77,18 +77,46 @@ function FieldViewer({ field, stain }: { field: FieldRow; stain: string }) {
   const objects = useFetch<{ objects: FieldObject[] }>(`/api/fields/${tileId}/objects`)
   const outlines = useFetch<Outline[]>(`/api/fields/${tileId}/outlines`)
   const [layers, setLayers] = useStored<Record<string, boolean>>('stainid.viewer.layers', { objects: true, outlines: true, rejected: false, dab: false, exclusions: false, threads: false, analysed: true })
-  const [zoom, setZoom] = useState(1)
-  const [offset, setOffset] = useState({ x: 0, y: 0 })
+  const [view, setView] = useState({ zoom: 1, x: 0, y: 0 })
+  const { zoom } = view
   const [selected, setSelected] = useState<number | null>(null)
   const [size, setSize] = useState({ w: 2304, h: 2304 })
+  const [loaded, setLoaded] = useState(false)
   const drag = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null)
   const box = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
+    setLoaded(false)
+    setView({ zoom: 1, x: 0, y: 0 })
     const img = new Image()
-    img.onload = () => setSize({ w: img.naturalWidth, h: img.naturalHeight })
+    img.onload = () => { setSize({ w: img.naturalWidth, h: img.naturalHeight }); setLoaded(true) }
     img.src = fieldImage(tileId)
   }, [tileId])
+
+  useEffect(() => {
+    const element = box.current
+    if (!element) return
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault()
+      const rect = element.getBoundingClientRect()
+      const px = e.clientX - rect.left
+      const py = e.clientY - rect.top
+      setView((v) => {
+        const next = Math.min(12, Math.max(1, v.zoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15)))
+        if (next === 1) return { zoom: 1, x: 0, y: 0 }
+        return { zoom: next, x: px - ((px - v.x) * next) / v.zoom, y: py - ((py - v.y) * next) / v.zoom }
+      })
+    }
+    element.addEventListener('wheel', onWheel, { passive: false })
+    return () => element.removeEventListener('wheel', onWheel)
+  }, [])
+
+  const zoomBy = (factor: number) => setView((v) => {
+    const width = box.current?.clientWidth ?? 600
+    const next = Math.min(12, Math.max(1, v.zoom * factor))
+    if (next === 1) return { zoom: 1, x: 0, y: 0 }
+    return { zoom: next, x: width / 2 - ((width / 2 - v.x) * next) / v.zoom, y: width / 2 - ((width / 2 - v.y) * next) / v.zoom }
+  })
 
   const visible = (objects.data?.objects ?? []).map((o, i) => ({ ...o, index: i })).filter((o) => layers.rejected || o.model_class !== 'rejected')
   const classes = Array.from(new Set((objects.data?.objects ?? []).map((o) => o.model_class)))
@@ -99,8 +127,7 @@ function FieldViewer({ field, stain }: { field: FieldRow; stain: string }) {
     setSelected(o.index)
     const width = box.current?.clientWidth ?? 600
     const scale = width / size.w
-    setZoom(4)
-    setOffset({ x: width / 2 - o.x * scale * 4, y: width / 2 - o.y * scale * 4 })
+    setView({ zoom: 4, x: width / 2 - o.x * scale * 4, y: width / 2 - o.y * scale * 4 })
   }
 
   return (
@@ -109,17 +136,17 @@ function FieldViewer({ field, stain }: { field: FieldRow; stain: string }) {
         <div className="row" style={{ marginBottom: 10 }}>
           <h3 style={{ margin: 0 }}>{tileId}</h3>
           <span className="spacer" />
-          <button className="btn small" onClick={() => setZoom(Math.max(1, zoom / 1.5))}>−</button>
+          <button className="btn small" onClick={() => zoomBy(1 / 1.5)}>−</button>
           <span className="small muted">{zoom.toFixed(1)}×</span>
-          <button className="btn small" onClick={() => setZoom(Math.min(12, zoom * 1.5))}>+</button>
-          <button className="btn small" onClick={() => { setZoom(1); setOffset({ x: 0, y: 0 }) }}>Reset</button>
+          <button className="btn small" onClick={() => zoomBy(1.5)}>+</button>
+          <button className="btn small" onClick={() => setView({ zoom: 1, x: 0, y: 0 })}>Reset</button>
         </div>
         <div ref={box} className="viewer" style={{ aspectRatio: `${size.w} / ${size.h}`, cursor: zoom > 1 ? 'grab' : 'default' }}
-          onWheel={(e) => { const next = Math.min(12, Math.max(1, zoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15))); setZoom(next); if (next === 1) setOffset({ x: 0, y: 0 }) }}
-          onMouseDown={(e) => { drag.current = { x: e.clientX, y: e.clientY, ox: offset.x, oy: offset.y } }}
-          onMouseMove={(e) => { if (drag.current && zoom > 1) setOffset({ x: drag.current.ox + e.clientX - drag.current.x, y: drag.current.oy + e.clientY - drag.current.y }) }}
+          onMouseDown={(e) => { drag.current = { x: e.clientX, y: e.clientY, ox: view.x, oy: view.y } }}
+          onMouseMove={(e) => { const d = drag.current; if (d && zoom > 1) setView((v) => ({ ...v, x: d.ox + e.clientX - d.x, y: d.oy + e.clientY - d.y })) }}
           onMouseUp={() => { drag.current = null }} onMouseLeave={() => { drag.current = null }}>
-          <div style={{ position: 'absolute', inset: 0, transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom})`, transformOrigin: '0 0' }}>
+          {!loaded && <div className="viewer-loading">Loading the field image… the first field of a core takes a few seconds; the others then open instantly.</div>}
+          <div style={{ position: 'absolute', inset: 0, transform: `translate(${view.x}px, ${view.y}px) scale(${zoom})`, transformOrigin: '0 0' }}>
             <img src={fieldImage(tileId)} alt={tileId} draggable={false} />
             {Object.entries(RASTER_LAYERS).filter(([key, def]) => layers[key] && def.stains.includes(stain)).map(([key]) => (
               <img key={key} src={fieldLayer(tileId, key)} alt={key} draggable={false} style={{ imageRendering: 'pixelated' }} />
@@ -138,7 +165,7 @@ function FieldViewer({ field, stain }: { field: FieldRow; stain: string }) {
             </svg>
           </div>
         </div>
-        <p className="muted small">Scroll to zoom, drag to pan. The dashed square is the analysed field; the margin is context only.</p>
+        <p className="muted small">Scroll over the image to zoom (towards the pointer), drag to pan. The dashed square is the analysed field; the margin is context only.</p>
       </div>
       <div className="grid">
         <div className="card">

@@ -70,13 +70,13 @@ export default function Models() {
           </div>
         ))}
       </div>
-      {step('download_models')?.job && <div style={{ marginTop: 12 }}><StepCard step={step('download_models')!} steps={steps.data ?? []} onChanged={steps.reload} /></div>}
+      {step('download_models')?.job && <div style={{ marginTop: 12 }}><StepCard step={step('download_models')!} onChanged={steps.reload} /></div>}
 
       <h2 className="stage-title" id="train">Train a stain model</h2>
       <div className="train-flow">
         <div>
           <div className="flow-number">1</div>
-          {step('training_set') && <StepCard step={step('training_set')!} steps={steps.data ?? []} onChanged={() => { steps.reload(); sets.reload() }} />}
+          {step('training_set') && <StepCard step={step('training_set')!} onChanged={() => { steps.reload(); sets.reload() }} />}
         </div>
         <div>
           <div className="flow-number">2</div>
@@ -100,7 +100,7 @@ export default function Models() {
         </div>
         <div>
           <div className="flow-number">3</div>
-          {step('train') && <StepCard step={step('train')!} steps={steps.data ?? []} onChanged={() => { steps.reload(); trained.reload() }} />}
+          {step('train') && <StepCard step={step('train')!} onChanged={() => { steps.reload(); trained.reload() }} />}
         </div>
       </div>
 

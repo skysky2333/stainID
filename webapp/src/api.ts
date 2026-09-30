@@ -32,7 +32,10 @@ export interface ProjectInfo {
   recent: string[]
 }
 export interface StepOption { key: string; label: string; kind: 'number' | 'text' | 'select' | 'stains' | 'bool'; default: unknown; help: string; choices: string[]; advanced: boolean }
-export interface ResourceInfo { id: string; label: string; description: string; path: string; exists: boolean }
+export interface ResourceInfo {
+  id: string; label: string; description: string; path: string; exists: boolean
+  made_by: { id: string; title: string } | null; download: string; template: string; setting: string; format: string
+}
 export interface StepProgress { state: 'done' | 'partial' | 'todo'; done: number; total: number; unit: string; note: string; outdated?: boolean }
 export interface Step {
   id: string; stage: string; title: string; summary: string; details: string; needs: ResourceInfo[]; uses: ResourceInfo[]; produces: ResourceInfo[]

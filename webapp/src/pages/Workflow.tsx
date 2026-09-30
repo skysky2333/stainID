@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import type { Job, SlideRow, SlidesInfo, Step } from '../api'
+import type { Job, ResourceInfo, SlideRow, SlidesInfo, Step } from '../api'
 import { api, runStep } from '../api'
 import { Empty, ErrorNote, FilePicker, HelpBox, OptionField, PageHead, PathLine, Progress, StatusBadge, Term, timeAgo, withError } from '../components'
 import { useFetch } from '../hooks'
@@ -45,7 +45,7 @@ export default function Workflow() {
       {MAIN_STAGES.map((stage) => (
         <section key={stage} className="stage">
           <h2 className="stage-title">{stage}</h2>
-          {list.filter((s) => s.stage === stage).map((step) => <StepCard key={step.id} step={step} steps={steps.data ?? []} onChanged={refresh} />)}
+          {list.filter((s) => s.stage === stage).map((step) => <StepCard key={step.id} step={step} onChanged={refresh} />)}
         </section>
       ))}
       <JobsTable />
@@ -53,7 +53,7 @@ export default function Workflow() {
   )
 }
 
-export function StepCard({ step, steps, onChanged }: { step: Step; steps: Step[]; onChanged: () => void }) {
+export function StepCard({ step, onChanged }: { step: Step; onChanged: () => void }) {
   const optionsKey = JSON.stringify(step.options)
   const outdated = Boolean(step.progress.outdated)
   const defaults = useMemo(() => Object.fromEntries((JSON.parse(optionsKey) as Step['options']).map((o) => [o.key, o.key === 'fresh' && outdated ? true : o.default])), [optionsKey, outdated])
@@ -68,7 +68,6 @@ export function StepCard({ step, steps, onChanged }: { step: Step; steps: Step[]
   const [open, setOpen] = useState(state !== 'done' || hash === `#${step.id}`)
   useEffect(() => { if (hash === `#${step.id}`) setOpen(true) }, [hash, step.id])
   const missing = step.needs.filter((n) => !n.exists)
-  const maker = (id: string) => steps.find((s) => s.produces.some((p) => p.id === id) && s.id !== step.id)
   const active = state === 'running' || state === 'queued'
   const job = step.job
   const basic = step.options.filter((o) => !o.advanced)
@@ -103,17 +102,12 @@ export function StepCard({ step, steps, onChanged }: { step: Step; steps: Step[]
       <div className="io-grid">
         <div>
           <div className="io-title">Needs</div>
-          {step.needs.length ? step.needs.map((n) => (
-            <div key={n.id} title={n.description}>
-              <PathLine path={n.path} exists={n.exists} label={n.label} />
-              {!n.exists && maker(n.id) && <div className="muted small io-hint">Made by <a href={`#${maker(n.id)!.id}`}>{maker(n.id)!.title}</a></div>}
-              {!n.exists && n.id.startsWith('model_') && <div className="muted small io-hint">Get it on the <Link to="/models">Models</Link> page</div>}
-            </div>
-          )) : <span className="muted small">Nothing extra.</span>}
+          {step.needs.length ? step.needs.map((n) => <NeedRow key={n.id} need={n} onChanged={onChanged} />)
+            : <span className="muted small">Nothing extra.</span>}
           {step.uses.length > 0 && (
             <>
               <div className="io-title" style={{ marginTop: 8 }}>Uses if available</div>
-              {step.uses.map((u) => <div key={u.id} title={u.description}><PathLine path={u.path} exists={u.exists} label={u.label} /></div>)}
+              {step.uses.map((u) => <NeedRow key={u.id} need={u} onChanged={onChanged} optional />)}
             </>
           )}
         </div>
@@ -155,6 +149,51 @@ export function StepCard({ step, steps, onChanged }: { step: Step; steps: Step[]
         </>
       )}
       </>}
+    </div>
+  )
+}
+
+/** One input of a step: where it is, whether it exists, and how to get it if it does not (go to the step that makes it,
+download it, or see what to provide and pick / upload it). */
+function NeedRow({ need, onChanged, optional = false }: { need: ResourceInfo; onChanged: () => void; optional?: boolean }) {
+  const navigate = useNavigate()
+  const { reload } = useProject()
+  const [open, setOpen] = useState(false)
+  const [picking, setPicking] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [started, setStarted] = useState(false)
+  const download = () => withError(async () => { await runStep('download_models', { which: [need.download] }); setStarted(true); onChanged() }, setError)
+  const choose = (path: string) => withError(async () => {
+    const [section, key] = need.setting.split('.')
+    await api.put('/api/project/config', { changes: { [section]: { [key]: path } } })
+    setPicking(false); reload(); onChanged()
+  }, setError)
+  const upload = (file: File | undefined) => file && withError(async () => { await api.upload(`/api/upload/${need.template}`, file); onChanged() }, setError)
+  return (
+    <div title={need.description} className="need-row">
+      <PathLine path={need.path} exists={need.exists} label={need.label} />
+      {!need.exists && (
+        <div className="need-actions">
+          {need.made_by && <button className="btn small" onClick={() => navigate(`/workflow#${need.made_by!.id}`)}>Go to “{need.made_by.title}”</button>}
+          {need.download && <button className="btn small primary" disabled={started} onClick={download}>{started ? 'Downloading…' : 'Download now'}</button>}
+          {need.format && <button className="btn small" onClick={() => setOpen(!open)}>{open ? 'Hide' : 'What should this be?'}</button>}
+          {need.id.startsWith('model_') && !need.download && <Link className="btn small" to="/models#train">Train one on the Models page</Link>}
+          {optional && <span className="muted small">optional</span>}
+        </div>
+      )}
+      {open && (
+        <div className="format-box">
+          <pre>{need.format}</pre>
+          <div className="row">
+            {need.template && <a className="btn small" href={`/api/templates/${need.template}.csv`}>Download template</a>}
+            {need.template && <label className="btn small primary">Upload filled-in file…<input type="file" accept=".csv" hidden onChange={(e) => upload(e.target.files?.[0])} /></label>}
+            {need.setting && !need.template && <button className="btn small" onClick={() => setPicking(true)}>Choose…</button>}
+          </div>
+        </div>
+      )}
+      <ErrorNote error={error} />
+      {picking && <FilePicker title={`Choose the ${need.label.toLowerCase()}`} pickFiles={need.id.startsWith('model_')} show={need.id.startsWith('model_') ? 'models' : 'slides'}
+        onClose={() => setPicking(false)} onPick={choose} />}
     </div>
   )
 }
