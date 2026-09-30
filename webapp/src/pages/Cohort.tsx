@@ -2,10 +2,12 @@ import { useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { CoreRow, Row, Summary } from '../api'
 import { coreThumb } from '../api'
-import { ErrorNote, GROUP_COLOR, GROUP_LABEL, GroupBadge, PageHead } from '../components'
+import { Empty, ErrorNote, GroupBadge, HelpBox, PageHead } from '../components'
 import { useFetch, useStored } from '../hooks'
+import { useProject } from '../project'
 
 export default function Cohort() {
+  const { groups, groupColor, groupLabel, tmaName } = useProject()
   const summary = useFetch<Summary>('/api/summary')
   const [tma, setTma] = useStored('stainid.cohort.tma', '1')
   const [stain, setStain] = useStored('stainid.cohort.stain', 'NeuN')
@@ -26,9 +28,9 @@ export default function Cohort() {
 
   return (
     <>
-      <PageHead title="Cohort & cores" subtitle="Tissue microarray layout. Border colour = group; click a core to open the field viewer.">
+      <PageHead title="Cohort & cores" subtitle="Every core of every TMA. Border colour = diagnostic group; click a core to see its fields with the detections drawn on top.">
         <label className="field">TMA
-          <select value={tma} onChange={(e) => setTma(e.target.value)}>{(summary.data?.tmas ?? [tma]).map((t) => <option key={t} value={t}>LIP-{t}</option>)}</select>
+          <select value={tma} onChange={(e) => setTma(e.target.value)}>{(summary.data?.tmas ?? [tma]).map((t) => <option key={t} value={t}>{tmaName(t)}</option>)}</select>
         </label>
         <label className="field">Stain
           <select value={stain} onChange={(e) => setStain(e.target.value)}>{stains.map((s) => <option key={s}>{s}</option>)}</select>
@@ -37,9 +39,14 @@ export default function Cohort() {
           <select value={view} onChange={(e) => setView(e.target.value as 'grid' | 'table')}><option value="grid">Grid</option><option value="table">Table</option></select>
         </label>
       </PageHead>
+      <HelpBox id="cohort">
+        Use this page to check the results by eye. In the core view, the yellow squares are the analysed <b>fields</b>; open one to zoom in and switch
+        layers: detected objects (coloured by class), outlines, stained area above the slide threshold, and excluded regions (folds, holes, artifacts).
+      </HelpBox>
+      {summary.data && !summary.data.cores && <Empty>No cores yet — run the set-up steps on the Workflow page first.</Empty>}
       <ErrorNote error={cores.error ?? layout.error} />
       <div className="row small" style={{ marginBottom: 12 }}>
-        {Object.entries(GROUP_LABEL).map(([g, label]) => <span key={g} className="row" style={{ gap: 5 }}><span className="swatch" style={{ background: GROUP_COLOR[g] }} />{label}</span>)}
+        {groups.map((g) => <span key={g} className="row" style={{ gap: 5 }}><span className="swatch" style={{ background: groupColor(g) }} />{groupLabel(g)}</span>)}
         <span className="row" style={{ gap: 5 }}><span className="swatch" style={{ border: '1px dashed var(--text-muted)' }} />control / empty position</span>
       </div>
       {view === 'grid' ? (
@@ -74,6 +81,7 @@ export default function Cohort() {
 function FragmentRow({ row, cols, stain, byLabel, layoutByLabel, onOpen }: {
   row: number; cols: string[]; stain: string; byLabel: Map<string, CoreRow>; layoutByLabel: Map<string, Row>; onOpen: (id: string) => void
 }) {
+  const { groupColor } = useProject()
   return (
     <>
       <div className="muted small" style={{ alignSelf: 'center', textAlign: 'center' }}>{row}</div>
@@ -85,10 +93,10 @@ function FragmentRow({ row, cols, stain, byLabel, layoutByLabel, onOpen }: {
           return <div key={label} className="core-cell empty" title={info ? `${label} ${info.tissue_control ?? ''}` : label}><span className="tag">{label}</span></div>
         }
         return (
-          <div key={label} className="core-cell" style={{ borderColor: core.disease_group ? GROUP_COLOR[core.disease_group] : 'var(--border)' }}
+          <div key={label} className="core-cell" style={{ borderColor: core.disease_group ? groupColor(core.disease_group) : 'var(--border)' }}
             title={`${core.core_id} · donor ${core.donor_id} · ${core.region}`} onClick={() => onOpen(core.core_id)}>
             <img loading="lazy" src={coreThumb(core.core_id, stain, 256)} alt={core.core_id} />
-            <span className="tag">{label} · {core.region === 'frontal' ? 'F' : core.region === 'occipital' ? 'O' : ''}</span>
+            <span className="tag">{label}{core.region ? ` · ${core.region}` : ''}</span>
           </div>
         )
       })}

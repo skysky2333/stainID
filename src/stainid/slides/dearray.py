@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import argparse
 import csv
-import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -13,7 +11,6 @@ from scipy.ndimage import gaussian_filter1d
 from stainid.qc.core_qc import classify_coverage
 from stainid.slides.vsi import SlidePreview, read_slide_preview
 
-SLIDE_PATTERN = re.compile(r"TMA LIP-(?P<tma>\d+) (?P<stain>6E10|AT8|NeuN)$", re.IGNORECASE)
 CROP_RADIUS_SCALE = 1.12
 CENTER_MAX_SHIFT_FRACTION = 0.32
 CENTER_MIN_AREA_RATIO = 0.08
@@ -50,18 +47,6 @@ class CenterRefinement:
     source: str
     offset: float
     component_area_ratio: float
-
-
-def parse_slide(path: Path) -> tuple[int, str]:
-    match = SLIDE_PATTERN.fullmatch(path.stem)
-    if match is None:
-        raise ValueError(f"Unexpected slide filename: {path.name}")
-    stain = match.group("stain")
-    if stain.lower() == "neun":
-        stain = "NeuN"
-    else:
-        stain = stain.upper()
-    return int(match.group("tma")), stain
 
 
 def segment_for_grid(rgb: np.ndarray) -> tuple[np.ndarray, float]:
@@ -358,9 +343,10 @@ def core_records(
     fit: GridFit,
     rows: int,
     columns: int,
+    tma: str,
+    stain: str,
 ) -> list[dict]:
     tissue, coverage_threshold = coverage_mask(preview.rgb)
-    tma, stain = parse_slide(preview.path)
     refinements = refine_core_centers(fit, rows, columns)
     crop_radius = CROP_RADIUS_SCALE * fit.radius
     records = []
@@ -532,6 +518,8 @@ def write_table(records: list[dict], path: Path, delimiter: str = ",") -> None:
 
 def process_slide(
     path: Path,
+    tma: str,
+    stain: str,
     rows: int,
     columns: int,
     target_long_side: int,
@@ -540,7 +528,7 @@ def process_slide(
     preview = read_slide_preview(path, target_long_side)
     strict_mask, strict_threshold = segment_for_grid(preview.rgb)
     fit = fit_grid(strict_mask, rows, columns, strict_threshold)
-    records = core_records(preview, fit, rows, columns)
+    records = core_records(preview, fit, rows, columns, tma, stain)
     slug = path.stem.replace(" ", "_")
 
     if qc_dir is not None:
@@ -549,76 +537,3 @@ def process_slide(
         if not cv2.imwrite(str(qc_path), draw_qc(preview, fit, records)):
             raise OSError(f"Could not write QC image: {qc_path}")
     return records
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("slides_dir", type=Path)
-    parser.add_argument(
-        "--manifest",
-        type=Path,
-        default=Path("data/core_manifest.csv"),
-    )
-    parser.add_argument("--qc-dir", type=Path)
-    parser.add_argument("--rows", type=int, default=5)
-    parser.add_argument("--columns", type=int, default=6)
-    parser.add_argument("--target-long-side", type=int, default=4500)
-    parser.add_argument("--slide", action="append", default=[])
-    parser.add_argument("--qc-only", action="store_true")
-    return parser.parse_args()
-
-
-def main() -> None:
-    args = parse_args()
-    slides = sorted(args.slides_dir.glob("*.vsi"))
-    if args.slide:
-        requested = set(args.slide)
-        slides = [
-            slide
-            for slide in slides
-            if slide.stem in requested or slide.name in requested
-        ]
-    if not slides:
-        raise ValueError(f"No VSI slides found in {args.slides_dir}")
-    if args.qc_only and args.qc_dir is None:
-        raise ValueError("--qc-only requires --qc-dir")
-
-    all_records = []
-    summaries = []
-    for slide in slides:
-        records = process_slide(
-            slide,
-            args.rows,
-            args.columns,
-            args.target_long_side,
-            args.qc_dir,
-        )
-        all_records.extend(records)
-        summary = {
-            "slide": slide.stem,
-            "substantial": sum(
-                record["provisional_tissue_status"] == "substantial"
-                for record in records
-            ),
-            "partial": sum(
-                record["provisional_tissue_status"] == "partial" for record in records
-            ),
-            "sparse": sum(
-                record["provisional_tissue_status"] == "sparse" for record in records
-            ),
-            "empty": sum(
-                record["provisional_tissue_status"] == "empty" for record in records
-            ),
-            "grid_inlier_count": records[0]["grid_inlier_count"],
-            "grid_rmse_preview_px": records[0]["grid_rmse_preview_px"],
-            "estimated_core_diameter_um": records[0]["estimated_core_diameter_um"],
-        }
-        summaries.append(summary)
-        print(f"{slide.name}: {summary}")
-
-    if not args.qc_only:
-        write_table(all_records, args.manifest)
-
-
-if __name__ == "__main__":
-    main()

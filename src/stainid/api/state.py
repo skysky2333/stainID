@@ -1,6 +1,7 @@
 """Cached, read-mostly view of a project's manifests and outputs for the web API."""
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, field
 from functools import cached_property
@@ -10,7 +11,7 @@ import pandas as pd
 
 from stainid.project import Project, load_project
 
-GROUP_LABELS = {"CT": "Control", "ASYMP": "ASYMAD", "AD": "AD"}
+SETTINGS = Path.home() / ".stainid" / "app.json"
 
 
 def _read(path: Path, **kwargs) -> pd.DataFrame:
@@ -25,6 +26,12 @@ class ProjectState:
     @property
     def root(self) -> Path:
         return self.project.root
+
+    @cached_property
+    def jobs(self):
+        from stainid.api.jobs import JobManager
+
+        return JobManager(self.root, self.project.output("jobs"))
 
     def cache_dir(self, name: str) -> Path:
         path = self.root / "data" / "cache" / name
@@ -46,6 +53,13 @@ class ProjectState:
     @cached_property
     def donors(self) -> pd.DataFrame:
         return _read(self.project.input("donor_metadata"), dtype={"tma": str, "donor_id": str})
+
+    def groups(self) -> list[dict[str, str]]:
+        """Diagnostic groups in plot order: from the project settings, else as found in the data."""
+        configured = self.project.config.get("groups") or []
+        found = sorted(set(self.tiles.disease_group.dropna()) if "disease_group" in self.tiles else set())
+        codes = [g["code"] for g in configured]
+        return list(configured) + [{"code": c, "label": c} for c in found if c not in codes]
 
     def calibration(self) -> pd.DataFrame:
         return _read(self.project.input("calibration"), dtype={"tma": str})
@@ -87,11 +101,42 @@ class ProjectState:
 _STATE: ProjectState | None = None
 
 
-def get_state() -> ProjectState:
+def _settings() -> dict:
+    return json.loads(SETTINGS.read_text()) if SETTINGS.exists() else {"recent": []}
+
+
+def recent_projects() -> list[str]:
+    return [p for p in _settings()["recent"] if Path(p).exists()]
+
+
+def remembered_project() -> Path:
+    """The project opened last in the app, else the current folder."""
+    recent = recent_projects()
+    return Path(recent[0]) if recent else Path.cwd()
+
+
+def _remember(root: Path) -> None:
+    settings = _settings()
+    settings["recent"] = [str(root)] + [p for p in settings["recent"] if p != str(root)][:9]
+    SETTINGS.parent.mkdir(parents=True, exist_ok=True)
+    SETTINGS.write_text(json.dumps(settings, indent=1))
+
+
+def open_project(path: Path | str) -> ProjectState:
     global _STATE
-    if _STATE is None:
-        project = load_project(os.environ.get("STAINID_PROJECT"))
-        os.chdir(project.root)
-        project.apply_environment()
-        _STATE = ProjectState(project)
+    if _STATE is not None and "jobs" in _STATE.__dict__ and _STATE.jobs.active():
+        raise RuntimeError("Jobs are still running in this project; wait for them or cancel them before switching projects")
+    project = load_project(path)
+    os.chdir(project.root)
+    for key in ("HF_HOME", "CELLPOSE_LOCAL_MODELS_PATH", "STAINID_PLAQUE_CNN_DIR"):
+        os.environ.pop(key, None)
+    project.apply_environment()
+    os.environ["STAINID_PROJECT"] = str(project.root)
+    if project.is_configured:
+        _remember(project.root)
+    _STATE = ProjectState(project)
     return _STATE
+
+
+def get_state() -> ProjectState:
+    return _STATE or open_project(os.environ.get("STAINID_PROJECT", "."))

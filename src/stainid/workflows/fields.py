@@ -20,6 +20,14 @@ Image.MAX_IMAGE_PIXELS = None
 TILE_KEYS = ("tile_id", "core_id", "tma", "donor_id", "sample_region_id", "region", "disease_group", "technical_replicate", "stain", "selection_order")
 
 
+def check_models(project: Project, path, models: dict) -> None:
+    """Refuse to mix results from different models in one results folder."""
+    used = {key: project.relative(value) for key, value in models.items()}
+    if path.exists() and json.loads(path.read_text()) != used:
+        raise ValueError("These results were made with a different model. Run the step again with 'Start over' to redo them with the current model.")
+    path.write_text(json.dumps(used, indent=1))
+
+
 def exclusion_mask(rgb, tile, inner, pixel_size, manual):
     x, y = int(tile["x_px"]), int(tile["y_px"])
     return (linear_artifact_mask(rgb) | fold_mask(rgb, pixel_size)
@@ -51,6 +59,7 @@ def run_fields(project: Project, stains: list[str] = ("6E10", "AT8"), shard_inde
     bundles = {"tau": load(project.model("tau")), "amyloid": load(project.model("amyloid"))}
     parts = project.output("fields") / "parts"
     parts.mkdir(parents=True, exist_ok=True)
+    check_models(project, project.output("fields") / "provenance.json", {"amyloid": project.model("amyloid"), "tau": project.model("tau")})
     nuclei_dir = project.output("nuclei")
     for number, ((core_id, stain), tiles) in enumerate(groups.items(), start=1):
         feature_path = parts / f"{core_id}_{stain}_features.csv"

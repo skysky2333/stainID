@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
-import { GROUP_COLOR, GROUP_LABEL, GROUP_ORDER, fmt } from './components'
+import { fmt } from './components'
+import { useProject } from './project'
 
 export interface Point { group: string; value: number; facet?: string; id?: string }
 
@@ -26,8 +27,9 @@ function niceTicks(min: number, max: number, count = 5) {
 /** Strip + box plot of one feature by group (optionally split by facet, e.g. region). */
 export function GroupStrip({ points, label, log = false, height = 300 }: { points: Point[]; label: string; log?: boolean; height?: number }) {
   const [tip, setTip] = useState<Tip | null>(null)
+  const { groups: order, groupColor, groupLabel } = useProject()
   const facets = useMemo(() => Array.from(new Set(points.map((p) => p.facet ?? ''))).sort(), [points])
-  const groups = GROUP_ORDER.filter((g) => points.some((p) => p.group === g))
+  const groups = [...order, ...Array.from(new Set(points.map((p) => p.group))).filter((g) => !order.includes(g)).sort()].filter((g) => points.some((p) => p.group === g))
   const tx = (v: number) => (log ? Math.log10(v + 1) : v)
   const values = points.map((p) => tx(p.value))
   const lo = Math.min(...values, 0)
@@ -67,12 +69,12 @@ export function GroupStrip({ points, label, log = false, height = 300 }: { point
                 {vals.map((p, i) => {
                   const jitter = ((i * 9301 + 49297) % 233280) / 233280 - 0.5
                   return (
-                    <circle key={i} cx={cx + jitter * 30} cy={y(tx(p.value))} r={4} fill={GROUP_COLOR[group]} stroke="var(--surface-2)" strokeWidth={1.5}
-                      onMouseMove={(e) => setTip({ x: e.clientX + 12, y: e.clientY + 12, text: `${p.id ?? ''} · ${GROUP_LABEL[group]} · ${fmt(p.value, 4)}` })}
+                    <circle key={i} cx={cx + jitter * 30} cy={y(tx(p.value))} r={4} fill={groupColor(group)} stroke="var(--surface-2)" strokeWidth={1.5}
+                      onMouseMove={(e) => setTip({ x: e.clientX + 12, y: e.clientY + 12, text: `${p.id ?? ''} · ${groupLabel(group)} · ${fmt(p.value, 4)}` })}
                       onMouseLeave={() => setTip(null)} />
                   )
                 })}
-                <text x={cx} y={height - m.b + 16} textAnchor="middle" fontSize={11.5} fill="var(--text-secondary)">{GROUP_LABEL[group]} ({vals.length})</text>
+                <text x={cx} y={height - m.b + 16} textAnchor="middle" fontSize={11.5} fill="var(--text-secondary)">{groupLabel(group)} ({vals.length})</text>
                 {gi === 0 && facet && (
                   <text x={m.l + slot * fi * groups.length + (slot * groups.length) / 2} y={height - 8} textAnchor="middle" fontSize={11.5} fontWeight={600} fill="var(--text-primary)">{facet}</text>
                 )}

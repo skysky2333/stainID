@@ -217,6 +217,7 @@ def export_cores(
     selected_cores: set[str] | None = None,
     overwrite: bool = False,
     write_workers: int = 2,
+    tma_prefix: str = "TMA-",
 ) -> None:
     if write_workers < 1:
         raise ValueError("write_workers must be at least 1")
@@ -231,7 +232,7 @@ def export_cores(
     if not grouped:
         raise ValueError("No manifest rows matched the requested slides")
 
-    for slide in sorted(grouped):
+    for slide_number, slide in enumerate(sorted(grouped), start=1):
         slide_rows = sorted(
             grouped[slide],
             key=lambda row: (int(row["row"]), int(row["column"])),
@@ -268,7 +269,7 @@ def export_cores(
                 output_path.stat().st_size,
             )
             print(
-                f"{slide}: {index:02d}/{len(slide_rows):02d} {row['core_label']}",
+                f"[{slide_number}/{len(grouped)}] {slide}: core {index}/{len(slide_rows)} {row['core_label']}",
                 flush=True,
             )
 
@@ -279,7 +280,7 @@ def export_cores(
                 x, y, width, height = core_bounds(row)
                 relative_path = (
                     Path("cores")
-                    / f"LIP-{row['tma']}"
+                    / f"{tma_prefix}{row['tma']}"
                     / row["core_label"]
                     / f"{row['stain']}.png"
                 )
@@ -306,7 +307,7 @@ def export_cores(
                         output_path.stat().st_size,
                     )
                     print(
-                        f"{slide}: {index:02d}/{len(slide_rows):02d} {row['core_label']}",
+                        f"[{slide_number}/{len(grouped)}] {slide}: core {index}/{len(slide_rows)} {row['core_label']}",
                         flush=True,
                     )
                 else:

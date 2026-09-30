@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import csv
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -258,7 +257,7 @@ def analyze_manifest(
 
     measure = partial(measure_manifest_row, manifest_path, write_overlays)
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        for slide, slide_rows in grouped.items():
+        for slide_number, (slide, slide_rows) in enumerate(grouped.items(), start=1):
             pending = [
                 row
                 for row in slide_rows
@@ -269,33 +268,5 @@ def analyze_manifest(
             for row, metrics in zip(pending, executor.map(measure, pending)):
                 row.update(metrics)
             write_manifest(manifest_path, fields, rows)
-            print(f"{slide}: {len(slide_rows)} cores", flush=True)
+            print(f"[{slide_number}/{len(grouped)}] {slide}: {len(slide_rows)} cores", flush=True)
     return manifest_path
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--manifest",
-        type=Path,
-        default=Path("data/core_manifest.csv"),
-    )
-    parser.add_argument("--overlays", action="store_true")
-    parser.add_argument("--overwrite", action="store_true")
-    parser.add_argument("--workers", type=int, default=1)
-    return parser.parse_args()
-
-
-def main() -> None:
-    args = parse_args()
-    output_path = analyze_manifest(
-        args.manifest,
-        args.overlays,
-        args.overwrite,
-        args.workers,
-    )
-    print(output_path)
-
-
-if __name__ == "__main__":
-    main()

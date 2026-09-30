@@ -5,11 +5,22 @@ from pathlib import Path
 import pandas as pd
 from fastapi import APIRouter, HTTPException
 
+from stainid.analysis.dictionary import describe
 from stainid.api.state import get_state
 from stainid.api.util import records
 
 router = APIRouter(tags=["analysis"])
 GROUP_COLUMNS = ("disease_group", "region", "tma")
+TABLES = {
+    "results_donor_region.csv": "Main results: one row per donor and brain region, every stain.",
+    "results_core.csv": "Main results, one row per core.",
+    "neun_donor_region.csv": "NeuN neuron measures per donor-region.",
+    "fields_donor_region.csv": "6E10 plaque and AT8 tau measures per donor-region.",
+    "masks_donor_region.csv": "Object-outline shape measures per donor-region.",
+    "neun_core.csv": "NeuN neuron measures per core.",
+    "fields_core.csv": "6E10 plaque and AT8 tau measures per core.",
+    "masks_core.csv": "Object-outline shape measures per core.",
+}
 
 
 def tables_root() -> Path:
@@ -30,9 +41,11 @@ def tables() -> list[dict]:
     for path in sorted(base.glob("*.csv")) + sorted(base.glob("biology/**/*.csv")):
         with path.open() as handle:
             header = handle.readline().strip().split(",")
-        out.append({"name": str(path.relative_to(base)), "columns": len(header), "size_kb": round(path.stat().st_size / 1024, 1),
-                    "donor_region": "sample_region_id" in header, "contrasts": "std_effect" in header or "effect_sd" in header})
-    return out
+        name = str(path.relative_to(base))
+        out.append({"name": name, "path": get_state().project.relative(path), "columns": len(header), "size_kb": round(path.stat().st_size / 1024, 1),
+                    "donor_region": "sample_region_id" in header, "contrasts": "std_effect" in header or "effect_sd" in header,
+                    "description": TABLES.get(name, ""), "main": name in TABLES})
+    return sorted(out, key=lambda t: (not t["main"], list(TABLES).index(t["name"]) if t["main"] else 0, t["name"]))
 
 
 @router.get("/tables/{name:path}/columns")
@@ -40,7 +53,8 @@ def columns(name: str) -> dict:
     frame = pd.read_csv(resolve(name), nrows=500, dtype={"donor_id": str, "tma": str})
     skip = {"tma", "technical_replicate", "selection_order", "label"}
     numeric = [c for c in frame.columns if pd.api.types.is_numeric_dtype(frame[c]) and c not in skip and not c.endswith("_id")]
-    return {"columns": list(frame.columns), "numeric": numeric, "groupable": [c for c in GROUP_COLUMNS if c in frame]}
+    return {"columns": list(frame.columns), "numeric": numeric, "groupable": [c for c in GROUP_COLUMNS if c in frame],
+            "descriptions": {c: describe(c) for c in frame.columns if describe(c)}}
 
 
 @router.get("/tables/{name:path}/rows")

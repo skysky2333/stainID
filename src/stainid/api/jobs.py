@@ -13,20 +13,10 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from stainid.workflows.steps import BY_ID, to_argv
+
 PROGRESS = re.compile(r"\[(\d+)/(\d+)\]")
-
-WORKFLOWS = {
-    "select": {"title": "Field selection", "args": ["select"], "heavy": False},
-    "calibrate": {"title": "Slide DAB calibration", "args": ["calibrate"], "heavy": False},
-    "nuclei": {"title": "Nuclei (Cellpose-SAM)", "args": ["nuclei"], "heavy": True},
-    "neun": {"title": "NeuN neurons", "args": ["neun"], "heavy": True},
-    "neun_merge": {"title": "Merge NeuN tables", "args": ["neun", "--merge"], "heavy": False},
-    "fields": {"title": "6E10 / AT8 field pipelines", "args": ["fields"], "heavy": True},
-    "masks": {"title": "SAM object outlines", "args": ["masks"], "heavy": True},
-    "aggregate_fields": {"title": "Aggregate field features", "args": ["aggregate", "fields"], "heavy": False},
-    "aggregate_masks": {"title": "Aggregate mask features", "args": ["aggregate", "masks"], "heavy": False},
-}
-
+ERROR = re.compile(r"^[A-Za-z_.]*(Error|Exception): ")
 
 @dataclass
 class Job:
@@ -42,22 +32,6 @@ class Job:
     returncode: int | None = None
 
 
-def to_argv(workflow: str, options: dict) -> list[str]:
-    argv = list(WORKFLOWS[workflow]["args"])
-    for key, value in options.items():
-        flag = "--" + key.replace("_", "-")
-        if value is None or value is False or value == "":
-            continue
-        if value is True:
-            argv.append(flag)
-        elif isinstance(value, list):
-            for item in value:
-                argv += [flag, str(item)]
-        else:
-            argv += [flag, str(value)]
-    return argv
-
-
 class JobManager:
     def __init__(self, project_root: Path, directory: Path, max_heavy: int = 2):
         self.root, self.dir, self.max_heavy = project_root, directory, max_heavy
@@ -68,6 +42,8 @@ class JobManager:
         for job in self.jobs.values():
             if job.status in ("running", "queued") and not (job.pid and _alive(job.pid)):
                 job.status = "interrupted" if job.status == "running" else job.status
+            if job.status == "queued" and job.workflow not in BY_ID:
+                job.status = "cancelled"
         threading.Thread(target=self._loop, daemon=True).start()
 
     def _load(self, path: Path) -> Job:
@@ -76,11 +52,14 @@ class JobManager:
     def _save(self, job: Job) -> None:
         (self.dir / f"{job.id}.json").write_text(json.dumps(asdict(job)))
 
+    def active(self) -> bool:
+        return any(j.status in ("running", "queued") for j in self.jobs.values())
+
     def log_path(self, job_id: str) -> Path:
         return self.dir / f"{job_id}.log"
 
     def submit(self, workflow: str, options: dict) -> Job:
-        if workflow not in WORKFLOWS:
+        if workflow not in BY_ID or BY_ID[workflow].command is None:
             raise KeyError(workflow)
         job = Job(id=time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6], workflow=workflow, options=options, argv=to_argv(workflow, options))
         with self.lock:
@@ -107,10 +86,12 @@ class JobManager:
         lines = [line for line in tail if line.strip() and "Warning" not in line]
         matches = [PROGRESS.search(line) for line in lines]
         last = next((m for m in reversed(matches) if m), None)
-        return {"done": int(last.group(1)) if last else 0, "total": int(last.group(2)) if last else 0, "last_line": lines[-1] if lines else ""}
+        error = ERROR.sub("", next((line for line in reversed(lines) if ERROR.match(line)), ""))
+        return {"done": int(last.group(1)) if last else 0, "total": int(last.group(2)) if last else 0, "last_line": lines[-1] if lines else "",
+                "error": error}
 
     def describe(self, job: Job) -> dict:
-        return {**asdict(job), "title": WORKFLOWS[job.workflow]["title"], "progress": self.progress(job)}
+        return {**asdict(job), "title": BY_ID[job.workflow].title if job.workflow in BY_ID else job.workflow, "progress": self.progress(job)}
 
     def _loop(self) -> None:
         while True:
@@ -124,9 +105,9 @@ class JobManager:
                             job.status = "finished" if code == 0 else "failed"
                         self._save(job)
                         del self.processes[job_id]
-                running_heavy = sum(WORKFLOWS[self.jobs[j].workflow]["heavy"] for j in self.processes)
+                running_heavy = sum(BY_ID[self.jobs[j].workflow].heavy for j in self.processes)
                 for job in sorted((j for j in self.jobs.values() if j.status == "queued"), key=lambda j: j.created):
-                    heavy = WORKFLOWS[job.workflow]["heavy"]
+                    heavy = BY_ID[job.workflow].heavy
                     if heavy and running_heavy >= self.max_heavy:
                         continue
                     self._start(job)

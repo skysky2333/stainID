@@ -12,8 +12,9 @@ from stainid.api.app import create_app  # noqa: E402
 
 
 @pytest.fixture()
-def client(synthetic_project, monkeypatch):
+def client(synthetic_project, monkeypatch, tmp_path_factory):
     monkeypatch.chdir(synthetic_project)
+    monkeypatch.setattr(state, "SETTINGS", tmp_path_factory.mktemp("home") / "app.json")
     state._STATE = None
     yield TestClient(create_app())
     state._STATE = None
@@ -56,3 +57,40 @@ def test_tables(client):
     assert "slide_dab_calibration.csv" in names
     rows = client.get("/api/tables/slide_dab_calibration.csv/rows").json()
     assert rows["total"] == 3
+
+
+def test_steps_describe_needs_and_progress(client):
+    steps = {s["id"]: s for s in client.get("/api/steps").json()}
+    assert steps["select"]["progress"] == {"state": "done", "done": 3, "total": 3, "unit": "fields", "note": "1 cores"}
+    assert steps["fields"]["progress"]["total"] == 2
+    assert [n["id"] for n in steps["fields"]["needs"]][:2] == ["tile_manifest", "calibration"]
+    assert steps["slides"]["command"] is None and steps["dearray"]["options"][0]["key"] == "redo"
+
+
+def test_settings_save_and_reopen(client, synthetic_project):
+    info = client.put("/api/project/config", json={"changes": {"tma": {"prefix": "LIP-"}, "groups": [{"code": "AD", "label": "Alzheimer"}]}}).json()
+    assert info["tma_prefix"] == "LIP-" and info["groups"][0] == {"code": "AD", "label": "Alzheimer"}
+    assert "prefix: LIP-" in (synthetic_project / "stainid.yaml").read_text()
+
+
+def test_create_open_project_and_templates(client, tmp_path):
+    new = tmp_path / "study2"
+    created = client.post("/api/project/create", json={"path": str(new), "name": "Second study"}).json()
+    assert created["name"] == "Second study" and created["configured"]
+    assert client.post("/api/project/open", json={"path": str(tmp_path / "missing")}).status_code == 404
+    listing = client.get("/api/fs", params={"path": str(new)}).json()
+    assert listing["path"] == str(new) and "stainid.yaml" in listing["files"]
+    assert client.get("/api/templates/tma_layout.csv").text.startswith("tma,core_label,donor_id")
+
+
+def test_upload_tma_map_validates(client, synthetic_project):
+    bad = client.post("/api/upload/tma_layout", files={"file": ("map.csv", b"tma,core_label\n1,B-2\n")})
+    assert bad.status_code == 400 and "missing columns" in bad.json()["detail"]
+    good = b"tma,core_label,donor_id,region,disease_group\n1,B-2,0001,frontal,AD\n"
+    saved = client.post("/api/upload/tma_layout", files={"file": ("map.csv", good)})
+    assert saved.status_code == 200 and saved.json()["rows"] == 1
+
+
+def test_download_is_limited_to_project(client):
+    assert client.get("/api/download", params={"path": "data/analysis/slide_dab_calibration.csv"}).status_code == 200
+    assert client.get("/api/download", params={"path": "../../etc/hosts"}).status_code == 403

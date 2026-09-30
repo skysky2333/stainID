@@ -19,7 +19,6 @@ dist/
 # ---- Web app ----
 webapp/node_modules/
 webapp/dist/
-src/stainid/api/static/
 
 # ---- OS / editors ----
 .DS_Store

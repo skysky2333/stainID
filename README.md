@@ -6,128 +6,111 @@ calibrated, artifact-masked native-resolution fields:
 
 | Stain | What is measured |
 |---|---|
-| **NeuN** | NeuN-positive neuronal profiles: density, positive fraction, soma size and shape |
+| **NeuN** | NeuN-positive neurons: density, positive fraction, soma size and shape |
 | **6E10** | Amyloid plaques: burden, density, compact / diffuse morphotype, dense cores, vascular/edge amyloid, peri-plaque nuclei |
-| **AT8** | Tau pathology: positive area, tau+ neurons (nucleus-ring and dense-body), neuropil thread network |
+| **AT8** | Tau pathology: positive area, tau+ neurons (tangles and pretangles), neuropil thread network |
 
-Everything runs from one command-line tool (`stainid`) or from a local web app that
-browses the cohort, launches and monitors pipeline jobs, inspects detections on the tissue, and
-collects blinded reference labels.
+Everything can be done from a local web app, without writing code. The app walks you through each step, from slide
+scans to a results table with one row per donor and brain region. Along the way you can check detections on the tissue,
+label objects blind, and train the stain models on your own slides. Every step is also a `stainid` command
+for scripted use.
 
-![Field viewer](docs/images/viewer.jpg)
+![Workflow](docs/images/workflow.png)
 
-## Install
+## Getting started (no coding)
 
-Python ≥ 3.10.
+1. **Install once.** You need [Python 3.10 or newer](https://www.python.org/downloads/). To read Olympus `.vsi` scans you
+   also need [Java](https://adoptium.net). Download this repository (green *Code* button → *Download ZIP*), unzip it, and
+   double-click **`Install stainID.command`** (macOS) or **`Install stainID.bat`** (Windows).
+   On macOS the first time, right-click the file → *Open* to allow it.
+2. **Start.** Double-click **`Start stainID.command`** (or `.bat`). stainID opens in your web browser. Keep the small
+   terminal window open while you work, because closing it stops running steps.
+3. **Create a project** for your study on the welcome screen: choose a study name and an empty folder. All settings,
+   core images and results for the study are kept in that folder.
+4. **Follow Home → Workflow.** Each step says what it needs, what it makes and where the files go; press *Run*.
+   The Help page has a getting-started guide, a glossary and answers to common questions.
 
-```bash
-git clone <this repo> stainID && cd stainID
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[app,deep,slides]"
-```
-
-Extras: `slides` reads Olympus `.vsi` scans (aicsimageio / Bio-Formats; needs a Java runtime), `deep` adds PyTorch,
-Cellpose-SAM, Segment Anything and Hugging Face transformers, `app` adds the web server,
-`dev` adds pytest and ruff. The core package (numpy / scikit-image / scikit-learn / OpenCV)
-installs without any of them.
-
-The web app ships prebuilt inside the package once built. To build it from source you need
-Node ≥ 20:
-
-```bash
-cd webapp && npm ci && npm run build   # writes src/stainid/api/static/
-```
-
-## Quick start
-
-```bash
-stainid init --project path/to/study        # writes path/to/study/stainid.yaml
-stainid --project path/to/study info        # shows every resolved input, model and output path
-stainid --project path/to/study serve       # web app at http://127.0.0.1:8765
-```
-
-A project is any folder with a `stainid.yaml`; all paths in it are relative to that folder. See
-[docs/project.md](docs/project.md) for the configuration, required input tables and models.
-
-## Pipeline
-
-```
-slides ──dearray──▶ core manifest ──export──▶ native core PNGs ──core QC──▶ select fields
-                                                                                │
-             ┌──────────────── calibrate (one DAB threshold per slide) ◀────────┘
-             ▼
-   nuclei (Cellpose-SAM) ──▶ neun │ fields (6E10, AT8) ──▶ masks (SAM outlines) ──▶ aggregate
-```
-
-| Step | Command |
-|---|---|
-| Find cores on each slide (affine lattice fit) | `stainid-dearray <slides_dir>` |
-| Attach the TMA map (donor, region, group) | `stainid-attach-layout` |
-| Export native-resolution cores | `stainid-export-cores` |
-| Core tissue / focus QC and contact sheets | `stainid-core-qc`, `stainid-core-sheets` |
-| Select analysis fields | `stainid select` |
-| Per-slide DAB threshold | `stainid calibrate` |
-| Nuclei on the hematoxylin counterstain | `stainid nuclei --stain AT8 --stain 6E10` |
-| NeuN neurons | `stainid neun`, then `stainid neun --merge` |
-| 6E10 plaques and AT8 tau | `stainid fields` |
-| Object outlines | `stainid masks --stain NeuN` (and `6E10`, `AT8`) |
-| Core / donor-region tables | `stainid aggregate fields`, `stainid aggregate masks` |
-
-Every step is resumable (finished cores and fields are skipped) and heavy steps take
-`--shard-index/--shard-count` so they can be spread over processes or machines. Method details
-and parameters for each stain are in [docs/pipelines.md](docs/pipelines.md).
-
-## Web app
+## What the app looks like
 
 | | |
 |---|---|
-| ![Overview](docs/images/overview.png) | ![Cohort](docs/images/cohort.jpg) |
-| **Overview**: cohort size and per-stain pipeline progress | **Cohort & cores**: TMA layout by group; click a core to open it |
-| ![Pipelines](docs/images/pipelines.png) | ![Labelling](docs/images/labelling.jpg) |
-| **Pipelines & jobs**: run any step, at most two heavy jobs at once, live logs | **Review & annotate**: blinded, keyboard-driven reference labelling |
-| ![Analysis](docs/images/analysis.png) | ![Calibration](docs/images/calibration.png) |
-| **Analysis**: any output feature by group and region | **Calibration**: per-slide DAB thresholds |
+| ![Home](docs/images/home.png) | ![Models](docs/images/models.png) |
+| **Home**: your next step and overall progress | **Models**: download published models; create a training set, label it, train, compare, switch |
+| ![Core viewer](docs/images/viewer.jpg) | ![Labelling](docs/images/labelling.jpg) |
+| **Cohort & cores**: every core and field with detections, outlines and masks drawn on the tissue | **Label & check**: blinded, keyboard-driven labelling |
+| ![Results](docs/images/results.png) | ![Settings](docs/images/settings.png) |
+| **Results**: download the main table, what every column means, plots by group | **Settings**: study layout, diagnostic groups and every file location |
 
-The field viewer overlays detections, SAM outlines, above-threshold DAB, excluded
-regions and traced tau threads on the native image, with light and dark themes. See
-[docs/webapp.md](docs/webapp.md).
+## The workflow
+
+| Step | What it does | Command |
+|---|---|---|
+| Register slides | say which scan is which TMA and stain (guessed from file names) | *web app* |
+| Find cores | fit the TMA grid on each slide | `stainid dearray` |
+| Attach TMA map | donor, brain region and diagnostic group per core position (CSV upload, template provided) | `stainid layout` |
+| Export cores | native-resolution core images | `stainid export` |
+| Check core quality | tissue coverage, fragments, focus | `stainid qc` |
+| Choose analysis fields | evenly spread ~560 µm fields per core | `stainid select` |
+| Calibrate | one DAB threshold per slide, blind to diagnosis | `stainid calibrate` |
+| Find nuclei | Cellpose-SAM nuclei (needed for AT8) | `stainid nuclei --stain AT8` |
+| Detect NeuN neurons | candidates + NeuN model | `stainid neun` |
+| Detect plaques and tau | 6E10 plaques and morphotypes; AT8 tau+ neurons and threads | `stainid fields` |
+| Outline objects (optional) | Segment Anything outlines and shape features | `stainid masks --stain NeuN` |
+| Make results tables | one row per donor-region, every stain | `stainid summarize` |
+
+Model steps: `stainid download-models`, `stainid training-set`, `stainid train`. `stainid status` prints the progress of
+every step. All steps are resumable and the heavy ones can be split with `--shard-index/--shard-count`.
+Method details and parameters are in [docs/pipelines.md](docs/pipelines.md).
+
+## Install from the command line
+
+```bash
+git clone https://github.com/skysky2333/stainID.git && cd stainID
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[app,deep,slides]"
+stainid serve                       # opens the web app; or: stainid --project path/to/study status
+```
+
+The extras are:
+
+- `slides`: reads `.vsi` scans (aicsimageio / Bio-Formats, needs Java).
+- `deep`: PyTorch, Cellpose-SAM, Segment Anything and transformers.
+- `app`: the web server.
+- `dev`: pytest and ruff.
+
+The web app is committed prebuilt, so Node is only needed to change the front end (see
+[docs/development.md](docs/development.md)).
+
+## Documentation
+
+- [docs/webapp.md](docs/webapp.md): the web app page by page, the review and training workflow, and the API
+- [docs/project.md](docs/project.md): project settings (`stainid.yaml`), input tables and output files
+- [docs/pipelines.md](docs/pipelines.md): what each step computes, with parameters
+- [docs/development.md](docs/development.md): tests, front-end development, adding a step
 
 ## Repository layout
 
 ```
 src/stainid/
-  project.py        stainid.yaml loading and path resolution
+  project.py        stainid.yaml loading, saving and path resolution
   cli.py            the `stainid` command
-  workflows/        end-to-end steps used by the CLI and the job runner
-  slides/           .vsi reading, dearraying, core export, TMA layout
+  workflows/        every step (steps.py is the registry the CLI, job runner and web app share)
+  training/         training sets and model training from blinded labels
+  slides/           slides table, scan reading, dearraying, core export, TMA map
   qc/               core QC, focus, artifact exclusions
-  sampling/         field selection and review sampling frames
+  sampling/         field selection
   imaging/          colour deconvolution, tissue / fold / artifact masks, calibration
   nuclei.py         Cellpose-SAM nuclei
   stains/           neun/, amyloid/, tau/ stain-specific detection and classifiers
   masks/            Segment Anything outlines and shape features
-  analysis/         core / donor-region aggregation
+  analysis/         core / donor-region aggregation and the column dictionary
   registration/     cross-stain core registration
-  review/           blinded review sets (sampling, storage)
-  api/              FastAPI backend for the web app
-webapp/             React + TypeScript front end (Vite)
+  review/           blinded review sets
+  api/              FastAPI backend (and the built web app in api/static)
+webapp/             React + TypeScript front end
 tools/qupath/       QuPath scripts for TMA grids and core export
 tests/              pytest suite (synthetic data only)
 ```
-
-Study data, models, results and analysis scripts live in `data/` and `workspace/` next to the
-code and are not part of the repository.
-
-## Development
-
-```bash
-pip install -e ".[dev,app,slides]"
-pytest
-ruff check src tests
-cd webapp && npm run dev      # hot-reloading UI, proxies /api to `stainid serve`
-```
-
-See [docs/development.md](docs/development.md).
 
 ## Acknowledgements
 

@@ -36,6 +36,7 @@ def analyze_at8_v2(
     inside = points[(points[:, 0] >= inner[1].start) & (points[:, 0] < inner[1].stop) & (points[:, 1] >= inner[0].start) & (points[:, 1] < inner[0].stop)] if len(points) else points
     summary = {
         "v2_tissue_area_mm2": area_mm2,
+        "at8_positive_area_mm2": float((maps["positive"][inner] & inner_valid).sum() * pixel_size_um**2 / 1e6),
         "tau_neuron_count": len(neurons),
         "tau_neuron_mature_count": mature,
         "tau_neuron_density_mm2": len(neurons) / area_mm2 if area_mm2 else float("nan"),

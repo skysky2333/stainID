@@ -7,14 +7,14 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from stainid.api.routes import analysis, cohort, images, jobs, models, project, reviews
+from stainid.api.routes import analysis, cohort, images, jobs, models, project, reviews, slides
 
 STATIC = Path(__file__).parent / "static"
 
 
 def create_app() -> FastAPI:
     app = FastAPI(title="stainID", version="2.0")
-    for module in (project, cohort, images, jobs, reviews, analysis, models):
+    for module in (project, slides, cohort, images, jobs, reviews, analysis, models):
         app.include_router(module.router, prefix="/api")
     if (STATIC / "index.html").exists():
         app.mount("/assets", StaticFiles(directory=STATIC / "assets"), name="assets")
