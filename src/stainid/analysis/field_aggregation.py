@@ -45,6 +45,7 @@ def summarize(stain: str, tiles: list[dict[str, str]], objects: list[dict[str, s
             "plaque_area_fraction": ratio(plaque_area / 1e6, area),
             "plaque_density_ge10um_mm2": ratio(sum(float(r["equivalent_diameter_um"]) >= 10.0 for r in objects), area),
             "vascular_or_edge_amyloid_density_mm2": ratio(total(tiles, "v2_vascular_or_edge_count"), area),
+            "amyloid_speck_density_mm2": ratio(total(tiles, "v2_speck_count"), area),
             "compact_fraction_v2": ratio(sum(r["plaque_class"] == "compact" for r in eligible), sum(r["plaque_class"] in {"compact", "diffuse"} for r in eligible)) if len(eligible) >= 10 else float("nan"),
             "v2_plaque_mean_area_um2": ratio(plaque_area, plaques),
             "plaque_dense_core_area_fraction": ratio(total(tiles, "v2_dense_core_area_sum_um2"), plaque_area) if plaques >= 10 else float("nan"),

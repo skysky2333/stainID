@@ -71,6 +71,7 @@ def analyze_6e10_v2(
     summary = {
         "v2_tissue_area_mm2": area_mm2,
         "v2_plaque_count": len(plaques),
+        "v2_speck_count": sum(row["candidate_class"] == "speck" for row in centered_objects(objects, inner)),
         "v2_vascular_or_edge_count": sum(
             row["candidate_class"] == "vascular_or_edge" for row in centered_objects(objects, inner)
         ),

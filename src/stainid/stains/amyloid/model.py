@@ -20,6 +20,8 @@ IDENTITY_CLASSES = {"compact", "diffuse", "review"}
 PATCH_CONTEXT_UM = 140.0
 PATCH_PX = 180
 MORPHOTYPE_MINIMUM_DIAMETER_UM = 15.0
+# Blind review of 389 disputed objects: none ≤8 µm and 4% of 8–10 µm were plaques (specks, cell bodies, vessel dots)
+MINIMUM_PLAQUE_DIAMETER_UM = 10.0
 
 
 def read_csv(path: Path) -> list[dict[str, str]]:
@@ -188,6 +190,8 @@ def classify_amyloid_objects(
         )
         if not accepted:
             plaque_class = "rejected"
+        elif float(row["equivalent_diameter_um"]) <= MINIMUM_PLAQUE_DIAMETER_UM:
+            plaque_class = "speck"
         elif not morphotype_eligible:
             plaque_class = "small_plaque"
         elif normalized >= float(bundle["morphotype_threshold"]):

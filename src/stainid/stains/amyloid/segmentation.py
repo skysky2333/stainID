@@ -20,6 +20,7 @@ CLASS_PROPERTIES = {
     "artifact": ("6E10 artifact", (180, 50, 190)),
     "compact_core": ("Compact plaque core", (245, 205, 35)),
     "small_plaque": ("Plaque below morphotype size", (60, 110, 220)),
+    "speck": ("Deposit below plaque size", (170, 170, 170)),
     "rejected": ("Rejected amyloid candidate", (120, 120, 120)),
 }
 
