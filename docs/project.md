@@ -1,12 +1,14 @@
-# Projects
+# Project files
 
-A project is a folder containing `stainid.yaml`. Every relative path in the file is resolved
-against that folder. The web app creates and edits it (Settings page). `stainid init` writes the
-defaults below, and the file only needs the keys it changes. `stainid info` prints every resolved
-path and whether it exists, and `stainid status` shows how far each step has got.
+A project is a folder with a settings file, `stainid.yaml`, and everything the study reads and makes. This page
+describes the [settings](#settings), the [input tables](#input-tables) and the [outputs](#outputs).
 
-The project is found from `--project`, then `$STAINID_PROJECT`, then the current directory.
-Commands run with the project folder as their working directory.
+## Settings
+
+The web app creates `stainid.yaml` and edits it on the Settings page; `stainid init` writes the defaults below. The
+file only keeps the keys that differ from the defaults, and every relative path in it is resolved against the project
+folder. On the command line the project is found from `--project`, then `$STAINID_PROJECT`, then the current folder;
+`stainid info` prints every resolved path and whether it exists, and `stainid status` shows how far each step has got.
 
 ```yaml
 name: My TMA study
@@ -59,6 +61,19 @@ outputs:
 is downloaded at run time.
 
 ## Input tables
+
+You provide the TMA map, and optionally donor information and hand-drawn exclusions. The other tables are made by the
+steps.
+
+| Table | Made by |
+|---|---|
+| `tma_layout.csv` | you (template on the *Attach TMA map* card) |
+| `donor_metadata.csv` | you, optional: only used by your own downstream statistics |
+| `manual_exclusions` | you, optional |
+| `slides.csv` | *Register slides* |
+| core table (`core_manifest`) | *Find cores*, then updated by *Attach TMA map*, *Export cores* and *Check core quality* |
+| analysis fields (`tile_manifest`, `field_manifest`), `core_images` | *Choose analysis fields* |
+| `calibration` | *Calibrate stain thresholds* |
 
 **`slides.csv`**: one row per scan, written by the *Register slides* step: `slide_path`, `tma`, `stain`.
 Supported scan formats are those Bio-Formats reads: `.vsi`, `.svs`, `.ndpi`, `.scn`, `.mrxs`, `.czi`, `.tif`.

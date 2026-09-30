@@ -1,4 +1,7 @@
-# Pipelines
+# Methods
+
+What each step computes, in workflow order, with its parameters. How to run the steps is in
+[webapp.md](webapp.md); the files they read and write are in [project.md](project.md).
 
 All measurements are made on native-resolution fields (default 2048 px ≈ 560 µm at
 0.274 µm/px). Each field is read with a 128 px context margin so that objects at the
