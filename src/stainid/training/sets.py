@@ -57,6 +57,14 @@ def with_detections(project: Project, stain: str, tiles: list[dict[str, str]]) -
     return [t for t in tiles if counts.get(t["tile_id"], 0) > 0] or tiles
 
 
+def unused_fields(project: Project, stain: str, tiles: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Prefer fields no earlier training set of this stain has used, so a new set brings new objects."""
+    root = project.output("reviews") / "training"
+    keys = [pd.read_csv(key, dtype=str) for key in root.glob("*/key.csv")] if root.exists() else []
+    used = {t for key in keys for t in key.tile_id[key.stain == stain]}
+    return [t for t in tiles if t["tile_id"] not in used] or tiles
+
+
 def pick_fields(tiles: list[dict[str, str]], n: int, seed: int) -> list[dict[str, str]]:
     """Spread fields over TMAs and diagnostic groups: shuffle, then take one field per (TMA, group) in turn."""
     rng = np.random.default_rng(seed)
@@ -90,7 +98,8 @@ def create_training_set(project: Project, stain: str, name: str, fields: int = 1
     if (project.output("reviews") / folder_name).exists():
         raise FileExistsError(f"A training set called {name} already exists")
     tiles = [t for t in read_csv(project.input("tile_manifest")) if t["stain"] == stain]
-    tiles = pick_fields(with_detections(project, stain, tiles) if enrich else tiles, fields, seed)
+    tiles = unused_fields(project, stain, with_detections(project, stain, tiles) if enrich else tiles)
+    tiles = pick_fields(tiles, fields, seed)
     loader = candidates.FieldLoader(project)
     rng = np.random.default_rng(seed)
     items, features, embeddings, names = [], [], [], None
