@@ -34,7 +34,7 @@ def row(stain, donor="1001"):
 
 class AnalysisManifestTest(unittest.TestCase):
     def test_builds_ordered_triplet(self):
-        records = analysis_rows([row("NeuN"), row("6E10"), row("AT8")])
+        records = analysis_rows([row("NeuN"), row("6E10"), row("AT8")], "LIP-")
         self.assertEqual([record["stain"] for record in records], ["6E10", "AT8", "NeuN"])
         self.assertTrue(all(record["core_id"] == "LIP-1_B-2" for record in records))
         self.assertEqual(records[0]["image_path"], "data/cores/LIP-1/B-2/6E10.png")
@@ -44,6 +44,15 @@ class AnalysisManifestTest(unittest.TestCase):
         rows = [row("6E10"), row("AT8"), row("NeuN", donor="1002")]
         with self.assertRaisesRegex(ValueError, "donor_id"):
             analysis_rows(rows)
+
+    def test_any_stain_subset_and_prefix(self):
+        records = analysis_rows([row("NeuN"), row("AT8")])
+        self.assertEqual([record["stain"] for record in records], ["AT8", "NeuN"])
+        self.assertEqual(records[0]["core_id"], "TMA-1_B-2")
+
+    def test_rejects_duplicate_stain(self):
+        with self.assertRaisesRegex(ValueError, "Duplicate"):
+            analysis_rows([row("NeuN"), row("NeuN")])
 
 
 if __name__ == "__main__":

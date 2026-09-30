@@ -2,11 +2,14 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import type { ReviewData, Row } from '../api'
 import { api } from '../api'
-import { ErrorNote, GROUP_LABEL, PageHead, Progress } from '../components'
+import { ErrorNote, PageHead, Progress } from '../components'
 import { useFetch, useStored } from '../hooks'
+import { useProject } from '../project'
 
 export default function ReviewLabel() {
   const name = useParams()['*'] ?? ''
+  const { groupLabel } = useProject()
+  const training = name.startsWith('training/')
   const data = useFetch<ReviewData>(`/api/reviews/${name}/items`)
   const [labels, setLabels] = useState<Record<string, string>>({})
   const [index, setIndex] = useState(0)
@@ -57,10 +60,11 @@ export default function ReviewLabel() {
 
   return (
     <>
-      <PageHead title={data.data?.meta.title ?? name} subtitle={<span><Link to="/reviews">Review sets</Link> · {data.data?.meta.stain} · crops are {data.data?.meta.fov_um} µm wide, target at the centre cross</span>}>
+      <PageHead title={data.data?.meta.title ?? name} subtitle={<span><Link to={training ? '/models#train' : '/label'}>← {training ? 'Back to training' : 'All sets'}</Link> · {data.data?.meta.stain} · each picture is {data.data?.meta.fov_um} µm wide; the object to judge is under the blue cross</span>}>
         <label className="field">Reviewer<input type="text" value={reviewer} onChange={(e) => setReviewer(e.target.value)} placeholder="your initials" /></label>
       </PageHead>
       <ErrorNote error={data.error ?? error} />
+      {data.data?.meta.instructions && <div className="instructions">{data.data.meta.instructions}</div>}
       {item && (
         <div className="grid" style={{ gridTemplateColumns: 'minmax(320px, 560px) 1fr', alignItems: 'start' }}>
           <div className="card">
@@ -96,15 +100,15 @@ export default function ReviewLabel() {
                 <label className="field" style={{ flex: 1 }}>Notes<input type="text" value={notes} onChange={(e) => setNotes(e.target.value)} /></label>
               </div>
               <p className="muted small">Keys: <span className="kbd">1</span>–<span className="kbd">{options.length}</span> label, <span className="kbd">←</span>/<span className="kbd">→</span> navigate.</p>
-              {data.data?.meta.instructions && <p className="secondary small">{data.data.meta.instructions}</p>}
             </div>
             <div className="card">
               <h3>Progress</h3>
               <Progress done={done} total={items.length} />
-              <p className="muted small">{done} of {items.length} labelled. Group and model score stay hidden until every item is labelled.</p>
+              <p className="muted small">{done} of {items.length} labelled. Labels are saved as you go, so you can stop and come back any time.
+                {training ? ' When you have labelled enough, go back to Models and press Train.' : ' Groups are revealed once every item is labelled.'}</p>
               {summary.data && summary.data.length > 0 && (
                 <table>
-                  <thead><tr><th>label</th>{Object.keys(summary.data[0]).filter((k) => k !== 'label').map((g) => <th key={g} className="num">{GROUP_LABEL[g] ?? g}</th>)}</tr></thead>
+                  <thead><tr><th>label</th>{Object.keys(summary.data[0]).filter((k) => k !== 'label').map((g) => <th key={g} className="num">{groupLabel(g)}</th>)}</tr></thead>
                   <tbody>{summary.data.map((r) => (
                     <tr key={String(r.label)}><td>{String(r.label)}</td>{Object.entries(r).filter(([k]) => k !== 'label').map(([k, v]) => <td key={k} className="num">{String(v)}</td>)}</tr>
                   ))}</tbody>

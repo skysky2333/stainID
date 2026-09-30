@@ -135,6 +135,21 @@ def train_amyloid_bundle(
     }
 
 
+def identity_features(rgb: np.ndarray, rows: list[dict[str, object]], pixel_size_um: float) -> tuple[np.ndarray, list[str]]:
+    """Morphology + 140 um context features of candidate deposits (the identity random forest's input)."""
+    bgr = rgb[:, :, ::-1]
+    contexts = [
+        context_features(review_patch(bgr, float(row["centroid_x_px"]), float(row["centroid_y_px"]), pixel_size_um), float(row["equivalent_diameter_um"]))
+        for row in rows
+    ]
+    names = list(MORPHOLOGY_FEATURES) + list(contexts[0])
+    matrix = np.asarray(
+        [[float(row[name]) for name in MORPHOLOGY_FEATURES] + [context[name] for name in names[len(MORPHOLOGY_FEATURES):]] for row, context in zip(rows, contexts)],
+        dtype=float,
+    )
+    return matrix, names
+
+
 def classify_amyloid_objects(
     rgb: np.ndarray,
     objects: list[dict[str, object]],
@@ -142,34 +157,13 @@ def classify_amyloid_objects(
     pixel_size_um: float,
     bundle: dict[str, object],
 ) -> list[dict[str, object]]:
-    bgr = rgb[:, :, ::-1]
     eligible = [row for row in objects if row["candidate_class"] in IDENTITY_CLASSES]
     caa_scores: dict[int, float] = {}
     probabilities: dict[int, float] = {}
     if eligible:
-        contexts = [
-            context_features(
-                review_patch(
-                    bgr,
-                    float(row["centroid_x_px"]),
-                    float(row["centroid_y_px"]),
-                    pixel_size_um,
-                ),
-                float(row["equivalent_diameter_um"]),
-            )
-            for row in eligible
-        ]
-        names = list(MORPHOLOGY_FEATURES) + list(contexts[0])
+        matrix, names = identity_features(rgb, eligible, pixel_size_um)
         if names != bundle["identity_feature_names"]:
             raise ValueError("Amyloid cohort features do not match the frozen model")
-        matrix = np.asarray(
-            [
-                [float(row[name]) for name in MORPHOLOGY_FEATURES]
-                + [context[name] for name in names[len(MORPHOLOGY_FEATURES) :]]
-                for row, context in zip(eligible, contexts)
-            ],
-            dtype=float,
-        )
         values = bundle["identity_classifier"].predict_proba(matrix)[:, 1]
         if "phikon_classifier" in bundle:
             embeddings = phikon_embeddings([

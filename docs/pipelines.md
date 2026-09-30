@@ -7,12 +7,13 @@ Colour deconvolution uses the Ruifrok–Johnston H-E-DAB matrix (`stainid.imagin
 
 ## 1. Slides to cores
 
-| Step | Module | Notes |
+| Step | Command | Notes |
 |---|---|---|
-| Dearray | `stainid.slides.dearray` | Fits an affine rows × columns lattice (default 5 × 6) to tissue components on a slide preview, then re-centres each core on local tissue so torn, partial and edge-clipped cores are recovered. Writes the core manifest and QC overlays. |
-| TMA map | `stainid.slides.layout` | Joins donor, region, disease group and tissue-control flags from `tma_layout.csv`. |
-| Export | `stainid.slides.export` | Native-resolution core PNGs read directly from the scanner files. |
-| Core QC | `stainid.qc.core_qc` | Tissue fraction and fragments, background brightness, hematoxylin / DAB OD quantiles, low-focus scanner tiles. |
+| Register slides | *web app* (writes `slides.csv`) | TMA number and stain are guessed from each file name and confirmed by the user. |
+| Find cores | `stainid dearray` | Fits an affine rows × columns lattice (`tma.rows` × `tma.columns`) to tissue components on a slide preview, then re-centres each core on local tissue so torn, partial and edge-clipped cores are recovered. Writes the core table and one grid picture per slide. |
+| Attach TMA map | `stainid layout` | Joins donor, region, diagnostic group (and optional neuropathology) from `tma_layout.csv`. Replicate cores of a donor-region are numbered in file order. |
+| Export cores | `stainid export` | Native-resolution core PNGs read directly from the scanner files. |
+| Core QC | `stainid qc` | Tissue fraction and fragments, background brightness, hematoxylin / DAB OD quantiles, low-focus scanner tiles. |
 
 QuPath alternatives for grid placement and export are in `tools/qupath/`.
 
@@ -84,7 +85,7 @@ reported next to density as a cellularity-independent measure.
 
 ## 8. AT8 tau — `stainid fields --stain AT8`
 
-1. Burden is the slide-calibrated DAB-positive area fraction after exclusions.
+1. Burden (`at8_positive_area_fraction`) is the slide-calibrated DAB-positive area fraction after exclusions.
 2. Tau+ neuron candidates come from two sources:
    - Cellpose nuclei with a stained perinuclear ring (`ring`);
    - dense AT8 bodies that stand above a 60 µm local background (`dense body`).
@@ -109,7 +110,7 @@ window.
 For each outline the step records area, perimeter, axes, elongation, solidity, circularity and
 stain density. For plaques it also records dense-core area and core count.
 
-## 10. Aggregation — `stainid aggregate`
+## 10. Results tables — `stainid summarize`
 
 Counts and areas are summed over fields and technical cores before densities are formed
 (numerator and denominator pooled). Per-object shape features are summarised by medians with
@@ -118,7 +119,9 @@ minimum object counts.
 - `--level sample_region_id` gives donor × region tables.
 - `--level core_id` gives per-core tables.
 
-Outputs are written to `outputs.tables` as `fields_<level>.csv` and `masks_<level>.csv`.
+`summarize` writes `results_<level>.csv`: NeuN, 6E10 / AT8 and outline features in one table. It also writes the
+per-kind tables `neun_`, `fields_` and `masks_<level>.csv` (`stainid aggregate neun|fields|masks` makes one of them).
+The meaning of every column is shown on the Results page and defined in `stainid.analysis.dictionary`.
 
 ## Models
 
@@ -133,4 +136,7 @@ Outputs are written to `outputs.tables` as `fields_<level>.csv` and `masks_<leve
 | `huggingface_home` | Phikon (`owkin/phikon`) | Hugging Face cache; run offline once populated |
 
 Random-forest bundles depend on the stain protocol and scanner, so no weights ship with the
-repository. Train them from reference labels collected in the review tool.
+repository. Train them in the web app (Models page) or with `stainid training-set` and `stainid train`. Training reuses
+the detection code to find candidates and compute their features, so a trained bundle drops into the pipeline unchanged
+(see [webapp.md](webapp.md#training-a-model)). `stainid download-models` fetches the Cellpose-SAM, Segment Anything
+and Phikon weights.

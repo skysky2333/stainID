@@ -21,6 +21,9 @@ npm run dev                                # Vite on :5173, proxies /api
 npm run build                              # production build into src/stainid/api/static/
 ```
 
+The production build in `src/stainid/api/static/` is committed so that installing stainID does not need Node:
+run `npm run build` and commit the result whenever the front end changes.
+
 React 19 + TypeScript + Vite, with no UI framework:
 
 | path | |
@@ -28,17 +31,21 @@ React 19 + TypeScript + Vite, with no UI framework:
 | `src/index.css` | design tokens (light / dark) |
 | `src/api.ts` | typed API client |
 | `src/hooks.ts` | `useFetch`, `useStored` |
-| `src/components.tsx`, `src/charts.tsx` | shared pieces |
+| `src/project.tsx` | project context: group labels / colours, TMA names |
+| `src/glossary.ts` | glossary behind hover definitions and the Help page |
+| `src/components.tsx`, `src/charts.tsx` | shared pieces (help boxes, folder picker, path lines, option fields, charts) |
 | `src/pages/` | one file per page |
 
 ## Adding a workflow step
 
 1. Implement it in `stainid/workflows/<step>.py` as a function of a `Project`. Print one
-   `[i/n] …` line per unit of work so the job runner can show progress, and skip finished
-   outputs so the step is resumable.
+   `[i/n] …` line per unit of work so the job runner can show progress, skip finished outputs
+   so the step is resumable, and raise `ValueError` with a plain-language message for user errors.
+   The web app shows that message on the step card.
 2. Add a subcommand in `stainid/cli.py`.
-3. Register it in `WORKFLOWS` in `stainid/api/jobs.py` (`heavy: True` if it is GPU/CPU-bound).
-4. Add a card to `STEPS` in `webapp/src/pages/Pipelines.tsx`.
+3. Add a `Step` to `STEPS` in `stainid/workflows/steps.py`. It covers the title, a one-line summary and details for
+   non-coders, `needs` / `produces` resources, options (with help text), `heavy`, and a status function. The job runner
+   and the Workflow page pick it up automatically.
 
 ## Conventions
 

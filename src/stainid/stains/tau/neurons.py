@@ -9,6 +9,12 @@ from stainid.imaging.tissue import field_tissue_mask
 from stainid.stains.amyloid.classifier import context_features
 from stainid.stains.neun.audit import crop_with_padding
 
+TAU_FEATURES = (
+    "normalized_contrast", "normalized_soma_dab", "soma_area_um2", "soma_solidity", "soma_circularity",
+    "soma_elongation", "soma_dab_cv", "soma_dab_p90", "nucleus_count", "nucleus_overlap_fraction",
+    "positive_fraction", "soma_hematoxylin_mean", "edge_fraction", "background_dab_median",
+)
+
 
 def _disk(radius_px: int) -> np.ndarray:
     return cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * radius_px + 1, 2 * radius_px + 1))
@@ -165,6 +171,14 @@ def add_context_features(rgb: np.ndarray, objects: list[dict[str, object]], pixe
     return rows
 
 
+def tau_feature_matrix(rows: list[dict[str, object]]) -> tuple[np.ndarray, list[str]]:
+    """Shape, stain and context features of tau+ neuron candidates (the tau random forest's input)."""
+    context = [k for k in rows[0] if str(k).startswith("ctx_")]
+    names = list(TAU_FEATURES) + context + ["from_ring"]
+    matrix = np.asarray([[float(row.get(n, np.nan)) for n in names[:-1]] + [float(row["candidate_source"] == "nucleus_ring")] for row in rows])
+    return matrix, names
+
+
 def classify_tau_neurons(rows: list[dict[str, object]], bundle: dict[str, object], pixel_size_um: float) -> list[dict[str, object]]:
     if not rows:
         return []
@@ -195,7 +209,9 @@ def classify_tau_neurons(rows: list[dict[str, object]], bundle: dict[str, object
 
 
 __all__ = [
+    "TAU_FEATURES",
     "add_context_features",
     "classify_tau_neurons",
+    "tau_feature_matrix",
     "tau_neuron_candidates",
 ]

@@ -3,8 +3,6 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-STAINS = ("6E10", "AT8", "NeuN")
-
 
 def read_core_manifest(path: Path) -> list[dict[str, str]]:
     with path.open(newline="", encoding="utf-8") as handle:
@@ -41,7 +39,11 @@ def read_core_manifest(path: Path) -> list[dict[str, str]]:
     return rows
 
 
-def analysis_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+def _tma_order(tma: str) -> tuple[int, str]:
+    return (int(tma), "") if tma.isdigit() else (1 << 30, tma)
+
+
+def analysis_rows(rows: list[dict[str, str]], tma_prefix: str = "TMA-") -> list[dict[str, str]]:
     biological = [row for row in rows if row["core_role"] == "biological"]
     grouped: dict[tuple[str, str], list[dict[str, str]]] = {}
     for row in biological:
@@ -49,11 +51,11 @@ def analysis_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
 
     records = []
     for (tma, core_label), triplet in sorted(
-        grouped.items(), key=lambda item: (int(item[0][0]), item[0][1])
+        grouped.items(), key=lambda item: (_tma_order(item[0][0]), item[0][1])
     ):
         by_stain = {row["stain"]: row for row in triplet}
-        if set(by_stain) != set(STAINS) or len(triplet) != len(STAINS):
-            raise ValueError(f"Invalid stain triplet for LIP-{tma} {core_label}")
+        if len(by_stain) != len(triplet):
+            raise ValueError(f"Duplicate stain images for {tma_prefix}{tma} {core_label}")
         identity_fields = (
             "donor_id",
             "region",
@@ -65,10 +67,10 @@ def analysis_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
         )
         for field in identity_fields:
             if len({row[field] for row in triplet}) != 1:
-                raise ValueError(f"Stain metadata disagree for LIP-{tma} {core_label}: {field}")
+                raise ValueError(f"Stain metadata disagree for {tma_prefix}{tma} {core_label}: {field}")
 
-        core_id = f"LIP-{tma}_{core_label}"
-        for stain in STAINS:
+        core_id = f"{tma_prefix}{tma}_{core_label}"
+        for stain in sorted(by_stain):
             row = by_stain[stain]
             records.append(
                 {
@@ -101,8 +103,8 @@ def analysis_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
     return records
 
 
-def write_analysis_manifest(core_manifest: Path, output_path: Path) -> Path:
-    records = analysis_rows(read_core_manifest(core_manifest))
+def write_analysis_manifest(core_manifest: Path, output_path: Path, tma_prefix: str = "TMA-") -> Path:
+    records = analysis_rows(read_core_manifest(core_manifest), tma_prefix)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = output_path.with_suffix(".tmp.csv")
     with temporary.open("w", newline="", encoding="utf-8") as handle:

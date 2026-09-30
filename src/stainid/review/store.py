@@ -30,7 +30,7 @@ def list_sets(root: Path) -> list[dict]:
         meta = json.loads((folder / "meta.json").read_text()) if (folder / "meta.json").exists() else {}
         out.append({"name": str(folder.relative_to(root)), "legacy": legacy, "items": items, "labelled": sum(labelled.values()),
                     "label_counts": labelled, "title": meta.get("title", folder.name), "stain": meta.get("stain", ""),
-                    "created": meta.get("created")})
+                    "created": meta.get("created"), "purpose": meta.get("purpose", "legacy" if legacy else "check")})
     return out
 
 

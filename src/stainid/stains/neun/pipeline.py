@@ -35,18 +35,16 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def classify_neun_tile(
+def neun_candidates(
     rgb: np.ndarray,
     raw_masks: np.ndarray,
-    inner: tuple[slice, slice],
     threshold: float,
     pixel_width_um: float,
     pixel_height_um: float,
     manual_mask: np.ndarray,
-    bundle: dict[str, object],
     tile_id: str,
-    context_um: float = 55.0,
-) -> tuple[dict[str, float | int], list[dict[str, object]]]:
+) -> tuple[list[dict[str, object]], np.ndarray, np.ndarray]:
+    """All NeuN candidate profiles in a field (stain contours + Cellpose cells) and their label images."""
     _, cellpose_objects, cellpose_labels = classify_cellpose_masks(
         raw_masks, rgb, threshold, pixel_width_um, pixel_height_um
     )
@@ -81,6 +79,27 @@ def classify_neun_tile(
         }
         for row in review_table_rows(combined, tile_id)
     ]
+    return rows, profile_labels, cellpose_labels
+
+
+def neun_feature_matrix(rgb: np.ndarray, rows: list[dict[str, object]], pixel_size_um: float, context_um: float = 55.0) -> tuple[np.ndarray, list[str]]:
+    contexts = object_contexts(rgb[:, :, ::-1], rows, pixel_size_um, context_um)
+    return build_matrix_from_contexts(rows, contexts)
+
+
+def classify_neun_tile(
+    rgb: np.ndarray,
+    raw_masks: np.ndarray,
+    inner: tuple[slice, slice],
+    threshold: float,
+    pixel_width_um: float,
+    pixel_height_um: float,
+    manual_mask: np.ndarray,
+    bundle: dict[str, object],
+    tile_id: str,
+    context_um: float = 55.0,
+) -> tuple[dict[str, float | int], list[dict[str, object]]]:
+    rows, profile_labels, cellpose_labels = neun_candidates(rgb, raw_masks, threshold, pixel_width_um, pixel_height_um, manual_mask, tile_id)
     artifact = linear_artifact_mask(rgb) | manual_mask
     tissue = field_tissue_mask(rgb) & ~artifact
     inner_tissue = tissue[inner]
@@ -97,10 +116,7 @@ def classify_neun_tile(
     addition_threshold = float(bundle["addition_threshold"])
     if selected_rows:
         pixel_size_um = float(np.sqrt(pixel_width_um * pixel_height_um))
-        contexts = object_contexts(
-            rgb[:, :, ::-1], selected_rows, pixel_size_um, context_um
-        )
-        matrix, names = build_matrix_from_contexts(selected_rows, contexts)
+        matrix, names = neun_feature_matrix(rgb, selected_rows, pixel_size_um, context_um)
         if names != bundle["feature_names"]:
             raise ValueError("NeuN cohort features do not match the frozen model")
         probability = bundle["classifier"].predict_proba(
@@ -236,7 +252,8 @@ def run_neun_cohort(
     if provenance_path.exists():
         recorded = json.loads(provenance_path.read_text(encoding="utf-8"))
         if recorded != provenance:
-            raise ValueError(f"Existing NeuN cohort outputs used different inputs: {provenance_path}")
+            raise ValueError("These NeuN results were made with a different model or settings. "
+                             f"Run the step again with 'Start over' to redo them ({provenance_path})")
     else:
         provenance_path.write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")
     print(f"Shard {shard_index}/{shard_count}: {len(pending)} of {len(rows)} tiles pending", flush=True)

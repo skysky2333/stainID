@@ -8,7 +8,7 @@ from stainid.tables import read_csv, write_records
 
 
 def select_fields(project: Project, fields_per_core: int = 8, primary: int = 4, field_size_px: int = 2048) -> list:
-    core_images = write_analysis_manifest(project.input("core_manifest"), project.input("core_images"))
+    core_images = write_analysis_manifest(project.input("core_manifest"), project.input("core_images"), project.tma_prefix)
     all_fields = project.input("field_manifest")
     create_systematic_tile_manifest(core_images, all_fields, all_fields.with_name(f"{all_fields.stem}_qc.csv"), fields_per_core, field_size_px)
     rows = [r for r in read_csv(all_fields) if int(r["selection_order"]) <= primary]

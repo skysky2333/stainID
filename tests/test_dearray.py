@@ -135,7 +135,7 @@ class DearrayTest(unittest.TestCase):
             pixel_width_um=1.0,
             pixel_height_um=1.0,
         )
-        records = core_records(preview, fit, 5, 6)
+        records = core_records(preview, fit, 5, 6, "1", "NeuN")
         labels = [record["core_label"] for record in records]
         self.assertEqual(labels[:6], ["A-1", "B-1", "C-1", "D-1", "E-1", "F-1"])
         self.assertEqual(labels[-1], "F-5")

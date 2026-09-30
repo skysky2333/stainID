@@ -1,8 +1,9 @@
 # Projects
 
 A project is a folder containing `stainid.yaml`. Every relative path in the file is resolved
-against that folder. `stainid init` writes the defaults below, and a project file only needs the
-keys it changes. `stainid info` prints every resolved path and whether it exists.
+against that folder. The web app creates and edits it (Settings page). `stainid init` writes the
+defaults below, and the file only needs the keys it changes. `stainid info` prints every resolved
+path and whether it exists, and `stainid status` shows how far each step has got.
 
 The project is found from `--project`, then `$STAINID_PROJECT`, then the current directory.
 Commands run with the project folder as their working directory.
@@ -12,9 +13,18 @@ name: My TMA study
 pixel_size_um: 0.2738        # fallback when a table has no pixel size
 field_context_px: 128        # margin read around each field
 stains: {NeuN: neun, 6E10: amyloid, AT8: tau}
+tma:
+  prefix: TMA-               # core names are <prefix><tma>_<column><row>, e.g. TMA-3_B-2
+  rows: 5                    # core grid on each slide
+  columns: 6
+groups:                      # diagnostic group codes used in the TMA map, in plot order
+  - {code: CT, label: Control, color: 3}     # color = palette slot 1-8 (optional)
+  - {code: AD, label: Alzheimer disease}
 
 inputs:
-  core_manifest: data/core_manifest.csv                          # stainid-dearray (+ attach-layout, core-qc)
+  slides_dir: data/slides                                        # folder with the slide scans
+  slides_table: data/slides.csv                                  # which scan is which TMA and stain
+  core_manifest: data/core_manifest.csv                          # stainid dearray (+ layout, export, qc)
   core_images: data/analysis/core_images.csv                     # stainid select
   field_manifest: data/analysis/cohort_systematic_tiles.csv      # stainid select (all fields)
   tile_manifest: data/analysis/cohort_primary_tiles.csv          # stainid select (analysis fields)
@@ -33,12 +43,14 @@ models:
   huggingface_home: data/models/foundation/hf
 
 outputs:
+  qc: data/qc
   neun: data/analysis/cohort_neun
   fields: data/analysis/cohort_v3
   nuclei: data/analysis/tile_nuclei
   masks: data/analysis/cohort_object_masks
   tables: data/analysis
   reviews: data/annotations
+  trained_models: data/models/trained
   jobs: data/jobs
 ```
 
@@ -48,7 +60,11 @@ is downloaded at run time.
 
 ## Input tables
 
-**`tma_layout.csv`**: one row per core position of the TMA map.
+**`slides.csv`**: one row per scan, written by the *Register slides* step: `slide_path`, `tma`, `stain`.
+Supported scan formats are those Bio-Formats reads: `.vsi`, `.svs`, `.ndpi`, `.scn`, `.mrxs`, `.czi`, `.tif`.
+
+**`tma_layout.csv`**: one row per core position of the TMA map. The web app offers a template with every position
+found by *Find cores* already listed.
 
 | column | |
 |---|---|
@@ -56,6 +72,7 @@ is downloaded at run time.
 | `donor_id`, `region`, `disease_group` | sample identity |
 | `tissue_control` | non-empty for control / orientation cores |
 | `cerad`, `braak` | optional neuropathology |
+| `sample_region_id` | optional; defaults to `<donor_id>_<region>` |
 
 **`donor_metadata.csv`**: one row per donor.
 
@@ -84,7 +101,9 @@ core-image pixel coordinates) to drop before measurement.
 | `outputs.neun` | `tiles/<tile_id>_{features,objects}.csv`; merged `tile_features.csv`, `objects.csv` |
 | `outputs.fields` | `parts/<core>_<stain>_{features,objects}.csv`: 6E10 plaques, AT8 tau neurons and field summaries |
 | `outputs.masks` | per-core SAM outlines and shape features |
-| `outputs.tables` | `fields_<level>.csv`, `masks_<level>.csv` (level = `sample_region_id` or `core_id`) |
+| `outputs.tables` | `results_<level>.csv` (every stain in one table) and `neun_`, `fields_`, `masks_<level>.csv` (level = `donor_region` or `core`) |
+| `outputs.qc` | `grids/<slide>.jpg`: the fitted core grid on every slide |
+| `outputs.trained_models` | `<stain>_<time>/bundle.joblib` and `report.json` for every model trained in the app |
 | `outputs.reviews` | `reviews/<name>/`: review sets (see [webapp.md](webapp.md)) |
 | `outputs.jobs` | job records and logs from the web app |
 
