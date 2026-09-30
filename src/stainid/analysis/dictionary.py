@@ -31,6 +31,7 @@ COLUMNS = {
     "plaque_area_fraction": "Share of tissue area covered by plaques (amyloid burden).",
     "plaque_density_ge10um_mm2": "Plaques at least 10 µm across, per mm².",
     "vascular_or_edge_amyloid_density_mm2": "Amyloid deposits on vessels or tissue edges per mm² (kept out of plaque measures).",
+    "amyloid_speck_density_mm2": "Accepted deposits of 10 µm or less per mm² (specks, not counted as plaques).",
     "compact_fraction_v2": "Share of plaques (≥ 15 µm) that are compact / cored rather than diffuse.",
     "v2_plaque_mean_area_um2": "Average plaque size (µm²).",
     "plaque_dense_core_area_fraction": "Share of total plaque area that is dense core.",
