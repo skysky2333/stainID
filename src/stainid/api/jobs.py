@@ -13,10 +13,12 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from stainid.workflows.steps import BY_ID, to_argv
+from stainid.project import load_project
+from stainid.workflows.steps import BY_ID, RESOURCES, STEPS, resource_info, to_argv, wait_reason
 
 PROGRESS = re.compile(r"\[(\d+)/(\d+)\]")
 ERROR = re.compile(r"^[A-Za-z_.]*(Error|Exception): ")
+NOISE = re.compile(r"Warning|Matplotlib is building|^\s*warnings\.warn|SLF4J")
 
 @dataclass
 class Job:
@@ -31,6 +33,7 @@ class Job:
     pid: int | None = None
     returncode: int | None = None
     waiting: str = ""
+    outcome: dict = field(default_factory=dict)
 
 
 class JobManager:
@@ -41,8 +44,8 @@ class JobManager:
         self.processes: dict[str, subprocess.Popen] = {}
         self.jobs = {j.id: j for j in (self._load(p) for p in self.dir.glob("*.json"))}
         for job in self.jobs.values():
-            if job.status in ("running", "queued") and not (job.pid and _alive(job.pid)):
-                job.status = "interrupted" if job.status == "running" else job.status
+            if job.status == "running" and not _alive(job.pid):
+                job.status, job.outcome = "interrupted", self.progress(job)
             if job.status == "queued" and job.workflow not in BY_ID:
                 job.status = "cancelled"
         self.open = True
@@ -79,6 +82,7 @@ class JobManager:
                 os.killpg(os.getpgid(job.pid), signal.SIGTERM)
                 job.status = "cancelled"
             self._save(job)
+            self._skip_dependents(job, "was stopped")
             return job
 
     def progress(self, job: Job) -> dict:
@@ -86,7 +90,7 @@ class JobManager:
         if not path.exists():
             return {"done": 0, "total": 0, "last_line": "", "error": ""}
         tail = path.read_bytes()[-20000:].decode(errors="replace").splitlines()
-        lines = [line for line in tail if line.strip() and "Warning" not in line]
+        lines = [line for line in tail if line.strip() and not NOISE.search(line)]
         matches = [PROGRESS.search(line) for line in lines]
         last = next((m for m in reversed(matches) if m), None)
         error = ERROR.sub("", next((line for line in reversed(lines) if ERROR.match(line)), ""))
@@ -94,7 +98,8 @@ class JobManager:
                 "error": error}
 
     def describe(self, job: Job) -> dict:
-        return {**asdict(job), "title": BY_ID[job.workflow].title if job.workflow in BY_ID else job.workflow, "progress": self.progress(job)}
+        progress = job.outcome or self.progress(job)
+        return {**asdict(job), "title": BY_ID[job.workflow].title if job.workflow in BY_ID else job.workflow, "progress": progress}
 
     def close(self) -> None:
         self.open = False
@@ -117,24 +122,50 @@ class JobManager:
                 self._finish(job, 1 if self.progress(job)["error"] else 0)
 
     def _finish(self, job: Job, code: int) -> None:
-        job.returncode, job.ended = code, time.time()
+        job.returncode, job.ended, job.outcome = code, time.time(), self.progress(job)
         if job.status != "cancelled":
             job.status = "finished" if code == 0 else "failed"
         self._save(job)
+        if job.status == "failed":
+            self._skip_dependents(job, "failed")
+
+    def _skip_dependents(self, job: Job, what: str) -> None:
+        """Queued jobs that were waiting for this one cannot do anything useful: skip them (and whatever waits for them)."""
+        for other in sorted(self.jobs.values(), key=lambda j: j.created):
+            if other.status == "queued" and other.created > job.created and wait_reason(BY_ID[job.workflow], BY_ID[other.workflow]):
+                self._skip(other, f"Not started because “{BY_ID[job.workflow].title}” {what}")
+
+    def _skip(self, job: Job, reason: str) -> None:
+        job.status, job.waiting, job.ended = "skipped", "", time.time()
+        job.outcome = {"done": 0, "total": 0, "last_line": reason, "error": reason}
+        self._save(job)
+        self._skip_dependents(job, "was skipped")
+
+    def _missing(self, step) -> str:
+        project = load_project(self.root)
+        missing = [r for r in step.needs if not resource_info(project, r)["exists"]]
+        if not missing:
+            return ""
+        makers = {r: next((s.title for s in STEPS if r in s.produces), "") for r in missing}
+        return "Not started: missing " + "; ".join(f"{RESOURCES[r].label}" + (f" (made by “{m}”)" if m else "") for r, m in makers.items())
 
     def _schedule(self) -> None:
-        """Start queued jobs in order. A job waits for earlier active jobs of the steps it depends on (and of the same
-        step with the same options), and heavy jobs wait for a free slot."""
+        """Start queued jobs oldest first. A job waits while an earlier running or waiting job makes something it reads or
+        writes the same file (see `wait_reason`); parts of one step with different options run side by side. Heavy jobs also
+        wait for a free slot."""
         active = [j for j in self.jobs.values() if j.status in ("running", "queued")]
         running_heavy = sum(BY_ID[j.workflow].heavy for j in active if j.status == "running")
         for job in sorted((j for j in active if j.status == "queued"), key=lambda j: j.created):
             step = BY_ID[job.workflow]
-            before = [j for j in active if j.created < job.created and j.status in ("running", "queued")
-                      and (j.workflow in step.after or (j.workflow == job.workflow and j.options == job.options))]
-            if before:
-                job.waiting = f"Waits for “{BY_ID[before[0].workflow].title}” to finish first"
+            reasons = [wait_reason(BY_ID[j.workflow], step) for j in active if j.created < job.created and j.status in ("running", "queued")
+                       and not (j.workflow == job.workflow and j.options != job.options)]
+            reasons = [r for r in reasons if r]
+            if reasons:
+                job.waiting = reasons[0]
             elif step.heavy and running_heavy >= self.max_heavy:
                 job.waiting = f"Waits for a free slot: {self.max_heavy} heavy steps are already running (at most {self.max_heavy} at a time)"
+            elif missing := self._missing(step):
+                self._skip(job, missing)
             else:
                 job.waiting = ""
                 self._start(job)

@@ -35,7 +35,7 @@ export interface StepOption { key: string; label: string; kind: 'number' | 'text
 export interface ResourceInfo { id: string; label: string; description: string; path: string; exists: boolean }
 export interface StepProgress { state: 'done' | 'partial' | 'todo'; done: number; total: number; unit: string; note: string; outdated?: boolean }
 export interface Step {
-  id: string; stage: string; title: string; summary: string; details: string; needs: ResourceInfo[]; produces: ResourceInfo[]
+  id: string; stage: string; title: string; summary: string; details: string; needs: ResourceInfo[]; uses: ResourceInfo[]; produces: ResourceInfo[]
   command: string[] | null; options: StepOption[]; heavy: boolean; view: string | null; duration: string; progress: StepProgress; job: Job | null
   after: string[]
 }

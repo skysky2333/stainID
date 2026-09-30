@@ -134,7 +134,7 @@ tr.clickable:hover td, tr.selected td { background: var(--accent-soft); }
 .status-outdated { color: var(--warning); }
 .status-finished, .status-done { color: var(--good); }
 .status-failed, .status-interrupted { color: var(--critical); }
-.status-queued, .status-cancelled, .status-todo { color: var(--text-muted); }
+.status-queued, .status-cancelled, .status-todo, .status-skipped { color: var(--text-muted); }
 
 .progress { height: 6px; background: var(--surface-0); border-radius: 99px; overflow: hidden; border: 1px solid var(--border); }
 .progress > div { height: 100%; background: var(--accent); border-radius: 99px; }

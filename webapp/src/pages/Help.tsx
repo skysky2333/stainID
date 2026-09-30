@@ -15,7 +15,8 @@ const FAQ: [string, React.ReactNode][] = [
     shows what is running now, how far it has got, roughly how long is left, and why anything is waiting.</>],
   ['Can I close the browser?', <>Yes. Steps keep running as long as the stainID window (the terminal started by “Start stainID”) is open. Closing that window stops running steps;
     starting a step again continues where it stopped.</>],
-  ['A step failed. What now?', <>The step card shows the reason. Common ones: a missing file (the card says which earlier step makes it), a model that is not downloaded yet
+  ['A step failed or was skipped. What now?', <>The step card shows the reason. Steps that were waiting for a failed step are
+    marked <b>Skipped</b> (they would only fail too); run them again once the failed step works. Common ones: a missing file (the card says which earlier step makes it), a model that is not downloaded yet
     (see <Link to="/models">Models</Link>), or results made with a different model (run again with “Start over” under Advanced options). “Show log” has every detail.</>],
   ['Where are my files?', <>Everything lives in the project folder shown on the Home page. Each step card lists the files it makes; “Show in Finder” opens them.
     The main results table is <code>data/analysis/results_donor_region.csv</code> (downloadable on the <Link to="/results">Results</Link> page).</>],

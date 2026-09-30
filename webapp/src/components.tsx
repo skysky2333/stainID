@@ -68,7 +68,7 @@ export function GroupBadge({ group }: { group: string | null | undefined }) {
 
 const STATUS_TEXT: Record<string, string> = {
   done: 'Done', partial: 'Partly done', todo: 'Not started', running: 'Running', queued: 'Waiting to start', failed: 'Failed',
-  finished: 'Finished', cancelled: 'Stopped', interrupted: 'Interrupted', blocked: 'Needs earlier steps', outdated: 'Made with an older model',
+  finished: 'Finished', skipped: 'Skipped', cancelled: 'Stopped', interrupted: 'Interrupted', blocked: 'Needs earlier steps', outdated: 'Made with an older model',
 }
 
 export function StatusBadge({ status }: { status: string }) {

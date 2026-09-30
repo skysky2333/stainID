@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { Job, Step } from './api'
-import { api } from './api'
+import { api, runStep } from './api'
 import { Progress, StatusBadge } from './components'
 
 const W = 118
@@ -86,12 +86,25 @@ function duration(seconds: number): string {
 }
 
 /** Running and waiting jobs: progress, elapsed time, estimated time left, and why a job is still waiting. */
-export function NowRunning({ jobs, onChanged }: { jobs: Job[]; onChanged: () => void }) {
+export function NowRunning({ jobs, steps, onChanged }: { jobs: Job[]; steps: Step[]; onChanged: () => void }) {
   const active = jobs.filter((j) => j.status === 'running' || j.status === 'queued').sort((a, b) => (a.status === b.status ? a.created - b.created : a.status === 'running' ? -1 : 1))
+  const busy = new Set(active.map((j) => j.workflow))
+  const remaining = steps.filter((s) => s.command && s.id !== 'masks' && (s.progress.state !== 'done' || s.progress.outdated) && !busy.has(s.id))
+  const runAll = async () => {
+    for (const s of remaining) await runStep(s.id, Object.fromEntries(s.options.map((o) => [o.key, o.key === 'fresh' && s.progress.outdated ? true : o.default])))
+    onChanged()
+  }
   const now = Date.now() / 1000
   return (
     <div className="card now-running">
-      <h2>Now running</h2>
+      <div className="row">
+        <h2 style={{ margin: 0 }}>Now running</h2><span className="spacer" />
+        {remaining.length > 0 && (
+          <button className="btn" onClick={runAll} title={remaining.map((s) => s.title).join(', ')}>
+            Run all remaining steps ({remaining.length})
+          </button>
+        )}
+      </div>
       {active.length ? (
         <table>
           <tbody>{active.map((job) => {

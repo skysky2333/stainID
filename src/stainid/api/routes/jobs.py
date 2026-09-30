@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
+from stainid.api.jobs import NOISE
 from stainid.api.state import get_state
 from stainid.workflows.steps import describe
 
@@ -52,4 +53,4 @@ def log(job_id: str, tail: int = 400) -> str:
     if not path.exists():
         return ""
     lines = path.read_text(errors="replace").splitlines()
-    return "\n".join(line for line in lines[-tail:] if "Warning" not in line)
+    return "\n".join(line for line in lines[-tail:] if not NOISE.search(line))

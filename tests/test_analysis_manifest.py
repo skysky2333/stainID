@@ -50,6 +50,10 @@ class AnalysisManifestTest(unittest.TestCase):
         self.assertEqual([record["stain"] for record in records], ["AT8", "NeuN"])
         self.assertEqual(records[0]["core_id"], "TMA-1_B-2")
 
+    def test_neuropathology_columns_are_optional(self):
+        rows = [{k: v for k, v in row(stain).items() if k not in ("cerad", "braak")} for stain in ("NeuN", "AT8")]
+        self.assertEqual({r["cerad"] for r in analysis_rows(rows)}, {""})
+
     def test_rejects_duplicate_stain(self):
         with self.assertRaisesRegex(ValueError, "Duplicate"):
             analysis_rows([row("NeuN"), row("NeuN")])

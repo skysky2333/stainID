@@ -19,7 +19,7 @@ under `/api`. It binds to localhost only and has no authentication, so do not ex
 | Page | What it is for |
 |---|---|
 | **Home** | Your next step (with a button to it), a checklist of every step, cohort numbers, recent jobs. |
-| **Workflow** | A **pipeline map** at the top shows every step as a box in the order they can run. Arrows mean "needs the result of", colours show done / running / waiting / failed / older model; hover to highlight what a step needs and what needs it, click to open it. **Now running** lists running and waiting steps with progress, elapsed time, time left and why a step is waiting. Below, every step in order. Finished steps fold away; each open card shows:<ul><li>what the step does and how long it takes;</li><li>**Needs** and **Makes**, each file with its location, whether it exists, and "Show in Finder" / "Download";</li><li>options, with advanced ones hidden;</li><li>Run / Continue / Run again, a live progress bar, "Show log", and a plain-language reason when a step fails.</li></ul>The *Register slides* card holds the slides-table editor. The *Attach TMA map* card holds the template download and CSV upload. |
+| **Workflow** | A **pipeline map** at the top shows every step as a box in the order they can run. Arrows mean "needs the result of", colours show done / running / waiting / failed / older model; hover to highlight what a step needs and what needs it, click to open it. **Now running** lists running and waiting steps with progress, elapsed time, time left and why a step is waiting; **Run all remaining steps** queues every unfinished step (except the optional outlines) in one click. Below, every step in order. Finished steps fold away; each open card shows:<ul><li>what the step does and how long it takes;</li><li>**Needs** and **Makes**, each file with its location, whether it exists, and "Show in Finder" / "Download";</li><li>options, with advanced ones hidden;</li><li>Run / Continue / Run again, a live progress bar, "Show log", and a plain-language reason when a step fails.</li></ul>The *Register slides* card holds the slides-table editor. The *Attach TMA map* card holds the template download and CSV upload. |
 | **Cohort & cores** | Every core of every TMA; click one for the field viewer. The viewer's layers are detections by class, SAM outlines, DAB above the slide threshold, excluded regions, AT8 threads and field boundaries. |
 | **Stain thresholds** | The per-slide DAB threshold and why it exists. |
 | **Label & check** | Training sets and check sets, the form to create a check set, and older study sets (read-only). |
@@ -34,7 +34,10 @@ Steps run as background `stainid` processes, started by a queue with two rules:
   map) is still running or waiting. The same step with the same options never runs twice at once.
 - **Load:** at most two heavy steps run at the same time.
 
-Each waiting step shows the reason. You can press Run on several steps in a row and they start in the right order. The
+Each waiting step shows the reason. You can press Run on several steps in a row and they start in the right order.
+Just before a step starts, the runner checks that everything it needs exists; if not, the step is **skipped** and the
+card says what is missing and which step makes it. When a step fails or is stopped, the queued steps that were waiting
+for it are skipped too, instead of failing one after another. The
 sidebar shows how many steps are running.
 
 Steps keep running when the browser is closed. If the server stops and starts again while a step is running, the step is
