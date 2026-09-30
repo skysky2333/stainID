@@ -5,7 +5,6 @@ these rows can be dropped into the pipeline unchanged.
 """
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from functools import cached_property
 
@@ -15,7 +14,7 @@ from PIL import Image
 from stainid.imaging.tissue import fold_mask, linear_artifact_mask
 from stainid.pipelines.cohort_v1 import context_crop
 from stainid.project import Project
-from stainid.qc.exclusions import rasterize_core_exclusions
+from stainid.qc.exclusions import rasterize_core_exclusions, read_manual_exclusions
 from stainid.workflows import calibration_table
 
 Image.MAX_IMAGE_PIXELS = None
@@ -43,8 +42,7 @@ class FieldLoader:
     def __init__(self, project: Project):
         self.project = project
         self.calibration = calibration_table(project.input("calibration"))
-        path = project.input("manual_exclusions")
-        self.manual = json.loads(path.read_text()) if path.exists() else {}
+        self.manual = read_manual_exclusions(project.input("manual_exclusions"))
         self._cellpose = None
 
     def load(self, tile: dict[str, str]) -> Field:

@@ -17,7 +17,7 @@ export default function Results() {
   const [tab, setTab] = useState<'plot' | 'columns' | 'rows'>('plot')
   const list = tables.data ?? []
   const main = list.find((t) => t.name === 'results_donor_region.csv')
-  const chosen = list.find((t) => t.name === table) ?? main ?? list.find((t) => t.donor_region)
+  const chosen = main ? list.find((t) => t.name === table) ?? main : undefined
 
   return (
     <>

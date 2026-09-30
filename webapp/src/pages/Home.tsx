@@ -12,8 +12,9 @@ export default function Home() {
   const steps = useFetch<Step[]>('/api/steps', 5000)
   const summary = useFetch<Summary>('/api/summary', 15000)
   const main = (steps.data ?? []).filter((s) => MAIN_STAGES.includes(s.stage))
-  const next = main.find((s) => !OPTIONAL.has(s.id) && s.progress.state !== 'done')
-  const running = main.filter((s) => ['running', 'queued'].includes(stepState(s)))
+  const next = main.find((s) => !OPTIONAL.has(s.id) && (s.progress.state !== 'done' || s.progress.outdated))
+  const running = main.filter((s) => stepState(s) === 'running')
+  const waiting = main.filter((s) => stepState(s) === 'queued')
   const data = summary.data
 
   return (
@@ -31,7 +32,7 @@ export default function Home() {
 
       {next ? (
         <div className="card next-card">
-          <div className="muted small">{running.length ? 'Running now: ' + running.map((s) => s.title).join(', ') : 'Your next step'}</div>
+          <div className="muted small">{running.length ? `Running now: ${running.map((s) => s.title).join(', ')}${waiting.length ? ` · waiting: ${waiting.map((s) => s.title).join(', ')}` : ''}` : 'Your next step'}</div>
           <h2 style={{ margin: '4px 0' }}>{next.title}</h2>
           <p className="secondary" style={{ margin: 0 }}>{next.summary}</p>
           <div className="row" style={{ marginTop: 12 }}>

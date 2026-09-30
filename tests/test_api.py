@@ -61,7 +61,7 @@ def test_tables(client):
 
 def test_steps_describe_needs_and_progress(client):
     steps = {s["id"]: s for s in client.get("/api/steps").json()}
-    assert steps["select"]["progress"] == {"state": "done", "done": 3, "total": 3, "unit": "fields", "note": "1 cores"}
+    assert steps["select"]["progress"] == {"state": "done", "done": 3, "total": 3, "unit": "fields", "note": "1 cores", "outdated": False}
     assert steps["fields"]["progress"]["total"] == 2
     assert [n["id"] for n in steps["fields"]["needs"]][:2] == ["tile_manifest", "calibration"]
     assert steps["slides"]["command"] is None and steps["dearray"]["options"][0]["key"] == "redo"
@@ -94,3 +94,20 @@ def test_upload_tma_map_validates(client, synthetic_project):
 def test_download_is_limited_to_project(client):
     assert client.get("/api/download", params={"path": "data/analysis/slide_dab_calibration.csv"}).status_code == 200
     assert client.get("/api/download", params={"path": "../../etc/hosts"}).status_code == 403
+
+
+def test_settings_can_change_while_steps_run(client, synthetic_project, tmp_path, monkeypatch):
+    runner = state.get_state().jobs
+    monkeypatch.setattr(runner, "_start", lambda job: None)
+    job = runner.submit("summarize", {})
+    job.status = "running"
+    assert client.put("/api/project/config", json={"changes": {"name": "Renamed"}}).status_code == 200
+    assert state.get_state().jobs is runner
+    assert client.post("/api/project/create", json={"path": str(tmp_path / "other")}).status_code == 409
+    job.status = "finished"
+
+
+def test_tma_map_upload_fills_groups(client):
+    good = b"tma,core_label,donor_id,region,disease_group\n1,B-2,0001,frontal,AD\n1,C-2,0002,frontal,CT\n"
+    assert client.post("/api/upload/tma_layout", files={"file": ("map.csv", good)}).status_code == 200
+    assert [g["code"] for g in client.get("/api/project").json()["groups"]] == ["AD", "CT"]

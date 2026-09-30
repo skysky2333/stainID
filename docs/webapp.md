@@ -19,7 +19,7 @@ under `/api`. It binds to localhost only and has no authentication, so do not ex
 | Page | What it is for |
 |---|---|
 | **Home** | Your next step (with a button to it), a checklist of every step, cohort numbers, recent jobs. |
-| **Workflow** | Every step in order. Finished steps fold away; each open card shows:<ul><li>what the step does and how long it takes;</li><li>**Needs** and **Makes**, each file with its location, whether it exists, and "Show in Finder" / "Download";</li><li>options, with advanced ones hidden;</li><li>Run / Continue / Run again, a live progress bar, "Show log", and a plain-language reason when a step fails.</li></ul>The *Register slides* card holds the slides-table editor. The *Attach TMA map* card holds the template download and CSV upload. |
+| **Workflow** | A **pipeline map** at the top shows every step as a box in the order they can run. Arrows mean "needs the result of", colours show done / running / waiting / failed / older model; hover to highlight what a step needs and what needs it, click to open it. **Now running** lists running and waiting steps with progress, elapsed time, time left and why a step is waiting. Below, every step in order. Finished steps fold away; each open card shows:<ul><li>what the step does and how long it takes;</li><li>**Needs** and **Makes**, each file with its location, whether it exists, and "Show in Finder" / "Download";</li><li>options, with advanced ones hidden;</li><li>Run / Continue / Run again, a live progress bar, "Show log", and a plain-language reason when a step fails.</li></ul>The *Register slides* card holds the slides-table editor. The *Attach TMA map* card holds the template download and CSV upload. |
 | **Cohort & cores** | Every core of every TMA; click one for the field viewer. The viewer's layers are detections by class, SAM outlines, DAB above the slide threshold, excluded regions, AT8 threads and field boundaries. |
 | **Stain thresholds** | The per-slide DAB threshold and why it exists. |
 | **Label & check** | Training sets and check sets, the form to create a check set, and older study sets (read-only). |
@@ -28,8 +28,18 @@ under `/api`. It binds to localhost only and has no authentication, so do not ex
 | **Settings** | Study name, TMA layout (core-name prefix, rows, columns), diagnostic groups (code, label, colour, order), and every file location with a folder picker. Also open or create another project. |
 | **Help** | Getting started, common questions, glossary. Dotted words anywhere in the app show their definition on hover. |
 
-Steps run as background `stainid` processes. At most two heavy steps (GPU/CPU-bound) run at once; others wait. The
-sidebar shows how many are running. Steps keep running when the browser is closed, but stop when the server stops.
+Steps run as background `stainid` processes, started by a queue with two rules:
+
+- **Order:** a step waits while an earlier step it depends on (its `after` list in `workflows/steps.py`, the arrows on the
+  map) is still running or waiting. The same step with the same options never runs twice at once.
+- **Load:** at most two heavy steps run at the same time.
+
+Each waiting step shows the reason. You can press Run on several steps in a row and they start in the right order. The
+sidebar shows how many steps are running.
+
+Steps keep running when the browser is closed. If the server stops and starts again while a step is running, the step is
+picked up again and marked finished or failed when it ends. When a stain model is switched, the detection steps made
+with the old one are marked **Made with an older model** until they are run again with *Start over*.
 
 ## Labelling
 
@@ -45,7 +55,8 @@ While labelling, only the image crop is shown. The object sits under a blue cros
 are hidden. Keys `1`–`n` assign a label and `←`/`→` move between items.
 
 - **Check sets** (`reviews/<name>`) sample detected objects: random, or those with probability in a band. They
-  are balanced across groups. After all items are labelled, the summary shows label counts per group.
+  are balanced across groups. After all items are labelled, two tables appear: your labels against what the model
+  decided (how accurate the results are) and your labels per diagnostic group.
 - **Training sets** (`training/<name>`) are made by the *Create a training set* step:
   - Fields are spread across TMAs and groups; optionally only fields where the current model found objects.
   - Every candidate object is found exactly as the detection step does.

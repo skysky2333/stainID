@@ -123,10 +123,15 @@ def _remember(root: Path) -> None:
 
 
 def open_project(path: Path | str) -> ProjectState:
+    """Open (or reload after a settings change) a project. Reloading keeps its job runner; switching projects waits for jobs."""
     global _STATE
-    if _STATE is not None and "jobs" in _STATE.__dict__ and _STATE.jobs.active():
-        raise RuntimeError("Jobs are still running in this project; wait for them or cancel them before switching projects")
     project = load_project(path)
+    runner = _STATE.__dict__.get("jobs") if _STATE is not None else None
+    if runner is not None and _STATE.root != project.root:
+        if runner.active():
+            raise RuntimeError("Steps are still running in this project; wait for them or stop them before switching projects")
+        runner.close()
+        runner = None
     os.chdir(project.root)
     for key in ("HF_HOME", "CELLPOSE_LOCAL_MODELS_PATH", "STAINID_PLAQUE_CNN_DIR"):
         os.environ.pop(key, None)
@@ -135,6 +140,9 @@ def open_project(path: Path | str) -> ProjectState:
     if project.is_configured:
         _remember(project.root)
     _STATE = ProjectState(project)
+    if runner is not None:
+        runner.root = project.root
+        _STATE.__dict__["jobs"] = runner
     return _STATE
 
 

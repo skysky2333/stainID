@@ -26,6 +26,16 @@ def archive(path: Path) -> None:
         print(f"Previous results moved to {target}", flush=True)
 
 
+def archive_neun(folder: Path) -> None:
+    """Start NeuN over but keep its Cellpose cache (the slow part, which does not depend on the model)."""
+    target = folder.with_name(f"{folder.name}_archived_{time.strftime('%Y%m%d-%H%M%S')}")
+    for name in ("tiles", "provenance.json", "tile_features.csv", "objects.csv"):
+        if (folder / name).exists():
+            target.mkdir(exist_ok=True)
+            (folder / name).rename(target / name)
+    print(f"Previous NeuN results moved to {target}", flush=True)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="stainid", description="Stain-level morphology for brain tissue microarrays.")
     parser.add_argument("--project", type=Path, default=None, help="project folder or stainid.yaml (default: $STAINID_PROJECT or cwd)")
@@ -74,7 +84,7 @@ def build_parser() -> argparse.ArgumentParser:
     _shard(p)
 
     p = sub.add_parser("masks", help="SAM object outlines for accepted objects")
-    p.add_argument("--stain", required=True, choices=("NeuN", "6E10", "AT8"))
+    p.add_argument("--stain", action="append", choices=("NeuN", "6E10", "AT8"))
     p.add_argument("--device", default="cpu")
     p.add_argument("--threads", type=int, default=4)
     _fresh(p)
@@ -165,7 +175,7 @@ def main(argv: list[str] | None = None) -> None:
                 print(path)
             return
         if args.fresh:
-            archive(project.output("neun"))
+            archive_neun(project.output("neun"))
         run_neun(project, args.device, args.threads, args.batch_size, args.shard_index, args.shard_count)
     elif args.command == "fields":
         from stainid.workflows.fields import run_fields
@@ -176,9 +186,10 @@ def main(argv: list[str] | None = None) -> None:
     elif args.command == "masks":
         from stainid.workflows.masks import run_masks
 
-        if args.fresh:
-            archive(project.output("masks") / args.stain)
-        run_masks(project, args.stain, args.device, args.threads, args.shard_index, args.shard_count)
+        for stain in args.stain or ["NeuN", "6E10", "AT8"]:
+            if args.fresh:
+                archive(project.output("masks") / stain)
+            run_masks(project, stain, args.device, args.threads, args.shard_index, args.shard_count)
     elif args.command == "aggregate":
         from stainid.workflows.aggregate import aggregate_fields, aggregate_masks, aggregate_neun
 
@@ -202,6 +213,7 @@ def main(argv: list[str] | None = None) -> None:
 
 
 def serve(args: argparse.Namespace) -> None:
+    import socket
     import threading
     import webbrowser
 
@@ -209,8 +221,14 @@ def serve(args: argparse.Namespace) -> None:
 
     from stainid.api.state import remembered_project
 
-    os.environ["STAINID_PROJECT"] = str(Path(args.project).resolve() if args.project else remembered_project())
     url = f"http://{args.host}:{args.port}"
+    with socket.socket() as probe:
+        if probe.connect_ex((args.host, args.port)) == 0:
+            print(f"stainID is already running at {url}; opening it", flush=True)
+            if not args.no_browser:
+                webbrowser.open(url)
+            return
+    os.environ["STAINID_PROJECT"] = str(Path(args.project).resolve() if args.project else remembered_project())
     if not args.no_browser:
         threading.Timer(1.5, webbrowser.open, (url,)).start()
     print(f"stainID is running at {url}  (press Ctrl+C to stop)", flush=True)

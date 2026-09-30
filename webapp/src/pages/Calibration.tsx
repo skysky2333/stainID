@@ -1,6 +1,5 @@
-import { useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import type { Row } from '../api'
-import { api } from '../api'
 import { Bars } from '../charts'
 import { ErrorNote, HelpBox, PageHead, Term, fmt } from '../components'
 import { useFetch } from '../hooks'
@@ -11,18 +10,12 @@ const STAIN_COLOR: Record<string, string> = { NeuN: 'var(--series-1)', '6E10': '
 export default function Calibration() {
   const { data, error } = useFetch<Row[]>('/api/calibration')
   const { tmaName } = useProject()
-  const navigate = useNavigate()
   const stains = Array.from(new Set((data ?? []).map((r) => String(r.stain))))
-
-  const recompute = async () => {
-    await api.post('/api/jobs', { workflow: 'calibrate', options: { output: 'data/analysis/slide_dab_calibration_recomputed.csv' } })
-    navigate('/workflow#calibrate')
-  }
 
   return (
     <>
       <PageHead title="Stain thresholds" subtitle="The brown-stain (DAB) cut-off used for each slide.">
-        <button className="btn" onClick={recompute} title="Writes a separate file; the frozen calibration is not overwritten">Recompute (new file)</button>
+        <Link className="btn" to="/workflow#calibrate">Calibration step</Link>
       </PageHead>
       <HelpBox id="calibration">
         Slides are never stained exactly alike. So instead of one fixed cut-off, stainID sets a <Term>stain threshold</Term> for each slide from that slide’s own tissue,

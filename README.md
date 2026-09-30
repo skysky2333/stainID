@@ -55,7 +55,7 @@ for scripted use.
 | Find nuclei | Cellpose-SAM nuclei (needed for AT8) | `stainid nuclei --stain AT8` |
 | Detect NeuN neurons | candidates + NeuN model | `stainid neun` |
 | Detect plaques and tau | 6E10 plaques and morphotypes; AT8 tau+ neurons and threads | `stainid fields` |
-| Outline objects (optional) | Segment Anything outlines and shape features | `stainid masks --stain NeuN` |
+| Outline objects (optional) | Segment Anything outlines and shape features | `stainid masks` |
 | Make results tables | one row per donor-region, every stain | `stainid summarize` |
 
 Model steps: `stainid download-models`, `stainid training-set`, `stainid train`. `stainid status` prints the progress of

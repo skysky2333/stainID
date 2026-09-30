@@ -83,13 +83,11 @@ def save_label(root: Path, name: str, review_id: str, label: str, confidence: st
         writer.writerow([review_id, label, confidence, notes, reviewer, time.strftime("%Y-%m-%dT%H:%M:%S")])
 
 
-def unblinded_summary(root: Path, name: str) -> list[dict]:
-    """Label counts by hidden group columns (only meaningful once labelling is complete)."""
+def unblinded_summary(root: Path, name: str) -> dict[str, list[dict]]:
+    """Your labels against the hidden columns, once labelling is complete: by diagnostic group and by what the model decided."""
     folder = root / name
     key = pd.read_csv(folder / "key.csv", dtype=str)
     labels = read_labels(folder)
-    if labels.empty or "disease_group" not in key:
-        return []
-    merged = key.merge(labels[["review_id", "label"]], on="review_id")
-    table = pd.crosstab(merged.label, merged.disease_group)
-    return [{"label": label, **{g: int(v) for g, v in row.items()}} for label, row in table.iterrows()]
+    merged = key.merge(labels[["review_id", "label"]], on="review_id") if not labels.empty else pd.DataFrame()
+    return {column: [{"label": label, **{g: int(v) for g, v in row.items()}} for label, row in pd.crosstab(merged.label, merged[column]).iterrows()]
+            for column in ("model_class", "disease_group") if column in merged}

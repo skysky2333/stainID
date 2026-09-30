@@ -47,6 +47,11 @@ def build_core_exclusions(
     return output
 
 
+def read_manual_exclusions(path: Path) -> dict[str, list[dict[str, object]]]:
+    """Hand-drawn exclusion polygons per core image; the file is optional."""
+    return json.loads(Path(path).read_text()) if Path(path).exists() else {}
+
+
 def rasterize_core_exclusions(
     exclusions: list[dict[str, object]],
     crop_x: int,

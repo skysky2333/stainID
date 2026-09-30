@@ -10,7 +10,7 @@ from PIL import Image
 from stainid.imaging.tissue import fold_mask, linear_artifact_mask
 from stainid.pipelines.cohort_v1 import context_crop
 from stainid.project import Project
-from stainid.qc.exclusions import rasterize_core_exclusions
+from stainid.qc.exclusions import rasterize_core_exclusions, read_manual_exclusions
 from stainid.stains.amyloid.field_pipeline import analyze_6e10_v2
 from stainid.stains.tau.field_pipeline import analyze_at8_v2
 from stainid.tables import write_records
@@ -55,18 +55,21 @@ def run_fields(project: Project, stains: list[str] = ("6E10", "AT8"), shard_inde
     project.apply_environment()
     groups = tiles_for(project.input("tile_manifest"), set(stains), shard_index, shard_count, core_ids)
     calibration = calibration_table(project.input("calibration"))
-    manual = json.loads(project.input("manual_exclusions").read_text())
+    manual = read_manual_exclusions(project.input("manual_exclusions"))
     bundles = {"tau": load(project.model("tau")), "amyloid": load(project.model("amyloid"))}
     parts = project.output("fields") / "parts"
     parts.mkdir(parents=True, exist_ok=True)
     check_models(project, project.output("fields") / "provenance.json", {"amyloid": project.model("amyloid"), "tau": project.model("tau")})
     nuclei_dir = project.output("nuclei")
+    print(f"[0/{len(groups)}] {sum(not (parts / f'{c}_{s}_features.csv').exists() for c, s in groups)} of {len(groups)} core images still to do", flush=True)
+    skipped = []
     for number, ((core_id, stain), tiles) in enumerate(groups.items(), start=1):
         feature_path = parts / f"{core_id}_{stain}_features.csv"
         if feature_path.exists():
             continue
         if stain == "AT8" and not all((nuclei_dir / f"{t['tile_id']}.npz").exists() for t in tiles):
-            print(f"skip {core_id} {stain}: nuclei pending", flush=True)
+            skipped.append(core_id)
+            print(f"[{number}/{len(groups)}] {core_id} AT8 skipped: its nuclei are missing", flush=True)
             continue
         features, objects = [], []
         with Image.open(project.root / tiles[0]["image_path"]) as image:
@@ -78,3 +81,6 @@ def run_fields(project: Project, stains: list[str] = ("6E10", "AT8"), shard_inde
         write_records(parts / f"{core_id}_{stain}_objects.csv", objects, ["tile_id"])
         write_records(feature_path, features)
         print(f"[{number}/{len(groups)}] {core_id} {stain}", flush=True)
+    if skipped:
+        print(f"{len(skipped)} AT8 cores were skipped because Find nuclei has not processed them yet; run Find nuclei for AT8, "
+              "then run this step again to finish them", flush=True)

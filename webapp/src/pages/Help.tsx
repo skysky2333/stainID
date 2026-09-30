@@ -9,6 +9,10 @@ const FAQ: [string, React.ReactNode][] = [
     Create a project, then follow the <Link to="/workflow">Workflow</Link> page from the top.</>],
   ['How long does a full study take?', <>Setting up (finding and exporting cores) takes about an hour for 20 slides. Detection is the slow part: roughly a minute per field
     and stain on a laptop, so a few hours to a day for a large study. Everything is resumable, so you can stop and continue later.</>],
+  ['What runs when? Why does a step say “Waiting to start”?', <>You can press Run on several steps at once; stainID starts them in the right order.
+    A step waits while a step it depends on (the arrows on the map at the top of the Workflow page) is still running or waiting, and at most two
+    heavy steps (Cellpose, detection, outlines) run at the same time so the computer stays usable. The <Link to="/workflow">Workflow</Link> page
+    shows what is running now, how far it has got, roughly how long is left, and why anything is waiting.</>],
   ['Can I close the browser?', <>Yes. Steps keep running as long as the stainID window (the terminal started by “Start stainID”) is open. Closing that window stops running steps;
     starting a step again continues where it stopped.</>],
   ['A step failed. What now?', <>The step card shows the reason. Common ones: a missing file (the card says which earlier step makes it), a model that is not downloaded yet
@@ -19,6 +23,8 @@ const FAQ: [string, React.ReactNode][] = [
     <Link to="/label"> Label &amp; check</Link>: comparing your labels with the model’s answers gives its precision and recall on your data.</>],
   ['The detections look wrong for my staining.', <>Train a stain model on your own slides: on <Link to="/models">Models</Link>, create a training set, label it
     (100–200 objects is a good start), train, and switch to the new model if it scores better. Then re-run the detection step with “Start over”.</>],
+  ['A step says “Made with an older model”.', <>You switched to a different model after that step ran. The existing results stay as they are
+    until you run the step again with <b>Start over</b> (under Advanced options); then “Make results tables” again.</>],
   ['Is anything deleted?', <>No. “Start over” and uploads move old files aside with a date in their name; nothing is removed.</>],
 ]
 

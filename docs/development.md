@@ -44,8 +44,8 @@ React 19 + TypeScript + Vite, with no UI framework:
    The web app shows that message on the step card.
 2. Add a subcommand in `stainid/cli.py`.
 3. Add a `Step` to `STEPS` in `stainid/workflows/steps.py`. It covers the title, a one-line summary and details for
-   non-coders, `needs` / `produces` resources, options (with help text), `heavy`, and a status function. The job runner
-   and the Workflow page pick it up automatically.
+   non-coders, `needs` / `produces` resources, options (with help text), `heavy`, a status function, and `after`: the
+   steps it must wait for. The job runner, the pipeline map and the Workflow page pick it up automatically.
 
 ## Conventions
 

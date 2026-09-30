@@ -248,8 +248,7 @@ def create_systematic_tile_manifest(
                     **sampling,
                 }
             )
-        if image_index % 25 == 0 or image_index == len(rows):
-            print(f"Selected fields for {image_index}/{len(rows)} stain-core images", flush=True)
+        print(f"[{image_index}/{len(rows)}] {row['core_id']} {row['stain']}: {len(fields)} fields", flush=True)
     if not records:
         raise ValueError("No systematic cohort fields were selected")
     write_csv(output_path, records, list(records[0]))

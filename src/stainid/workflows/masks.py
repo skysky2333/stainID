@@ -51,12 +51,18 @@ def run_masks(project: Project, stain: str, device: str = "cpu", threads: int = 
     groups = tiles_for(project.input("tile_manifest"), {stain}, shard_index, shard_count)
     if stain == "NeuN":
         groups = {k: [t for t in v if (neun_tiles / f"{t['tile_id']}_objects.csv").exists()] for k, v in groups.items()}
+    else:
+        groups = {k: v for k, v in groups.items() if (project.output("fields") / "parts" / f"{k[0]}_{stain}_objects.csv").exists()}
+    groups = {k: v for k, v in groups.items() if v}
+    if not groups:
+        raise ValueError(f"Nothing to outline for {stain} yet: run {'Detect NeuN neurons' if stain == 'NeuN' else 'Detect plaques and tau'} first")
     calibration = calibration_table(project.input("calibration"))
     core_multiplier = float(load(project.model("amyloid"))["morphotype_threshold"]) if stain == "6E10" else None
     sam = WindowedSam(project.model("sam"), device=device)
     out = project.output("masks") / stain
     (out / "parts").mkdir(parents=True, exist_ok=True)
     (out / "labels").mkdir(parents=True, exist_ok=True)
+    print(f"[0/{len(groups)}] outlining objects in {len(groups)} core images", flush=True)
     for number, ((core_id, _), tiles) in enumerate(groups.items(), start=1):
         target = out / "parts" / f"{core_id}_{stain}_objects.csv"
         if target.exists() or not tiles:
