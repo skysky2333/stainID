@@ -41,7 +41,7 @@ export default function Workflow() {
       </HelpBox>
       <ErrorNote error={steps.error} />
       {list.length > 0 && <PipelineMap steps={list} state={stepState} onOpen={(id) => navigate(`/workflow#${id}`)} />}
-      <NowRunning jobs={jobs.data ?? []} onChanged={refresh} />
+      <NowRunning jobs={jobs.data ?? []} steps={list} onChanged={refresh} />
       {MAIN_STAGES.map((stage) => (
         <section key={stage} className="stage">
           <h2 className="stage-title">{stage}</h2>
@@ -54,8 +54,11 @@ export default function Workflow() {
 }
 
 export function StepCard({ step, steps, onChanged }: { step: Step; steps: Step[]; onChanged: () => void }) {
-  const defaults = useMemo(() => Object.fromEntries(step.options.map((o) => [o.key, o.default])), [step.options])
+  const optionsKey = JSON.stringify(step.options)
+  const outdated = Boolean(step.progress.outdated)
+  const defaults = useMemo(() => Object.fromEntries((JSON.parse(optionsKey) as Step['options']).map((o) => [o.key, o.key === 'fresh' && outdated ? true : o.default])), [optionsKey, outdated])
   const [values, setValues] = useState<Record<string, unknown>>(defaults)
+  useEffect(() => setValues(defaults), [defaults])
   const [advanced, setAdvanced] = useState(false)
   const [details, setDetails] = useState(false)
   const [log, setLog] = useState(false)
@@ -107,6 +110,12 @@ export function StepCard({ step, steps, onChanged }: { step: Step; steps: Step[]
               {!n.exists && n.id.startsWith('model_') && <div className="muted small io-hint">Get it on the <Link to="/models">Models</Link> page</div>}
             </div>
           )) : <span className="muted small">Nothing extra.</span>}
+          {step.uses.length > 0 && (
+            <>
+              <div className="io-title" style={{ marginTop: 8 }}>Uses if available</div>
+              {step.uses.map((u) => <div key={u.id} title={u.description}><PathLine path={u.path} exists={u.exists} label={u.label} /></div>)}
+            </>
+          )}
         </div>
         <div>
           <div className="io-title">Makes</div>
@@ -117,7 +126,7 @@ export function StepCard({ step, steps, onChanged }: { step: Step; steps: Step[]
 
       {step.progress.outdated && (
         <div className="warning-note">These results were made with a different model than the one in use now. To redo them with the current model,
-          open <b>Advanced options</b>, tick <b>Start over</b> and run the step again (old results are moved aside, not deleted).</div>
+          run the step again: <b>Start over</b> (under Advanced options) is already ticked, so old results are moved aside (not deleted) and redone.</div>
       )}
       {step.id === 'slides' && <SlidesPanel onSaved={onChanged} />}
       {step.id === 'layout' && <MapUpload onSaved={onChanged} />}
@@ -140,6 +149,7 @@ export function StepCard({ step, steps, onChanged }: { step: Step; steps: Step[]
           {state === 'queued' && job?.waiting && <div className="small secondary live-line">{job.waiting}. It starts on its own.</div>}
           {state === 'running' && job?.progress.last_line && <div className="muted small live-line">{job.progress.last_line}</div>}
           {job?.status === 'failed' && <ErrorNote error={`This step stopped with an error: ${job.progress.error || job.progress.last_line || 'see the log'}`} />}
+          {job?.status === 'skipped' && <div className="warning-note">{job.progress.error}</div>}
           <ErrorNote error={error} />
           {log && job && <JobLog id={job.id} />}
         </>

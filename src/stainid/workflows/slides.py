@@ -10,6 +10,8 @@ from stainid.slides.layout import attach_layout
 from stainid.slides.table import read_slides
 from stainid.tables import read_csv, write_records
 
+READER_NOTE = "The first time, the Bio-Formats slide reader is downloaded (about 60 MB); this can take a minute."
+
 
 def dearray_slides(project: Project, redo: bool = False, target_long_side: int = 4500) -> Path:
     """Fit the TMA grid on every slide in the slides table; slides already in the core manifest are skipped unless `redo`."""
@@ -22,7 +24,7 @@ def dearray_slides(project: Project, redo: bool = False, target_long_side: int =
     existing = read_csv(manifest) if manifest.exists() else []
     done = {row["slide_path"] for row in existing}
     pending = [s for s in slides if redo or str(Path(s["slide_path"]).resolve()) not in done]
-    print(f"{len(pending)} of {len(slides)} slides to process", flush=True)
+    print(f"[0/{len(pending)}] {len(pending)} of {len(slides)} slides to process. {READER_NOTE}", flush=True)
     rows, columns = int(project.config["tma"]["rows"]), int(project.config["tma"]["columns"])
     for number, slide in enumerate(pending, start=1):
         path = Path(slide["slide_path"])
@@ -41,6 +43,8 @@ def attach_map(project: Project) -> Path:
 
 
 def export(project: Project, overwrite: bool = False, workers: int = 2) -> None:
+    slides = {r["slide"] for r in read_csv(project.input("core_manifest"))}
+    print(f"[0/{len(slides)}] Opening {len(slides)} slides. {READER_NOTE}", flush=True)
     export_cores(project.input("core_manifest"), None, None, overwrite, workers, project.tma_prefix)
 
 

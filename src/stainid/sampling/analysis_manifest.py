@@ -25,8 +25,6 @@ def read_core_manifest(path: Path) -> list[dict[str, str]]:
         "donor_id",
         "region",
         "disease_group",
-        "cerad",
-        "braak",
         "technical_replicate",
         "sample_region_id",
         "tissue_status",
@@ -66,7 +64,7 @@ def analysis_rows(rows: list[dict[str, str]], tma_prefix: str = "TMA-") -> list[
             "sample_region_id",
         )
         for field in identity_fields:
-            if len({row[field] for row in triplet}) != 1:
+            if len({row.get(field, "") for row in triplet}) != 1:
                 raise ValueError(f"Stain metadata disagree for {tma_prefix}{tma} {core_label}: {field}")
 
         core_id = f"{tma_prefix}{tma}_{core_label}"
@@ -81,8 +79,8 @@ def analysis_rows(rows: list[dict[str, str]], tma_prefix: str = "TMA-") -> list[
                     "sample_region_id": row["sample_region_id"],
                     "region": row["region"],
                     "disease_group": row["disease_group"],
-                    "cerad": row["cerad"],
-                    "braak": row["braak"],
+                    "cerad": row.get("cerad", ""),
+                    "braak": row.get("braak", ""),
                     "technical_replicate": row["technical_replicate"],
                     "stain": stain,
                     "image_path": str(Path("data") / row["output_path"]),
