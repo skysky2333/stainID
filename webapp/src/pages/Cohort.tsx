@@ -9,13 +9,16 @@ import { useProject } from '../project'
 export default function Cohort() {
   const { groups, groupColor, groupLabel, tmaName } = useProject()
   const summary = useFetch<Summary>('/api/summary')
-  const [tma, setTma] = useStored('stainid.cohort.tma', '1')
-  const [stain, setStain] = useStored('stainid.cohort.stain', 'NeuN')
+  const [storedTma, setTma] = useStored('stainid.cohort.tma', '1')
+  const [storedStain, setStain] = useStored('stainid.cohort.stain', 'NeuN')
   const [view, setView] = useStored<'grid' | 'table'>('stainid.cohort.view', 'grid')
+  const tmas = summary.data?.tmas ?? []
+  const tma = tmas.includes(storedTma) ? storedTma : tmas[0] ?? storedTma
   const cores = useFetch<CoreRow[]>(`/api/cores?tma=${tma}`)
   const layout = useFetch<Row[]>(`/api/tmas/${tma}/layout`)
   const navigate = useNavigate()
   const stains = summary.data ? Object.keys(summary.data.fields) : ['NeuN', '6E10', 'AT8']
+  const stain = stains.includes(storedStain) ? storedStain : stains[0] ?? storedStain
 
   const grid = useMemo(() => {
     const cells = (layout.data ?? []).map((r) => String(r.core_label))
@@ -51,7 +54,7 @@ export default function Cohort() {
       </div>
       {view === 'grid' ? (
         <div className="card">
-          <div className="core-grid" style={{ gridTemplateColumns: `28px repeat(${grid.cols.length}, minmax(70px, 1fr))` }}>
+          <div className="core-grid" style={{ gridTemplateColumns: `28px repeat(${grid.cols.length}, minmax(70px, 220px))` }}>
             <div />
             {grid.cols.map((c) => <div key={c} className="muted small" style={{ textAlign: 'center' }}>{c}</div>)}
             {grid.rows.map((r) => (

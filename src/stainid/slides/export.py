@@ -55,7 +55,7 @@ def read_manifest(path: Path) -> tuple[list[str], list[dict[str, str]]]:
 
 
 def write_manifest(path: Path, fields: list[str], rows: list[dict[str, str]]) -> None:
-    complete_fields = fields + [field for field in EXPORT_FIELDS if field not in fields]
+    complete_fields = fields + [field for field in EXPORT_FIELDS + QC_FIELDS if field not in fields]
     temporary = path.with_suffix(".tmp.csv")
     with temporary.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=complete_fields, lineterminator="\n")

@@ -17,7 +17,7 @@ export default function ReviewLabel() {
   const [confidence, setConfidence] = useState('high')
   const [notes, setNotes] = useState('')
   const [error, setError] = useState<string | null>(null)
-  const summary = useFetch<Row[]>(Object.keys(labels).length && data.data && Object.keys(labels).length >= data.data.items.length ? `/api/reviews/${name}/summary` : null)
+  const summary = useFetch<Record<string, Row[]>>(Object.keys(labels).length && data.data && Object.keys(labels).length >= data.data.items.length ? `/api/reviews/${name}/summary` : null)
 
   useEffect(() => {
     if (!data.data) return
@@ -105,19 +105,37 @@ export default function ReviewLabel() {
               <h3>Progress</h3>
               <Progress done={done} total={items.length} />
               <p className="muted small">{done} of {items.length} labelled. Labels are saved as you go, so you can stop and come back any time.
-                {training ? ' When you have labelled enough, go back to Models and press Train.' : ' Groups are revealed once every item is labelled.'}</p>
-              {summary.data && summary.data.length > 0 && (
-                <table>
-                  <thead><tr><th>label</th>{Object.keys(summary.data[0]).filter((k) => k !== 'label').map((g) => <th key={g} className="num">{groupLabel(g)}</th>)}</tr></thead>
-                  <tbody>{summary.data.map((r) => (
-                    <tr key={String(r.label)}><td>{String(r.label)}</td>{Object.entries(r).filter(([k]) => k !== 'label').map(([k, v]) => <td key={k} className="num">{String(v)}</td>)}</tr>
-                  ))}</tbody>
-                </table>
+                {training ? ' When you have labelled enough, go back to Models and press Train.' : ' When every item is labelled, the tables below compare your labels with what the model decided and with the diagnostic groups.'}</p>
+              {summary.data?.model_class && summary.data.model_class.length > 0 && (
+                <Crosstab title="Your labels against what the model decided" rows={summary.data.model_class} header={(k) => MODEL_CLASS[k] ?? k} />
+              )}
+              {summary.data?.disease_group && summary.data.disease_group.length > 0 && (
+                <Crosstab title="Your labels by diagnostic group" rows={summary.data.disease_group} header={groupLabel} />
               )}
             </div>
           </div>
         </div>
       )}
     </>
+  )
+}
+
+const MODEL_CLASS: Record<string, string> = {
+  neuron: 'counted as neuron', rejected: 'rejected', compact: 'compact plaque', diffuse: 'diffuse plaque', small_plaque: 'small plaque',
+  tau_neuron_ring: 'tau+ neuron (ring)', tau_neuron_dense: 'tau+ neuron (dense)',
+}
+
+function Crosstab({ title, rows, header }: { title: string; rows: Row[]; header: (key: string) => string }) {
+  const columns = Object.keys(rows[0]).filter((k) => k !== 'label')
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div className="small secondary" style={{ marginBottom: 4 }}>{title}</div>
+      <table className="compact">
+        <thead><tr><th>your label</th>{columns.map((c) => <th key={c} className="num">{header(c)}</th>)}</tr></thead>
+        <tbody>{rows.map((r) => (
+          <tr key={String(r.label)}><td>{String(r.label)}</td>{columns.map((c) => <td key={c} className="num">{String(r[c])}</td>)}</tr>
+        ))}</tbody>
+      </table>
+    </div>
   )
 }

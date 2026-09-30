@@ -33,10 +33,11 @@ export interface ProjectInfo {
 }
 export interface StepOption { key: string; label: string; kind: 'number' | 'text' | 'select' | 'stains' | 'bool'; default: unknown; help: string; choices: string[]; advanced: boolean }
 export interface ResourceInfo { id: string; label: string; description: string; path: string; exists: boolean }
-export interface StepProgress { state: 'done' | 'partial' | 'todo'; done: number; total: number; unit: string; note: string }
+export interface StepProgress { state: 'done' | 'partial' | 'todo'; done: number; total: number; unit: string; note: string; outdated?: boolean }
 export interface Step {
   id: string; stage: string; title: string; summary: string; details: string; needs: ResourceInfo[]; produces: ResourceInfo[]
   command: string[] | null; options: StepOption[]; heavy: boolean; view: string | null; duration: string; progress: StepProgress; job: Job | null
+  after: string[]
 }
 export interface SlideRow { slide_path: string; tma: string; stain: string }
 export interface SlidesInfo { folder: string; folder_exists: boolean; stains: string[]; saved: boolean; rows: SlideRow[] }
@@ -59,7 +60,7 @@ export interface FieldObject { x: number; y: number; radius_px: number; model_cl
 export interface Outline { label: number; points: [number, number][]; area_um2: number | null; circularity: number | null; seed_source: string }
 export interface Job {
   id: string; workflow: string; title: string; options: Record<string, unknown>; argv: string[]; status: string
-  created: number; started: number | null; ended: number | null; returncode: number | null
+  created: number; started: number | null; ended: number | null; returncode: number | null; waiting: string
   progress: { done: number; total: number; last_line: string; error: string }
 }
 export interface ReviewSet {

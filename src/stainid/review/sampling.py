@@ -7,9 +7,9 @@ from stainid.outputs import objects
 from stainid.project import Project
 
 DEFAULT_LABELS = {
-    "NeuN": ["neuron", "neun_negative_cell", "artifact", "uncertain"],
-    "6E10": ["compact_plaque", "diffuse_plaque", "vascular", "not_plaque", "uncertain"],
-    "AT8": ["tau_neuron", "neurite_fragment", "artifact", "negative", "uncertain"],
+    "NeuN": ["NeuN+ neuron", "not a neuron", "artifact or unclear", "unsure"],
+    "6E10": ["compact plaque", "diffuse plaque", "vessel or tissue edge", "not a plaque", "unsure"],
+    "AT8": ["tau+ neuron", "thread or neurite piece", "not a tau+ neuron", "unsure"],
 }
 DEFAULT_FOV_UM = {"NeuN": 45.0, "6E10": 85.0, "AT8": 55.0}
 

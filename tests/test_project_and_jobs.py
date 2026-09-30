@@ -29,3 +29,21 @@ def test_save_project_writes_only_changes(tmp_path):
     assert load_project(tmp_path).config["tma"] == {"prefix": "TMA-", "rows": 8, "columns": 6}
     assert (tmp_path / "stainid.yaml").read_text() == "name: Study\ntma:\n  rows: 8\n"
     assert project.tma_name("3") == "TMA-3"
+
+
+def test_queue_respects_step_order_and_heavy_slots(tmp_path, monkeypatch):
+    from stainid.api import jobs
+
+    started = []
+    monkeypatch.setattr(jobs.JobManager, "_start", lambda self, job: (started.append(job.workflow), setattr(job, "status", "running")))
+    monkeypatch.setattr(jobs.JobManager, "_loop", lambda self: None)
+    manager = jobs.JobManager(tmp_path, tmp_path / "jobs", max_heavy=2)
+    nuclei, neun, fields, masks = (manager.submit(step, {}) for step in ("nuclei", "neun", "fields", "masks"))
+    for job, when in zip((nuclei, neun, fields, masks), range(4)):
+        job.created = when
+    manager._schedule()
+    assert started == ["nuclei", "neun"]
+    assert "Find nuclei" in fields.waiting and "Detect NeuN" in masks.waiting
+    nuclei.status = "finished"
+    manager._schedule()
+    assert started == ["nuclei", "neun", "fields"] and masks.status == "queued"

@@ -22,7 +22,7 @@ def run_nuclei(project: Project, stains: list[str], device: str = "mps", batch_s
     rows = [r for r in read_csv(project.input("tile_manifest")) if r["stain"] in set(stains)]
     rows = sorted(rows, key=lambda r: (r["image_path"], int(r["selection_order"])))[shard_index::shard_count]
     pending = [r for r in rows if not (output / f"{r['tile_id']}.npz").exists()]
-    print(f"{len(pending)} of {len(rows)} fields pending", flush=True)
+    print(f"[0/{len(pending)}] {len(pending)} of {len(rows)} fields still to do", flush=True)
     CELLPOSE_SETTINGS["batch_size"] = batch_size
     model = load_cellpose(project.model("cellpose"), threads, device)
     image_path, image = None, None

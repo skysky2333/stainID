@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useLocation } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import type { Job, SlideRow, SlidesInfo, Step } from '../api'
 import { api, runStep } from '../api'
 import { Empty, ErrorNote, FilePicker, HelpBox, OptionField, PageHead, PathLine, Progress, StatusBadge, Term, timeAgo, withError } from '../components'
 import { useFetch } from '../hooks'
+import { NowRunning, PipelineMap } from '../pipeline'
 import { useProject } from '../project'
 
 export const MAIN_STAGES = ['1 · Set up', '2 · Detect', '3 · Results']
@@ -11,16 +12,20 @@ export const MAIN_STAGES = ['1 · Set up', '2 · Detect', '3 · Results']
 export function stepState(step: Step): string {
   if (step.job && (step.job.status === 'running' || step.job.status === 'queued')) return step.job.status
   if (step.job?.status === 'failed' && step.progress.state !== 'done') return 'failed'
+  if (step.progress.outdated) return 'outdated'
   return step.progress.state
 }
 
 export default function Workflow() {
   const steps = useFetch<Step[]>('/api/steps', 3000)
+  const jobs = useFetch<Job[]>('/api/jobs', 3000)
+  const navigate = useNavigate()
   const { hash } = useLocation()
   const list = (steps.data ?? []).filter((s) => MAIN_STAGES.includes(s.stage))
   useEffect(() => {
     if (hash && steps.data) document.getElementById(hash.slice(1))?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }, [hash, steps.data === null])
+  const refresh = () => { steps.reload(); jobs.reload() }
 
   return (
     <>
@@ -35,10 +40,12 @@ export default function Workflow() {
         </ul>
       </HelpBox>
       <ErrorNote error={steps.error} />
+      {list.length > 0 && <PipelineMap steps={list} state={stepState} onOpen={(id) => navigate(`/workflow#${id}`)} />}
+      <NowRunning jobs={jobs.data ?? []} onChanged={refresh} />
       {MAIN_STAGES.map((stage) => (
         <section key={stage} className="stage">
           <h2 className="stage-title">{stage}</h2>
-          {list.filter((s) => s.stage === stage).map((step) => <StepCard key={step.id} step={step} steps={steps.data ?? []} onChanged={steps.reload} />)}
+          {list.filter((s) => s.stage === stage).map((step) => <StepCard key={step.id} step={step} steps={steps.data ?? []} onChanged={refresh} />)}
         </section>
       ))}
       <JobsTable />
@@ -54,7 +61,9 @@ export function StepCard({ step, steps, onChanged }: { step: Step; steps: Step[]
   const [log, setLog] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const state = stepState(step)
-  const [open, setOpen] = useState(state !== 'done' || window.location.hash === `#${step.id}`)
+  const { hash } = useLocation()
+  const [open, setOpen] = useState(state !== 'done' || hash === `#${step.id}`)
+  useEffect(() => { if (hash === `#${step.id}`) setOpen(true) }, [hash, step.id])
   const missing = step.needs.filter((n) => !n.exists)
   const maker = (id: string) => steps.find((s) => s.produces.some((p) => p.id === id) && s.id !== step.id)
   const active = state === 'running' || state === 'queued'
@@ -84,6 +93,7 @@ export function StepCard({ step, steps, onChanged }: { step: Step; steps: Step[]
           <span className="muted small">{step.progress.done.toLocaleString()} of {step.progress.total.toLocaleString()} {step.progress.unit}{step.progress.note ? ` · ${step.progress.note}` : ''}</span>
         </div>
       )}
+      {step.progress.total === 0 && step.progress.note && <p className="small secondary" style={{ margin: '4px 0' }}>{step.progress.note}</p>}
       <button className="link-btn" onClick={() => setDetails(!details)}>{details ? 'Less' : 'What does this step do?'}</button>
       {details && <p className="secondary step-details">{step.details}{step.duration && <><br /><span className="muted">Typical time: {step.duration}.</span></>}</p>}
 
@@ -105,6 +115,10 @@ export function StepCard({ step, steps, onChanged }: { step: Step; steps: Step[]
         </div>
       </div>
 
+      {step.progress.outdated && (
+        <div className="warning-note">These results were made with a different model than the one in use now. To redo them with the current model,
+          open <b>Advanced options</b>, tick <b>Start over</b> and run the step again (old results are moved aside, not deleted).</div>
+      )}
       {step.id === 'slides' && <SlidesPanel onSaved={onChanged} />}
       {step.id === 'layout' && <MapUpload onSaved={onChanged} />}
 
@@ -123,7 +137,8 @@ export function StepCard({ step, steps, onChanged }: { step: Step; steps: Step[]
             {job && <span className="muted small">Last run {timeAgo(job.created)}</span>}
             {job && <button className="link-btn small" onClick={() => setLog(!log)}>{log ? 'Hide log' : 'Show log'}</button>}
           </div>
-          {active && job?.progress.last_line && <div className="muted small live-line">{job.progress.last_line}</div>}
+          {state === 'queued' && job?.waiting && <div className="small secondary live-line">{job.waiting}. It starts on its own.</div>}
+          {state === 'running' && job?.progress.last_line && <div className="muted small live-line">{job.progress.last_line}</div>}
           {job?.status === 'failed' && <ErrorNote error={`This step stopped with an error: ${job.progress.error || job.progress.last_line || 'see the log'}`} />}
           <ErrorNote error={error} />
           {log && job && <JobLog id={job.id} />}
@@ -192,7 +207,7 @@ function MapUpload({ onSaved }: { onSaved: () => void }) {
   const [message, setMessage] = useState('')
   const upload = (kind: string, file: File | undefined) => file && withError(async () => {
     const result = await api.upload<{ saved: string; rows: number }>(`/api/upload/${kind}`, file)
-    setMessage(`Saved ${result.rows} rows to ${result.saved}.`)
+    setMessage(`Saved ${result.rows} rows to ${result.saved}. Next: press Run below. You can give the group codes readable names in Settings.`)
     onSaved()
   }, setError)
   return (
@@ -231,7 +246,7 @@ export function JobsTable({ limit }: { limit?: number }) {
                   <td>{job.title}<div className="muted small ellipsis" title={`stainid ${job.argv.join(' ')}`}><code>stainid {job.argv.join(' ')}</code></div></td>
                   <td><StatusBadge status={job.status} /></td>
                   <td><Progress done={job.progress.done} total={job.progress.total} />
-                    <div className="muted small ellipsis">{job.status === 'failed' ? job.progress.error || job.progress.last_line : job.progress.last_line}</div></td>
+                    <div className="muted small ellipsis">{job.status === 'failed' ? job.progress.error || job.progress.last_line : job.status === 'queued' ? job.waiting : job.progress.last_line}</div></td>
                   <td className="muted small">{job.started ? timeAgo(job.started) : '—'}</td>
                   <td className="row">
                     <button className="btn small" onClick={() => setOpenLog(openLog === job.id ? null : job.id)}>Log</button>

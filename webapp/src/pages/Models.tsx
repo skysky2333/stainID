@@ -56,7 +56,7 @@ export default function Models() {
             <div className="row"><h3 className="step-title">{TITLES[m.key] ?? m.key}</h3><span className="spacer" />
               <span className={`badge ${m.exists ? 'status-finished' : 'status-failed'}`}>{m.exists ? 'ready' : 'missing'}</span></div>
             <p className="secondary small">{m.role}</p>
-            <PathLine path={m.path} exists={m.exists} />
+            <PathLine path={m.path} exists={m.exists} wrap />
             {m.bundle && (
               <table className="compact"><tbody>
                 {Object.entries(m.bundle).filter(([k]) => k in DETAILS).map(([k, v]) => (

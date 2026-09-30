@@ -102,7 +102,7 @@ reported next to density as a cellularity-independent measure.
 ## 9. Object outlines — `stainid masks`
 
 Segment Anything (ViT-B) is prompted at each accepted object's centroid on a native 1024 px
-window.
+window. One run covers every stain (`--stain` limits it); cores without detections yet are skipped.
 
 - NeuN and 6E10 use a fixed output.
 - AT8 picks among SAM's outputs with a stain-contrast rule.

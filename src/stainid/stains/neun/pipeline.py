@@ -13,7 +13,7 @@ from PIL import Image
 from stainid.imaging.tissue import field_tissue_mask, linear_artifact_mask
 from stainid.nuclei import CELLPOSE_SETTINGS, cellpose_masks, load_cellpose
 from stainid.pipelines.cohort_v1 import context_crop, local_profile_density
-from stainid.qc.exclusions import rasterize_core_exclusions
+from stainid.qc.exclusions import rasterize_core_exclusions, read_manual_exclusions
 from stainid.stains.neun.cellpose import classify_cellpose_masks
 from stainid.stains.neun.classifier import build_matrix_from_contexts, object_contexts
 from stainid.stains.neun.profiles import combine_profile_and_cellpose_reviews, review_table_rows, segment_dab_profiles
@@ -256,7 +256,7 @@ def run_neun_cohort(
                              f"Run the step again with 'Start over' to redo them ({provenance_path})")
     else:
         provenance_path.write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")
-    print(f"Shard {shard_index}/{shard_count}: {len(pending)} of {len(rows)} tiles pending", flush=True)
+    print(f"[0/{len(pending)}] {len(pending)} of {len(rows)} fields still to do (part {shard_index + 1} of {shard_count})", flush=True)
     if not pending:
         return 0
     bundle = load(model_bundle_path)
@@ -265,8 +265,7 @@ def run_neun_cohort(
         for row in read_csv(calibration_path)
         if row["stain"] == "NeuN"
     }
-    with manual_exclusions_path.open(encoding="utf-8") as handle:
-        manual_exclusions = json.load(handle)
+    manual_exclusions = read_manual_exclusions(manual_exclusions_path)
     CELLPOSE_SETTINGS["batch_size"] = batch_size
     model = load_cellpose(cellpose_model_path, threads, device)
     image_path = None

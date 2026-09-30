@@ -11,6 +11,7 @@ from PIL import Image
 from stainid.api.state import ProjectState
 from stainid.imaging.color import rgb_to_hed
 from stainid.imaging.tissue import field_tissue_mask, fold_mask, linear_artifact_mask
+from stainid.qc.exclusions import rasterize_core_exclusions, read_manual_exclusions
 from stainid.tables import read_csv
 
 Image.MAX_IMAGE_PIXELS = None
@@ -67,6 +68,9 @@ def exclusion_overlay(state: ProjectState, tile_id: str) -> Path:
         mask = ~field_tissue_mask(rgb) | linear_artifact_mask(rgb)
         if tile["stain"] != "NeuN":
             mask |= fold_mask(rgb, state.project.pixel_size_um)
+        manual = read_manual_exclusions(state.project.input("manual_exclusions")).get(tile["image_path"], [])
+        origin = [max(0, int(tile[k]) - state.project.context_px) for k in ("x_px", "y_px")]
+        mask |= rasterize_core_exclusions(manual, origin[0], origin[1], mask.shape)
         _rgba_png(mask, (90, 110, 255), 110, target)
     return target
 

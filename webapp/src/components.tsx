@@ -68,7 +68,7 @@ export function GroupBadge({ group }: { group: string | null | undefined }) {
 
 const STATUS_TEXT: Record<string, string> = {
   done: 'Done', partial: 'Partly done', todo: 'Not started', running: 'Running', queued: 'Waiting to start', failed: 'Failed',
-  finished: 'Finished', cancelled: 'Cancelled', interrupted: 'Interrupted', blocked: 'Needs earlier steps',
+  finished: 'Finished', cancelled: 'Stopped', interrupted: 'Interrupted', blocked: 'Needs earlier steps', outdated: 'Made with an older model',
 }
 
 export function StatusBadge({ status }: { status: string }) {
@@ -130,10 +130,10 @@ export function FilePicker({ title, start, pickFiles = false, show = '', onPick,
 }
 
 /** A file or folder location with "Show in Finder" and (for files) "Download". */
-export function PathLine({ path, exists, label }: { path: string; exists: boolean; label?: ReactNode }) {
+export function PathLine({ path, exists, label, wrap = false }: { path: string; exists: boolean; label?: ReactNode; wrap?: boolean }) {
   const isFile = /\.[a-z0-9]+$/i.test(path)
   return (
-    <div className="path-line">
+    <div className={`path-line${wrap ? ' wrap-path' : ''}`}>
       <span className={`exists-dot ${exists ? 'yes' : 'no'}`} title={exists ? 'exists' : 'not there yet'} />
       {label && <span className="path-label">{label}</span>}
       <code title={path}>{path}</code>

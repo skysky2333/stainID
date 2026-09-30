@@ -30,6 +30,7 @@ class Job:
     ended: float | None = None
     pid: int | None = None
     returncode: int | None = None
+    waiting: str = ""
 
 
 class JobManager:
@@ -44,6 +45,7 @@ class JobManager:
                 job.status = "interrupted" if job.status == "running" else job.status
             if job.status == "queued" and job.workflow not in BY_ID:
                 job.status = "cancelled"
+        self.open = True
         threading.Thread(target=self._loop, daemon=True).start()
 
     def _load(self, path: Path) -> Job:
@@ -61,6 +63,7 @@ class JobManager:
     def submit(self, workflow: str, options: dict) -> Job:
         if workflow not in BY_ID or BY_ID[workflow].command is None:
             raise KeyError(workflow)
+        options = {**{o.key: o.default for o in BY_ID[workflow].options}, **options}
         job = Job(id=time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6], workflow=workflow, options=options, argv=to_argv(workflow, options))
         with self.lock:
             self.jobs[job.id] = job
@@ -81,7 +84,7 @@ class JobManager:
     def progress(self, job: Job) -> dict:
         path = self.log_path(job.id)
         if not path.exists():
-            return {"done": 0, "total": 0, "last_line": ""}
+            return {"done": 0, "total": 0, "last_line": "", "error": ""}
         tail = path.read_bytes()[-20000:].decode(errors="replace").splitlines()
         lines = [line for line in tail if line.strip() and "Warning" not in line]
         matches = [PROGRESS.search(line) for line in lines]
@@ -93,26 +96,49 @@ class JobManager:
     def describe(self, job: Job) -> dict:
         return {**asdict(job), "title": BY_ID[job.workflow].title if job.workflow in BY_ID else job.workflow, "progress": self.progress(job)}
 
+    def close(self) -> None:
+        self.open = False
+
     def _loop(self) -> None:
-        while True:
+        while self.open:
             with self.lock:
-                for job_id, process in list(self.processes.items()):
-                    code = process.poll()
-                    if code is not None:
-                        job = self.jobs[job_id]
-                        job.returncode, job.ended = code, time.time()
-                        if job.status != "cancelled":
-                            job.status = "finished" if code == 0 else "failed"
-                        self._save(job)
-                        del self.processes[job_id]
-                running_heavy = sum(BY_ID[self.jobs[j].workflow].heavy for j in self.processes)
-                for job in sorted((j for j in self.jobs.values() if j.status == "queued"), key=lambda j: j.created):
-                    heavy = BY_ID[job.workflow].heavy
-                    if heavy and running_heavy >= self.max_heavy:
-                        continue
-                    self._start(job)
-                    running_heavy += heavy
+                self._reap()
+                self._schedule()
             time.sleep(1.0)
+
+    def _reap(self) -> None:
+        for job_id, process in list(self.processes.items()):
+            code = process.poll()
+            if code is not None:
+                self._finish(self.jobs[job_id], code)
+                del self.processes[job_id]
+        for job in self.jobs.values():
+            if job.status == "running" and job.id not in self.processes and not _alive(job.pid):
+                self._finish(job, 1 if self.progress(job)["error"] else 0)
+
+    def _finish(self, job: Job, code: int) -> None:
+        job.returncode, job.ended = code, time.time()
+        if job.status != "cancelled":
+            job.status = "finished" if code == 0 else "failed"
+        self._save(job)
+
+    def _schedule(self) -> None:
+        """Start queued jobs in order. A job waits for earlier active jobs of the steps it depends on (and of the same
+        step with the same options), and heavy jobs wait for a free slot."""
+        active = [j for j in self.jobs.values() if j.status in ("running", "queued")]
+        running_heavy = sum(BY_ID[j.workflow].heavy for j in active if j.status == "running")
+        for job in sorted((j for j in active if j.status == "queued"), key=lambda j: j.created):
+            step = BY_ID[job.workflow]
+            before = [j for j in active if j.created < job.created and j.status in ("running", "queued")
+                      and (j.workflow in step.after or (j.workflow == job.workflow and j.options == job.options))]
+            if before:
+                job.waiting = f"Waits for “{BY_ID[before[0].workflow].title}” to finish first"
+            elif step.heavy and running_heavy >= self.max_heavy:
+                job.waiting = f"Waits for a free slot: {self.max_heavy} heavy steps are already running (at most {self.max_heavy} at a time)"
+            else:
+                job.waiting = ""
+                self._start(job)
+                running_heavy += step.heavy
 
     def _start(self, job: Job) -> None:
         log = self.log_path(job.id).open("ab")

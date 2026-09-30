@@ -213,6 +213,9 @@ async def upload(kind: str, file: UploadFile = File(...)) -> dict:
     if target.exists():
         target.rename(target.with_name(f"{target.stem}.replaced-{time.strftime('%Y%m%d-%H%M%S')}{target.suffix}"))
     staged.rename(target)
+    if kind == "tma_layout" and not project.config["groups"]:
+        codes = [c for c in dict.fromkeys(frame["disease_group"]) if c]
+        project = save_project(project, {"groups": [{"code": c, "label": c} for c in codes]})
     open_project(project.root)
     return {"saved": project.relative(target), "rows": len(frame)}
 

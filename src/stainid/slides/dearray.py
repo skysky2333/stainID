@@ -67,11 +67,16 @@ def segment_for_grid(rgb: np.ndarray) -> tuple[np.ndarray, float]:
     return mask.astype(bool), float(threshold)
 
 
-def find_components(mask: np.ndarray) -> tuple[Component, ...]:
+def _at_least(fraction: float, positions: int) -> int:
+    return max(3, int(np.ceil(fraction * positions)))
+
+
+def find_components(mask: np.ndarray, positions: int = 30) -> tuple[Component, ...]:
+    """Tissue blobs that could be cores; size limits scale with the grid (for a 5 x 6 grid: 0.07-6% of the slide)."""
     count, _, stats, centroids = cv2.connectedComponentsWithStats(mask.astype(np.uint8), 8)
-    image_area = mask.shape[0] * mask.shape[1]
-    minimum_area = image_area * 0.0007
-    maximum_area = image_area * 0.06
+    cell_area = mask.shape[0] * mask.shape[1] / positions
+    minimum_area = cell_area * 0.021
+    maximum_area = cell_area * 1.8
     components = []
     for index in range(1, count):
         _, _, width, height, area = stats[index]
@@ -85,8 +90,9 @@ def find_components(mask: np.ndarray) -> tuple[Component, ...]:
                     area=int(area),
                 )
             )
-    if len(components) < 12:
-        raise ValueError(f"Only {len(components)} candidate core components were detected")
+    if len(components) < _at_least(0.4, positions):
+        raise ValueError(f"Only {len(components)} core-sized tissue pieces were found on the slide preview; "
+                         "check the rows and columns in Settings and that the scan shows the whole TMA")
     return tuple(components)
 
 
@@ -132,7 +138,8 @@ def _weighted_affine(
 
 
 def fit_grid(mask: np.ndarray, rows: int, columns: int, strict_threshold: float) -> GridFit:
-    components = find_components(mask)
+    positions = rows * columns
+    components = find_components(mask, positions)
     origin_x, pitch_x = fit_axis(mask.mean(axis=0), columns)
     origin_y, pitch_y = fit_axis(mask.mean(axis=1), rows)
     initial_centers = np.array(
@@ -144,7 +151,7 @@ def fit_grid(mask: np.ndarray, rows: int, columns: int, strict_threshold: float)
     )
 
     areas = np.array([component.area for component in components])
-    reference_count = min(len(areas), rows * columns - 4)
+    reference_count = max(1, min(len(areas), round(positions * 26 / 30)))
     reference_area = float(np.median(np.sort(areas)[-reference_count:]))
     selected: dict[tuple[int, int], Component] = {}
     for component in components:
@@ -160,8 +167,8 @@ def fit_grid(mask: np.ndarray, rows: int, columns: int, strict_threshold: float)
         if previous is None or component.area > previous.area:
             selected[(row, column)] = component
 
-    if len(selected) < 12:
-        raise ValueError(f"Only {len(selected)} reliable components could be assigned to the grid")
+    if len(selected) < _at_least(0.4, positions):
+        raise ValueError(f"Only {len(selected)} cores could be matched to a {rows} x {columns} grid; check the rows and columns in Settings")
 
     assigned_rows = np.array([position[0] for position in selected], dtype=float)
     assigned_columns = np.array([position[1] for position in selected], dtype=float)
@@ -178,7 +185,7 @@ def fit_grid(mask: np.ndarray, rows: int, columns: int, strict_threshold: float)
         mad = float(np.median(np.abs(residuals - median)))
         limit = max(0.10 * min(pitch_x, pitch_y), median + 2.5 * mad)
         next_keep = residuals <= limit
-        if next_keep.sum() < 10 or np.array_equal(next_keep, keep):
+        if next_keep.sum() < _at_least(0.33, positions) or np.array_equal(next_keep, keep):
             break
         keep = next_keep
         coefficients = _weighted_affine(
@@ -201,9 +208,10 @@ def fit_grid(mask: np.ndarray, rows: int, columns: int, strict_threshold: float)
         if included
     )
     radius = float(0.41 * minimum_pitch)
-    if len(inlier_components) < 10 or rmse > 0.12 * minimum_pitch:
+    if len(inlier_components) < _at_least(0.33, positions) or rmse > 0.12 * minimum_pitch:
         raise ValueError(
-            f"Unreliable grid fit: {len(inlier_components)} inliers, RMSE {rmse:.1f} pixels"
+            f"The {rows} x {columns} grid does not fit this slide well ({len(inlier_components)} cores fit, "
+            f"error {rmse:.1f} preview pixels); check the rows and columns in Settings"
         )
     return GridFit(
         origin=origin,

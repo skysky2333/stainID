@@ -55,7 +55,8 @@ export default function Settings() {
             <label className="field">Columns<input type="number" value={config.tma.columns} style={{ width: 70 }} onChange={(e) => update({ ...config, tma: { ...config.tma, columns: Number(e.target.value) } })} /></label>
             <label className="field">Pixel size (µm)<input type="number" step="0.0001" value={config.pixel_size_um} style={{ width: 100 }} onChange={(e) => update({ ...config, pixel_size_um: Number(e.target.value) })} /></label>
           </div>
-          <p className="muted small">Cores are named <code>{config.tma.prefix}3_B-2</code> (TMA 3, column B, row 2). {info.help['tma.rows']} {info.help['tma.columns']}</p>
+          <p className="muted small">Cores are named <code>{config.tma.prefix}3_B-2</code> (TMA 3, column B, row 2). {info.help['tma.rows']} {info.help['tma.columns']}
+            {' '}Set these before <i>Find cores</i> and <i>Choose analysis fields</i>; changing them later needs those steps (and everything after) to be run again.</p>
         </div>
 
         <div className="card">

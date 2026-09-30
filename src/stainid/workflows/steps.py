@@ -50,15 +50,21 @@ class Step:
     view: str | None = None
     duration: str = ""
     status: Callable[[Project], dict] = field(default=lambda project: {}, repr=False)
+    after: tuple[str, ...] = ()
 
 
 def _rows(path: Path) -> list[dict[str, str]]:
     return read_csv(path) if path.exists() else []
 
 
-def _state(done: int, total: int, unit: str, note: str = "") -> dict:
+def _state(done: int, total: int, unit: str, note: str = "", outdated: bool = False) -> dict:
     state = "done" if total and done >= total else "partial" if done else "todo"
-    return {"state": state, "done": done, "total": total, "unit": unit, "note": note}
+    return {"state": state, "done": done, "total": total, "unit": unit, "note": note, "outdated": outdated}
+
+
+def _made_with_other_model(project: Project, output: str, recorded: Callable[[dict], dict], current: dict) -> bool:
+    path = project.output(output) / "provenance.json"
+    return path.exists() and recorded(json.loads(path.read_text())) != current
 
 
 def _tiles(project: Project, stains: set[str]) -> list[dict[str, str]]:
@@ -109,12 +115,15 @@ def _nuclei_status(project: Project) -> dict:
 
 def _neun_status(project: Project) -> dict:
     tiles = _tiles(project, {"NeuN"})
-    return _state(_count_files(project.output("neun") / "tiles", [f"{t['tile_id']}_features.csv" for t in tiles]), len(tiles), "fields")
+    outdated = _made_with_other_model(project, "neun", lambda r: {"neun": str(Path(r["neun_model_bundle"]).resolve())},
+                                      {"neun": str(project.model("neun").resolve())})
+    return _state(_count_files(project.output("neun") / "tiles", [f"{t['tile_id']}_features.csv" for t in tiles]), len(tiles), "fields", outdated=outdated)
 
 
 def _fields_status(project: Project) -> dict:
     keys = sorted({f"{t['core_id']}_{t['stain']}_features.csv" for t in _tiles(project, {"6E10", "AT8"})})
-    return _state(_count_files(project.output("fields") / "parts", keys), len(keys), "core images")
+    outdated = _made_with_other_model(project, "fields", lambda r: r, {k: project.relative(project.model(k)) for k in ("amyloid", "tau")})
+    return _state(_count_files(project.output("fields") / "parts", keys), len(keys), "core images", outdated=outdated)
 
 
 def _masks_status(project: Project) -> dict:
@@ -136,9 +145,21 @@ def _training_status(project: Project) -> dict:
 
 
 def _trained_status(project: Project) -> dict:
+    from stainid.review.store import read_labels
+    from stainid.training.sets import POSITIVE, SKIP
+
     root = project.output("trained_models")
     count = len(list(root.glob("*/bundle.joblib"))) if root.exists() else 0
-    return _state(count, count, "trained models")
+    sets = project.output("reviews") / "training"
+    counts = {stain: [0, 0] for stain in POSITIVE}
+    for meta in sets.glob("*/meta.json") if sets.exists() else []:
+        stain = json.loads(meta.read_text())["stain"]
+        labels = read_labels(meta.parent)
+        for label in labels.label if not labels.empty else []:
+            if label not in SKIP:
+                counts[stain][label not in POSITIVE[stain]] += 1
+    note = " · ".join(f"{s}: {p} positive / {n} negative labels" for s, (p, n) in counts.items() if p or n)
+    return _state(count, count, "trained models", note or "No labels yet. Training needs at least 10 positive and 10 negative labels per stain")
 
 
 RESOURCES = {r.id: r for r in (
@@ -179,67 +200,69 @@ STEPS = (
          "check the guesses and fix any that are wrong, then save.", ("slides_dir",), ("slides_table",), None, status=_slides_status),
     Step("dearray", "1 · Set up", "Find cores", "Locate every core on each slide by fitting the TMA grid.",
          "Reads a small preview of each slide, fits a rows × columns grid (set in Settings) and re-centres each core on its tissue. "
-         "Check the grid pictures afterwards: every circle should sit on a core.",
+         "Check the grid pictures afterwards: every circle should sit on a core. The first time, stainID downloads the Bio-Formats "
+         "slide reader (about 60 MB, needs internet); later runs start straight away.",
          ("slides_table",), ("core_manifest", "grid_images"), ("dearray",),
          (Option("redo", "Redo all slides", "bool", False, "Fit the grid again on slides that were already done.", advanced=True),),
-         heavy=True, view="/setup/grids", duration="about 1 minute per slide", status=_dearray_status),
+         heavy=True, view="/setup/grids", duration="about 1 minute per slide", status=_dearray_status, after=("slides",)),
     Step("layout", "1 · Set up", "Attach TMA map", "Say which donor, region and group sits at each core position.",
          "Upload a spreadsheet (CSV) with one row per core position: tma, core_label (e.g. B-2), donor_id, region and disease_group. "
          "Leave donor_id empty for orientation or control cores. Download the template to start.",
-         ("core_manifest", "tma_layout"), ("core_manifest",), ("layout",), status=_manifest_status("core_role", "core positions")),
+         ("core_manifest", "tma_layout"), ("core_manifest",), ("layout",), status=_manifest_status("core_role", "core positions"), after=('dearray',)),
     Step("export", "1 · Set up", "Export cores", "Cut every core out of the slide at full resolution.",
          "Writes one PNG per core and stain. Finished cores are skipped, so this can be stopped and restarted.",
          ("core_manifest",), ("core_images",), ("export",),
          (Option("workers", "Parallel writers", "number", 2, "How many images are written at once.", advanced=True),
           Option("overwrite", "Export again", "bool", False, "Re-export cores that already exist.", advanced=True)),
          heavy=True, view="/cohort", duration="about 1–2 minutes per slide",
-         status=_manifest_status("export_status", only=lambda r: r.get("core_role") == "biological")),
+         status=_manifest_status("export_status", only=lambda r: r.get("core_role") == "biological"), after=('dearray', 'layout')),
     Step("qc", "1 · Set up", "Check core quality", "Measure tissue coverage, fragments and focus of every core.",
          "Flags cores that are mostly empty, torn or out of focus so they can be reviewed. Field selection only uses tissue and focus, never the stain.",
          ("core_images",), ("core_manifest", "core_qc_images"), ("qc",),
          (Option("workers", "Parallel workers", "number", 2, advanced=True), Option("overwrite", "Measure again", "bool", False, advanced=True)),
          heavy=True, view="/cohort", duration="a few seconds per core",
-         status=_manifest_status("tissue_status", only=lambda r: r.get("export_status") == "complete")),
+         status=_manifest_status("tissue_status", only=lambda r: r.get("export_status") == "complete"), after=('export',)),
     Step("select", "1 · Set up", "Choose analysis fields", "Pick evenly spread ~560 µm fields inside every core.",
          "Scores candidate windows for tissue and focus, then spreads the chosen fields across the core. The first few fields per core are "
          "analysed; the rest are kept for stability checks.",
          ("core_manifest",), ("tile_manifest",), ("select",),
          (Option("fields_per_core", "Fields per core", "number", 8, "How many fields to choose in each core."),
           Option("primary", "Fields analysed", "number", 4, "How many of them are measured (the first N).")),
-         view="/cohort", duration="a few minutes", status=_select_status),
+         view="/cohort", duration="a few minutes", status=_select_status, after=('qc', 'layout')),
     Step("calibrate", "1 · Set up", "Calibrate stain thresholds", "Find the brown-stain (DAB) cut-off for every slide.",
          "Pools tissue pixels from all cores of a slide and sets one threshold per slide, blind to diagnosis. Everything downstream is measured "
          "relative to it, so slides stained a little darker or lighter stay comparable.",
-         ("tile_manifest",), ("calibration",), ("calibrate",), view="/calibration", duration="a few minutes", status=_calibration_status),
+         ("tile_manifest",), ("calibration",), ("calibrate",), view="/calibration", duration="a few minutes", status=_calibration_status, after=('select',)),
     Step("nuclei", "2 · Detect", "Find nuclei", "Outline every cell nucleus with Cellpose-SAM.",
          "Needed before the AT8 step (tau+ neurons are found around nuclei); also used for 6E10 plaque-neighbourhood features.",
          ("tile_manifest", "model_cellpose"), ("nuclei",), ("nuclei",),
-         (Option("stain", "Stains", "stains", ["AT8", "6E10"], choices=("AT8", "6E10", "NeuN")),
+         (Option("stain", "Stains", "stains", ["AT8", "6E10"], "NeuN detection finds its own cells, so it does not need this step.", ("AT8", "6E10")),
           Option("device", "Processor", "select", "mps", "mps uses the Apple GPU; choose cpu elsewhere.", ("cpu", "mps")),
           Option("batch_size", "Batch size", "number", 8, advanced=True), *SHARD),
-         heavy=True, duration="about 20 s per field on a Mac GPU", status=_nuclei_status),
+         heavy=True, duration="about 20 s per field on a Mac GPU", status=_nuclei_status, after=('select', 'download_models')),
     Step("neun", "2 · Detect", "Detect NeuN neurons", "Find and classify NeuN-stained neuronal profiles.",
          "Candidates come from brown-stain contours and Cellpose cells; the NeuN model scores each one with its shape, stain and 55 µm "
          "neighbourhood.", ("tile_manifest", "calibration", "model_neun", "model_cellpose"), ("neun_results",), ("neun",),
          (DEVICE, Option("threads", "CPU threads", "number", 8, advanced=True), FRESH, *SHARD),
-         heavy=True, view="/cohort", duration="about 1 minute per field", status=_neun_status),
+         heavy=True, view="/cohort", duration="about 1 minute per field", status=_neun_status, after=('select', 'calibrate', 'download_models')),
     Step("fields", "2 · Detect", "Detect plaques and tau", "6E10 plaques (compact / diffuse) and AT8 tau+ neurons and threads.",
          "6E10: segments deposits, keeps real plaques with the 6E10 model and sorts them into compact and diffuse. AT8: finds tau+ neurons "
          "around nuclei and traces neuropil threads, so run Find nuclei for AT8 first (AT8 cores without nuclei are skipped).",
          ("tile_manifest", "calibration", "model_amyloid", "model_tau"), ("field_results",), ("fields",),
          (Option("stain", "Stains", "stains", ["6E10", "AT8"], choices=("6E10", "AT8")), FRESH, *SHARD),
-         heavy=True, view="/cohort", duration="about 1 minute per core", status=_fields_status),
+         heavy=True, view="/cohort", duration="about 1 minute per core", status=_fields_status, after=('select', 'calibrate', 'nuclei', 'download_models')),
     Step("masks", "2 · Detect", "Outline objects", "Draw an exact outline around every detected object with Segment Anything.",
          "Adds precise size and shape measurements (area, roundness, dense cores). Optional: the main counts do not need it.",
          ("model_sam",), ("mask_results",), ("masks",),
-         (Option("stain", "Stain", "select", "NeuN", choices=("NeuN", "6E10", "AT8")), DEVICE, *SHARD),
-         heavy=True, view="/cohort", duration="about 1 minute per core", status=_masks_status),
+         (Option("stain", "Stains", "stains", ["NeuN", "6E10", "AT8"], "Stains without detections yet are skipped.", ("NeuN", "6E10", "AT8")),
+          DEVICE, FRESH, *SHARD),
+         heavy=True, view="/cohort", duration="about 1 minute per core", status=_masks_status, after=('neun', 'fields', 'download_models')),
     Step("summarize", "3 · Results", "Make results tables", "Combine everything into one row per donor and brain region.",
          "Sums counts and areas over fields and replicate cores before dividing, so every density is area-weighted. Writes "
          "results_donor_region.csv (and per-core tables) that open in Excel, R or Python.",
          (), ("results",), ("summarize",),
          (Option("level", "One row per", "select", "sample_region_id", "donor-region (recommended) or single core.", ("sample_region_id", "core_id")),),
-         view="/results", duration="about a minute", status=_summary_status),
+         view="/results", duration="about a minute", status=_summary_status, after=('neun', 'fields', 'masks')),
     Step("download_models", "Models", "Download public models", "Fetch the Cellpose-SAM, Segment Anything and Phikon weights.",
          "These models are published by their authors and are the same for every study. The NeuN, 6E10 and AT8 models are specific to "
          "your staining and are trained on the Models page instead.", (), ("model_cellpose", "model_sam"), ("download-models",),
@@ -256,12 +279,12 @@ STEPS = (
           Option("strategy", "Which objects", "select", "uncertain", "uncertain: half the objects are ones the current model is unsure about.",
                  ("uncertain", "random")),
           Option("enrich", "Prefer fields with detections", "bool", True, "Plaques and tau+ neurons are rare; sample fields that have some.")),
-         heavy=True, view="/models", duration="a few minutes", status=_training_status),
+         heavy=True, view="/models", duration="a few minutes", status=_training_status, after=('calibrate', 'nuclei', 'download_models')),
     Step("train", "Models", "Train a model", "Train a new model from your labelled training sets.",
          "Fits the same kind of model the pipeline uses, checks it by leaving one TMA out at a time, and compares it with the current model on "
          "your labels. The new model is only used after you choose it on the Models page.",
          ("training_sets",), ("trained_models",), ("train",), (Option("stain", "Stain", "select", "AT8", choices=tuple(STAINS)),),
-         view="/models", duration="under a minute", status=_trained_status),
+         view="/models", duration="under a minute", status=_trained_status, after=('training_set',)),
 )
 BY_ID = {s.id: s for s in STEPS}
 

@@ -88,7 +88,7 @@ def label(name: str, request: Label) -> dict:
 
 
 @router.get("/reviews/{name:path}/summary")
-def summary(name: str) -> list[dict]:
+def summary(name: str) -> dict:
     return store.unblinded_summary(root(), safe(name))
 
 
