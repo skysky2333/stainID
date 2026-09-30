@@ -1,6 +1,7 @@
 # ---- Not published: study data, models and working area ----
 data/
 workspace/
+deliveries/
 results*/
 stainid.yaml
 *.rsync*.log
