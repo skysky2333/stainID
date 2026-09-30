@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
@@ -99,6 +100,7 @@ class ProjectState:
 
 
 _STATE: ProjectState | None = None
+_LOCK = threading.RLock()
 
 
 def _settings() -> dict:
@@ -119,11 +121,18 @@ def _remember(root: Path) -> None:
     settings = _settings()
     settings["recent"] = [str(root)] + [p for p in settings["recent"] if p != str(root)][:9]
     SETTINGS.parent.mkdir(parents=True, exist_ok=True)
-    SETTINGS.write_text(json.dumps(settings, indent=1))
+    temporary = SETTINGS.with_suffix(".tmp")
+    temporary.write_text(json.dumps(settings, indent=1))
+    temporary.replace(SETTINGS)
 
 
 def open_project(path: Path | str) -> ProjectState:
     """Open (or reload after a settings change) a project. Reloading keeps its job runner; switching projects waits for jobs."""
+    with _LOCK:
+        return _open(path)
+
+
+def _open(path: Path | str) -> ProjectState:
     global _STATE
     project = load_project(path)
     runner = _STATE.__dict__.get("jobs") if _STATE is not None else None
@@ -139,12 +148,15 @@ def open_project(path: Path | str) -> ProjectState:
     os.environ["STAINID_PROJECT"] = str(project.root)
     if project.is_configured:
         _remember(project.root)
-    _STATE = ProjectState(project)
+    state = ProjectState(project)
     if runner is not None:
         runner.root = project.root
-        _STATE.__dict__["jobs"] = runner
+        state.__dict__["jobs"] = runner
+    state.jobs  # start the job runner now, inside the lock, so parallel first requests share one runner
+    _STATE = state
     return _STATE
 
 
 def get_state() -> ProjectState:
-    return _STATE or open_project(os.environ.get("STAINID_PROJECT", "."))
+    with _LOCK:
+        return _STATE or _open(os.environ.get("STAINID_PROJECT", "."))

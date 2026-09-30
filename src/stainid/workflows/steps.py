@@ -267,7 +267,9 @@ STEPS = (
     Step("neun", "2 · Detect", "Detect NeuN neurons", "Find and classify NeuN-stained neuronal profiles.",
          "Candidates come from brown-stain contours and Cellpose cells; the NeuN model scores each one with its shape, stain and 55 µm "
          "neighbourhood.", ("tile_manifest", "calibration", "model_neun", "model_cellpose"), ("neun_results",), ("neun",),
-         (DEVICE, Option("threads", "CPU threads", "number", 8, advanced=True), FRESH, *SHARD),
+         (Option("device", "Processor", "select", "cpu", "cpu reproduces published results exactly; mps / cuda (GPU) are faster but Cellpose "
+                 "outlines can differ slightly.", ("cpu", "mps", "cuda")),
+          Option("threads", "CPU threads", "number", 8, advanced=True), FRESH, *SHARD),
          heavy=True, view="/cohort", duration="about 1 minute per field", status=_neun_status),
     Step("fields", "2 · Detect", "Detect plaques and tau", "6E10 plaques (compact / diffuse) and AT8 tau+ neurons and threads.",
          "6E10: segments deposits, keeps real plaques with the 6E10 model and sorts them into compact and diffuse. AT8: finds tau+ neurons "
