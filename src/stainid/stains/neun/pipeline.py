@@ -199,6 +199,25 @@ def classify_neun_tile(
     return summary, objects
 
 
+def claim_field(claim: Path) -> bool:
+    """Take a field for this process; a claim left by a process that no longer runs (stopped or crashed) is taken over."""
+    try:
+        descriptor = os.open(claim, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        owner = claim.read_text().strip()
+        try:
+            os.kill(int(owner), 0)
+            return False
+        except (ValueError, ProcessLookupError):
+            claim.unlink(missing_ok=True)
+            return claim_field(claim)
+        except PermissionError:
+            return False
+    os.write(descriptor, str(os.getpid()).encode())
+    os.close(descriptor)
+    return True
+
+
 def run_neun_cohort(
     tile_manifest: Path,
     calibration_path: Path,
@@ -274,9 +293,7 @@ def run_neun_cohort(
         claim = tile_dir / f"{row['tile_id']}.claim"
         if (tile_dir / f"{row['tile_id']}_features.csv").exists():
             continue
-        try:
-            os.close(os.open(claim, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
-        except FileExistsError:
+        if not claim_field(claim):
             continue
         if row["image_path"] != image_path:
             image_path = row["image_path"]
