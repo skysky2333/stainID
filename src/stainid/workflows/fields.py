@@ -13,7 +13,7 @@ from stainid.project import Project
 from stainid.qc.exclusions import rasterize_core_exclusions, read_manual_exclusions
 from stainid.stains.amyloid.field_pipeline import analyze_6e10_v2
 from stainid.stains.tau.field_pipeline import analyze_at8_v2
-from stainid.tables import write_records
+from stainid.tables import write_records, write_text_atomic
 from stainid.workflows import calibration_table, tiles_for
 
 Image.MAX_IMAGE_PIXELS = None
@@ -23,9 +23,11 @@ TILE_KEYS = ("tile_id", "core_id", "tma", "donor_id", "sample_region_id", "regio
 def check_models(project: Project, path, models: dict) -> None:
     """Refuse to mix results from different models in one results folder."""
     used = {key: project.relative(value) for key, value in models.items()}
-    if path.exists() and json.loads(path.read_text()) != used:
-        raise ValueError("These results were made with a different model. Run the step again with 'Start over' to redo them with the current model.")
-    path.write_text(json.dumps(used, indent=1))
+    if path.exists():
+        if json.loads(path.read_text()) != used:
+            raise ValueError("These results were made with a different model. Run the step again with 'Start over' to redo them with the current model.")
+        return
+    write_text_atomic(path, json.dumps(used, indent=1))
 
 
 def exclusion_mask(rgb, tile, inner, pixel_size, manual):

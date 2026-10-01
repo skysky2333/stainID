@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import tempfile
 from pathlib import Path
 
 
@@ -20,6 +21,13 @@ def write_csv(
         writer.writeheader()
         writer.writerows(rows)
     temporary.replace(path)
+
+
+def write_text_atomic(path: Path, text: str) -> None:
+    """Parallel shards write the same small files; readers must never see a half-written one."""
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False) as handle:
+        handle.write(text)
+    Path(handle.name).replace(path)
 
 
 def format_csv_value(value: object) -> object:
