@@ -17,7 +17,7 @@ from stainid.qc.exclusions import rasterize_core_exclusions, read_manual_exclusi
 from stainid.stains.neun.cellpose import classify_cellpose_masks
 from stainid.stains.neun.classifier import build_matrix_from_contexts, object_contexts
 from stainid.stains.neun.profiles import combine_profile_and_cellpose_reviews, review_table_rows, segment_dab_profiles
-from stainid.tables import format_csv_value, write_csv
+from stainid.tables import format_csv_value, write_csv, write_text_atomic
 
 Image.MAX_IMAGE_PIXELS = None
 
@@ -255,7 +255,7 @@ def run_neun_cohort(
             raise ValueError("These NeuN results were made with a different model or settings. "
                              f"Run the step again with 'Start over' to redo them ({provenance_path})")
     else:
-        provenance_path.write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")
+        write_text_atomic(provenance_path, json.dumps(provenance, indent=2) + "\n")
     print(f"[0/{len(pending)}] {len(pending)} of {len(rows)} fields still to do (part {shard_index + 1} of {shard_count})", flush=True)
     if not pending:
         return 0
