@@ -134,7 +134,14 @@ def train_model(project: Project, stain: str) -> Path:
                     parts.append(wong[te])
             return np.mean(parts, axis=0)
 
-        oof, scheme = out_of_fold(ensemble, len(y), y, groups)
+        oof, scheme = out_of_fold(lambda tr, te: forest().fit(x[tr], y[tr]).predict_proba(x[te])[:, 1], len(y), y, groups)
+        choices = {"random forest": metrics(y, oof, threshold)["auc"]}
+        if emb is not None:
+            oof_ensemble, _ = out_of_fold(ensemble, len(y), y, groups)
+            choices["random forest + Phikon" + (" + Wong 2022" if wong is not None else "")] = metrics(y, oof_ensemble, threshold)["auc"]
+            if choices[list(choices)[1]] > choices["random forest"]:
+                oof = oof_ensemble
+        members = max(choices, key=choices.get)
     print(f"[2/3] cross-validated ({scheme})", flush=True)
 
     if stain == "NeuN":
@@ -158,7 +165,7 @@ def train_model(project: Project, stain: str) -> Path:
                   "identity_training_candidate_ids": ids, "morphotype_feature": "inner_mean_dab_od / slide 6E10 calibration threshold",
                   "morphotype_threshold": float(morph), "morphotype_minimum_diameter_um": MORPHOTYPE_MINIMUM_DIAMETER_UM,
                   "morphotype_training_n": int(plaques.sum()) if enough else int(old.get("morphotype_training_n", 0))}
-        if emb is not None:
+        if members != "random forest":
             bundle |= {"phikon_classifier": probe().fit(emb, y), "use_wong_consensus": wong is not None,
                        "identity_rule": "mean of morphology-context random forest, Phikon linear probe" + (" and Wong 2022 consensus CNN" if wong is not None else "")}
 
@@ -168,6 +175,8 @@ def train_model(project: Project, stain: str) -> Path:
     report = {"stain": stain, "created": time.time(), "validation": scheme, "threshold": threshold, "sets": sorted(data.set.unique()),
               "new_model": metrics(y, oof, threshold), "current_model": metrics(y, current, threshold) if current is not None else None,
               "current_model_path": project.relative(project.model(MODEL_KEY[stain]))}
+    if stain == "6E10":
+        report |= {"members": members, "member_choice_auc": choices}
     (folder / "report.json").write_text(json.dumps(report, indent=1))
     new = report["new_model"]
     print(f"[3/3] new model: AUC {new['auc']:.2f}, precision {new['precision']:.2f}, recall {new['recall']:.2f} -> {project.relative(folder)}", flush=True)
