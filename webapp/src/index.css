@@ -156,6 +156,7 @@ tr.clickable:hover td, tr.selected td { background: var(--accent-soft); }
 
 .log { background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; white-space: pre-wrap; max-height: 320px; overflow: auto; }
 .empty-state { color: var(--text-muted); padding: 24px; text-align: center; border: 1px dashed var(--border); border-radius: 10px; }
+.btn.primary .kbd { color: #fff; border-color: rgb(255 255 255 / 60%); }
 .kbd { font-family: ui-monospace, monospace; font-size: 11px; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; padding: 0 5px; color: var(--text-secondary); }
 
 .chart-tooltip { position: fixed; pointer-events: none; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px; font-size: 12px; box-shadow: var(--shadow); z-index: 20; }

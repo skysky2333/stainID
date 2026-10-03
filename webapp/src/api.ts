@@ -77,6 +77,33 @@ export interface ModelInfo {
   size_mb?: number; modified?: string; bundle?: Record<string, unknown>
 }
 
+export interface Session { mode: 'annotate' | 'full'; annotator: string | null; code_required: boolean; project: string }
+export type AiView = 'full' | 'positions' | 'none'
+export interface AnnotationMeta {
+  name: string; title: string; stain: string; fields: string[]; labels: string[]; tags: string[]; tools: string[]; ai_view: AiView
+  per_field: number; instructions: string; created: number
+}
+export interface AnnotationListItem {
+  name: string; title: string; stain: string; tools: string[]; ai_view: AiView; per_field: number; created: number
+  fields: number; fields_covered: number; done_by_me: number
+}
+export interface AnnotationField { tile_id: string; done_by_me: boolean; annotators_done: number; open_by_others: number }
+export interface AnnotationDetail { meta: AnnotationMeta; fields: AnnotationField[]; annotator: string | null }
+export interface Mark {
+  id: string; type: 'object' | 'point' | 'polygon' | 'tag' | 'note' | 'done'; label: string; points: number[][]; note: string
+  deleted?: boolean; annotator?: string; time?: number; ai?: { x: number; y: number; model_class: string; probability: number | null }
+}
+export interface FieldWork {
+  tile_id: string; box: { x: number; y: number; width: number; height: number }; pixel_size_um: number
+  ai: { objects: FieldObject[]; outlines: Outline[]; layers: string[] }; mine: Mark[]
+}
+export interface AnnotationSummary {
+  fields: number; fields_covered: number
+  annotators: { annotator: string; fields_done: number; object: number; point: number; polygon: number; tag: number }[]
+  agreement: { a: string; b: string; objects: number; agreement: number }[]
+  ai_vs_human: { ai_class: string; label: string; n: number }[]
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init)
   if (!response.ok) {

@@ -1,0 +1,121 @@
+import { useEffect, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
+
+export const CLASS_STYLE: Record<string, { color: string; label: string; short?: string }> = {
+  neuron: { color: '#00d5ff', label: 'NeuN+ neuron', short: 'neuron' },
+  rejected: { color: '#ff3b3b', label: 'rejected candidate', short: 'rejected' },
+  compact: { color: '#ff00c8', label: 'compact plaque', short: 'compact' },
+  diffuse: { color: '#00dcff', label: 'diffuse plaque', short: 'diffuse' },
+  small_plaque: { color: '#c8c8c8', label: 'small plaque (10–15 µm)', short: 'small' },
+  tau_neuron_ring: { color: '#00e050', label: 'tau+ neuron (nucleus-ring)', short: 'ring' },
+  tau_neuron_dense: { color: '#ffd000', label: 'tau+ neuron (dense body)', short: 'dense body' },
+}
+
+export const RASTER_LAYERS: Record<string, { label: string; color: string }> = {
+  dab: { label: 'DAB above slide threshold', color: '#ff2828' },
+  exclusions: { label: 'excluded (non-tissue, artifacts, folds)', color: '#5a6eff' },
+  threads: { label: 'neuropil threads (computed on demand)', color: '#286eff' },
+}
+
+export interface ImagePoint { x: number; y: number; unit: number }
+
+/**
+ * A field image with raster layers and an SVG overlay in image pixel coordinates. Scroll zooms towards the pointer,
+ * dragging pans; a press without dragging is reported as a click in image pixels (`unit` = image pixels per screen pixel).
+ */
+export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, onMove, children }: {
+  src: string
+  layers?: string[]
+  title: ReactNode
+  focus?: { x: number; y: number; key: number } | null
+  cursor?: string
+  onClick?: (point: ImagePoint, event: React.MouseEvent) => void
+  onMove?: (point: ImagePoint) => void
+  children: (zoom: number, size: { w: number; h: number }, unit: number) => ReactNode
+}) {
+  const [view, setView] = useState({ zoom: 1, x: 0, y: 0 })
+  const [size, setSize] = useState({ w: 2304, h: 2304 })
+  const [loaded, setLoaded] = useState(false)
+  const [width, setWidth] = useState(800)
+  const drag = useRef<{ x: number; y: number; ox: number; oy: number; moved: boolean } | null>(null)
+  const box = useRef<HTMLDivElement>(null)
+  const { zoom } = view
+
+  useEffect(() => {
+    setLoaded(false)
+    setView({ zoom: 1, x: 0, y: 0 })
+    const img = new Image()
+    img.onload = () => { setSize({ w: img.naturalWidth, h: img.naturalHeight }); setLoaded(true) }
+    img.src = src
+  }, [src])
+
+  useEffect(() => {
+    const element = box.current
+    if (!element) return
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault()
+      const rect = element.getBoundingClientRect()
+      const px = e.clientX - rect.left
+      const py = e.clientY - rect.top
+      setView((v) => {
+        const next = Math.min(16, Math.max(1, v.zoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15)))
+        if (next === 1) return { zoom: 1, x: 0, y: 0 }
+        return { zoom: next, x: px - ((px - v.x) * next) / v.zoom, y: py - ((py - v.y) * next) / v.zoom }
+      })
+    }
+    element.addEventListener('wheel', onWheel, { passive: false })
+    const resize = new ResizeObserver(() => setWidth(element.clientWidth))
+    resize.observe(element)
+    return () => { element.removeEventListener('wheel', onWheel); resize.disconnect() }
+  }, [])
+
+  useEffect(() => {
+    if (!focus) return
+    const width = box.current?.clientWidth ?? 600
+    const scale = width / size.w
+    setView({ zoom: 4, x: width / 2 - focus.x * scale * 4, y: width / 2 - focus.y * scale * 4 })
+  }, [focus, size.w])
+
+  const zoomBy = (factor: number) => setView((v) => {
+    const width = box.current?.clientWidth ?? 600
+    const next = Math.min(16, Math.max(1, v.zoom * factor))
+    if (next === 1) return { zoom: 1, x: 0, y: 0 }
+    return { zoom: next, x: width / 2 - ((width / 2 - v.x) * next) / v.zoom, y: width / 2 - ((width / 2 - v.y) * next) / v.zoom }
+  })
+
+  const toImage = (e: React.MouseEvent): ImagePoint => {
+    const rect = box.current!.getBoundingClientRect()
+    const unit = size.w / rect.width / zoom
+    return { x: (e.clientX - rect.left - view.x) * unit, y: (e.clientY - rect.top - view.y) * unit, unit }
+  }
+
+  return (
+    <div className="card">
+      <div className="row" style={{ marginBottom: 10 }}>
+        {title}
+        <span className="spacer" />
+        <button className="btn small" onClick={() => zoomBy(1 / 1.5)}>−</button>
+        <span className="small muted">{zoom.toFixed(1)}×</span>
+        <button className="btn small" onClick={() => zoomBy(1.5)}>+</button>
+        <button className="btn small" onClick={() => setView({ zoom: 1, x: 0, y: 0 })}>Reset</button>
+      </div>
+      <div ref={box} className="viewer" style={{ aspectRatio: `${size.w} / ${size.h}`, cursor: cursor ?? (zoom > 1 ? 'grab' : 'default') }}
+        onMouseDown={(e) => { drag.current = { x: e.clientX, y: e.clientY, ox: view.x, oy: view.y, moved: false } }}
+        onMouseMove={(e) => {
+          const d = drag.current
+          if (d && Math.hypot(e.clientX - d.x, e.clientY - d.y) > 4) d.moved = true
+          if (d?.moved && zoom > 1) setView((v) => ({ ...v, x: d.ox + e.clientX - d.x, y: d.oy + e.clientY - d.y }))
+          onMove?.(toImage(e))
+        }}
+        onMouseUp={(e) => { if (drag.current && !drag.current.moved) onClick?.(toImage(e), e); drag.current = null }}
+        onMouseLeave={() => { drag.current = null }}>
+        {!loaded && <div className="viewer-loading">Loading the field image… the first field of a core takes a few seconds; the others then open instantly.</div>}
+        <div style={{ position: 'absolute', inset: 0, transform: `translate(${view.x}px, ${view.y}px) scale(${zoom})`, transformOrigin: '0 0' }}>
+          <img src={src} alt="field" draggable={false} />
+          {layers.map((layer) => <img key={layer} src={layer} alt="" draggable={false} style={{ imageRendering: 'pixelated' }} />)}
+          <svg viewBox={`0 0 ${size.w} ${size.h}`}>{children(zoom, size, size.w / width / zoom)}</svg>
+        </div>
+      </div>
+    </div>
+  )
+}

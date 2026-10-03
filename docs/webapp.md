@@ -68,6 +68,7 @@ are marked **Made with an older model** until you run them again with *Start ove
 | **Cohort & cores** | Every core of every TMA; click one to open the viewer. Layers: detections by class, outlines, DAB above the slide threshold, excluded regions, AT8 threads and field boundaries. Scroll to zoom. |
 | **Stain thresholds** | The DAB threshold of every slide and why it exists. |
 | **Label & check** | Training sets, check sets, the form to create a check set, and older study sets (read-only). |
+| **Annotate together** | Annotation projects where several people annotate whole fields, see the AI output, and are compared with each other and with the AI. |
 | **Models** | Every model with its status and settings, download buttons, the three-step training flow, and trained models compared with the current one. |
 | **Results** | The main results table (download), every other table, plots by group and region, and the meaning of every column. |
 | **Settings** | Study name, TMA layout, diagnostic groups and every file location, with a folder picker. Also opens or creates another project. |
@@ -94,6 +95,40 @@ Every set is a folder under `outputs.reviews` (`reviews/<name>` or `training/<na
 | `labels.csv` | labels (`review_id`, `label`, `confidence`, `notes`, `reviewer`, `timestamp`), appended; the last label per item counts |
 | `meta.json` | stain, label options, crop size, instructions, purpose |
 | `features.csv`, `embeddings.npy` | training sets only: the candidates' features (and Phikon embeddings for 6E10) |
+
+## Annotating together
+
+An **annotation project** is a set of whole fields that one or more people annotate, each signed in with their name.
+Create one on the *Annotate together* page and choose:
+
+- **What people can do**: label the AI detections (click a circled object), mark objects the AI missed (points),
+  draw outlines (polygons) and tag the whole field (e.g. white matter, fold, unusable). Labels and tags are lists you
+  type in; each field also has a free-text note.
+- **What people see of the AI**: detections with their classes, outlines and DAB/exclusion/thread layers; only the
+  positions of the detections (blind to what the AI decided); or nothing.
+- **Annotators per field**: 1 shares the fields out between people; 2 or more gives independent repeat annotations, so
+  agreement can be measured. Each person is sent to the field that most needs them and that nobody else has open.
+
+Every annotation is saved instantly under the annotator's name, so nobody overwrites anyone else; edits and deletions
+are kept as history. The *Results* button shows each person's progress, agreement between annotators on the same AI
+objects, and the AI class against the human label, and downloads every annotation as one CSV (coordinates in
+field-crop pixels, with core, TMA, group and region).
+
+**Letting other people in.** In the project folder run
+
+```bash
+stainid serve --annotate --access-code <choose a code>
+```
+
+This starts a second server (port 8766, reachable from your network) that shows only the annotation pages: running
+steps, settings, files and the rest of the cohort stay private, and project creation, results and downloads stay in
+your own app. People open the printed address, sign in with their name and the code, and continue where they left off
+on any computer. For people outside your network, put that port behind a tunnel (e.g. `cloudflared tunnel --url
+http://localhost:8766`) or a reverse proxy with HTTPS.
+
+Each project is a folder `outputs.reviews/shared/<name>` with `meta.json` (fields, labels, tools, AI view) and
+`annotations.jsonl`, one line per saved annotation (`annotator`, `tile_id`, `type`, `label`, `points`, the AI object's
+class and probability for labelled detections, `time`, `deleted`); the latest line per annotator and annotation counts.
 
 ## Training a model
 

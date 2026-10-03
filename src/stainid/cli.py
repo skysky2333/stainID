@@ -114,8 +114,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--which", action="append", choices=("cellpose", "sam", "huggingface_home"))
 
     p = sub.add_parser("serve", help="start the web app")
-    p.add_argument("--host", default="127.0.0.1")
-    p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--host", default=None, help="default 127.0.0.1 (this computer only); 0.0.0.0 with --annotate")
+    p.add_argument("--port", type=int, default=None, help="default 8765, or 8766 with --annotate")
+    p.add_argument("--annotate", action="store_true", help="shared annotation server: other people can reach only the annotation pages")
+    p.add_argument("--access-code", default="", help="code annotators must enter to sign in (recommended with --annotate)")
     p.add_argument("--no-browser", action="store_true", help="do not open the web browser")
     p.add_argument("--reload", action="store_true")
     return parser
@@ -221,18 +223,28 @@ def serve(args: argparse.Namespace) -> None:
 
     from stainid.api.state import remembered_project
 
-    url = f"http://{args.host}:{args.port}"
+    host = args.host or ("0.0.0.0" if args.annotate else "127.0.0.1")
+    port = args.port or (8766 if args.annotate else 8765)
+    url = f"http://{'127.0.0.1' if host == '0.0.0.0' else host}:{port}"
     with socket.socket() as probe:
-        if probe.connect_ex((args.host, args.port)) == 0:
+        if probe.connect_ex(("127.0.0.1" if host == "0.0.0.0" else host, port)) == 0:
             print(f"stainID is already running at {url}; opening it", flush=True)
             if not args.no_browser:
                 webbrowser.open(url)
             return
     os.environ["STAINID_PROJECT"] = str(Path(args.project).resolve() if args.project else remembered_project())
+    if args.annotate:
+        os.environ["STAINID_MODE"] = "annotate"
+        os.environ["STAINID_ACCESS_CODE"] = args.access_code
+        print(f"Shared annotation server for {os.environ['STAINID_PROJECT']}", flush=True)
+        print(f"Annotators open http://{socket.gethostname()}:{port} (or this computer's IP address) and sign in with their name"
+              + (" and the access code." if args.access_code else ". No access code is set: anyone who can reach this address can annotate."), flush=True)
+    elif host not in ("127.0.0.1", "localhost"):
+        print("Warning: the full app lets visitors run steps and browse files. To share annotation only, use --annotate.", flush=True)
     if not args.no_browser:
         threading.Timer(1.5, webbrowser.open, (url,)).start()
     print(f"stainID is running at {url}  (press Ctrl+C to stop)", flush=True)
-    uvicorn.run("stainid.api.app:create_app", factory=True, host=args.host, port=args.port, reload=args.reload, log_level="warning")
+    uvicorn.run("stainid.api.app:create_app", factory=True, host=host, port=port, reload=args.reload, log_level="warning")
 
 
 if __name__ == "__main__":

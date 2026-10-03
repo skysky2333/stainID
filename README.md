@@ -77,6 +77,8 @@ says what each step computes.
 | **Home**: your next step and overall progress | **Models**: download published models; create a training set, label it, train, compare, switch |
 | ![Core viewer](docs/images/viewer.jpg) | ![Labelling](docs/images/labelling.jpg) |
 | **Cohort & cores**: every core and field with detections, outlines and masks drawn on the tissue | **Label & check**: blind, keyboard-driven labelling |
+| ![Annotate together](docs/images/annotate.jpg) | |
+| **Annotate together**: several people annotate whole fields with the AI output shown, each in their own layer | |
 | ![Results](docs/images/results.png) | ![Settings](docs/images/settings.png) |
 | **Results**: download the main table, what every column means, plots by group | **Settings**: study layout, diagnostic groups and every file location |
 
@@ -87,6 +89,7 @@ git clone https://github.com/skysky2333/stainID.git && cd stainID
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[app,deep,slides]"
 stainid serve                              # the web app
+stainid serve --annotate --access-code X   # annotation-only server for other people (port 8766)
 stainid --project path/to/study status     # progress of every step
 stainid --project path/to/study neun       # run one step
 ```

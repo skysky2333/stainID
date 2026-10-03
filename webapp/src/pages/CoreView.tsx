@@ -1,24 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import type { CoreDetail, FieldObject, FieldRow, Outline } from '../api'
 import { coreThumb, fieldImage, fieldLayer } from '../api'
 import { ErrorNote, GroupBadge, PageHead, fmt } from '../components'
 import { useFetch, useStored } from '../hooks'
+import { CLASS_STYLE, RASTER_LAYERS, ZoomViewer } from '../viewer'
 
-const CLASS_STYLE: Record<string, { color: string; label: string; short?: string }> = {
-  neuron: { color: '#00d5ff', label: 'NeuN+ neuron', short: 'neuron' },
-  rejected: { color: '#ff3b3b', label: 'rejected candidate', short: 'rejected' },
-  compact: { color: '#ff00c8', label: 'compact plaque', short: 'compact' },
-  diffuse: { color: '#00dcff', label: 'diffuse plaque', short: 'diffuse' },
-  small_plaque: { color: '#c8c8c8', label: 'small plaque (10–15 µm)', short: 'small' },
-  tau_neuron_ring: { color: '#00e050', label: 'tau+ neuron (nucleus-ring)', short: 'ring' },
-  tau_neuron_dense: { color: '#ffd000', label: 'tau+ neuron (dense body)', short: 'dense body' },
-}
-const RASTER_LAYERS: Record<string, { label: string; stains: string[]; color: string }> = {
-  dab: { label: 'DAB above slide threshold', stains: ['NeuN', '6E10', 'AT8'], color: '#ff2828' },
-  exclusions: { label: 'excluded (non-tissue, artifacts, folds)', stains: ['NeuN', '6E10', 'AT8'], color: '#5a6eff' },
-  threads: { label: 'neuropil threads (computed on demand)', stains: ['AT8'], color: '#286eff' },
-}
 const CONTEXT = 128
 
 export default function CoreView() {
@@ -71,100 +58,46 @@ export default function CoreView() {
   )
 }
 
+const RASTER_STAINS: Record<string, string[]> = { dab: ['NeuN', '6E10', 'AT8'], exclusions: ['NeuN', '6E10', 'AT8'], threads: ['AT8'] }
+
 function FieldViewer({ field, stain }: { field: FieldRow; stain: string }) {
   const tileId = field.tile_id
   const inner = { x: field.x_px - Math.max(0, field.x_px - CONTEXT), y: field.y_px - Math.max(0, field.y_px - CONTEXT) }
   const objects = useFetch<{ objects: FieldObject[] }>(`/api/fields/${tileId}/objects`)
   const outlines = useFetch<Outline[]>(`/api/fields/${tileId}/outlines`)
   const [layers, setLayers] = useStored<Record<string, boolean>>('stainid.viewer.layers', { objects: true, outlines: true, rejected: false, dab: false, exclusions: false, threads: false, analysed: true })
-  const [view, setView] = useState({ zoom: 1, x: 0, y: 0 })
-  const { zoom } = view
   const [selected, setSelected] = useState<number | null>(null)
-  const [size, setSize] = useState({ w: 2304, h: 2304 })
-  const [loaded, setLoaded] = useState(false)
-  const drag = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null)
-  const box = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    setLoaded(false)
-    setView({ zoom: 1, x: 0, y: 0 })
-    const img = new Image()
-    img.onload = () => { setSize({ w: img.naturalWidth, h: img.naturalHeight }); setLoaded(true) }
-    img.src = fieldImage(tileId)
-  }, [tileId])
-
-  useEffect(() => {
-    const element = box.current
-    if (!element) return
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault()
-      const rect = element.getBoundingClientRect()
-      const px = e.clientX - rect.left
-      const py = e.clientY - rect.top
-      setView((v) => {
-        const next = Math.min(12, Math.max(1, v.zoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15)))
-        if (next === 1) return { zoom: 1, x: 0, y: 0 }
-        return { zoom: next, x: px - ((px - v.x) * next) / v.zoom, y: py - ((py - v.y) * next) / v.zoom }
-      })
-    }
-    element.addEventListener('wheel', onWheel, { passive: false })
-    return () => element.removeEventListener('wheel', onWheel)
-  }, [])
-
-  const zoomBy = (factor: number) => setView((v) => {
-    const width = box.current?.clientWidth ?? 600
-    const next = Math.min(12, Math.max(1, v.zoom * factor))
-    if (next === 1) return { zoom: 1, x: 0, y: 0 }
-    return { zoom: next, x: width / 2 - ((width / 2 - v.x) * next) / v.zoom, y: width / 2 - ((width / 2 - v.y) * next) / v.zoom }
-  })
+  const [focus, setFocus] = useState<{ x: number; y: number; key: number } | null>(null)
 
   const visible = (objects.data?.objects ?? []).map((o, i) => ({ ...o, index: i })).filter((o) => layers.rejected || o.model_class !== 'rejected')
   const classes = Array.from(new Set((objects.data?.objects ?? []).map((o) => o.model_class)))
   const counts = classes.map((c) => [c, (objects.data?.objects ?? []).filter((o) => o.model_class === c).length] as const)
   const toggle = (key: string) => setLayers({ ...layers, [key]: !layers[key] })
+  const rasters = Object.keys(RASTER_LAYERS).filter((key) => RASTER_STAINS[key].includes(stain))
 
-  const focus = (o: FieldObject & { index: number }) => {
+  const focusOn = (o: FieldObject & { index: number }) => {
     setSelected(o.index)
-    const width = box.current?.clientWidth ?? 600
-    const scale = width / size.w
-    setView({ zoom: 4, x: width / 2 - o.x * scale * 4, y: width / 2 - o.y * scale * 4 })
+    setFocus((f) => ({ x: o.x, y: o.y, key: (f?.key ?? 0) + 1 }))
   }
 
   return (
     <div className="grid" style={{ gridTemplateColumns: 'minmax(0, 1fr) 320px', alignItems: 'start' }}>
-      <div className="card">
-        <div className="row" style={{ marginBottom: 10 }}>
-          <h3 style={{ margin: 0 }}>{tileId}</h3>
-          <span className="spacer" />
-          <button className="btn small" onClick={() => zoomBy(1 / 1.5)}>−</button>
-          <span className="small muted">{zoom.toFixed(1)}×</span>
-          <button className="btn small" onClick={() => zoomBy(1.5)}>+</button>
-          <button className="btn small" onClick={() => setView({ zoom: 1, x: 0, y: 0 })}>Reset</button>
-        </div>
-        <div ref={box} className="viewer" style={{ aspectRatio: `${size.w} / ${size.h}`, cursor: zoom > 1 ? 'grab' : 'default' }}
-          onMouseDown={(e) => { drag.current = { x: e.clientX, y: e.clientY, ox: view.x, oy: view.y } }}
-          onMouseMove={(e) => { const d = drag.current; if (d && zoom > 1) setView((v) => ({ ...v, x: d.ox + e.clientX - d.x, y: d.oy + e.clientY - d.y })) }}
-          onMouseUp={() => { drag.current = null }} onMouseLeave={() => { drag.current = null }}>
-          {!loaded && <div className="viewer-loading">Loading the field image… the first field of a core takes a few seconds; the others then open instantly.</div>}
-          <div style={{ position: 'absolute', inset: 0, transform: `translate(${view.x}px, ${view.y}px) scale(${zoom})`, transformOrigin: '0 0' }}>
-            <img src={fieldImage(tileId)} alt={tileId} draggable={false} />
-            {Object.entries(RASTER_LAYERS).filter(([key, def]) => layers[key] && def.stains.includes(stain)).map(([key]) => (
-              <img key={key} src={fieldLayer(tileId, key)} alt={key} draggable={false} style={{ imageRendering: 'pixelated' }} />
+      <div>
+        <ZoomViewer src={fieldImage(tileId)} layers={rasters.filter((key) => layers[key]).map((key) => fieldLayer(tileId, key))} focus={focus}
+          title={<h3 style={{ margin: 0 }}>{tileId}</h3>}>
+          {(zoom) => <>
+            {layers.analysed && <rect x={inner.x} y={inner.y} width={field.width_px} height={field.height_px} fill="none" stroke="#ffd21f" strokeWidth={4} strokeDasharray="24 16" />}
+            {layers.outlines && (outlines.data ?? []).map((o) => (
+              <polygon key={o.label} points={o.points.map((p) => p.join(',')).join(' ')} fill="none" stroke="#ffffff" strokeOpacity={0.85} strokeWidth={2.5 / zoom} />
             ))}
-            <svg viewBox={`0 0 ${size.w} ${size.h}`}>
-              {layers.analysed && <rect x={inner.x} y={inner.y} width={field.width_px} height={field.height_px} fill="none" stroke="#ffd21f" strokeWidth={4} strokeDasharray="24 16" />}
-              {layers.outlines && (outlines.data ?? []).map((o) => (
-                <polygon key={o.label} points={o.points.map((p) => p.join(',')).join(' ')} fill="none" stroke="#ffffff" strokeOpacity={0.85} strokeWidth={2.5 / zoom} />
-              ))}
-              {layers.objects && visible.map((o) => (
-                <circle key={o.index} cx={o.x} cy={o.y} r={Math.max(8, o.radius_px) + 4} fill="none" stroke={CLASS_STYLE[o.model_class]?.color ?? '#fff'}
-                  strokeWidth={(o.index === selected ? 6 : 3) / Math.sqrt(zoom)} style={{ cursor: 'pointer' }} onClick={() => setSelected(o.index)}>
-                  <title>{`${CLASS_STYLE[o.model_class]?.label ?? o.model_class} · p=${fmt(o.probability, 2)} · ${fmt(o.area_um2, 3)} µm²`}</title>
-                </circle>
-              ))}
-            </svg>
-          </div>
-        </div>
+            {layers.objects && visible.map((o) => (
+              <circle key={o.index} cx={o.x} cy={o.y} r={Math.max(8, o.radius_px) + 4} fill="none" stroke={CLASS_STYLE[o.model_class]?.color ?? '#fff'}
+                strokeWidth={(o.index === selected ? 6 : 3) / Math.sqrt(zoom)} style={{ cursor: 'pointer' }} onClick={() => setSelected(o.index)}>
+                <title>{`${CLASS_STYLE[o.model_class]?.label ?? o.model_class} · p=${fmt(o.probability, 2)} · ${fmt(o.area_um2, 3)} µm²`}</title>
+              </circle>
+            ))}
+          </>}
+        </ZoomViewer>
         <p className="muted small">Scroll over the image to zoom (towards the pointer), drag to pan. The dashed square is the analysed field; the margin is context only.</p>
       </div>
       <div className="grid">
@@ -178,8 +111,8 @@ function FieldViewer({ field, stain }: { field: FieldRow; stain: string }) {
           ))}
           {stain === 'NeuN' && <label className="layer-toggle" style={{ paddingLeft: 22 }}><input type="checkbox" checked={!!layers.rejected} onChange={() => toggle('rejected')} />show rejected</label>}
           <label className="layer-toggle"><input type="checkbox" checked={!!layers.outlines} onChange={() => toggle('outlines')} /><span className="swatch" style={{ border: '2px solid #fff', background: '#555' }} />SAM outlines ({outlines.data?.length ?? 0})</label>
-          {Object.entries(RASTER_LAYERS).filter(([, d]) => d.stains.includes(stain)).map(([key, d]) => (
-            <label key={key} className="layer-toggle"><input type="checkbox" checked={!!layers[key]} onChange={() => toggle(key)} /><span className="swatch" style={{ background: d.color }} />{d.label}</label>
+          {rasters.map((key) => (
+            <label key={key} className="layer-toggle"><input type="checkbox" checked={!!layers[key]} onChange={() => toggle(key)} /><span className="swatch" style={{ background: RASTER_LAYERS[key].color }} />{RASTER_LAYERS[key].label}</label>
           ))}
           <label className="layer-toggle"><input type="checkbox" checked={!!layers.analysed} onChange={() => toggle('analysed')} />analysed-field boundary</label>
         </div>
@@ -190,7 +123,7 @@ function FieldViewer({ field, stain }: { field: FieldRow; stain: string }) {
               <thead><tr><th>class</th><th className="num">p</th><th className="num">µm²</th></tr></thead>
               <tbody>
                 {visible.sort((a, b) => (b.probability ?? 0) - (a.probability ?? 0)).map((o) => (
-                  <tr key={o.index} className={`clickable${o.index === selected ? ' selected' : ''}`} onClick={() => focus(o)}>
+                  <tr key={o.index} className={`clickable${o.index === selected ? ' selected' : ''}`} onClick={() => focusOn(o)}>
                     <td><span className="swatch" style={{ background: CLASS_STYLE[o.model_class]?.color }} /> {CLASS_STYLE[o.model_class]?.short ?? o.model_class}</td>
                     <td className="num">{fmt(o.probability, 2)}</td><td className="num">{fmt(o.area_um2, 3)}</td>
                   </tr>
