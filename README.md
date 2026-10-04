@@ -57,7 +57,8 @@ The Help page in the app has the same guide, answers to common questions and a g
 | | Attach TMA map | donor, brain region and diagnostic group for each core | `stainid layout` |
 | | Export cores | native-resolution core images | `stainid export` |
 | | Check core quality | tissue coverage, fragments, focus | `stainid qc` |
-| **Fields** | Choose analysis fields | evenly spread ~560 µm fields per core | `stainid select` |
+| **Fields** | Choose analysis fields | evenly spread ~560 µm fields per core, used to label, train and test | `stainid select` |
+| | Cut whole cores into tiles | every ~560 µm tile of tissue, for whole-core analysis | `stainid tiles` |
 | | Calibrate stain thresholds | one DAB threshold per slide, blind to diagnosis | `stainid calibrate` |
 | **Detection** | Find nuclei | Cellpose-SAM nuclei (needed for AT8) | `stainid nuclei --stain AT8` |
 | | Detect NeuN neurons | candidates + NeuN model | `stainid neun` |

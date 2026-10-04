@@ -22,6 +22,8 @@ tma:
 groups:                      # diagnostic group codes used in the TMA map, in plot order
   - {code: CT, label: Control, color: 3}     # color = palette slot 1-8 (optional)
   - {code: AD, label: Alzheimer disease}
+analysis:
+  tiles: whole_core          # detect objects in every tissue tile of each core, or: sampled_fields
 
 inputs:
   slides_dir: data/slides                                        # folder with the slide scans
@@ -29,7 +31,8 @@ inputs:
   core_manifest: data/core_manifest.csv                          # stainid dearray (+ layout, export, qc)
   core_images: data/analysis/core_images.csv                     # stainid select
   field_manifest: data/analysis/cohort_systematic_tiles.csv      # stainid select (all fields)
-  tile_manifest: data/analysis/cohort_primary_tiles.csv          # stainid select (analysis fields)
+  tile_manifest: data/analysis/cohort_primary_tiles.csv          # stainid select (sampled fields: label, train, test)
+  whole_core_manifest: data/analysis/cohort_whole_core_tiles.csv # stainid tiles (whole-core analysis)
   calibration: data/analysis/slide_dab_calibration.csv           # stainid calibrate
   manual_exclusions: data/annotations/cohort_manual_exclusions.json
   donor_metadata: data/donor_metadata.csv
@@ -72,7 +75,8 @@ steps.
 | `manual_exclusions` | you, optional |
 | `slides.csv` | *Register slides* |
 | core table (`core_manifest`) | *Find cores*, then updated by *Attach TMA map*, *Export cores* and *Check core quality* |
-| analysis fields (`tile_manifest`, `field_manifest`), `core_images` | *Choose analysis fields* |
+| sampled fields (`tile_manifest`, `field_manifest`), `core_images` | *Choose analysis fields* |
+| whole-core tiles (`whole_core_manifest`) | *Cut whole cores into tiles* |
 | `calibration` | *Calibrate stain thresholds* |
 
 **`slides.csv`**: one row per scan, written by the *Register slides* step: `slide_path`, `tma`, `stain`.

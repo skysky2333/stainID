@@ -24,9 +24,19 @@ QuPath alternatives for grid placement and export are in `tools/qupath/`.
 
 For every stain-core, candidate windows are scored on a preview for tissue and focus only
 (never stain intensity). The requested number of fields (default 8) is chosen to be spatially
-spread across the core. The first `--primary` fields (default 4) form the analysis manifest
-(`inputs.tile_manifest`); the full set (`inputs.field_manifest`) is kept for sampling-stability
-checks.
+spread across the core. The first `--primary` fields (default 4) form the sampled fields
+(`inputs.tile_manifest`), which are labelled to train and test the models; the full set
+(`inputs.field_manifest`) is kept for sampling-stability checks.
+
+**Whole cores — `stainid tiles`.** Cuts every core image into the same 2048 px grid (about
+560 µm), keeping every square that holds at least 10 % tissue, including the narrower squares at
+the right and bottom image edges, so the whole core is covered without overlap
+(`inputs.whole_core_manifest`). Squares that are sampled fields keep their names (`…_S01`); the
+others are `…_W<row><column>`. Detection runs on these tiles when `analysis.tiles` is
+`whole_core` (the default; Settings → Analysis), or on the sampled fields only when it is
+`sampled_fields`. Results are then aggregated over all tiles of a core (sampling extent
+`whole_core`); the sampled-field summaries (`primary_four`, `extended_eight`) are still made from
+the same outputs.
 
 ## 3. Slide calibration — `stainid calibrate`
 
@@ -44,7 +54,11 @@ between slides do not change what counts as positive.
 
 Applied before any measurement (`stainid.imaging.tissue`, `stainid.qc.exclusions`):
 
-- non-tissue (brightness / saturation);
+- non-tissue (brightness / saturation). For tissue **area** (the denominator of every density and
+  area fraction) the bare glass is found in each field: some scanners render it light grey
+  (about 230/255), darker than the fixed cut-off, so tissue is anything clearly darker than the
+  glass seen in that field, and enclosed holes up to ~10,000 µm² (vacuoles, small vessel lumens)
+  count as tissue;
 - linear folds and cut lines;
 - hematoxylin-dense fold bands (≥ 150 µm long, aspect ≥ 4);
 - manually drawn artifact polygons (`inputs.manual_exclusions`);
