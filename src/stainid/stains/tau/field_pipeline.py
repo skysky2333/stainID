@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from stainid.imaging.tissue import tissue_area_mask
 from stainid.nuclei import clean_nuclei, nucleus_centroids
 from stainid.pipelines.cohort_v1 import centered_objects
 from stainid.stains.tau.network import segment_at8_network
@@ -22,7 +23,7 @@ def analyze_at8_v2(
     _, _, maps = segment_at8_network(rgb, dab_threshold, pixel_size_um, pixel_size_um, exclusion)
     valid = maps["valid"]
     inner_valid = valid[inner]
-    area_mm2 = inner_valid.sum() * pixel_size_um**2 / 1e6
+    area_mm2 = (tissue_area_mask(rgb) & ~exclusion)[inner].sum() * pixel_size_um**2 / 1e6
     objects, _ = tau_neuron_candidates(rgb, nuclei, dab_threshold, pixel_size_um, exclusion)
     rows = classify_tau_neurons(add_context_features(rgb, objects, pixel_size_um), tau_bundle, pixel_size_um)
     rows = [row for row in centered_objects(rows, inner) if valid[int(row["centroid_y_px"]), int(row["centroid_x_px"])]]

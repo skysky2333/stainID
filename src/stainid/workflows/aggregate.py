@@ -48,7 +48,7 @@ def aggregate_masks(project: Project, level: str = "sample_region_id", output: P
     for path in (project.output("fields") / "parts").glob("*_features.csv"):
         for row in read_csv(path):
             tissue[(row["tile_id"], row["stain"])] = float(row["v2_tissue_area_mm2"])
-    manifest = read_csv(project.input("tile_manifest"))
+    manifest = read_csv(project.analysis_tiles())
     region_of: dict[str, dict] = {}
     out: dict[str, dict[str, object]] = defaultdict(dict)
     for stain in ("NeuN", "AT8", "6E10"):

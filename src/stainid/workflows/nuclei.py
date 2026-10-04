@@ -19,7 +19,7 @@ def run_nuclei(project: Project, stains: list[str], device: str = "mps", batch_s
     project.apply_environment()
     output = project.output("nuclei")
     output.mkdir(parents=True, exist_ok=True)
-    rows = [r for r in read_csv(project.input("tile_manifest")) if r["stain"] in set(stains)]
+    rows = [r for r in read_csv(project.analysis_tiles()) if r["stain"] in set(stains)]
     rows = sorted(rows, key=lambda r: (r["image_path"], int(r["selection_order"])))[shard_index::shard_count]
     pending = [r for r in rows if not (output / f"{r['tile_id']}.npz").exists()]
     print(f"[0/{len(pending)}] {len(pending)} of {len(rows)} fields still to do", flush=True)

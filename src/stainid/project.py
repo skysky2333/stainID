@@ -18,6 +18,7 @@ DEFAULTS: dict = {
     "stains": dict(SUPPORTED_STAINS),
     "tma": {"prefix": "TMA-", "rows": 5, "columns": 6},
     "groups": [],
+    "analysis": {"tiles": "whole_core"},
     "inputs": {
         "slides_dir": "data/slides",
         "slides_table": "data/slides.csv",
@@ -25,6 +26,7 @@ DEFAULTS: dict = {
         "core_images": "data/analysis/core_images.csv",
         "field_manifest": "data/analysis/cohort_systematic_tiles.csv",
         "tile_manifest": "data/analysis/cohort_primary_tiles.csv",
+        "whole_core_manifest": "data/analysis/cohort_whole_core_tiles.csv",
         "calibration": "data/analysis/slide_dab_calibration.csv",
         "manual_exclusions": "data/annotations/cohort_manual_exclusions.json",
         "donor_metadata": "data/donor_metadata.csv",
@@ -104,6 +106,10 @@ class Project:
     @property
     def is_configured(self) -> bool:
         return self.config_file.exists()
+
+    def analysis_tiles(self) -> Path:
+        """The tiles detection runs on: every tissue tile of each core (whole_core) or only the sampled fields."""
+        return self.input("whole_core_manifest" if self.config["analysis"]["tiles"] == "whole_core" else "tile_manifest")
 
     def resolve(self, section: str, key: str) -> Path:
         path = Path(self.config[section][key])

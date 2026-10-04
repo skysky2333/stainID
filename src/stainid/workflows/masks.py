@@ -48,7 +48,7 @@ def run_masks(project: Project, stain: str, device: str = "cpu", threads: int = 
 
     torch.set_num_threads(threads)
     neun_tiles = project.output("neun") / "tiles"
-    groups = tiles_for(project.input("tile_manifest"), {stain}, shard_index, shard_count)
+    groups = tiles_for(project.analysis_tiles(), {stain}, shard_index, shard_count)
     if stain == "NeuN":
         groups = {k: [t for t in v if (neun_tiles / f"{t['tile_id']}_objects.csv").exists()] for k, v in groups.items()}
     else:

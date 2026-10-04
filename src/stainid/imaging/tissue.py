@@ -57,10 +57,32 @@ def linear_artifact_mask(rgb: np.ndarray) -> np.ndarray:
     ).astype(bool)
 
 
-def field_tissue_mask(rgb: np.ndarray) -> np.ndarray:
+GLASS_MAX_CHROMA = 8
+GLASS_MIN_LEVEL = 180
+GLASS_MIN_FRACTION = 0.02
+TISSUE_DARKNESS = 0.10
+GLASS_MARGIN = 0.04
+MAX_HOLE_PX = 130_000
+
+
+def glass_darkness(rgb: np.ndarray) -> float | None:
+    """How dark the bare slide glass is in this field (bright, colourless pixels), if enough of it is visible.
+    Some scanners render glass light grey (about 230/255), darker than the fixed tissue cut-off."""
+    sample = rgb[::4, ::4].reshape(-1, 3).astype(np.int16)
+    glass = sample[(sample.max(axis=1) - sample.min(axis=1) <= GLASS_MAX_CHROMA) & (sample.min(axis=1) >= GLASS_MIN_LEVEL)]
+    if len(glass) < GLASS_MIN_FRACTION * len(sample):
+        return None
+    return float(np.max(-np.log(np.maximum(np.median(glass, axis=0), 1.0) / 255.0)))
+
+
+def field_tissue_mask(rgb: np.ndarray, glass_aware: bool = False) -> np.ndarray:
+    """Pixels darker than bare glass. The detection steps use the fixed cut-off they were trained with; tissue-area
+    measurements use the glass-aware version (see tissue_area_mask)."""
     scaled = np.maximum(rgb.astype(np.float32) / 255.0, 1.0 / 255.0)
     darkness = np.max(-np.log(scaled), axis=2)
-    mask = (darkness >= 0.10).astype(np.uint8)
+    glass = glass_darkness(rgb) if glass_aware else None
+    threshold = TISSUE_DARKNESS if glass is None else max(TISSUE_DARKNESS, glass + GLASS_MARGIN)
+    mask = (darkness >= threshold).astype(np.uint8)
     mask = cv2.morphologyEx(
         mask,
         cv2.MORPH_OPEN,
@@ -72,6 +94,17 @@ def field_tissue_mask(rgb: np.ndarray) -> np.ndarray:
         cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)),
     )
     return mask.astype(bool)
+
+
+def tissue_area_mask(rgb: np.ndarray) -> np.ndarray:
+    """Tissue for area measurements (the denominator of every density): glass-aware, so a light-grey slide background
+    is not counted as tissue, and with enclosed holes up to MAX_HOLE_PX (vacuoles, small vessel lumens) counted as tissue."""
+    solid = field_tissue_mask(rgb, glass_aware=True)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats((~solid).astype(np.uint8), connectivity=4)
+    border = np.unique(np.concatenate([labels[0], labels[-1], labels[:, 0], labels[:, -1]]))
+    fill = stats[:, cv2.CC_STAT_AREA] <= MAX_HOLE_PX
+    fill[border] = False
+    return solid | (fill[labels] & ~solid)
 
 
 def fold_mask(rgb: np.ndarray, pixel_size_um: float) -> np.ndarray:

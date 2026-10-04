@@ -58,6 +58,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--primary", type=int, default=4, help="first N fields per stain-core form the analysis manifest")
     p.add_argument("--field-size", type=int, default=2048)
 
+    p = sub.add_parser("tiles", help="cut every core into tissue tiles for whole-core analysis")
+    p.add_argument("--field-size", type=int, default=2048)
+
     p = sub.add_parser("calibrate", help="per-slide DAB thresholds (TMA x stain)")
     p.add_argument("--stain", action="append")
     p.add_argument("--fields-per-core", type=int, default=1)
@@ -157,6 +160,10 @@ def main(argv: list[str] | None = None) -> None:
 
         for path in select_fields(project, args.fields_per_core, args.primary, args.field_size):
             print(path)
+    elif args.command == "tiles":
+        from stainid.sampling.whole_core import write_whole_core_manifest
+
+        write_whole_core_manifest(project, args.field_size)
     elif args.command == "calibrate":
         from stainid.workflows.calibrate import calibrate_slides
 

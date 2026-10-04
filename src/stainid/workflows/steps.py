@@ -80,7 +80,13 @@ def _made_with_other_model(project: Project, output: str, recorded: Callable[[di
 
 
 def _tiles(project: Project, stains: set[str]) -> list[dict[str, str]]:
-    return [t for t in _rows(project.input("tile_manifest")) if t["stain"] in stains]
+    return [t for t in _rows(project.analysis_tiles()) if t["stain"] in stains]
+
+
+def _whole_core_status(project: Project) -> dict:
+    tiles = _rows(project.input("whole_core_manifest"))
+    cores = {(r["core_id"], r["stain"]) for r in tiles}
+    return _state(len(tiles), len(tiles), "tiles", f"{len(cores)} core images") if tiles else _state(0, 0, "tiles")
 
 
 def _column_filled(column: str) -> Callable[[Project], bool]:
@@ -199,7 +205,10 @@ RESOURCES = {r.id: r for r in (
                     "Optional columns: cerad, braak, sample_region_id. The template lists every position already."),
     Resource("core_images", "Core images", "Every core cut out of the slide at full resolution (PNG).", lambda p: p.input("core_manifest").parent / "cores"),
     Resource("core_qc_images", "Core QC images", "Tissue and focus overlays for every core.", lambda p: p.input("core_manifest").parent / "qc" / "cores"),
-    Resource("tile_manifest", "Analysis fields", "The fields (about 560 µm squares) measured in every core.", lambda p: p.input("tile_manifest")),
+    Resource("tile_manifest", "Sampled fields", "A few ~560 µm fields per core: labelled to train and test the models.", lambda p: p.input("tile_manifest")),
+    Resource("whole_core_tiles", "Whole-core tiles", "Every ~560 µm tile of tissue in each core.", lambda p: p.input("whole_core_manifest")),
+    Resource("analysis_tiles", "Analysis tiles", "The tiles detection runs on: whole cores, or only the sampled fields (Settings → Analysis).",
+             lambda p: p.analysis_tiles()),
     Resource("calibration", "Stain thresholds", "One brown-stain (DAB) threshold per slide.", lambda p: p.input("calibration")),
     Resource("nuclei", "Nuclei", "Every cell nucleus found by Cellpose, one file per field.", lambda p: p.output("nuclei")),
     Resource("neun_results", "NeuN results", "Neuron detections and per-field counts.", lambda p: p.output("neun")),
@@ -270,27 +279,33 @@ STEPS = (
           Option("field_size", "Field size (pixels)", "number", 2048, "Side of each square field; 2048 px is about 560 µm at 0.27 µm/px. "
                  "Use a smaller size for small cores.", advanced=True)),
          view="/cohort", duration="a few minutes", status=_select_status),
+    Step("tiles", "1 · Set up", "Cut whole cores into tiles", "Cover each core's tissue with ~560 µm tiles for whole-core analysis.",
+         "Uses the same grid as the sampled fields (they keep their names), keeps every square that holds tissue, including the narrower squares "
+         "at the image edges, so detection covers the whole core without overlap. Detection runs on these tiles when Settings → Analysis is "
+         "“whole cores”.", ("core_quality", "tile_manifest"), ("whole_core_tiles",), ("tiles",),
+         (Option("field_size", "Tile size (pixels)", "number", 2048, "Use the same size as the sampled fields.", advanced=True),),
+         heavy=True, view="/cohort", duration="a few seconds per core", status=_whole_core_status),
     Step("calibrate", "1 · Set up", "Calibrate stain thresholds", "Find the brown-stain (DAB) cut-off for every slide.",
          "Pools tissue pixels from all cores of a slide and sets one threshold per slide, blind to diagnosis. Everything downstream is measured "
          "relative to it, so slides stained a little darker or lighter stay comparable.",
          ("tile_manifest",), ("calibration",), ("calibrate",), view="/calibration", duration="a few minutes", status=_calibration_status),
     Step("nuclei", "2 · Detect", "Find nuclei", "Outline every cell nucleus with Cellpose-SAM.",
          "Needed before the AT8 step (tau+ neurons are found around nuclei); also used for 6E10 plaque-neighbourhood features.",
-         ("tile_manifest", "model_cellpose"), ("nuclei",), ("nuclei",),
+         ("analysis_tiles", "model_cellpose"), ("nuclei",), ("nuclei",),
          (Option("stain", "Stains", "stains", ["AT8", "6E10"], "NeuN detection finds its own cells, so it does not need this step.", ("AT8", "6E10")),
           DEVICE, Option("batch_size", "Batch size", "number", 8, advanced=True), *SHARD),
-         heavy=True, duration="about 20 s per field on a Mac GPU", status=_nuclei_status),
+         heavy=True, duration="about 20 s per tile on a Mac GPU", status=_nuclei_status),
     Step("neun", "2 · Detect", "Detect NeuN neurons", "Find and classify NeuN-stained neuronal profiles.",
          "Candidates come from brown-stain contours and Cellpose cells; the NeuN model scores each one with its shape, stain and 55 µm "
-         "neighbourhood.", ("tile_manifest", "calibration", "model_neun", "model_cellpose"), ("neun_results",), ("neun",),
+         "neighbourhood.", ("analysis_tiles", "calibration", "model_neun", "model_cellpose"), ("neun_results",), ("neun",),
          (Option("device", "Processor", "select", "cpu", "cpu reproduces published results exactly; mps / cuda (GPU) are faster but Cellpose "
                  "outlines can differ slightly.", ("cpu", "mps", "cuda")),
           Option("threads", "CPU threads", "number", 8, advanced=True), FRESH, *SHARD),
-         heavy=True, view="/cohort", duration="about 1 minute per field", status=_neun_status),
+         heavy=True, view="/cohort", duration="about 1 minute per tile", status=_neun_status),
     Step("fields", "2 · Detect", "Detect plaques and tau", "6E10 plaques (compact / diffuse) and AT8 tau+ neurons and threads.",
          "6E10: segments deposits, keeps real plaques with the 6E10 model and sorts them into compact and diffuse. AT8: finds tau+ neurons "
          "around nuclei and traces neuropil threads, so run Find nuclei for AT8 first (AT8 cores without nuclei are skipped).",
-         ("tile_manifest", "calibration", "model_amyloid", "model_tau"), ("field_results",), ("fields",),
+         ("analysis_tiles", "calibration", "model_amyloid", "model_tau"), ("field_results",), ("fields",),
          (Option("stain", "Stains", "stains", ["6E10", "AT8"], choices=("6E10", "AT8")), FRESH, *SHARD),
          heavy=True, view="/cohort", duration="about 1 minute per core", status=_fields_status, uses=("nuclei", "model_phikon")),
     Step("masks", "2 · Detect", "Outline objects", "Draw an exact outline around every detected object with Segment Anything.",

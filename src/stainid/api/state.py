@@ -44,6 +44,11 @@ class ProjectState:
         return _read(self.project.input("tile_manifest"), dtype={"tma": str, "donor_id": str})
 
     @cached_property
+    def analysis_tiles(self) -> pd.DataFrame:
+        """The tiles detection runs on (whole-core tiles or the sampled fields, per Settings → Analysis)."""
+        return _read(self.project.analysis_tiles(), dtype={"tma": str, "donor_id": str})
+
+    @cached_property
     def core_images(self) -> pd.DataFrame:
         return _read(self.project.input("core_images"), dtype={"tma": str, "donor_id": str})
 

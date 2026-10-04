@@ -10,7 +10,7 @@ import numpy as np
 from joblib import load
 from PIL import Image
 
-from stainid.imaging.tissue import field_tissue_mask, linear_artifact_mask
+from stainid.imaging.tissue import linear_artifact_mask, tissue_area_mask
 from stainid.nuclei import CELLPOSE_SETTINGS, cellpose_masks, load_cellpose
 from stainid.pipelines.cohort_v1 import context_crop, local_profile_density
 from stainid.qc.exclusions import rasterize_core_exclusions, read_manual_exclusions
@@ -101,7 +101,7 @@ def classify_neun_tile(
 ) -> tuple[dict[str, float | int], list[dict[str, object]]]:
     rows, profile_labels, cellpose_labels = neun_candidates(rgb, raw_masks, threshold, pixel_width_um, pixel_height_um, manual_mask, tile_id)
     artifact = linear_artifact_mask(rgb) | manual_mask
-    tissue = field_tissue_mask(rgb) & ~artifact
+    tissue = tissue_area_mask(rgb) & ~artifact
     inner_tissue = tissue[inner]
     pixel_area_um2 = pixel_width_um * pixel_height_um
     tissue_area_mm2 = inner_tissue.sum() * pixel_area_um2 / 1_000_000.0

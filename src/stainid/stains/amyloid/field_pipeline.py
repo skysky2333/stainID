@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 
 from stainid.imaging.color import rgb_to_hed
-from stainid.imaging.tissue import field_tissue_mask
+from stainid.imaging.tissue import field_tissue_mask, tissue_area_mask
 from stainid.nuclei import clean_nuclei, nucleus_centroids
 from stainid.pipelines.cohort_v1 import centered_objects
 from stainid.stains.amyloid.model import classify_amyloid_objects, flag_vascular_or_edge
@@ -67,7 +67,7 @@ def analyze_6e10_v2(
             "ring_area_um2": float(ring_area),
         })
     inner_valid = valid[inner]
-    area_mm2 = inner_valid.sum() * pixel_size_um**2 / 1e6
+    area_mm2 = (tissue_area_mask(rgb) & ~excluded)[inner].sum() * pixel_size_um**2 / 1e6
     summary = {
         "v2_tissue_area_mm2": area_mm2,
         "v2_plaque_count": len(plaques),

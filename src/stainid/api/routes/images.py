@@ -71,7 +71,8 @@ def core_region_objects(core_id: str, stain: str, x: int, y: int, size: int = 16
     """Where the region lies in the core image, and the detections inside it (region pixel coordinates)."""
     x0, y0, size = _box(core_id, stain, x, y, size)
     state = get_state()
-    tiles = state.tiles[(state.tiles.core_id == core_id) & (state.tiles.stain == stain)]
+    source = state.analysis_tiles if not state.analysis_tiles.empty else state.tiles
+    tiles = source[(source.core_id == core_id) & (source.stain == stain)]
     found = objects(state.project, tiles, stain)
     out = []
     if not found.empty:

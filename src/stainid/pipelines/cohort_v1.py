@@ -9,7 +9,7 @@ import numpy as np
 from joblib import load
 from PIL import Image
 
-from stainid.imaging.tissue import field_tissue_mask, linear_artifact_mask
+from stainid.imaging.tissue import field_tissue_mask, linear_artifact_mask, tissue_area_mask
 from stainid.qc.exclusions import rasterize_core_exclusions
 from stainid.stains.amyloid.model import classify_amyloid_objects
 from stainid.stains.amyloid.segmentation import segment_amyloid_candidates, write_amyloid_overlay
@@ -139,7 +139,7 @@ def analyze_tile(
             rgb, threshold, pixel_width_um, pixel_height_um, artifact
         )
         selected = centered_objects(objects, inner)
-        tissue = field_tissue_mask(rgb) & ~artifact
+        tissue = tissue_area_mask(rgb) & ~artifact
         inner_tissue = tissue[inner]
         tissue_area_mm2 = inner_tissue.sum() * pixel_area_um2 / 1_000_000.0
         complete = [row for row in selected if not bool(row["touches_edge"])]
@@ -195,7 +195,8 @@ def analyze_tile(
         )
         valid = field_tissue_mask(rgb) & ~excluded
         inner_valid = valid[inner]
-        tissue_area_mm2 = inner_valid.sum() * pixel_area_um2 / 1_000_000.0
+        inner_area = (tissue_area_mask(rgb) & ~excluded)[inner]
+        tissue_area_mm2 = inner_area.sum() * pixel_area_um2 / 1_000_000.0
         accepted = [
             row
             for row in selected
@@ -224,13 +225,13 @@ def analyze_tile(
                 len(accepted) / tissue_area_mm2 if tissue_area_mm2 else float("nan")
             ),
             "accepted_plaque_deposit_area_fraction": (
-                accepted_area.sum() / inner_valid.sum()
-                if inner_valid.any()
+                accepted_area.sum() / inner_area.sum()
+                if inner_area.any()
                 else float("nan")
             ),
             "amyloid_positive_area_fraction": (
-                (plaque_labels[inner] > 0)[inner_valid].mean()
-                if inner_valid.any()
+                ((plaque_labels[inner] > 0) & inner_valid).sum() / inner_area.sum()
+                if inner_area.any()
                 else float("nan")
             ),
             "compact_plaque_fraction": (
@@ -252,7 +253,8 @@ def analyze_tile(
         valid = maps["valid"][inner]
         positive = maps["positive"][inner] & valid
         thread = maps["thread"][inner] & valid
-        tissue_area_mm2 = valid.sum() * pixel_area_um2 / 1_000_000.0
+        area = (tissue_area_mask(rgb) & ~artifact)[inner]
+        tissue_area_mm2 = area.sum() * pixel_area_um2 / 1_000_000.0
         positive_count = int(positive.sum())
         compact_count = sum(row["source_kind"] == "compact_profile" for row in selected)
         skeleton_length_mm = (
@@ -263,17 +265,17 @@ def analyze_tile(
         summary = {
             "tissue_area_mm2": tissue_area_mm2,
             "at8_positive_area_fraction": (
-                positive_count / valid.sum() if valid.any() else float("nan")
+                positive_count / area.sum() if area.any() else float("nan")
             ),
             "compact_profile_count": compact_count,
             "compact_profile_density_mm2": (
                 compact_count / tissue_area_mm2 if tissue_area_mm2 else float("nan")
             ),
             "noncompact_at8_area_fraction": (
-                thread.sum() / valid.sum() if valid.any() else float("nan")
+                thread.sum() / area.sum() if area.any() else float("nan")
             ),
             "thread_area_fraction": (
-                thread.sum() / valid.sum() if valid.any() else float("nan")
+                thread.sum() / area.sum() if area.any() else float("nan")
             ),
             "tau_noncompact_area_fraction_of_at8": (
                 thread.sum() / positive_count if positive_count else float("nan")

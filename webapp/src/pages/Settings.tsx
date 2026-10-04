@@ -26,8 +26,8 @@ export default function Settings() {
   const setPath = (section: 'inputs' | 'models' | 'outputs', key: string, value: string) => update({ ...config, [section]: { ...config[section], [key]: value } })
   const setGroup = (i: number, group: Group) => update({ ...config, groups: config.groups.map((g, j) => (j === i ? group : g)) })
   const save = () => withError(async () => {
-    const { name, pixel_size_um, field_context_px, tma, groups, inputs, models, outputs } = config
-    await api.put('/api/project/config', { changes: { name, pixel_size_um, field_context_px, tma, groups, inputs, models, outputs } })
+    const { name, pixel_size_um, field_context_px, tma, groups, analysis, inputs, models, outputs } = config
+    await api.put('/api/project/config', { changes: { name, pixel_size_um, field_context_px, tma, groups, analysis, inputs, models, outputs } })
     setSaved(true)
     reload()
   }, setError)
@@ -58,6 +58,14 @@ export default function Settings() {
           </div>
           <p className="muted small">Cores are named <code>{config.tma.prefix}3_B-2</code> (TMA 3, column B, row 2). {info.help['tma.rows']} {info.help['tma.columns']}
             {' '}Set these before <i>Find cores</i> and <i>Choose analysis fields</i>; changing them later needs those steps (and everything after) to be run again.</p>
+          <h2 style={{ marginTop: 16 }}>Analysis</h2>
+          <label className="field">Detect objects in
+            <select value={config.analysis.tiles} onChange={(e) => update({ ...config, analysis: { tiles: e.target.value } })}>
+              <option value="whole_core">whole cores (every tile of tissue)</option>
+              <option value="sampled_fields">the sampled fields only</option>
+            </select></label>
+          <p className="muted small">The sampled fields are always used for labelling, training and testing the models. Whole cores give the most complete
+            results but take about ten times longer; changing this needs the detection steps to be run again with Start over.</p>
         </div>
 
         <div className="card">

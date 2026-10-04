@@ -102,3 +102,10 @@ def test_train_report_and_activate(tmp_path):
     assert not trained_models(project)[0]["active"]
     project = activate(project, folder / "bundle.joblib")
     assert project.model("tau") == folder / "bundle.joblib" and trained_models(project)[0]["active"]
+
+
+def test_whole_core_grid_covers_the_image_without_overlap():
+    from stainid.sampling.whole_core import grid
+
+    assert grid(5000, 2048) == [(0, 2048), (2048, 2048), (4096, 904)]
+    assert grid(4200, 2048) == [(0, 2048), (2048, 2048)]

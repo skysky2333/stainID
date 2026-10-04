@@ -14,7 +14,7 @@ export interface Group { code: string; label: string; color?: number }
 export interface PathInfo { path: string; exists: boolean; help: string }
 export interface ProjectConfig {
   name: string; pixel_size_um: number; field_context_px: number; stains: Record<string, string>
-  tma: { prefix: string; rows: number; columns: number }; groups: Group[]
+  tma: { prefix: string; rows: number; columns: number }; groups: Group[]; analysis: { tiles: string }
   inputs: Record<string, string>; models: Record<string, string>; outputs: Record<string, string>
 }
 export interface ProjectInfo {

@@ -55,7 +55,7 @@ def analyze_field(project: Project, image, tile, stain, calibration, manual, bun
 def run_fields(project: Project, stains: list[str] = ("6E10", "AT8"), shard_index: int = 0, shard_count: int = 1,
                core_ids: set[str] | None = None) -> None:
     project.apply_environment()
-    groups = tiles_for(project.input("tile_manifest"), set(stains), shard_index, shard_count, core_ids)
+    groups = tiles_for(project.analysis_tiles(), set(stains), shard_index, shard_count, core_ids)
     calibration = calibration_table(project.input("calibration"))
     manual = read_manual_exclusions(project.input("manual_exclusions"))
     bundles = {"tau": load(project.model("tau")), "amyloid": load(project.model("amyloid"))}

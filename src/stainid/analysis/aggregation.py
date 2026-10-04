@@ -267,7 +267,8 @@ def aggregate_level(
     output: list[dict[str, object]] = []
     for _, group in sorted(grouped.items()):
         first = group[0]
-        for extent, maximum_order in (("primary_four", 4), ("extended_eight", 8)):
+        extents = [("primary_four", 4), ("extended_eight", 8)] + ([("whole_core", 10**9)] if any(int(r["selection_order"]) > 8 for r in group) else [])
+        for extent, maximum_order in extents:
             selected = [
                 row for row in group if int(row["selection_order"]) <= maximum_order
             ]

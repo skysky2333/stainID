@@ -53,7 +53,7 @@ def test_steps_describe_needs_and_progress(client):
     steps = {s["id"]: s for s in client.get("/api/steps").json()}
     assert steps["select"]["progress"] == {"state": "done", "done": 3, "total": 3, "unit": "fields", "note": "1 cores", "outdated": False}
     assert steps["fields"]["progress"]["total"] == 2
-    assert [n["id"] for n in steps["fields"]["needs"]][:2] == ["tile_manifest", "calibration"]
+    assert [n["id"] for n in steps["fields"]["needs"]][:2] == ["analysis_tiles", "calibration"]
     assert steps["slides"]["command"] is None and steps["dearray"]["options"][0]["key"] == "redo"
 
 

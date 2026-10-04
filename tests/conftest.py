@@ -44,6 +44,6 @@ def synthetic_project(tmp_path: Path, monkeypatch) -> Path:
     pd.DataFrame(plaques).to_csv(parts / "LIP-1_B-2_6E10_objects.csv", index=False)
     (tmp_path / "data" / "annotations").mkdir()
     (tmp_path / "data" / "annotations" / "cohort_manual_exclusions.json").write_text(json.dumps({}))
-    (tmp_path / "stainid.yaml").write_text(yaml.safe_dump({"name": "synthetic"}))
+    (tmp_path / "stainid.yaml").write_text(yaml.safe_dump({"name": "synthetic", "analysis": {"tiles": "sampled_fields"}}))
     monkeypatch.setenv("STAINID_PROJECT", str(tmp_path))
     return tmp_path
