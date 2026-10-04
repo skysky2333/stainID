@@ -3,17 +3,23 @@
 # Cellpose is the slow step (about 90 s per tile on an Apple GPU, a few seconds on a data-centre GPU); everything after
 # it reads the saved masks, so only the masks travel back.
 #
-#   tools/gpu_cellpose.sh push user@server:/scratch/stainid     # from the project folder: code, model, tile list, core images
-#   tools/gpu_cellpose.sh run [number of GPUs]                  # on the server, inside that folder
-#   tools/gpu_cellpose.sh pull user@server:/scratch/stainid     # back in the project folder: copy the masks home
+#   tools/gpu_cellpose.sh package /some/folder                  # from the project folder: a self-contained folder to move yourself
+#   tools/gpu_cellpose.sh push user@server:/scratch/stainid     # or copy the same files straight to a server
+#   tools/gpu_cellpose.sh run [number of GPUs]                  # on the GPU machine, inside that folder
+#   tools/gpu_cellpose.sh pull /some/folder                     # back in the project folder: copy the masks home (local folder or user@server:path)
 #
 # Then run the detection steps here as usual (Workflow page, or stainid neun / fields); they reuse the masks.
 set -euo pipefail
 action=${1:?push, run or pull}
 
 case "$action" in
-  push)
-    dest=${2:?destination, e.g. user@server:/scratch/stainid}
+  package|push)
+    dest=${2:?destination folder, or user@server:/scratch/stainid}
+    link=()
+    if [ "$action" = package ]; then
+      mkdir -p "$dest"
+      link=(--link-dest="$PWD")
+    fi
     list=$(mktemp)
     .venv/bin/python - "$list" <<'EOF'
 import sys
@@ -25,11 +31,12 @@ paths = {project.relative(manifest), project.relative(project.model("cellpose"))
 paths |= {row["image_path"] for row in read_csv(manifest)}
 open(sys.argv[1], "w").write("\n".join(sorted(paths)) + "\n")
 EOF
-    rsync -a --exclude .venv --exclude data --exclude webapp/node_modules ./ "$dest/"
-    rsync -a --files-from="$list" -r ./ "$dest/"
+    rsync -a --exclude __pycache__ src tools pyproject.toml README.md LICENSE "$dest/"
+    rsync -a ${link[@]+"${link[@]}"} --files-from="$list" -r ./ "$dest/"
     rsync -a data/analysis/tile_nuclei "$dest/data/analysis/"
     rsync -a data/analysis/cohort_neun/cellpose_masks/ "$dest/data/analysis/tile_nuclei/"
     rm "$list"
+    echo "ready: $dest (then on the GPU machine: cd into it and run tools/gpu_cellpose.sh run <number of GPUs>)"
     ;;
   run)
     gpus=${2:-1}
