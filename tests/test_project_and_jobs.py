@@ -43,11 +43,11 @@ def test_queue_respects_step_order_and_heavy_slots(tmp_path, monkeypatch):
     for job, when in zip((nuclei, neun, fields, masks), range(4)):
         job.created = when
     manager._schedule()
-    assert started == ["nuclei", "neun"]
-    assert "Find nuclei" in fields.waiting and "Nuclei" in fields.waiting and "Detect NeuN" in masks.waiting
+    assert started == ["nuclei"]
+    assert "Find nuclei" in neun.waiting and "Find nuclei" in fields.waiting and "Nuclei" in fields.waiting
     nuclei.status = "finished"
     manager._schedule()
-    assert started == ["nuclei", "neun", "fields"] and masks.status == "queued"
+    assert started == ["nuclei", "neun", "fields"] and masks.status == "queued" and "Detect NeuN" in masks.waiting
 
 
 def test_failed_step_skips_what_waits_for_it_and_missing_inputs_are_reported(tmp_path, monkeypatch):

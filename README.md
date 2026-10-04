@@ -60,7 +60,7 @@ The Help page in the app has the same guide, answers to common questions and a g
 | **Fields** | Choose analysis fields | evenly spread ~560 µm fields per core, used to label, train and test | `stainid select` |
 | | Cut whole cores into tiles | every ~560 µm tile of tissue, for whole-core analysis | `stainid tiles` |
 | | Calibrate stain thresholds | one DAB threshold per slide, blind to diagnosis | `stainid calibrate` |
-| **Detection** | Find nuclei | Cellpose-SAM nuclei (needed for AT8) | `stainid nuclei --stain AT8` |
+| **Detection** | Find nuclei | Cellpose-SAM cells for every stain; the slow step, the one to run on a GPU | `stainid nuclei --stain NeuN --stain AT8 --stain 6E10` |
 | | Detect NeuN neurons | candidates + NeuN model | `stainid neun` |
 | | Detect plaques and tau | 6E10 plaques and morphotypes; AT8 tau+ neurons and threads | `stainid fields` |
 | | Outline objects | Segment Anything outlines and shape features (optional) | `stainid masks` |
@@ -123,7 +123,7 @@ src/stainid/
   qc/               core QC, focus, artifact exclusions
   sampling/         field selection
   imaging/          colour deconvolution, tissue / fold / artifact masks, calibration
-  nuclei.py         Cellpose-SAM nuclei
+  nuclei.py         Cellpose-SAM cells (shared by every stain)
   stains/           neun/, amyloid/, tau/ stain-specific detection and classifiers
   masks/            Segment Anything outlines and shape features
   analysis/         core / donor-region aggregation and the column dictionary

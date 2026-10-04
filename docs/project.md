@@ -116,7 +116,7 @@ core-image pixel coordinates) to drop before measurement.
 
 | Folder | Content |
 |---|---|
-| `outputs.nuclei` | `<tile_id>.npz`: Cellpose label image (field + context) |
+| `outputs.nuclei` | `<tile_id>.npz`: Cellpose-SAM label image (field + context), every stain; NeuN, AT8 and 6E10 detection read it |
 | `outputs.neun` | `tiles/<tile_id>_{features,objects}.csv`; merged `tile_features.csv`, `objects.csv` |
 | `outputs.fields` | `parts/<core>_<stain>_{features,objects}.csv`: 6E10 plaques, AT8 tau neurons and field summaries |
 | `outputs.masks` | per-core SAM outlines and shape features |

@@ -224,6 +224,7 @@ def run_neun_cohort(
     model_bundle_path: Path,
     cellpose_model_path: Path,
     output_dir: Path,
+    mask_dir: Path,
     manual_exclusions_path: Path,
     tile_ids: set[str] | None = None,
     nested_samples: set[str] | None = None,
@@ -246,7 +247,6 @@ def run_neun_cohort(
         key=lambda row: (row["image_path"], int(row["selection_order"])),
     )
     tile_dir = output_dir / "tiles"
-    mask_dir = output_dir / "cellpose_masks"
     tile_dir.mkdir(parents=True, exist_ok=True)
     mask_dir.mkdir(parents=True, exist_ok=True)
     pending = [

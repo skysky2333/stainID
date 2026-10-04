@@ -133,9 +133,9 @@ def _count_files(folder: Path, names: list[str]) -> int:
 
 
 def _nuclei_status(project: Project) -> dict:
-    tiles = _tiles(project, {"AT8"})
-    return _state(_count_files(project.output("nuclei"), [f"{t['tile_id']}.npz" for t in tiles]), len(tiles), "AT8 fields",
-                  "AT8 needs nuclei; 6E10 uses them for plaque-niche features if present")
+    tiles = _tiles(project, set(STAINS))
+    return _state(_count_files(project.output("nuclei"), [f"{t['tile_id']}.npz" for t in tiles]), len(tiles), "tiles",
+                  "NeuN and AT8 detection need these outlines; 6E10 uses them for plaque-niche features")
 
 
 def _neun_status(project: Project) -> dict:
@@ -289,19 +289,23 @@ STEPS = (
          "Pools tissue pixels from all cores of a slide and sets one threshold per slide, blind to diagnosis. Everything downstream is measured "
          "relative to it, so slides stained a little darker or lighter stay comparable.",
          ("tile_manifest",), ("calibration",), ("calibrate",), view="/calibration", duration="a few minutes", status=_calibration_status),
-    Step("nuclei", "2 · Detect", "Find nuclei", "Outline every cell nucleus with Cellpose-SAM.",
-         "Needed before the AT8 step (tau+ neurons are found around nuclei); also used for 6E10 plaque-neighbourhood features.",
+    Step("nuclei", "2 · Detect", "Find nuclei", "Outline every cell with Cellpose-SAM, for all stains.",
+         "The slow step (about 90 s per tile on an Apple GPU, a few seconds on a data-centre GPU), and the only one that needs a GPU. "
+         "NeuN and AT8 detection read these outlines; 6E10 uses them for plaque-neighbourhood features. To use a GPU machine, copy the "
+         "project folder there, run this step (stainid nuclei --stain NeuN --stain AT8 --stain 6E10 --device cuda), and copy "
+         "the nuclei folder back; the detection steps then run here.",
          ("analysis_tiles", "model_cellpose"), ("nuclei",), ("nuclei",),
-         (Option("stain", "Stains", "stains", ["AT8", "6E10"], "NeuN detection finds its own cells, so it does not need this step.", ("AT8", "6E10")),
+         (Option("stain", "Stains", "stains", ["NeuN", "AT8", "6E10"], choices=("NeuN", "AT8", "6E10")),
           DEVICE, Option("batch_size", "Batch size", "number", 8, advanced=True), *SHARD),
-         heavy=True, duration="about 20 s per tile on a Mac GPU", status=_nuclei_status),
+         heavy=True, duration="about 90 s per tile on a Mac GPU", status=_nuclei_status),
     Step("neun", "2 · Detect", "Detect NeuN neurons", "Find and classify NeuN-stained neuronal profiles.",
-         "Candidates come from brown-stain contours and Cellpose cells; the NeuN model scores each one with its shape, stain and 55 µm "
-         "neighbourhood.", ("analysis_tiles", "calibration", "model_neun", "model_cellpose"), ("neun_results",), ("neun",),
-         (Option("device", "Processor", "select", "cpu", "cpu reproduces published results exactly; mps / cuda (GPU) are faster but Cellpose "
+         "Candidates come from brown-stain contours and the Cellpose cells of Find nuclei (computed here for tiles that have none yet); "
+         "the NeuN model scores each one with its shape, stain and 55 µm neighbourhood.",
+         ("analysis_tiles", "calibration", "model_neun", "model_cellpose"), ("neun_results",), ("neun",),
+         (Option("device", "Processor", "select", "cpu", "Only matters for tiles without Find nuclei outlines. cpu reproduces published results exactly; mps / cuda (GPU) are faster but Cellpose "
                  "outlines can differ slightly.", ("cpu", "mps", "cuda")),
           Option("threads", "CPU threads", "number", 8, advanced=True), FRESH, *SHARD),
-         heavy=True, view="/cohort", duration="about 1 minute per tile", status=_neun_status),
+         heavy=True, view="/cohort", duration="seconds per tile once Find nuclei has run", status=_neun_status, uses=("nuclei",)),
     Step("fields", "2 · Detect", "Detect plaques and tau", "6E10 plaques (compact / diffuse) and AT8 tau+ neurons and threads.",
          "6E10: segments deposits, keeps real plaques with the 6E10 model and sorts them into compact and diffuse. AT8: finds tau+ neurons "
          "around nuclei and traces neuropil threads, so run Find nuclei for AT8 first (AT8 cores without nuclei are skipped).",

@@ -73,7 +73,7 @@ def neun(loader: FieldLoader, field: Field) -> tuple[list[dict], np.ndarray, lis
     from stainid.stains.neun.pipeline import neun_candidates, neun_feature_matrix
 
     tile = field.tile
-    raw = loader.cellpose(field.rgb, loader.project.output("neun") / "cellpose_masks" / f"{tile['tile_id']}.npz")
+    raw = loader.cellpose(field.rgb, loader.project.output("nuclei") / f"{tile['tile_id']}.npz")
     rows, _, _ = neun_candidates(field.rgb, raw, field.threshold, float(tile["pixel_width_um"]), float(tile["pixel_height_um"]), field.manual, tile["tile_id"])
     rows = [r for r in rows if field.inside(r)]
     if not rows:
