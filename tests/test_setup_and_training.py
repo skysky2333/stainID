@@ -8,11 +8,10 @@ import pandas as pd
 import pytest
 from joblib import load
 
+from stainid.labels import pool, sessions, store
 from stainid.project import load_project
-from stainid.review.store import create_set, save_label
 from stainid.slides.layout import attach_layout, read_layout
 from stainid.slides.table import guess, save_slides, scan_slides
-from stainid.training.sets import LABELS, choose, pick_fields, unused_fields
 from stainid.training.train import activate, train_model, trained_models
 
 
@@ -52,49 +51,49 @@ def test_layout_defaults_and_attach(tmp_path):
         attach_layout(manifest, layout)
 
 
-def test_pick_fields_spreads_over_tmas_and_choose_prefers_uncertain():
-    tiles = [{"tile_id": f"{t}_{i}", "tma": t, "disease_group": g} for t in "12" for g in ("AD", "CT") for i in range(5)]
-    picked = pick_fields(tiles, 4, seed=0)
-    assert {(t["tma"], t["disease_group"]) for t in picked} == {("1", "AD"), ("1", "CT"), ("2", "AD"), ("2", "CT")}
-    probability = np.array([0.01] * 10 + [0.5] * 10)
-    chosen = choose(probability, 8, "uncertain", np.random.default_rng(0))
-    assert len(set(chosen)) == 8 and (probability[chosen] == 0.5).sum() >= 4
+def test_pick_fields_spreads_over_tmas_and_skips_reviewed():
+    tiles = pd.DataFrame([{"tile_id": f"{t}_{g}_{i}", "tma": t, "disease_group": g} for t in "12" for g in ("AD", "CT") for i in range(5)])
+    picked = sessions.pick_fields(tiles, {"1_AD_0"}, 4, seed=0)
+    assert {tuple(t.split("_")[:2]) for t in picked} == {("1", "AD"), ("1", "CT"), ("2", "AD"), ("2", "CT")} and "1_AD_0" not in picked
 
 
-def _training_set(project, stain: str, name: str, n: int = 60) -> None:
+def _labelled_pool(project, n: int = 60) -> None:
+    """A prepared AT8 field with n candidates, labelled by two people who disagree on a few objects."""
     rng = np.random.default_rng(1)
     names = ["size", "stain_mean", "context"]
     x = rng.normal(size=(n, 3))
-    positive = x[:, 0] + x[:, 1] > 0
-    items = pd.DataFrame({"tile_id": "T", "stain": stain, "x": 1.0, "y": 1.0, "tma": [str(i % 3 + 1) for i in range(n)], "item": range(n)})
-    folder = create_set(project.output("reviews"), f"training/{name}", name, stain, items, LABELS[stain], "", 55.0)
-    key = pd.read_csv(folder / "key.csv")
-    features = pd.DataFrame(x[key["item"]], columns=names)
-    features.insert(0, "review_id", key["review_id"])
-    features["soma_dab_p90"] = rng.uniform(0.05, 0.3, n)
-    features.to_csv(folder / "features.csv", index=False)
-    meta = json.loads((folder / "meta.json").read_text())
-    (folder / "meta.json").write_text(json.dumps({**meta, "purpose": "training", "feature_names": names}))
-    for review_id, is_positive, p90 in zip(key["review_id"], positive[key["item"]], features["soma_dab_p90"]):
-        label = ("tau+ neuron: tangle" if p90 > 0.17 else "tau+ neuron: pretangle") if is_positive else "not a tau+ neuron"
-        save_label(project.output("reviews"), f"training/{name}", review_id, label)
+    truth = x[:, 0] + x[:, 1] > 0
+    p90 = rng.uniform(0.05, 0.3, n)
+    frame = pd.DataFrame({"x": np.arange(n) * 20.0, "y": 10.0, "radius_px": 8.0, "ai_value": "not a tau+ neuron", "ai_probability": 0.5,
+                          "tma": [str(i % 3 + 1) for i in range(n)], "complete": True, "soma_dab_p90": p90})
+    folder = pool.folder(project, "AT8")
+    folder.mkdir(parents=True)
+    pd.concat([frame, pd.DataFrame(x, columns=names)], axis=1).to_csv(folder / "T.csv", index=False)
+    pool._check_names(project, "AT8", names)
+    labels = [("tau+ neuron: tangle" if q > 0.17 else "tau+ neuron: pretangle") if t else "not a tau+ neuron" for t, q in zip(truth, p90)]
+    for person, flip in (("Ann", set()), ("Ben", {0, 1})):
+        store.append(project.output("reviews"), [
+            {"id": store.object_id("class", "T", i * 20.0, 10.0), "source": person, "stain": "AT8", "task": "class", "tile_id": "T", "x": i * 20.0, "y": 10.0,
+             "value": "not a tau+ neuron" if i in flip else label} for i, label in enumerate(labels)])
 
 
-def test_unused_fields_skips_fields_of_earlier_sets(tmp_path):
+def test_consensus_and_queue_rules(tmp_path):
     project = load_project(tmp_path)
-    tiles = [{"tile_id": "T"}, {"tile_id": "U"}]
-    assert unused_fields(project, "AT8", tiles) == tiles
-    _training_set(project, "AT8", "r1")
-    assert unused_fields(project, "AT8", tiles) == [{"tile_id": "U"}]
-    assert unused_fields(project, "NeuN", tiles) == tiles
-    assert unused_fields(project, "AT8", [{"tile_id": "T"}]) == [{"tile_id": "T"}]
+    _labelled_pool(project)
+    labels = store.current(project.output("reviews"))
+    consensus = store.consensus(labels, "AT8").set_index("x")
+    assert len(consensus) == 60 and consensus.loc[20.0, "n"] == 2
+    objects = pool.all_objects(project, "AT8")
+    disputed = sessions.next_object({"stain": "AT8", "rule": "disagree"}, objects, labels, "Cy")
+    assert disputed is not None and disputed["labels_so_far"] == 2
+    assert sessions.next_object({"stain": "AT8", "rule": "random"}, objects, labels, "Ann") is None
 
 
 def test_train_report_and_activate(tmp_path):
     project = load_project(tmp_path)
     with pytest.raises(ValueError, match="No labelled AT8"):
         train_model(project, "AT8")
-    _training_set(project, "AT8", "r1")
+    _labelled_pool(project)
     folder = train_model(project, "AT8")
     report = json.loads((folder / "report.json").read_text())
     assert report["validation"] == "leave-one-TMA-out" and report["new_model"]["auc"] > 0.85 and report["current_model"] is None

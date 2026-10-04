@@ -158,27 +158,22 @@ def _summary_status(project: Project) -> dict:
     return _state(1 if any(made) else 0, 1, "table", note)
 
 
-def _training_status(project: Project) -> dict:
-    root = project.output("reviews") / "training"
-    sets = [json.loads(m.read_text()) for m in root.glob("*/meta.json")] if root.exists() else []
-    return _state(len(sets), len(sets), "training sets")
+def _labels_status(project: Project) -> dict:
+    from stainid.labels import pool
+
+    prepared = {stain: len(pool.prepared(project, stain)) for stain in STAINS}
+    total = sum(prepared.values())
+    return _state(total, total, "fields prepared", " · ".join(f"{s}: {n}" for s, n in prepared.items() if n))
 
 
 def _trained_status(project: Project) -> dict:
-    from stainid.review.store import read_labels
-    from stainid.training.sets import POSITIVE, SKIP
+    from stainid.labels import store
 
     root = project.output("trained_models")
     count = len(list(root.glob("*/bundle.joblib"))) if root.exists() else 0
-    sets = project.output("reviews") / "training"
-    counts = {stain: [0, 0] for stain in POSITIVE}
-    for meta in sets.glob("*/meta.json") if sets.exists() else []:
-        stain = json.loads(meta.read_text())["stain"]
-        labels = read_labels(meta.parent)
-        for label in labels.label if not labels.empty else []:
-            if label not in SKIP:
-                counts[stain][label not in POSITIVE[stain]] += 1
-    note = " · ".join(f"{s}: {p} positive / {n} negative labels" for s, (p, n) in counts.items() if p or n)
+    labels = store.current(project.output("reviews"))
+    counts = {stain: store.consensus(labels, stain).positive.value_counts() for stain in STAINS}
+    note = " · ".join(f"{s}: {int(c.get(True, 0))} positive / {int(c.get(False, 0))} negative labels" for s, c in counts.items() if len(c))
     return _state(count, count, "trained models", note or "No labels yet. Training needs at least 10 positive and 10 negative labels per stain")
 
 
@@ -224,7 +219,9 @@ RESOURCES = {r.id: r for r in (
     Resource("model_cellpose", "Cellpose-SAM weights", "Finds cells and nuclei.", lambda p: p.model("cellpose"), download="cellpose"),
     Resource("model_sam", "Segment Anything weights", "Draws object outlines.", lambda p: p.model("sam"), download="sam"),
     Resource("model_phikon", "Phikon weights", "Image features used by the 6E10 model.", lambda p: p.model("huggingface_home"), download="huggingface_home"),
-    Resource("training_sets", "Training sets", "Candidate objects you label to train a model.", lambda p: p.output("reviews") / "training"),
+    Resource("label_store", "Labels", "Every label people made (and imported earlier label sets).", lambda p: p.output("reviews") / "labels" / "labels.jsonl"),
+    Resource("candidate_pool", "Candidate objects", "The objects of each prepared field, with their measurements and the AI's call.",
+             lambda p: p.output("reviews") / "pool"),
     Resource("trained_models", "Trained models", "Models you trained, with their accuracy reports.", lambda p: p.output("trained_models")),
 )}
 
@@ -314,21 +311,17 @@ STEPS = (
          (Option("which", "Models", "stains", ["cellpose", "sam", "huggingface_home"], choices=("cellpose", "sam", "huggingface_home")),),
          heavy=True, view="/models", duration="a few minutes (about 2 GB)", status=lambda p: _state(
              sum(p.model(k).exists() for k in ("cellpose", "sam", "huggingface_home")), 3, "models")),
-    Step("training_set", "Models", "Create a training set", "Pick candidate objects to label for training a model.",
-         "Chooses fields spread across TMAs and groups, finds every candidate object exactly as the detection step does, and stores their "
-         "measurements. You then label them blind on the Label page.",
-         ("tile_manifest", "calibration"), ("training_sets",), ("training-set",),
-         (Option("stain", "Stain", "select", "AT8", choices=tuple(STAINS)), Option("name", "Name", "text", ""),
-          Option("fields", "Fields", "number", 12, "How many fields to sample."),
-          Option("per_field", "Objects per field", "number", 10),
-          Option("strategy", "Which objects", "select", "uncertain", "uncertain: half the objects are ones the current model is unsure about.",
-                 ("uncertain", "random")),
-          Option("enrich", "Prefer fields with detections", "bool", True, "Plaques and tau+ neurons are rare; sample fields that have some.")),
-         heavy=True, view="/models", duration="a few minutes", status=_training_status, uses=("nuclei", "model_cellpose", "model_phikon")),
-    Step("train", "Models", "Train a model", "Train a new model from your labelled training sets.",
+    Step("prepare_labels", "Models", "Prepare fields for labelling", "Find every candidate object in fields people will label.",
+         "Finds the candidates exactly as the detection step does, stores their measurements and the AI's call, so labelling sessions open "
+         "instantly and every label can train a model. Labelling sessions run this for their own fields.",
+         ("tile_manifest", "calibration"), ("candidate_pool",), ("labels", "prepare"),
+         (Option("stain", "Stain", "select", "AT8", choices=tuple(STAINS)), Option("fields", "Fields", "number", 20, "How many more fields to prepare."),
+          Option("session", "Session", "text", "", "Prepare every field of this labelling session instead.", advanced=True)),
+         heavy=True, view="/labels", duration="10–30 s per field", status=_labels_status, uses=("nuclei", "model_cellpose")),
+    Step("train", "Models", "Train a model", "Train a new model from the labels people made.",
          "Fits the same kind of model the pipeline uses, checks it by leaving one TMA out at a time, and compares it with the current model on "
          "your labels. The new model is only used after you choose it on the Models page.",
-         ("training_sets",), ("trained_models",), ("train",), (Option("stain", "Stain", "select", "AT8", choices=tuple(STAINS)),),
+         ("label_store", "candidate_pool"), ("trained_models",), ("train",), (Option("stain", "Stain", "select", "AT8", choices=tuple(STAINS)),),
          view="/models", duration="under a minute", status=_trained_status),
 )
 BY_ID = {s.id: s for s in STEPS}

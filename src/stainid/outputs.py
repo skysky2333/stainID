@@ -58,7 +58,7 @@ def field_objects(project: Project, tiles: pd.DataFrame, stain: str) -> pd.DataF
         else:
             radius = np.sqrt(o.soma_area_um2 / np.pi) / project.pixel_size_um
             frame = pd.DataFrame({"model_class": np.where(o.candidate_source == "nucleus_ring", "tau_neuron_ring", "tau_neuron_dense"),
-                                  "probability": o.tau_neuron_probability, "area_um2": o.soma_area_um2})
+                                  "probability": o.tau_neuron_probability, "area_um2": o.soma_area_um2, "mature": o.tau_neuron_mature})
         frame.insert(0, "radius_px", radius.to_numpy())
         frame.insert(0, "y", o.centroid_y_px.to_numpy())
         frame.insert(0, "x", o.centroid_x_px.to_numpy())

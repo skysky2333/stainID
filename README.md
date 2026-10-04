@@ -42,9 +42,9 @@ slides. Every step is also a `stainid` command.
 5. **Run the Workflow page from top to bottom.** Each step says what it needs, what it makes and where the files go.
    Anything missing has a button next to it: go to the step that makes it, download it, or get a template.
    *Run all remaining steps* queues everything in the right order.
-6. **Check and use the results.** Look at detections on the tissue (Cohort & cores), label a check set to measure
-   accuracy on your slides (Label & check), let other people annotate fields through a link (Annotation sessions), and
-   download the results table (Results).
+6. **Check and use the results.** Look at detections on the tissue (Cohort & cores), review fields alone or with
+   others through a link to measure accuracy and collect labels (Labels), train better models from those labels
+   (Models), and download the results table (Results).
 
 The Help page in the app has the same guide, answers to common questions and a glossary.
 
@@ -65,7 +65,7 @@ The Help page in the app has the same guide, answers to common questions and a g
 | | Outline objects | Segment Anything outlines and shape features (optional) | `stainid masks` |
 | **Results** | Make results tables | one row per donor and region, every stain | `stainid summarize` |
 | **Models** | Download public models | Cellpose-SAM, Segment Anything, Phikon | `stainid download-models` |
-| | Create a training set, Train a model | label objects, train and compare a stain model | `stainid training-set`, `stainid train` |
+| | Prepare fields for labelling, Train a model | candidates for labelling; train and compare a stain model from all labels | `stainid labels prepare`, `stainid train` |
 
 Steps run in the background, in dependency order, at most two heavy ones at a time; all of them can be stopped and
 resumed. [docs/webapp.md](docs/webapp.md) explains how the queue works, and [docs/pipelines.md](docs/pipelines.md)
@@ -76,11 +76,11 @@ says what each step computes.
 | | |
 |---|---|
 | ![Home](docs/images/home.png) | ![Models](docs/images/models.png) |
-| **Home**: your next step and overall progress | **Models**: download published models; create a training set, label it, train, compare, switch |
-| ![Core viewer](docs/images/viewer.jpg) | ![Labelling](docs/images/labelling.jpg) |
-| **Cohort & cores**: every core and field with detections, outlines and masks drawn on the tissue | **Label & check**: blind, keyboard-driven labelling |
-| ![Annotation sessions](docs/images/annotation_sessions.png) | ![Annotating](docs/images/annotate.jpg) |
-| **Annotation sessions**: create, start and stop sessions, share the link, follow results | **Annotating** (at `/annotate`): people register a name and annotate fields with the AI output shown |
+| **Home**: your next step and overall progress | **Models**: download published models; train from all labels, compare, switch |
+| ![Core viewer](docs/images/viewer.jpg) | ![Labels](docs/images/labels.png) |
+| **Cohort & cores**: every core and field with detections, outlines and masks drawn on the tissue | **Labels**: progress per stain, agreement with the AI, labelling sessions and the link to share |
+| ![Reviewing a field](docs/images/annotate.jpg) | |
+| **Reviewing a field** (at `/annotate`): the AI's calls and outlines pre-filled; people correct, add and confirm | |
 | ![Results](docs/images/results.png) | ![Settings](docs/images/settings.png) |
 | **Results**: download the main table, what every column means, plots by group | **Settings**: study layout, diagnostic groups and every file location |
 
@@ -116,7 +116,8 @@ src/stainid/
   project.py        stainid.yaml loading, saving and path resolution
   cli.py            the `stainid` command
   workflows/        every step (steps.py is the registry the CLI, job runner and web app share)
-  training/         training sets and model training from blind labels
+  labels/           label store, candidate pool, labelling sessions, import of earlier label sets
+  training/         candidate features and model training from the label store
   slides/           slides table, scan reading, dearraying, core export, TMA map
   qc/               core QC, focus, artifact exclusions
   sampling/         field selection

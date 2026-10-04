@@ -7,7 +7,6 @@ import { ProjectProvider, useProject } from './project'
 import { AdminSignIn, Annotator, SessionContext, useSession } from './session'
 import AnnotateField from './pages/AnnotateField'
 import AnnotateHome from './pages/AnnotateHome'
-import AnnotationSessions from './pages/AnnotationSessions'
 import Calibration from './pages/Calibration'
 import Cohort from './pages/Cohort'
 import CoreView from './pages/CoreView'
@@ -16,8 +15,7 @@ import Help from './pages/Help'
 import Home from './pages/Home'
 import Models from './pages/Models'
 import Results from './pages/Results'
-import ReviewLabel from './pages/ReviewLabel'
-import Reviews from './pages/Reviews'
+import Labels from './pages/Labels'
 import Settings from './pages/Settings'
 import Welcome from './pages/Welcome'
 import Workflow from './pages/Workflow'
@@ -25,7 +23,7 @@ import Workflow from './pages/Workflow'
 const NAV: { section: string; links: [string, string][] }[] = [
   { section: '', links: [['/', 'Home'], ['/workflow', 'Workflow']] },
   { section: 'Look at the data', links: [['/cohort', 'Cohort & cores'], ['/calibration', 'Stain thresholds']] },
-  { section: 'Improve accuracy', links: [['/label', 'Label & check'], ['/annotations', 'Annotation sessions'], ['/models', 'Models']] },
+  { section: 'Improve accuracy', links: [['/labels', 'Labels'], ['/models', 'Models']] },
   { section: 'Results', links: [['/results', 'Results']] },
   { section: '', links: [['/settings', 'Settings'], ['/help', 'Help']] },
 ]
@@ -106,9 +104,7 @@ function Shell() {
           <Route path="/cohort" element={<Cohort />} />
           <Route path="/cores/:coreId" element={<CoreView />} />
           <Route path="/calibration" element={<Calibration />} />
-          <Route path="/label" element={<Reviews />} />
-          <Route path="/label/*" element={<ReviewLabel />} />
-          <Route path="/annotations" element={<AnnotationSessions />} />
+          <Route path="/labels" element={<Labels />} />
           <Route path="/models" element={<Models />} />
           <Route path="/results" element={<Results />} />
           <Route path="/settings" element={<Settings />} />

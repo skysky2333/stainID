@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import type { Metrics, ModelInfo, ReviewSet, Step, TrainedModel } from '../api'
+import type { LabelsOverview, Metrics, ModelInfo, Step, TrainedModel } from '../api'
 import { api, runStep } from '../api'
-import { ErrorNote, HelpBox, PageHead, PathLine, Progress, Term, fmt, timeAgo, withError } from '../components'
+import { ErrorNote, HelpBox, PageHead, PathLine, Term, fmt, timeAgo, withError } from '../components'
 import { useFetch } from '../hooks'
 import { useProject } from '../project'
 import { StepCard } from './Workflow'
@@ -23,10 +23,9 @@ export default function Models() {
   const models = useFetch<ModelInfo[]>('/api/models')
   const steps = useFetch<Step[]>('/api/steps', 3000)
   const trained = useFetch<TrainedModel[]>('/api/models/trained', 5000)
-  const sets = useFetch<ReviewSet[]>('/api/reviews', 5000)
+  const labels = useFetch<LabelsOverview>('/api/labels/overview', 15000)
   const [error, setError] = useState<string | null>(null)
   const step = (id: string) => steps.data?.find((s) => s.id === id)
-  const training = (sets.data ?? []).filter((s) => s.purpose === 'training')
 
   const download = (key: string) => withError(async () => { await runStep('download_models', { which: [key] }); steps.reload() }, setError)
   const activate = (path: string) => withError(async () => {
@@ -42,8 +41,8 @@ export default function Models() {
         <ul>
           <li><b>Published models</b> (Cellpose-SAM, Segment Anything, Phikon) are the same for every study. Press <b>Download</b> if one is missing.</li>
           <li><b>Stain models</b> (NeuN, 6E10, AT8) learn what a real neuron / plaque / tau+ neuron looks like with <i>your</i> staining.
-            They are <Term term="random forest">random forests</Term> trained on objects you label. To train or improve one:
-            <b> 1</b> create a <Term>training set</Term>, <b>2</b> label it, <b>3</b> train, then compare it with the current model and choose which to use.</li>
+            They are <Term term="random forest">random forests</Term> trained on every object people have labelled (the majority label of each object).
+            To improve one: <b>1</b> label more objects on <Link to="/labels">Labels</Link>, <b>2</b> train, then compare it with the current model and choose which to use.</li>
         </ul>
         <p className="muted small">Switching to a new model does not change results you already have: run the detection step again with “Start over” to redo them.</p>
       </HelpBox>
@@ -76,30 +75,21 @@ export default function Models() {
       <div className="train-flow">
         <div>
           <div className="flow-number">1</div>
-          {step('training_set') && <StepCard step={step('training_set')!} onChanged={() => { steps.reload(); sets.reload() }} />}
-        </div>
-        <div>
-          <div className="flow-number">2</div>
           <div className="card">
-            <h3 className="step-title">Label the training sets</h3>
-            <p className="step-summary">Open a set and say what each object is. Diagnosis and the model’s answer are hidden while you label.</p>
-            {training.length ? (
-              <table>
-                <thead><tr><th>Set</th><th>Stain</th><th style={{ width: 200 }}>Labelled</th><th /></tr></thead>
-                <tbody>{training.map((s) => (
-                  <tr key={s.name}>
-                    <td>{s.title}<div className="muted small">{Object.entries(s.label_counts).map(([k, v]) => `${k}: ${v}`).join(' · ')}</div></td>
-                    <td>{s.stain}</td>
-                    <td><Progress done={s.labelled} total={s.items} /><span className="muted small">{s.labelled} of {s.items}</span></td>
-                    <td><Link className="btn small primary" to={`/label/${s.name}`}>Label</Link></td>
-                  </tr>
-                ))}</tbody>
-              </table>
-            ) : <p className="muted small">No training sets yet — create one in step 1.</p>}
+            <h3 className="step-title">Label objects</h3>
+            <p className="step-summary">Every label in the label store counts: review sessions, queues and imported earlier labels. Labels on objects no candidate covers
+              (objects people added) show what the detector misses but cannot train the classifier.</p>
+            <table className="compact"><tbody>
+              {(labels.data?.stains ?? []).map((st) => (
+                <tr key={st.stain}><td><b>{st.stain}</b></td><td className="num">{st.objects_labelled.toLocaleString()} objects</td>
+                  <td className="muted small">{Object.entries(st.values).map(([k, v]) => `${k}: ${v}`).join(' · ')}</td></tr>
+              ))}
+            </tbody></table>
+            <Link className="btn small" to="/labels" style={{ marginTop: 8, display: 'inline-block' }}>Go to Labels</Link>
           </div>
         </div>
         <div>
-          <div className="flow-number">3</div>
+          <div className="flow-number">2</div>
           {step('train') && <StepCard step={step('train')!} onChanged={() => { steps.reload(); trained.reload() }} />}
         </div>
       </div>
@@ -117,7 +107,8 @@ export default function Models() {
             <tbody>{trained.data.map((t) => (
               <tr key={t.path}>
                 <td><b>{t.stain}</b></td>
-                <td className="small">{timeAgo(t.created)}<div className="muted">{t.sets.join(', ')}</div></td>
+                <td className="small">{timeAgo(t.created)}<div className="muted ellipsis" title={Object.keys(t.sources ?? {}).join(', ')}>
+                  {t.sources ? `${Object.keys(t.sources).length} label sources` : (t.sets ?? []).join(', ')}</div></td>
                 <td className="num">{t.new_model.n}<div className="muted small">{t.new_model.positives} positive</div></td>
                 <td><MetricLine m={t.new_model} /><div className="muted small">{t.validation}</div></td>
                 <td>{t.current_model ? <MetricLine m={t.current_model} /> : <span className="muted small">no current model</span>}</td>

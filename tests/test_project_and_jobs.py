@@ -21,7 +21,7 @@ def test_job_argv():
     assert to_argv("nuclei", {"stain": ["AT8", "6E10"], "device": "mps", "shard_index": 0, "reverse": False}) == [
         "nuclei", "--stain", "AT8", "--stain", "6E10", "--device", "mps", "--shard-index", "0"]
     assert to_argv("summarize", {"level": "core_id"}) == ["summarize", "--level", "core_id"]
-    assert to_argv("training_set", {"stain": "AT8", "name": "r1", "enrich": False}) == ["training-set", "--stain", "AT8", "--name", "r1", "--no-enrich"]
+    assert to_argv("prepare_labels", {"stain": "AT8", "fields": 5, "session": ""}) == ["labels", "prepare", "--stain", "AT8", "--fields", "5"]
 
 
 def test_save_project_writes_only_changes(tmp_path):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pandas as pd
 import pytest
 
 pytest.importorskip("fastapi")
@@ -39,19 +40,6 @@ def test_images_and_objects(client):
     assert layer.status_code == 200
     objects = client.get("/api/fields/LIP-1_B-2_6E10_S01/objects").json()["objects"]
     assert len(objects) == 8 and {o["model_class"] for o in objects} == {"compact", "diffuse"}
-
-
-def test_review_roundtrip(client):
-    created = client.post("/api/reviews", json={"name": "plaques_r1", "stain": "6E10", "n": 4, "per_group": False})
-    assert created.status_code == 200, created.text
-    name = created.json()["name"]
-    data = client.get(f"/api/reviews/{name}/items").json()
-    assert len(data["items"]) == 4 and "disease_group" not in data["items"][0]
-    first = data["items"][0]["review_id"]
-    assert client.post(f"/api/reviews/{name}/labels", json={"review_id": first, "label": "compact_plaque"}).status_code == 200
-    assert client.get(f"/api/reviews/{name}/image/{first}.jpg").status_code == 200
-    listed = {s["name"]: s for s in client.get("/api/reviews").json()}
-    assert listed[name]["labelled"] == 1
 
 
 def test_tables(client):
@@ -124,9 +112,29 @@ def test_missing_inputs_say_how_to_get_them(client, tmp_path):
     assert needs["model_neun"]["setting"] == "models.neun" and needs["slides_table"]["made_by"]["id"] == "slides"
 
 
-def annotation_session(client, **options):
-    body = {"name": "plaques_together", "stain": "6E10", "n_fields": 5, "per_group": False, **options}
-    created = client.post("/api/annotate", json=body)
+TILE = "LIP-1_B-2_6E10_S01"
+
+
+@pytest.fixture()
+def prepared(client, synthetic_project, monkeypatch):
+    """A prepared 6E10 field: the 8 detected plaques plus 4 rejected candidates; no background job in tests."""
+    from stainid.api.routes import annotate
+    from stainid.api.state import get_state
+    from stainid.labels import pool
+
+    monkeypatch.setattr(annotate, "prepare_job", lambda *args, **kwargs: None)
+    project = get_state().project
+    rows = [{"x": 100.0 + 30 * i, "y": 200.0, "radius_px": 20.0, "ai_value": ["compact plaque", "diffuse plaque"][i % 2], "ai_probability": 0.9} for i in range(8)]
+    rows += [{"x": 100.0 + 30 * i, "y": 400.0, "radius_px": 10.0, "ai_value": "not a plaque", "ai_probability": 0.2} for i in range(4)]
+    folder = pool.folder(project, "6E10")
+    folder.mkdir(parents=True)
+    pd.DataFrame(rows).assign(tma="1", complete=True, f1=1.0).to_csv(folder / f"{TILE}.csv", index=False)
+    return client
+
+
+def new_session(client, **options):
+    body = {"name": "plaques_together", "stain": "6E10", "tile_ids": [TILE], **options}
+    created = client.post("/api/labels/sessions", json=body)
     assert created.status_code == 200, created.text
     return created.json()
 
@@ -145,59 +153,59 @@ def test_admin_password_guards_the_app(client):
     assert visitor.get("/api/cores").status_code == 200
 
 
-def test_annotation_session_lifecycle(client):
-    meta = annotation_session(client)
-    tile = meta["fields"][0]
-    assert meta["open"] is False
+def test_field_review_prefills_ai_and_confirms_on_finish(prepared):
+    client = prepared
+    assert new_session(client)["open"] is False
     ann, ben = TestClient(client.app), TestClient(client.app)
     assert ann.get("/api/annotate").status_code == 401
-    assert ann.post("/api/session/annotator", json={"name": "Ann"}).json() == {"annotator": "Ann"}
-    assert ann.get("/api/annotate").json() == []
-    assert ann.get("/api/annotate/plaques_together/next").status_code == 403
-    assert ann.post("/api/annotate/plaques_together/open", json={"open": True}).status_code == 401
-    client.post("/api/annotate/plaques_together/open", json={"open": True})
-    assert [s["name"] for s in ann.get("/api/annotate").json()] == ["plaques_together"]
+    ann.post("/api/session/annotator", json={"name": "Ann"})
+    assert ann.get("/api/annotate").json() == [] and ann.get("/api/annotate/plaques_together/next").status_code == 403
+    assert ann.post("/api/labels/sessions/plaques_together/open", json={"open": True}).status_code == 401
+    client.post("/api/labels/sessions/plaques_together/open", json={"open": True})
+    assert ann.get("/api/annotate/plaques_together/next").json()["tile_id"] == TILE
 
-    opened = ann.get(f"/api/annotate/plaques_together/fields/{tile}").json()
-    ai = opened["ai"]["objects"]
-    assert len(ai) == 8 and "model_class" in ai[0] and opened["box"]["width"] > 0
-    assert ann.get(f"/api/annotate/plaques_together/fields/{tile}/image.jpg").status_code == 200
-    marks = [{"id": "obj-1", "type": "object", "label": "diffuse plaque", "points": [[ai[0]["x"], ai[0]["y"]]]},
-             {"id": "p1", "type": "point", "label": "compact plaque", "points": [[10, 12]]},
-             {"id": "o1", "type": "polygon", "label": "compact plaque", "points": [[0, 0], [20, 0], [20, 20]]},
-             {"id": "tag:unusable", "type": "tag", "label": "unusable"}]
-    saved = ann.post(f"/api/annotate/plaques_together/fields/{tile}", json={"records": marks}).json()
-    assert saved[0]["ai"]["model_class"] == ai[0]["model_class"] and all(r["annotator"] == "Ann" for r in saved)
-    bad = ann.post(f"/api/annotate/plaques_together/fields/{tile}", json={"records": [{"id": "x", "type": "point", "label": "cat", "points": [[1, 1]]}]})
-    assert bad.status_code == 400
-    ann.post(f"/api/annotate/plaques_together/fields/{tile}", json={"records": [{"id": "p1", "type": "point", "deleted": True}, {"id": "done", "type": "done"}]})
-    assert {r["id"] for r in ann.get(f"/api/annotate/plaques_together/fields/{tile}").json()["mine"]} == {"obj-1", "o1", "tag:unusable", "done"}
+    work = ann.get(f"/api/annotate/plaques_together/fields/{TILE}").json()
+    assert len(work["objects"]) == 12 and work["objects"][0]["ai_value"] == "compact plaque" and work["mine"] == []
+    url = "/api/annotate/plaques_together/labels"
+    assert ann.post(url, json={"records": [{"task": "class", "tile_id": TILE, "x": 100, "y": 200, "value": "cat"}]}).status_code == 400
+    saved = ann.post(url, json={"records": [
+        {"task": "class", "tile_id": TILE, "x": 100.0, "y": 200.0, "value": "not a plaque"},
+        {"task": "class", "tile_id": TILE, "x": 500.0, "y": 500.0, "value": "diffuse plaque"},
+        {"task": "outline", "tile_id": TILE, "x": 500.0, "y": 500.0, "points": [[490, 490], [510, 490], [510, 510]]},
+        {"task": "tag", "tile_id": TILE, "value": "unusable"}]}).json()
+    assert all(r["source"] == "Ann" and r["session"] == "plaques_together" for r in saved)
+    finished = ann.post(f"/api/annotate/plaques_together/fields/{TILE}/finish").json()
+    assert sum(r.get("confirmed") for r in finished) == 11 and finished[-1]["task"] == "done"
     assert ann.get("/api/annotate/plaques_together/next").json()["tile_id"] is None
 
     ben.post("/api/session/annotator", json={"name": "Ben"})
-    assert ben.get(f"/api/annotate/plaques_together/fields/{tile}").json()["mine"] == []
-    assert ben.get("/api/annotate/plaques_together/next").json()["tile_id"] == tile
-    ben.post(f"/api/annotate/plaques_together/fields/{tile}", json={"records": [marks[0], {"id": "done", "type": "done"}]})
-    assert ben.get("/api/annotate/plaques_together/summary").status_code == 401 and ben.get("/api/cores").status_code == 401
-    summary = client.get("/api/annotate/plaques_together/summary").json()
-    assert summary["fields_covered"] == 1 and summary["agreement"] == [{"a": "Ann", "b": "Ben", "objects": 1, "agreement": 1.0}]
-    export = client.get("/api/annotate/plaques_together/export.csv").text.splitlines()
-    assert export[0].startswith("annotator,tile_id,type,label") and len(export) == 1 + 6
+    assert ben.get(f"/api/annotate/plaques_together/fields/{TILE}").json()["mine"] == []
+    ben.post(f"/api/annotate/plaques_together/fields/{TILE}/finish")
+    overview = client.get("/api/labels/overview").json()
+    plaques = next(s for s in overview["stains"] if s["stain"] == "6E10")
+    assert plaques["fields_reviewed"] == 1 and plaques["objects_labelled"] == 13 and plaques["objects_added"] == 1
+    assert plaques["objects_with_several_labels"] == 12 and plaques["agreement"] == 11 / 12
+    assert overview["sessions"][0]["fields_covered"] == 1 and overview["sessions"][0]["people"] == 2
+    people = {p["person"]: p for p in client.get("/api/labels/sessions/plaques_together/people").json()}
+    assert people["Ann"]["changed"] == 2 and people["Ben"]["confirmed"] == 12
+    export = client.get("/api/labels/export.csv?session=plaques_together").text.splitlines()
+    assert export[0].startswith("id,source,stain,task") and len(export) == 1 + 4 + 11 + 1 + 12 + 1
 
-    client.post("/api/annotate/plaques_together/open", json={"open": False})
-    assert ann.get(f"/api/annotate/plaques_together/fields/{tile}").status_code == 403
-    assert client.get("/api/annotate/plaques_together").status_code == 200
-    moved = client.delete("/api/annotate/plaques_together").json()["moved_to"]
-    assert ".deleted" in moved and client.get("/api/annotate").json() == []
+    client.post("/api/labels/sessions/plaques_together/open", json={"open": False})
+    assert ann.get(f"/api/annotate/plaques_together/fields/{TILE}").status_code == 403
+    assert ".deleted" in client.delete("/api/labels/sessions/plaques_together").json()["moved_to"]
 
 
-def test_blind_session_hides_ai_classes(client):
-    annotation_session(client, ai_view="positions")
-    client.post("/api/annotate/plaques_together/open", json={"open": True})
+def test_blind_queue_hides_ai_and_serves_crops(prepared):
+    client = prepared
+    new_session(client, name="q", kind="queue", rule="random", ai_view="positions", tools=["class"], tile_ids=None)
+    client.post("/api/labels/sessions/q/open", json={"open": True})
     ann = TestClient(client.app)
     ann.post("/api/session/annotator", json={"name": "Ann"})
-    tile = ann.get("/api/annotate/plaques_together").json()["fields"][0]["tile_id"]
-    work = ann.get(f"/api/annotate/plaques_together/fields/{tile}").json()
-    assert work["ai"]["objects"] and "model_class" not in work["ai"]["objects"][0] and work["ai"]["layers"] == []
-    assert ann.get(f"/api/annotate/plaques_together/fields/{tile}/layer/dab.png").status_code == 404
-    assert client.get("/api/annotate-share").json()["links"][0].endswith("/annotate")
+    item = ann.get("/api/annotate/q/next").json()["object"]
+    assert item["tile_id"] == TILE and item["remaining"] == 12
+    crop = ann.get(f"/api/annotate/q/object.jpg?tile_id={TILE}&x={item['x']}&y={item['y']}")
+    assert crop.status_code == 200 and crop.headers["content-type"] == "image/jpeg"
+    ann.post("/api/annotate/q/labels", json={"records": [{"task": "class", "tile_id": TILE, "x": item["x"], "y": item["y"], "value": "unsure"}]})
+    assert ann.get("/api/annotate/q/next").json()["object"]["remaining"] == 11
+    assert client.get("/api/labels/share").json()["links"][0].endswith("/annotate")

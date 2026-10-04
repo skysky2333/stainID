@@ -20,14 +20,14 @@ const FAQ: [string, React.ReactNode][] = [
     (see <Link to="/models">Models</Link>), or results made with a different model (run again with “Start over” under Advanced options). “Show log” has every detail.</>],
   ['Where are my files?', <>Everything lives in the project folder shown on the Home page. Each step card lists the files it makes; “Show in Finder” opens them.
     The main results table is <code>data/analysis/results_donor_region.csv</code> (downloadable on the <Link to="/results">Results</Link> page).</>],
-  ['How do I know the results are right?', <>Look at cores in <Link to="/cohort">Cohort</Link> with the detections drawn on top, and label a check set on
-    <Link to="/label"> Label &amp; check</Link>: comparing your labels with the model’s answers gives its precision and recall on your data.</>],
-  ['The detections look wrong for my staining.', <>Train a stain model on your own slides: on <Link to="/models">Models</Link>, create a training set, label it
-    (100–200 objects is a good start), train, and switch to the new model if it scores better. Then re-run the detection step with “Start over”.</>],
+  ['How do I know the results are right?', <>Look at cores in <Link to="/cohort">Cohort</Link>, and review some fields on <Link to="/labels">Labels</Link>:
+    each stain shows how often the AI agrees with people, and Models shows the cross-validated precision and recall on all labels.</>],
+  ['The detections look wrong for my staining.', <>Label objects on your own slides (a review session on <Link to="/labels">Labels</Link>; 100–200 objects is a good start),
+    then train on <Link to="/models">Models</Link> and switch to the new model if it scores better. Then re-run the detection step with “Start over”.</>],
   ['A step says “Made with an older model”.', <>You switched to a different model after that step ran. The existing results stay as they are
     until you run the step again with <b>Start over</b> (under Advanced options); then “Make results tables” again.</>],
-  ['How do other people annotate for me?', <>On <Link to="/annotations">Annotation sessions</Link>, create a session and press Start, then send people the link shown there
-    (it ends in /annotate). They type their name and annotate in their browser; you follow their progress and download the annotations on the same page.
+  ['How do other people label for me?', <>On <Link to="/labels">Labels</Link>, create a session and press Start, then send people the link shown there
+    (it ends in /annotate). They type their name and label in their browser; you follow their progress and download the labels on the same page.
     Change the admin password in <Link to="/settings">Settings</Link> first: everything except the annotation pages needs it.</>],
   ['Is anything deleted?', <>No. “Start over” and uploads move old files aside with a date in their name; nothing is removed.</>],
 ]
@@ -47,7 +47,7 @@ export default function Help() {
             <li><b>Describe your TMAs</b> in <Link to="/settings">Settings</Link>: rows and columns of cores per slide, the name prefix, and the diagnostic group codes.</li>
             <li><b>Get the models</b> on <Link to="/models">Models</Link>: download the published ones; put in (or train) the NeuN / 6E10 / AT8 models.</li>
             <li><b>Follow the Workflow</b> from the top: register slides → find cores → attach the TMA map → export cores → check quality → choose fields → calibrate → detect → results.</li>
-            <li><b>Check</b> detections in <Link to="/cohort">Cohort</Link> and with a check set on <Link to="/label">Label &amp; check</Link>.</li>
+            <li><b>Check</b> detections in <Link to="/cohort">Cohort</Link> and by reviewing fields on <Link to="/labels">Labels</Link>.</li>
             <li><b>Use the results</b>: download the main table on <Link to="/results">Results</Link>, which also explains every column.</li>
           </ol>
           <h2 style={{ marginTop: 20 }}>Common questions</h2>

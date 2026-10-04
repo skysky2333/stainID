@@ -1,4 +1,9 @@
-"""Train a stain model from labelled training sets and compare it with the current model on the same labels."""
+"""Train a stain model on the human labels in the label store and compare it with the current model on the same labels.
+
+Each labelled object's class is the majority of the people who labelled it; its features are those of the matching
+candidate in the pool (labels on positions no candidate covers, such as objects people added, cannot train the
+classifier and are skipped).
+"""
 from __future__ import annotations
 
 import json
@@ -10,16 +15,14 @@ import pandas as pd
 from joblib import dump, load
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import SimpleImputer
-from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import precision_score, recall_score, roc_auc_score
 from sklearn.model_selection import LeaveOneGroupOut, StratifiedKFold
 from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler
 
+from stainid.labels import pool, store
+from stainid.labels.tasks import MODEL_KEY
 from stainid.project import Project, save_project
-from stainid.review.store import read_labels
 from stainid.stains.amyloid.model import MORPHOTYPE_MINIMUM_DIAMETER_UM, morphotype_threshold
-from stainid.training.sets import MODEL_KEY, POSITIVE, SKIP
 
 MINIMUM_PER_CLASS = 10
 
@@ -29,39 +32,22 @@ def forest():
                          RandomForestClassifier(n_estimators=500, min_samples_leaf=2, class_weight="balanced", random_state=0, n_jobs=-1))
 
 
-def probe():
-    return make_pipeline(StandardScaler(), LogisticRegression(C=0.05, max_iter=5000, class_weight="balanced"))
-
-
-def training_folders(project: Project, stain: str) -> list[Path]:
-    root = project.output("reviews") / "training"
-    metas = sorted(root.glob("*/meta.json")) if root.exists() else []
-    return [m.parent for m in metas if json.loads(m.read_text()).get("stain") == stain]
-
-
-def labelled(project: Project, stain: str) -> tuple[pd.DataFrame, np.ndarray | None, list[str]]:
-    frames, embeddings, names = [], [], None
-    for folder in training_folders(project, stain):
-        meta = json.loads((folder / "meta.json").read_text())
-        if names is not None and meta["feature_names"] != names:
-            raise ValueError(f"{folder.name} was made with different feature definitions than the other {stain} training sets")
-        names = meta["feature_names"]
-        labels = read_labels(folder)
-        if labels.empty:
-            continue
-        features = pd.read_csv(folder / "features.csv", dtype={"review_id": str})
-        key = pd.read_csv(folder / "key.csv", dtype={"review_id": str, "tma": str})[["review_id", "tma"]]
-        frame = features.merge(key, on="review_id").merge(labels[["review_id", "label"]], on="review_id")
-        frame = frame[~frame.label.isin(SKIP)]
-        frame.insert(0, "set", folder.name)
-        frames.append(frame)
-        if (folder / "embeddings.npy").exists():
-            embeddings.append(np.load(folder / "embeddings.npy")[features.review_id.isin(frame.review_id).to_numpy()])
-    if not frames:
-        raise ValueError(f"No labelled {stain} training candidates yet: create a training set and label it first")
-    data = pd.concat(frames, ignore_index=True)
-    stacked = np.concatenate(embeddings) if embeddings and sum(len(e) for e in embeddings) == len(data) else None
-    return data, stacked, names
+def labelled(project: Project, stain: str) -> tuple[pd.DataFrame, list[str]]:
+    """Consensus-labelled objects with their candidate features (one row per object)."""
+    truth = store.consensus(store.current(project.output("reviews")), stain)
+    truth = truth[truth.positive.notna()]
+    names = pool.feature_names(project, stain)
+    rows = []
+    for tile_id, group in truth.groupby("tile_id"):
+        objects = pool.load_field(project, stain, tile_id)
+        for r in group.itertuples():
+            i = pool.nearest(objects, r.x, r.y)
+            if i is not None:
+                rows.append({**objects.iloc[i].to_dict(), "tile_id": tile_id, "label": r.value, "positive": bool(r.positive), "sources": r.sources})
+    if not rows:
+        raise ValueError(f"No labelled {stain} objects yet: label some on the Labels page first")
+    data = pd.DataFrame(rows).drop_duplicates(["tile_id", "x", "y"]).reset_index(drop=True)
+    return data, names
 
 
 def out_of_fold(fit_predict, n: int, y: np.ndarray, groups: np.ndarray) -> tuple[np.ndarray, str]:
@@ -84,71 +70,38 @@ def metrics(y: np.ndarray, p: np.ndarray, threshold: float) -> dict[str, float]:
             "precision": float(precision_score(y, p >= threshold, zero_division=0)), "recall": float(recall_score(y, p >= threshold, zero_division=0))}
 
 
-def _current(project: Project, stain: str, x: np.ndarray, names: list[str], emb: np.ndarray | None, wong: np.ndarray | None) -> tuple[np.ndarray | None, dict]:
+def _current(project: Project, stain: str, x: np.ndarray, names: list[str]) -> tuple[np.ndarray | None, dict]:
     path = project.model(MODEL_KEY[stain])
     if not path.exists():
         return None, {}
-    bundle = load(path)
-    if stain == "NeuN" and names == bundle["feature_names"]:
-        return bundle["classifier"].predict_proba(x[:, bundle["usable_features"]])[:, 1], bundle
-    if stain == "AT8" and names == bundle["feature_names"]:
-        return bundle["classifier"].predict_proba(x)[:, 1], bundle
-    if stain == "6E10" and names == bundle["identity_feature_names"]:
-        parts = [bundle["identity_classifier"].predict_proba(x)[:, 1]]
-        if "phikon_classifier" in bundle and emb is not None:
-            parts.append(bundle["phikon_classifier"].predict_proba(emb)[:, 1])
-            if bundle.get("use_wong_consensus") and wong is not None:
-                parts.append(wong)
-        return np.mean(parts, axis=0), bundle
-    return None, bundle
+    probability, _ = pool.model_probability(project, stain, x, names)
+    return probability, load(path)
 
 
 def train_model(project: Project, stain: str) -> Path:
-    data, emb, names = labelled(project, stain)
-    y = data.label.isin(POSITIVE[stain]).to_numpy()
+    data, names = labelled(project, stain)
+    y = data.positive.to_numpy(bool)
     if y.sum() < MINIMUM_PER_CLASS or (~y).sum() < MINIMUM_PER_CLASS:
         raise ValueError(f"Need at least {MINIMUM_PER_CLASS} positive and {MINIMUM_PER_CLASS} negative labels; have {int(y.sum())} and {int((~y).sum())}. "
-                         "Label more candidates (or create another training set) and try again.")
+                         "Label more objects and try again.")
     x = data[names].to_numpy(float)
     groups = data.tma.astype(str).to_numpy()
-    wong = data["wong_plaque_probability"].to_numpy(float) if "wong_plaque_probability" in data and data["wong_plaque_probability"].notna().all() else None
-    ids = (data.set + "/" + data.review_id).tolist()
-    current, old = _current(project, stain, x, names, emb, wong)
-    print(f"[1/3] {len(y)} labels ({int(y.sum())} positive) from {data.set.nunique()} training set(s)", flush=True)
+    ids = (data.tile_id + ":" + data.x.round().astype(int).astype(str) + ":" + data.y.round().astype(int).astype(str)).tolist()
+    current, old = _current(project, stain, x, names)
+    sources = data.sources.str.split(", ").explode().value_counts()
+    print(f"[1/3] {len(y)} labelled objects ({int(y.sum())} positive) from {len(sources)} source(s)", flush=True)
 
     usable = np.any(np.isfinite(x), axis=0)
-    if stain == "NeuN":
-        threshold = 0.5
-        oof, scheme = out_of_fold(lambda tr, te: forest().fit(x[tr][:, usable], y[tr]).predict_proba(x[te][:, usable])[:, 1], len(y), y, groups)
-    elif stain == "AT8":
-        threshold = float(old.get("probability_threshold", 0.4))
-        oof, scheme = out_of_fold(lambda tr, te: forest().fit(x[tr], y[tr]).predict_proba(x[te])[:, 1], len(y), y, groups)
-    else:
-        threshold = 0.5
-
-        def ensemble(tr, te):
-            parts = [forest().fit(x[tr], y[tr]).predict_proba(x[te])[:, 1]]
-            if emb is not None:
-                parts.append(probe().fit(emb[tr], y[tr]).predict_proba(emb[te])[:, 1])
-                if wong is not None:
-                    parts.append(wong[te])
-            return np.mean(parts, axis=0)
-
-        oof, scheme = out_of_fold(lambda tr, te: forest().fit(x[tr], y[tr]).predict_proba(x[te])[:, 1], len(y), y, groups)
-        choices = {"random forest": metrics(y, oof, threshold)["auc"]}
-        if emb is not None:
-            oof_ensemble, _ = out_of_fold(ensemble, len(y), y, groups)
-            choices["random forest + Phikon" + (" + Wong 2022" if wong is not None else "")] = metrics(y, oof_ensemble, threshold)["auc"]
-            if choices[list(choices)[1]] > choices["random forest"]:
-                oof = oof_ensemble
-        members = max(choices, key=choices.get)
+    threshold = float(old.get("probability_threshold", 0.4)) if stain == "AT8" else 0.5
+    columns = usable if stain == "NeuN" else np.ones(len(names), bool)
+    oof, scheme = out_of_fold(lambda tr, te: forest().fit(x[tr][:, columns], y[tr]).predict_proba(x[te][:, columns])[:, 1], len(y), y, groups)
     print(f"[2/3] cross-validated ({scheme})", flush=True)
 
     if stain == "NeuN":
         bundle = {"classifier": forest().fit(x[:, usable], y), "feature_names": names, "usable_features": usable, "decision_mode": "context_rf",
                   "context_threshold": threshold, "addition_threshold": 0.6, "training_candidate_ids": ids}
     elif stain == "AT8":
-        positives = y & data.label.str.startswith("tau+ neuron").to_numpy()
+        positives = y & data.label.str.startswith("tau+ neuron:").to_numpy()
         mature = data.label.eq("tau+ neuron: tangle").to_numpy()
         p90 = data.soma_dab_p90.to_numpy(float)
         enough = (positives & mature).sum() >= 3 and (positives & ~mature).sum() >= 3
@@ -158,25 +111,22 @@ def train_model(project: Project, stain: str) -> Path:
                   "mature_p90_threshold": maturity, "context_um": 55.0, "training_n": int(len(y)), "training_positive_n": int(y.sum())}
     else:
         plaques = y & (data.equivalent_diameter_um.to_numpy(float) >= MORPHOTYPE_MINIMUM_DIAMETER_UM)
+        typed = data.label.isin(["compact plaque", "diffuse plaque"]).to_numpy()
         compact = data.label.eq("compact plaque").to_numpy()
-        enough = (plaques & compact).sum() >= 5 and (plaques & ~compact).sum() >= 5
-        morph = morphotype_threshold(data.normalized_inner_dab.to_numpy(float)[plaques], compact[plaques]) if enough else float(old.get("morphotype_threshold", 1.5))
+        enough = (plaques & typed & compact).sum() >= 5 and (plaques & typed & ~compact).sum() >= 5
+        morph = morphotype_threshold(data.normalized_inner_dab.to_numpy(float)[plaques & typed], compact[plaques & typed]) if enough \
+            else float(old.get("morphotype_threshold", 1.5))
         bundle = {"identity_classifier": forest().fit(x, y), "identity_feature_names": names, "identity_threshold": threshold,
                   "identity_training_candidate_ids": ids, "morphotype_feature": "inner_mean_dab_od / slide 6E10 calibration threshold",
                   "morphotype_threshold": float(morph), "morphotype_minimum_diameter_um": MORPHOTYPE_MINIMUM_DIAMETER_UM,
-                  "morphotype_training_n": int(plaques.sum()) if enough else int(old.get("morphotype_training_n", 0))}
-        if members != "random forest":
-            bundle |= {"phikon_classifier": probe().fit(emb, y), "use_wong_consensus": wong is not None,
-                       "identity_rule": "mean of morphology-context random forest, Phikon linear probe" + (" and Wong 2022 consensus CNN" if wong is not None else "")}
+                  "morphotype_training_n": int((plaques & typed).sum()) if enough else int(old.get("morphotype_training_n", 0))}
 
     folder = project.output("trained_models") / f"{stain}_{time.strftime('%Y%m%d-%H%M%S')}"
     folder.mkdir(parents=True)
     dump(bundle, folder / "bundle.joblib")
-    report = {"stain": stain, "created": time.time(), "validation": scheme, "threshold": threshold, "sets": sorted(data.set.unique()),
+    report = {"stain": stain, "created": time.time(), "validation": scheme, "threshold": threshold, "sources": sources.to_dict(),
               "new_model": metrics(y, oof, threshold), "current_model": metrics(y, current, threshold) if current is not None else None,
               "current_model_path": project.relative(project.model(MODEL_KEY[stain]))}
-    if stain == "6E10":
-        report |= {"members": members, "member_choice_auc": choices}
     (folder / "report.json").write_text(json.dumps(report, indent=1))
     new = report["new_model"]
     print(f"[3/3] new model: AUC {new['auc']:.2f}, precision {new['precision']:.2f}, recall {new['recall']:.2f} -> {project.relative(folder)}", flush=True)

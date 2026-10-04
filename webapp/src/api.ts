@@ -47,7 +47,7 @@ export interface SlidesInfo { folder: string; folder_exists: boolean; stains: st
 export interface FsListing { path: string; parent: string | null; dirs: string[]; files: string[]; shortcuts: { label: string; path: string }[] }
 export interface Metrics { n: number; positives: number; auc: number; precision: number; recall: number }
 export interface TrainedModel {
-  stain: string; created: number; validation: string; threshold: number; sets: string[]; new_model: Metrics; current_model: Metrics | null
+  stain: string; created: number; validation: string; threshold: number; sets?: string[]; sources?: Record<string, number>; new_model: Metrics; current_model: Metrics | null
   current_model_path: string; path: string; active: boolean
 }
 export interface CoreRow {
@@ -66,11 +66,6 @@ export interface Job {
   created: number; started: number | null; ended: number | null; returncode: number | null; waiting: string
   progress: { done: number; total: number; last_line: string; error: string }
 }
-export interface ReviewSet {
-  name: string; legacy: boolean; items: number; labelled: number; label_counts: Record<string, number>; title: string; stain: string
-  created: number | null; purpose: 'training' | 'check' | 'legacy'
-}
-export interface ReviewData { meta: { title: string; stain: string; label_options: string[]; instructions: string; fov_um: number }; items: Row[] }
 export interface TableInfo { name: string; path: string; columns: number; size_kb: number; donor_region: boolean; contrasts: boolean; description: string; main: boolean }
 export interface ModelInfo {
   key: string; role: string; path: string; exists: boolean; source: 'train' | 'download' | 'manual'; stain: string | null
@@ -79,30 +74,34 @@ export interface ModelInfo {
 
 export interface Session { admin: boolean; annotator: string | null; default_password: boolean; local: boolean; project: string | null }
 export type AiView = 'full' | 'positions' | 'none'
-export interface AnnotationMeta {
-  name: string; title: string; stain: string; fields: string[]; labels: string[]; tags: string[]; tools: string[]; ai_view: AiView
-  per_field: number; instructions: string; created: number; open: boolean
+export interface StainOverview {
+  stain: string; fields: number; fields_prepared: number; fields_reviewed: number; fields_with_labels: number
+  objects_labelled: number; objects_added: number; values: Record<string, number>; outlines: number; outlines_edited: number
+  people: string[]; agreement: number | null; objects_with_several_labels: number
+  ai: { n: number; agreement: number | null; precision: number | null; recall: number | null }; tags: Record<string, number>
 }
-export interface AnnotationListItem {
-  name: string; title: string; stain: string; tools: string[]; ai_view: AiView; per_field: number; created: number; open: boolean
-  fields: number; fields_covered: number; done_by_me: number; annotators: number
+export interface SessionInfo {
+  name: string; title: string; stain: string; kind: 'fields' | 'queue'; tools: string[]; ai_view: AiView; per_field: number; rule: string
+  instructions: string; created: number; open: boolean; people: number; labels: number
+  fields?: number; fields_covered?: number; fields_prepared?: number
 }
-export interface AnnotationField { tile_id: string; done_by_me: boolean; annotators_done: number; open_by_others: number }
-export interface AnnotationDetail { meta: AnnotationMeta; fields: AnnotationField[]; annotator: string | null }
-export interface Mark {
-  id: string; type: 'object' | 'point' | 'polygon' | 'tag' | 'note' | 'done'; label: string; points: number[][]; note: string
-  deleted?: boolean; annotator?: string; time?: number; ai?: { x: number; y: number; model_class: string; probability: number | null }
+export interface LabelsOverview { stains: StainOverview[]; sessions: SessionInfo[] }
+export interface OpenSession { name: string; title: string; stain: string; kind: 'fields' | 'queue'; open: boolean; fields: number; done_by_me: number; my_labels: number }
+export interface SessionField { tile_id: string; done_by_me: boolean; annotators_done: number; open_by_others: number; prepared: boolean }
+export interface SessionDetail {
+  meta: SessionInfo & { fields: string[]; classes: string[]; tags: string[]; class_instructions: string }
+  fields: SessionField[]; annotator: string | null
 }
+export interface Label {
+  id: string; source: string; stain: string; task: 'class' | 'outline' | 'tag' | 'note' | 'done'; tile_id: string
+  x: number | null; y: number | null; value: string; points: number[][] | null; session: string; confirmed: boolean; time: number; deleted?: boolean
+}
+export interface FieldObjectLite { x: number; y: number; radius_px: number; ai_value?: string; ai_probability?: number }
 export interface FieldWork {
-  tile_id: string; box: { x: number; y: number; width: number; height: number }; pixel_size_um: number
-  ai: { objects: FieldObject[]; outlines: Outline[]; layers: string[] }; mine: Mark[]
+  tile_id: string; box: { x: number; y: number; width: number; height: number }; objects: FieldObjectLite[]
+  outlines: { x: number; y: number; points: number[][] }[]; layers: string[]; mine: Label[]
 }
-export interface AnnotationSummary {
-  fields: number; fields_covered: number
-  annotators: { annotator: string; fields_done: number; object: number; point: number; polygon: number; tag: number }[]
-  agreement: { a: string; b: string; objects: number; agreement: number }[]
-  ai_vs_human: { ai_class: string; label: string; n: number }[]
-}
+export interface QueueItem { tile_id: string; x: number; y: number; radius_px: number; ai_value: string; ai_probability: number; labels_so_far: number; remaining: number }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init)

@@ -1,25 +1,25 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import type { AnnotationDetail, FieldObject, FieldWork, Mark } from '../api'
+import type { FieldObjectLite, FieldWork, Label, QueueItem, SessionDetail } from '../api'
 import { api, enc } from '../api'
 import { Empty, ErrorNote, PageHead, Progress, fmt } from '../components'
 import { useFetch, useStored } from '../hooks'
 import { Register, useSession } from '../session'
 import type { ImagePoint } from '../viewer'
-import { CLASS_STYLE, RASTER_LAYERS, ZoomViewer } from '../viewer'
-import { AI_VIEW_TEXT } from './AnnotationSessions'
+import { RASTER_LAYERS, ZoomViewer } from '../viewer'
+import { AI_VIEW_TEXT } from './Labels'
 
 const COLORS = ['#ff4fd8', '#ff8c1a', '#facc15', '#4ade80', '#a78bfa', '#f87171', '#e2e8f0', '#22d3ee', '#2dd4bf']
-type Tool = 'object' | 'point' | 'polygon'
-const TOOLS: { id: Tool; key: string; name: string; hint: string }[] = [
-  { id: 'object', key: 'v', name: 'Label AI objects', hint: 'Click a circled AI object to give it the chosen label; click again with the same label to remove it.' },
-  { id: 'point', key: 'p', name: 'Mark missed objects', hint: 'Click on an object the AI missed to put a point with the chosen label on it. Click a point to select it, then press a number to relabel or Delete to remove it.' },
-  { id: 'polygon', key: 'o', name: 'Draw outlines', hint: 'Click around the object to place corners; click the first corner or press Enter to close. Backspace removes the last corner.' },
+type Tool = 'label' | 'add' | 'outline'
+const TOOLS: { id: Tool; needs: string; key: string; name: string; hint: string }[] = [
+  { id: 'label', needs: 'class', key: 'v', name: 'Label objects', hint: 'Click an object to give it the chosen class. Dashed = the AI’s call, not yet checked by you; solid = your decision. Click again with the same class to go back to the AI’s call.' },
+  { id: 'add', needs: 'point', key: 'a', name: 'Add missed objects', hint: 'Click on an object the AI did not circle to add it with the chosen class. Click one of your added objects to select it; Delete removes it.' },
+  { id: 'outline', needs: 'outline', key: 'o', name: 'Fix outlines', hint: 'Click an object to select it, then drag the corners of its outline or press Redraw. Clicking empty tissue starts a new outline (a new object): click its corners, then the first corner or Enter.' },
 ]
 
-const newId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
-const objectId = (o: { x: number; y: number }) => `obj:${Math.round(o.x)}:${Math.round(o.y)}`
+const rkey = (x: number, y: number) => `${Math.round(x)}:${Math.round(y)}`
 const typing = (e: KeyboardEvent) => ['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement).tagName)
+const NEGATIVE = /^not a|artifact|^unsure/
 
 function inside(polygon: number[][], x: number, y: number) {
   let hit = false
@@ -31,69 +31,83 @@ function inside(polygon: number[][], x: number, y: number) {
   return hit
 }
 
-export default function AnnotateFieldPage() {
+export default function AnnotatePage() {
   const { session } = useSession()
   const { name = '', tile } = useParams()
-  if (!session.annotator) return <><PageHead title="Annotate" /><Register /></>
-  return tile ? <Workspace key={tile} name={name} tile={tile} /> : <NextField name={name} />
+  const detail = useFetch<SessionDetail>(session.annotator ? `/api/annotate/${name}` : null)
+  if (!session.annotator) return <><PageHead title="Label tissue images" /><Register /></>
+  if (detail.error) return <><PageHead title="Label" subtitle={<Link to="/annotate">← All sessions</Link>} /><ErrorNote error={detail.error} /></>
+  if (!detail.data) return null
+  if (detail.data.meta.kind === 'queue') return <Queue detail={detail.data} />
+  return tile ? <Workspace key={tile} detail={detail.data} reload={detail.reload} tile={tile} /> : <NextField name={name} />
 }
 
 function NextField({ name }: { name: string }) {
   const navigate = useNavigate()
-  const next = useFetch<{ tile_id: string | null }>(`/api/annotate/${name}/next`)
+  const next = useFetch<{ tile_id: string | null; waiting: number }>(`/api/annotate/${name}/next`)
   useEffect(() => {
     if (next.data?.tile_id) navigate(`/annotate/${name}/${enc(next.data.tile_id)}`, { replace: true })
   }, [next.data, name, navigate])
   return (
     <>
-      <PageHead title="Annotate" subtitle={<Link to="/annotate">← All sessions</Link>}></PageHead>
+      <PageHead title="Label" subtitle={<Link to="/annotate">← All sessions</Link>} />
       <ErrorNote error={next.error} />
-      {next.data && !next.data.tile_id && <Empty>You have finished every field in this session. Thank you! You can still reopen a field from the list on any field page.</Empty>}
+      {next.data && !next.data.tile_id && (next.data.waiting
+        ? <Empty>{next.data.waiting} more fields are still being prepared. <button className="link-btn" onClick={next.reload}>Check again</button></Empty>
+        : <Empty>You have finished every field in this session. Thank you!</Empty>)}
     </>
   )
 }
 
-function Workspace({ name, tile }: { name: string; tile: string }) {
+function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: () => void; tile: string }) {
   const navigate = useNavigate()
-  const detail = useFetch<AnnotationDetail>(`/api/annotate/${name}`)
+  const meta = detail.meta
+  const name = meta.name
   const work = useFetch<FieldWork>(`/api/annotate/${name}/fields/${enc(tile)}`)
-  const meta = detail.data?.meta
-  const [marks, setMarks] = useState<Record<string, Mark>>({})
+  const [mine, setMine] = useState<Record<string, Label>>({})
   const [tool, setTool] = useState<Tool | null>(null)
   const [labelIndex, setLabelIndex] = useState(0)
   const [selected, setSelected] = useState<string | null>(null)
   const [draft, setDraft] = useState<number[][]>([])
+  const [redrawing, setRedrawing] = useState(false)
   const [hover, setHover] = useState<number[] | null>(null)
+  const [dragging, setDragging] = useState<{ index: number; points: number[][] } | null>(null)
   const [note, setNote] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
-  const [layers, setLayers] = useStored<Record<string, boolean>>('stainid.annotate.layers', { ai: true, rejected: false, outlines: false, mine: true, box: true })
+  const [layers, setLayers] = useStored<Record<string, boolean>>('stainid.label.layers', { negatives: true, outlines: true, mine: true, box: true })
 
   useEffect(() => {
     if (!work.data) return
-    setMarks(Object.fromEntries(work.data.mine.map((m) => [m.id, m])))
-    setNote(work.data.mine.find((m) => m.id === 'note')?.note ?? '')
+    setMine(Object.fromEntries(work.data.mine.map((m) => [m.id, m])))
+    setNote(work.data.mine.find((m) => m.task === 'note')?.value ?? '')
   }, [work.data])
 
-  const objects = useMemo(() => work.data?.ai.objects ?? [], [work.data])
-  const tools = useMemo(() => TOOLS.filter((t) => meta?.tools.includes(t.id) && (t.id !== 'object' || objects.length > 0)), [meta, objects])
+  const classes = meta.classes
+  const label = classes[labelIndex] ?? classes[0]
+  const color = (v: string | undefined) => (v ? COLORS[Math.max(0, classes.indexOf(v)) % COLORS.length] : '#ffffff')
+  const full = meta.ai_view === 'full'
+  const tools = useMemo(() => TOOLS.filter((t) => meta.tools.includes(t.needs)), [meta.tools])
   const active = tools.find((t) => t.id === tool) ?? tools[0]
-  const labels = useMemo(() => meta?.labels ?? [], [meta])
-  const label = labels[labelIndex] ?? labels[0]
-  const color = (l: string) => COLORS[Math.max(0, labels.indexOf(l)) % COLORS.length]
-  const full = meta?.ai_view === 'full'
-  const shown = objects.filter((o) => layers.rejected || !full || o.model_class !== 'rejected')
-  const hasRejected = full && objects.some((o) => o.model_class === 'rejected')
-  const drawn = Object.values(marks).filter((m) => ['object', 'point', 'polygon'].includes(m.type))
-  const done = !!marks.done
-  const fields = detail.data?.fields ?? []
+  const objects = useMemo(() => work.data?.objects ?? [], [work.data])
+  const objectKeys = useMemo(() => new Set(objects.map((o) => rkey(o.x, o.y))), [objects])
+  const aiOutlines = useMemo(() => Object.fromEntries((work.data?.outlines ?? []).map((o) => [rkey(o.x, o.y), o.points])), [work.data])
+  const myClass = useCallback((x: number, y: number) => mine[`class:${tile}:${rkey(x, y)}`], [mine, tile])
+  const myOutline = useCallback((x: number, y: number) => mine[`outline:${tile}:${rkey(x, y)}`], [mine, tile])
+  const value = (o: FieldObjectLite) => myClass(o.x, o.y)?.value ?? (full ? o.ai_value : undefined)
+  const added = Object.values(mine).filter((m) => m.task === 'class' && !objectKeys.has(rkey(m.x!, m.y!)))
+  const done = !!mine[`done:${tile}`]
+  const fields = detail.fields
   const position = fields.findIndex((f) => f.tile_id === tile)
+  const all = [...objects.map((o) => ({ x: o.x, y: o.y, r: o.radius_px })), ...added.map((m) => ({ x: m.x!, y: m.y!, r: 8 }))]
+  const selectedObject = selected ? all.find((o) => rkey(o.x, o.y) === selected) : undefined
+  const outlineOf = (x: number, y: number) => myOutline(x, y)?.points ?? aiOutlines[rkey(x, y)]
 
-  const save = useCallback(async (records: Partial<Mark>[]) => {
+  const save = useCallback(async (records: Partial<Label>[]) => {
     setSaving(true)
     try {
-      const saved = await api.post<Mark[]>(`/api/annotate/${name}/fields/${enc(tile)}`, { records })
-      setMarks((current) => {
+      const saved = await api.post<Label[]>(`/api/annotate/${name}/labels`, { records: records.map((r) => ({ tile_id: tile, ...r })) })
+      setMine((current) => {
         const next = { ...current }
         for (const r of saved) {
           if (r.deleted) delete next[r.id]
@@ -102,70 +116,103 @@ function Workspace({ name, tile }: { name: string; tile: string }) {
         return next
       })
       setError(null)
-      return true
     } catch (e) {
       setError((e as Error).message)
-      return false
     } finally {
       setSaving(false)
     }
   }, [name, tile])
 
-  const remove = useCallback((m: Mark) => {
-    setSelected(null)
-    save([{ id: m.id, type: m.type, points: m.points, deleted: true }])
-  }, [save])
-
   const closeDraft = useCallback(() => {
     if (draft.length < 3) return
-    save([{ id: newId(), type: 'polygon', label, points: draft.map((p) => p.map(Math.round)) }])
+    const points = draft.map((p) => p.map(Math.round))
+    const centre = { x: Math.round(points.reduce((a, p) => a + p[0], 0) / points.length), y: Math.round(points.reduce((a, p) => a + p[1], 0) / points.length) }
+    const target = selectedObject ?? centre
+    const records: Partial<Label>[] = [{ task: 'outline', x: target.x, y: target.y, points }]
+    if (!selectedObject) records.push({ task: 'class', x: target.x, y: target.y, value: label })
+    save(records)
+    setSelected(rkey(target.x, target.y))
     setDraft([])
     setHover(null)
-  }, [draft, label, save])
+  }, [draft, selectedObject, label, save])
 
-  const nearestObject = (p: ImagePoint) => {
-    let best: FieldObject | null = null
-    let bestDistance = Infinity
-    for (const o of shown) {
+  const hit = (p: ImagePoint) => {
+    let best: { x: number; y: number; r: number } | null = null
+    let distance = Infinity
+    for (const o of all) {
       const d = Math.hypot(o.x - p.x, o.y - p.y)
-      if (d < Math.max(8, o.radius_px) + 4 + 8 * p.unit && d < bestDistance) { best = o; bestDistance = d }
+      if (d < Math.max(8, o.r) + 4 + 6 * p.unit && d < distance) { best = o; distance = d }
     }
-    return best
+    if (best) return best
+    return all.find((o) => { const poly = outlineOf(o.x, o.y); return poly && inside(poly, p.x, p.y) }) ?? null
   }
-  const hitMine = (p: ImagePoint) => drawn.find((m) => m.type === 'point' && Math.hypot(m.points[0][0] - p.x, m.points[0][1] - p.y) < 10 * p.unit)
-    ?? drawn.find((m) => m.type === 'polygon' && inside(m.points, p.x, p.y))
 
   const click = (p: ImagePoint) => {
-    if (!active || !label) return
-    if (active.id === 'polygon' && draft.length) {
+    if (!active) return
+    if (draft.length || redrawing) {
       if (draft.length >= 3 && Math.hypot(draft[0][0] - p.x, draft[0][1] - p.y) < 10 * p.unit) closeDraft()
       else setDraft([...draft, [p.x, p.y]])
+      setRedrawing(false)
       return
     }
-    if (active.id === 'object') {
-      const o = nearestObject(p)
-      if (o) {
-        const id = objectId(o)
-        setSelected(null)
-        if (marks[id]?.label === label) save([{ id, type: 'object', points: [[o.x, o.y]], deleted: true }])
-        else save([{ id, type: 'object', label, points: [[o.x, o.y]] }])
-        return
-      }
+    const o = hit(p)
+    if (active.id === 'label') {
+      if (!o) return
+      setSelected(rkey(o.x, o.y))
+      if (myClass(o.x, o.y)?.value === label) save([{ task: 'class', x: o.x, y: o.y, deleted: true }])
+      else save([{ task: 'class', x: o.x, y: o.y, value: label }])
+      return
     }
-    const mine = hitMine(p)
-    if (mine) { setSelected(mine.id); return }
+    if (active.id === 'add') {
+      if (o) { setSelected(rkey(o.x, o.y)); return }
+      save([{ task: 'class', x: Math.round(p.x), y: Math.round(p.y), value: label }])
+      setSelected(rkey(p.x, p.y))
+      return
+    }
+    if (o) { setSelected(rkey(o.x, o.y)); return }
     setSelected(null)
-    if (active.id === 'point') {
-      save([{ id: newId(), type: 'point', label, points: [[Math.round(p.x), Math.round(p.y)]] }])
-    }
-    if (active.id === 'polygon') setDraft([[p.x, p.y]])
+    setDraft([[p.x, p.y]])
   }
 
-  const finish = async () => {
-    if (await save([{ id: 'done', type: 'done' }])) navigate(`/annotate/${name}`)
+  const move = (p: ImagePoint) => {
+    if (dragging) setDragging({ ...dragging, points: dragging.points.map((q, i) => (i === dragging.index ? [p.x, p.y] : q)) })
+    else if (draft.length) setHover([p.x, p.y])
+  }
+
+  useEffect(() => {
+    if (!dragging || !selectedObject) return
+    const finish = () => {
+      save([{ task: 'outline', x: selectedObject.x, y: selectedObject.y, points: dragging.points.map((q) => q.map(Math.round)) }])
+      setDragging(null)
+    }
+    window.addEventListener('mouseup', finish)
+    return () => window.removeEventListener('mouseup', finish)
+  }, [dragging, selectedObject, save])
+
+  const removeSelected = useCallback(() => {
+    if (!selectedObject) return
+    const { x, y } = selectedObject
+    const records: Partial<Label>[] = []
+    if (myOutline(x, y)) records.push({ task: 'outline', x, y, deleted: true })
+    if (!objectKeys.has(rkey(x, y)) && myClass(x, y)) records.push({ task: 'class', x, y, deleted: true })
+    if (records.length) save(records)
+    setSelected(null)
+  }, [selectedObject, myOutline, myClass, objectKeys, save])
+
+  const finishField = async () => {
+    setSaving(true)
+    try {
+      await api.post(`/api/annotate/${name}/fields/${enc(tile)}/finish`, {})
+      reload()
+      navigate(`/annotate/${name}`)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setSaving(false)
+    }
   }
   const skip = () => {
-    const later = [...fields.slice(position + 1), ...fields.slice(0, position)].find((f) => !f.done_by_me)
+    const later = [...fields.slice(position + 1), ...fields.slice(0, position)].find((f) => !f.done_by_me && f.prepared)
     if (later) navigate(`/annotate/${name}/${enc(later.tile_id)}`)
   }
 
@@ -173,75 +220,84 @@ function Workspace({ name, tile }: { name: string; tile: string }) {
     const onKey = (e: KeyboardEvent) => {
       if (typing(e) || e.metaKey || e.ctrlKey) return
       const n = Number(e.key)
-      if (n >= 1 && n <= Math.min(9, labels.length)) {
-        setLabelIndex(n - 1)
-        const m = selected ? marks[selected] : undefined
-        if (m && ['object', 'point', 'polygon'].includes(m.type) && m.label !== labels[n - 1]) save([{ ...m, label: labels[n - 1] }])
-        return
-      }
+      if (n >= 1 && n <= Math.min(9, classes.length)) { setLabelIndex(n - 1); return }
       const chosen = tools.find((t) => t.key === e.key.toLowerCase())
       if (chosen) { setTool(chosen.id); setDraft([]); return }
-      if (e.key === 'Escape') { setDraft([]); setSelected(null) }
+      if (e.key === 'Escape') { setDraft([]); setRedrawing(false); setSelected(null) }
       if (e.key === 'Enter') closeDraft()
       if (e.key === 'Backspace' || e.key === 'Delete') {
         e.preventDefault()
         if (draft.length) setDraft(draft.slice(0, -1))
-        else if (selected && marks[selected]) remove(marks[selected])
+        else removeSelected()
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [labels, selected, marks, save, tools, draft, closeDraft, remove])
+  }, [classes, tools, draft, closeDraft, removeSelected])
 
-  const selectedMark = selected ? marks[selected] : undefined
-  const selectedObject = selected?.startsWith('obj:') ? objects.find((o) => objectId(o) === selected) : undefined
-  const counts = (l: string) => drawn.filter((m) => m.label === l).length
+  const counts: Record<string, number> = {}
+  for (const o of objects) { const v = value(o); if (v) counts[v] = (counts[v] ?? 0) + 1 }
+  for (const m of added) counts[m.value] = (counts[m.value] ?? 0) + 1
+  const changed = Object.values(mine).filter((m) => m.task === 'class' && !m.confirmed).length
   const toggle = (key: string) => setLayers({ ...layers, [key]: !layers[key] })
+  const selectedAi = selected ? objects.find((o) => rkey(o.x, o.y) === selected) : undefined
+  const selectedValue = selectedObject ? (myClass(selectedObject.x, selectedObject.y)?.value ?? selectedAi?.ai_value) : undefined
+  const editing = active?.id === 'outline' && selectedObject && !draft.length ? (dragging?.points ?? outlineOf(selectedObject.x, selectedObject.y)) : undefined
 
   return (
     <>
-      <PageHead title={meta?.title ?? name} subtitle={<span><Link to="/annotate">← All sessions</Link> · {meta?.stain} · field {position + 1} of {fields.length}
-        {meta && ` · ${AI_VIEW_TEXT[meta.ai_view]}`}</span>}></PageHead>
-      <ErrorNote error={detail.error ?? work.error ?? error} />
-      {meta?.instructions && <div className="instructions">{meta.instructions}</div>}
-      {work.data && meta && (
-        <div className="grid" style={{ gridTemplateColumns: 'minmax(0, 1fr) 330px', alignItems: 'start' }}>
+      <PageHead title={meta.title} subtitle={<span><Link to="/annotate">← All sessions</Link> · {meta.stain} · field {position + 1} of {fields.length} · {AI_VIEW_TEXT[meta.ai_view]}</span>} />
+      <ErrorNote error={work.error ?? error} />
+      {meta.instructions && <div className="instructions">{meta.instructions}</div>}
+      {work.data && (
+        <div className="grid" style={{ gridTemplateColumns: 'minmax(0, 1fr) 340px', alignItems: 'start' }}>
           <div>
             <ZoomViewer src={`/api/annotate/${name}/fields/${enc(tile)}/image.jpg`}
-              layers={work.data.ai.layers.filter((l) => layers[l]).map((l) => `/api/annotate/${name}/fields/${enc(tile)}/layer/${l}.png`)}
+              layers={work.data.layers.filter((l) => layers[l]).map((l) => `/api/annotate/${name}/fields/${enc(tile)}/layer/${l}.png`)}
               title={<span className="row"><h3 style={{ margin: 0 }}>{tile}</h3>{done && <span className="badge status-done">finished</span>}{saving && <span className="muted small">saving…</span>}</span>}
-              cursor={active?.id === 'object' ? 'pointer' : 'crosshair'} onClick={click} onMove={(p) => { if (draft.length) setHover([p.x, p.y]) }}>
+              cursor={active?.id === 'label' ? 'pointer' : 'crosshair'} onClick={click} onMove={move}>
               {(_zoom, _size, unit) => <>
                 {layers.box && <rect x={work.data!.box.x} y={work.data!.box.y} width={work.data!.box.width} height={work.data!.box.height} fill="none" stroke="#ffd21f" strokeWidth={2 * unit} strokeDasharray={`${12 * unit} ${8 * unit}`} />}
-                {layers.outlines && work.data!.ai.outlines.map((o) => (
-                  <polygon key={o.label} points={o.points.map((p) => p.join(',')).join(' ')} fill="none" stroke="#ffffff" strokeOpacity={0.8} strokeWidth={1.5 * unit} />
-                ))}
-                {layers.ai && shown.map((o) => {
-                  const id = objectId(o)
-                  const mine = layers.mine ? marks[id] : undefined
-                  const stroke = mine ? color(mine.label) : full ? CLASS_STYLE[o.model_class]?.color ?? '#fff' : '#ffffff'
+                {layers.outlines && all.map((o) => {
+                  const k = rkey(o.x, o.y)
+                  const v = myClass(o.x, o.y)?.value ?? objects.find((q) => rkey(q.x, q.y) === k)?.ai_value
+                  const poly = k === selected && editing ? undefined : outlineOf(o.x, o.y)
+                  if (!poly || (v && NEGATIVE.test(v) && !myOutline(o.x, o.y))) return null
+                  return <polygon key={`o${k}`} points={poly.map((p) => p.join(',')).join(' ')} fill="none" stroke={myOutline(o.x, o.y) ? color(v) : '#ffffff'}
+                    strokeOpacity={0.9} strokeWidth={(myOutline(o.x, o.y) ? 2 : 1.2) * unit} />
+                })}
+                {objects.map((o) => {
+                  const v = value(o)
+                  const decided = !!myClass(o.x, o.y)
+                  const negative = !v || NEGATIVE.test(v)
+                  if (negative && !decided && !layers.negatives) return null
+                  const k = rkey(o.x, o.y)
                   return (
-                    <circle key={id} cx={o.x} cy={o.y} r={Math.max(8, o.radius_px) + 4} fill={mine ? stroke : 'none'} fillOpacity={0.22} stroke={stroke}
-                      strokeWidth={(id === selected ? 3.5 : 2) * unit} strokeDasharray={mine ? undefined : `${5 * unit} ${3 * unit}`}>
-                      <title>{[full && `AI: ${CLASS_STYLE[o.model_class]?.label ?? o.model_class} (p ${fmt(o.probability, 2)})`, mine && `you: ${mine.label}`].filter(Boolean).join(' · ') || 'AI detection'}</title>
+                    <circle key={k} cx={o.x} cy={o.y} r={Math.max(8, o.radius_px) + 4} fill={decided ? color(v) : 'none'} fillOpacity={0.18}
+                      stroke={v ? color(v) : '#ffffff'} strokeOpacity={negative && !decided ? 0.55 : 1}
+                      strokeWidth={(k === selected ? 3.5 : negative && !decided ? 1.2 : 2) * unit} strokeDasharray={decided ? undefined : `${5 * unit} ${3 * unit}`}>
+                      <title>{[full && o.ai_value && `AI: ${o.ai_value} (p ${fmt(o.ai_probability, 2)})`, decided && `you: ${v}`].filter(Boolean).join(' · ') || 'candidate'}</title>
                     </circle>
                   )
                 })}
-                {layers.mine && drawn.filter((m) => m.type === 'polygon').map((m) => (
-                  <polygon key={m.id} points={m.points.map((p) => p.join(',')).join(' ')} fill={color(m.label)} fillOpacity={0.2} stroke={m.id === selected ? '#fff' : color(m.label)}
-                    strokeWidth={(m.id === selected ? 3 : 2) * unit} />
+                {layers.mine && added.map((m) => (
+                  <circle key={m.id} cx={m.x!} cy={m.y!} r={6 * unit} fill={color(m.value)} stroke={rkey(m.x!, m.y!) === selected ? '#fff' : '#000'} strokeWidth={(rkey(m.x!, m.y!) === selected ? 2.5 : 1.2) * unit} />
                 ))}
-                {layers.mine && drawn.filter((m) => m.type === 'point').map((m) => (
-                  <circle key={m.id} cx={m.points[0][0]} cy={m.points[0][1]} r={6 * unit} fill={color(m.label)} stroke={m.id === selected ? '#fff' : '#000'} strokeWidth={(m.id === selected ? 2.5 : 1.2) * unit} />
-                ))}
+                {editing && <>
+                  <polygon points={editing.map((p) => p.join(',')).join(' ')} fill={color(selectedValue)} fillOpacity={0.15} stroke="#fff" strokeWidth={2 * unit} />
+                  {editing.map((p, i) => (
+                    <circle key={i} cx={p[0]} cy={p[1]} r={5 * unit} fill="#fff" stroke="#000" strokeWidth={unit} style={{ cursor: 'move' }}
+                      onMouseDown={(e) => { e.stopPropagation(); setDragging({ index: i, points: editing }) }} />
+                  ))}
+                </>}
                 {draft.length > 0 && <>
-                  <polyline points={[...draft, ...(hover ? [hover] : [])].map((p) => p.join(',')).join(' ')} fill="none" stroke={color(label)} strokeWidth={2 * unit} />
+                  <polyline points={[...draft, ...(hover ? [hover] : [])].map((p) => p.join(',')).join(' ')} fill="none" stroke={color(selectedValue ?? label)} strokeWidth={2 * unit} />
                   {draft.map((p, i) => <circle key={i} cx={p[0]} cy={p[1]} r={(i === 0 ? 6 : 3.5) * unit} fill={i === 0 ? '#fff' : color(label)} stroke="#000" strokeWidth={unit} />)}
                 </>}
               </>}
             </ZoomViewer>
-            <p className="muted small">Scroll to zoom, drag to pan. The dashed yellow square is the field to annotate; the margin is context. Keys: <span className="kbd">1</span>–<span className="kbd">{Math.min(9, labels.length)}</span> label,
-              {tools.map((t) => <span key={t.id}> <span className="kbd">{t.key.toUpperCase()}</span> {t.name.toLowerCase()},</span>)} <span className="kbd">Delete</span> remove selected, <span className="kbd">Esc</span> cancel.</p>
+            <p className="muted small">Scroll to zoom, drag to pan. Keys: <span className="kbd">1</span>–<span className="kbd">{Math.min(9, classes.length)}</span> choose class,
+              {tools.map((t) => <span key={t.id}> <span className="kbd">{t.key.toUpperCase()}</span> {t.name.toLowerCase()},</span>)} <span className="kbd">Delete</span> remove, <span className="kbd">Esc</span> cancel.</p>
           </div>
           <div className="grid">
             <div className="card">
@@ -253,72 +309,69 @@ function Workspace({ name, tile }: { name: string; tile: string }) {
                   </button>
                 ))}
               </div>
-              {active && <p className="muted small">{active.hint}</p>}
-              {tools.length > 0 && <>
-                <h3 style={{ marginTop: 12 }}>Label</h3>
-                <div className="grid" style={{ gap: 4 }}>
-                  {labels.map((l, i) => (
-                    <button key={l} className={`btn small${l === label ? ' primary' : ''}`} style={{ textAlign: 'left', display: 'flex', gap: 6, alignItems: 'center' }}
-                      onClick={() => { setLabelIndex(i); if (selectedMark && selectedMark.label !== l && selectedMark.type !== 'tag') save([{ ...selectedMark, label: l }]) }}>
-                      {i < 9 && <span className="kbd">{i + 1}</span>}<span className="swatch" style={{ background: color(l) }} />{l}<span className="spacer" /><span className="muted">{counts(l) || ''}</span>
-                    </button>
-                  ))}
-                </div>
-              </>}
-              {!tools.length && <p className="muted small">This session only asks for field tags (below).</p>}
+              {active && <p className="muted small">{redrawing ? 'Click the corners of the new outline, then the first corner or Enter.' : active.hint}</p>}
+              <h3 style={{ marginTop: 12 }}>Class</h3>
+              <div className="grid" style={{ gap: 4 }}>
+                {classes.map((c, i) => (
+                  <button key={c} className={`btn small${c === label ? ' primary' : ''}`} style={{ textAlign: 'left', display: 'flex', gap: 6, alignItems: 'center' }} onClick={() => setLabelIndex(i)}>
+                    {i < 9 && <span className="kbd">{i + 1}</span>}<span className="swatch" style={{ background: color(c) }} />{c}<span className="spacer" /><span className="muted">{counts[c] ?? ''}</span>
+                  </button>
+                ))}
+              </div>
+              <p className="muted small">{meta.class_instructions}</p>
             </div>
-            {(selectedMark || selectedObject) && (
+            {selectedObject && (
               <div className="card">
-                <h3>Selected</h3>
-                {selectedObject && full && <p className="small">AI: {CLASS_STYLE[selectedObject.model_class]?.label ?? selectedObject.model_class} · p {fmt(selectedObject.probability, 2)} · {fmt(selectedObject.area_um2, 3)} µm²</p>}
-                {selectedObject && !full && <p className="small muted">AI detection</p>}
-                {selectedMark ? <>
-                  <p className="small">Your label: <b>{selectedMark.label}</b> ({selectedMark.type === 'object' ? 'AI object' : selectedMark.type})</p>
-                  <p className="muted small">Press a number or click a label to change it.</p>
-                  <button className="btn small" onClick={() => remove(selectedMark)}>Remove</button>
-                </> : <p className="muted small">Not labelled by you yet.</p>}
+                <h3>Selected object</h3>
+                {selectedAi?.ai_value && <p className="small">AI: {selectedAi.ai_value} · p {fmt(selectedAi.ai_probability, 2)}</p>}
+                <p className="small">{myClass(selectedObject.x, selectedObject.y) ? <>Your class: <b>{myClass(selectedObject.x, selectedObject.y)!.value}</b></> : 'Not changed by you'}
+                  {!objectKeys.has(selected!) && ' (added by you)'}</p>
+                <div className="row">
+                  {myClass(selectedObject.x, selectedObject.y) && objectKeys.has(selected!) &&
+                    <button className="btn small" onClick={() => save([{ task: 'class', x: selectedObject.x, y: selectedObject.y, deleted: true }])}>Back to AI call</button>}
+                  {meta.tools.includes('outline') && active?.id !== 'outline' && <button className="btn small" onClick={() => setTool('outline')}>Edit outline</button>}
+                  {meta.tools.includes('outline') && active?.id === 'outline' && <button className="btn small" onClick={() => { setDraft([]); setRedrawing(true) }}>Redraw outline</button>}
+                  {myOutline(selectedObject.x, selectedObject.y) && <button className="btn small" onClick={() => save([{ task: 'outline', x: selectedObject.x, y: selectedObject.y, deleted: true }])}>Outline back to AI</button>}
+                  {!objectKeys.has(selected!) && <button className="btn small" onClick={removeSelected}>Remove object</button>}
+                </div>
               </div>
             )}
             <div className="card">
               <h3>This field</h3>
               {meta.tools.includes('tag') && meta.tags.map((t) => (
-                <label key={t} className="layer-toggle"><input type="checkbox" checked={!!marks[`tag:${t}`]}
-                  onChange={() => save([{ id: `tag:${t}`, type: 'tag', label: t, deleted: !!marks[`tag:${t}`] }])} />{t}</label>
+                <label key={t} className="layer-toggle"><input type="checkbox" checked={!!mine[`tag:${tile}:${t}`]}
+                  onChange={() => save([{ task: 'tag', value: t, deleted: !!mine[`tag:${tile}:${t}`] }])} />{t}</label>
               ))}
               <label className="field" style={{ marginTop: 8 }}>Note (optional)
                 <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)}
-                  onBlur={() => { if (note !== (marks.note?.note ?? '')) save([{ id: 'note', type: 'note', note, deleted: !note }]) }} />
+                  onBlur={() => { if (note !== (Object.values(mine).find((m) => m.task === 'note')?.value ?? '')) save([{ task: 'note', value: note, deleted: !note }]) }} />
               </label>
-              <p className="muted small">{drawn.length} annotation{drawn.length === 1 ? '' : 's'} by you on this field. Everything is saved as you go.</p>
+              <p className="muted small">{changed} change{changed === 1 ? '' : 's'} by you. {full ? 'Finished counts every AI call you left as it is as checked by you.' : 'Objects you did not label stay unlabelled.'}</p>
               <div className="row">
                 {done
-                  ? <button className="btn" onClick={() => save([{ id: 'done', type: 'done', deleted: true }])}>Reopen field</button>
-                  : <button className="btn primary" disabled={draft.length > 0} onClick={finish}>Finished — next field</button>}
+                  ? <button className="btn" onClick={() => save([{ task: 'done', deleted: true }])}>Reopen field</button>
+                  : <button className="btn primary" disabled={draft.length > 0 || saving} onClick={finishField}>Finished — next field</button>}
                 <button className="btn" onClick={skip}>Skip for now</button>
               </div>
             </div>
             <div className="card">
               <h3>Show</h3>
-              {objects.length > 0 && <label className="layer-toggle"><input type="checkbox" checked={!!layers.ai} onChange={() => toggle('ai')} />AI detections ({shown.length})</label>}
-              {full && layers.ai && Array.from(new Set(shown.map((o) => o.model_class))).map((c) => (
-                <div key={c} className="layer-toggle" style={{ paddingLeft: 22 }}><span className="swatch" style={{ background: CLASS_STYLE[c]?.color ?? '#999' }} />{CLASS_STYLE[c]?.label ?? c}</div>
-              ))}
-              {hasRejected && <label className="layer-toggle" style={{ paddingLeft: 22 }}><input type="checkbox" checked={!!layers.rejected} onChange={() => toggle('rejected')} />candidates the AI rejected</label>}
-              {work.data.ai.outlines.length > 0 && <label className="layer-toggle"><input type="checkbox" checked={!!layers.outlines} onChange={() => toggle('outlines')} />AI outlines ({work.data.ai.outlines.length})</label>}
-              {work.data.ai.layers.map((l) => (
+              <label className="layer-toggle"><input type="checkbox" checked={!!layers.negatives} onChange={() => toggle('negatives')} />candidates that are not objects</label>
+              {work.data.outlines.length > 0 && <label className="layer-toggle"><input type="checkbox" checked={!!layers.outlines} onChange={() => toggle('outlines')} />outlines</label>}
+              {work.data.layers.map((l) => (
                 <label key={l} className="layer-toggle"><input type="checkbox" checked={!!layers[l]} onChange={() => toggle(l)} /><span className="swatch" style={{ background: RASTER_LAYERS[l].color }} />{RASTER_LAYERS[l].label}</label>
               ))}
-              <label className="layer-toggle"><input type="checkbox" checked={!!layers.mine} onChange={() => toggle('mine')} />my annotations</label>
+              <label className="layer-toggle"><input type="checkbox" checked={!!layers.mine} onChange={() => toggle('mine')} />objects I added</label>
               <label className="layer-toggle"><input type="checkbox" checked={!!layers.box} onChange={() => toggle('box')} />field boundary</label>
             </div>
             <div className="card">
               <h3>Fields</h3>
               <Progress done={fields.filter((f) => f.done_by_me).length} total={fields.length} />
-              <p className="muted small">{fields.filter((f) => f.done_by_me).length} of {fields.length} finished by you. Green = finished by you; a dot = someone else has it open.</p>
+              <p className="muted small">{fields.filter((f) => f.done_by_me).length} of {fields.length} finished by you. Green = finished; dot = someone else has it open; faded = still being prepared.</p>
               <div className="row" style={{ gap: 4 }}>
                 {fields.map((f, i) => (
-                  <Link key={f.tile_id} to={`/annotate/${name}/${enc(f.tile_id)}`} title={`${f.tile_id} · finished by ${f.annotators_done} annotator(s)`}
-                    className="btn small" style={{ minWidth: 34, textAlign: 'center', position: 'relative',
+                  <Link key={f.tile_id} to={f.prepared ? `/annotate/${name}/${enc(f.tile_id)}` : '#'} title={`${f.tile_id} · finished by ${f.annotators_done}`}
+                    className="btn small" style={{ minWidth: 34, textAlign: 'center', position: 'relative', opacity: f.prepared ? 1 : 0.4,
                       background: f.tile_id === tile ? 'var(--accent)' : f.done_by_me ? 'color-mix(in srgb, var(--good) 25%, var(--surface-2))' : undefined,
                       color: f.tile_id === tile ? '#fff' : undefined }}>
                     {i + 1}{f.open_by_others > 0 && <span style={{ position: 'absolute', top: 2, right: 3, width: 6, height: 6, borderRadius: 3, background: 'var(--warning)' }} />}
@@ -326,6 +379,77 @@ function Workspace({ name, tile }: { name: string; tile: string }) {
                 ))}
               </div>
             </div>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
+function Queue({ detail }: { detail: SessionDetail }) {
+  const meta = detail.meta
+  const next = useFetch<{ object: QueueItem | null }>(`/api/annotate/${meta.name}/next`)
+  const [history, setHistory] = useState<QueueItem[]>([])
+  const [error, setError] = useState<string | null>(null)
+  const item = next.data?.object
+  const classes = meta.classes
+
+  const choose = useCallback(async (value: string) => {
+    if (!item) return
+    try {
+      await api.post(`/api/annotate/${meta.name}/labels`, { records: [{ task: 'class', tile_id: item.tile_id, x: item.x, y: item.y, value }] })
+      setHistory((h) => [item, ...h].slice(0, 20))
+      next.reload()
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }, [item, meta.name, next])
+
+  const undo = async () => {
+    const last = history[0]
+    if (!last) return
+    await api.post(`/api/annotate/${meta.name}/labels`, { records: [{ task: 'class', tile_id: last.tile_id, x: last.x, y: last.y, deleted: true }] })
+    setHistory((h) => h.slice(1))
+    next.reload()
+  }
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (typing(e) || e.metaKey || e.ctrlKey) return
+      const n = Number(e.key)
+      if (n >= 1 && n <= Math.min(9, classes.length)) choose(classes[n - 1])
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [classes, choose])
+
+  return (
+    <>
+      <PageHead title={meta.title} subtitle={<span><Link to="/annotate">← All sessions</Link> · {meta.stain} · one object at a time · {AI_VIEW_TEXT[meta.ai_view]}</span>} />
+      <ErrorNote error={next.error ?? error} />
+      {meta.instructions && <div className="instructions">{meta.instructions}</div>}
+      {next.data && !item && <Empty>Nothing left for you in this queue right now. Thank you!</Empty>}
+      {item && (
+        <div className="grid" style={{ gridTemplateColumns: 'minmax(300px, 520px) 1fr', alignItems: 'start' }}>
+          <div className="card">
+            <div style={{ position: 'relative' }}>
+              <img src={`/api/annotate/${meta.name}/object.jpg?tile_id=${enc(item.tile_id)}&x=${item.x}&y=${item.y}`} alt="object" style={{ width: '100%', display: 'block', borderRadius: 8 }} />
+              <svg viewBox="0 0 100 100" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
+                <path d="M50 42 V46 M50 54 V58 M42 50 H46 M54 50 H58" stroke="#00e5ff" strokeWidth={0.8} />
+              </svg>
+            </div>
+            <p className="muted small">{item.remaining} objects left for you · {item.labels_so_far} label{item.labels_so_far === 1 ? '' : 's'} by others so far</p>
+          </div>
+          <div className="card">
+            <h3>What is under the cross?</h3>
+            {meta.ai_view === 'full' && <p className="small">AI: {item.ai_value} · p {fmt(item.ai_probability, 2)}</p>}
+            <div className="grid" style={{ gap: 6 }}>
+              {classes.map((c, i) => (
+                <button key={c} className="btn" style={{ textAlign: 'left' }} onClick={() => choose(c)}><span className="kbd">{i + 1}</span> {c}</button>
+              ))}
+            </div>
+            <p className="muted small">{meta.class_instructions}</p>
+            <button className="btn small" disabled={!history.length} onClick={undo}>Undo last</button>
           </div>
         </div>
       )}

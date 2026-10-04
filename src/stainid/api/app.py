@@ -8,7 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from stainid.api.routes import analysis, annotate, cohort, images, jobs, models, project, reviews, session, slides
+from stainid.api.routes import analysis, annotate, cohort, images, jobs, models, project, session, slides
 from stainid.api.session import is_admin
 
 STATIC = Path(__file__).parent / "static"
@@ -17,7 +17,7 @@ PUBLIC_API = re.compile(r"^/api/(session|annotate)(/|$)")
 
 def create_app() -> FastAPI:
     app = FastAPI(title="stainID", version="2.0", docs_url=None, redoc_url=None, openapi_url=None)
-    for module in (project, slides, cohort, images, jobs, reviews, analysis, models, session, annotate):
+    for module in (project, slides, cohort, images, jobs, analysis, models, session, annotate):
         app.include_router(module.router, prefix="/api")
 
     @app.middleware("http")

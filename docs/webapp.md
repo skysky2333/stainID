@@ -28,7 +28,7 @@ those pages needs the password, and while it is still `admin` you can only sign 
 | 3 | **Models** | Download the published models. Add the NeuN, 6E10 and AT8 models, or train them (see [Training a model](#training-a-model)). |
 | 4 | **Workflow** | Register the slides, upload the TMA map, then run the steps from top to bottom (or press *Run all remaining steps*). |
 | 5 | **Cohort & cores** | Look at the detections on the tissue, core by core. |
-| 6 | **Label & check** | Label a check set to measure how accurate the detections are on your slides. |
+| 6 | **Labels** | Review fields (alone or with others) to measure how accurate the detections are and to collect labels for training. |
 | 7 | **Results** | Download the results table (one row per donor and region) and read what every column means. |
 
 ## The Workflow page
@@ -72,74 +72,63 @@ are marked **Made with an older model** until you run them again with *Start ove
 | **Home** | Your next step (with a button to it), a checklist of every step, cohort numbers and recent jobs. |
 | **Cohort & cores** | Every core of every TMA; click one to open the viewer. Layers: detections by class, outlines, DAB above the slide threshold, excluded regions, AT8 threads and field boundaries. Scroll to zoom. |
 | **Stain thresholds** | The DAB threshold of every slide and why it exists. |
-| **Label & check** | Training sets, check sets, the form to create a check set, and older study sets (read-only). |
-| **Annotation sessions** | Sessions in which other people annotate whole fields (optionally seeing the AI output): create, start and stop them, share the link, follow results and download annotations. |
-| **Models** | Every model with its status and settings, download buttons, the three-step training flow, and trained models compared with the current one. |
+| **Labels** | Labelling progress per stain, how often people and the AI agree, the labelling sessions (create, start, stop, share the link, follow people, download) and all labels as CSV. |
+| **Models** | Every model with its status and settings, download buttons, training from all labels, and trained models compared with the current one. |
 | **Results** | The main results table (download), every other table, plots by group and region, and the meaning of every column. |
 | **Settings** | Study name, TMA layout, diagnostic groups and every file location, with a folder picker. Also opens or creates another project. |
 | **Help** | Getting started, common questions and a glossary. Words with a dotted underline show their definition on hover. |
 
-## Labelling
+## Labels
 
-While labelling, only the image crop is shown: the object sits under a blue cross, and the diagnosis, donor and model
-answer are hidden. Keys `1`–`n` assign a label and `←`/`→` move between items.
+Everything people say about the tissue is a **label**: the class of an object (e.g. *NeuN+ neuron*, *compact plaque*,
+*not a tau+ neuron*), its outline, a tag on a whole field (*white matter*, *unusable*, …) or a note. Labels are attached
+to the objects the pipeline considers in the analysed fields, accepted or rejected; the AI's own call is shown next to
+them but is not a label. An object's label is what most people said; ties stay unresolved. All labels live in one
+append-only file, `outputs.reviews/labels/labels.jsonl` (one line per saved label with who, what, where and when;
+edits and deletions keep the history), and *Download all labels (CSV)* exports them.
 
-- **Check sets** sample detected objects, at random or within a probability band, balanced across groups. Once every
-  item is labelled, two tables appear: your labels against the model's answers (how accurate the results are) and
-  your labels per diagnostic group.
-- **Training sets** are made by the *Create a training set* step (Models page):
-  - fields are spread across TMAs and groups, optionally only fields where the current model found objects;
-  - candidates are found exactly as the detection step finds them;
-  - half of each field's candidates are ones the current model is unsure about.
+The **Labels** page shows, per stain: how many analysed fields have been fully reviewed, how many objects carry labels
+and of which class, objects people added that the AI missed, outlines people drew or corrected, how often people agree
+with each other, and how often the AI agrees with people (precision and recall). Labels the current model was trained
+on are included in the last figure, which therefore flatters the model; the cross-validated figures on Models are the
+fair estimate.
 
-Every set is a folder under `outputs.reviews` (`reviews/<name>` or `training/<name>`):
+### Labelling sessions
 
-| file | |
-|---|---|
-| `key.csv` | one row per item: `review_id`, `tile_id`, `x`, `y` (field-crop pixels) and the hidden columns (group, donor, region, model probability) |
-| `labels.csv` | labels (`review_id`, `label`, `confidence`, `notes`, `reviewer`, `timestamp`), appended; the last label per item counts |
-| `meta.json` | stain, label options, crop size, instructions, purpose |
-| `features.csv`, `embeddings.npy` | training sets only: the candidates' features (and Phikon embeddings for 6E10) |
+Other people label in their browser; everything is managed on the Labels page.
 
-## Annotation sessions
+1. **Create a session**: the stain, then either
+   - **Review whole fields**: fields nobody has reviewed yet, spread over TMAs and groups in shuffled order (or a list
+     of field IDs), and how many people should review each field (1 shares them out; 2 or more gives repeat reviews
+     for agreement). People see the field with the AI's calls and outlines pre-filled: dashed circles are the AI's call,
+     solid ones their own decision. They change the class of wrong objects, add objects the AI missed, drag the corners
+     of an outline or draw a new one, tag the field, and press *Finished*, which records every AI call they left alone
+     as confirmed by them. A blind variant shows the candidates without the AI's calls.
+   - **Quick object queue**: one object at a time, labelled with the keyboard. The next object is chosen anew each time
+     from all prepared fields: where the AI is unsure, where people disagree with each other or with the AI, objects
+     one other person has labelled, or at random; each person gets objects they have not labelled, fewest labels first.
+2. **Start** it and send the link shown on the page (`http://<this computer>:8765/annotate`). People register a name
+   and can stop and continue later under the same name. Only started sessions are listed, and nothing else in stainID
+   is reachable without the admin password.
+3. Follow progress, the people and their changes; **+10 fields** extends a session; **Stop** closes it but keeps
+   everything; **Delete** moves the session definition aside (its labels stay).
 
-Other people can annotate fields for you through their web browser; everything is managed on the *Annotation
-sessions* page.
+Fields have to be **prepared** before people can label them: the *Prepare fields for labelling* step (`stainid labels
+prepare`) finds every candidate exactly as the detection step does and stores its measurements and the AI's call in
+`outputs.reviews/pool/<stain>/<field>.csv` (10–30 s per field). Sessions prepare their own fields in the background.
 
-1. **Create a session**: the stain and how many fields (drawn at random, balanced across groups, in shuffled order) or
-   a list of field IDs, and
-   - **what people can do**: label the AI detections (click a circled object), mark objects the AI missed (points),
-     draw outlines (polygons) and tag the whole field (e.g. white matter, fold, unusable); labels and tags are lists you
-     type in, and each field also has a free-text note;
-   - **what people see of the AI**: detections with their classes, outlines and DAB/exclusion/thread layers; only the
-     positions of the detections (blind to what the AI decided); or nothing;
-   - **annotators per field**: 1 shares the fields out between people; 2 or more gives independent repeat
-     annotations, so agreement can be measured. Each person is sent to the field that most needs them and that nobody
-     else has open.
-2. **Start** it. Send people the link shown on the page (`http://<this computer>:8765/annotate`). They type their name
-   and annotate; each person works in their own layer, so nobody overwrites anyone else, and they can stop and continue
-   later under the same name. Only started sessions are listed, and nothing else in stainID is reachable without the
-   admin password.
-3. **Results** shows each person's progress, agreement between people on the same AI objects, and the AI class against
-   the human label; *Download all annotations (CSV)* gives every annotation (coordinates in field-crop pixels, with
-   core, TMA, group and region). **Stop** closes the session to annotators but keeps everything; **Delete** moves it
-   aside (`sessions/.deleted`).
-
-The link works for computers on the same network. For people elsewhere, forward the port on your router or use a
-tunnel (e.g. `cloudflared tunnel --url http://localhost:8765`); change the admin password first.
-
-Each session is a folder `outputs.reviews/sessions/<name>` with `meta.json` (fields, labels, tools, AI view, whether it
-is running) and `annotations.jsonl`, one line per saved annotation (`annotator`, `tile_id`, `type`, `label`, `points`,
-the AI object's class and probability for labelled detections, `time`, `deleted`); the latest line per annotator and
-annotation counts.
+Labels made before the label store (training sets, the CNN-outlier adjudication and the white-matter field review)
+were imported once with `stainid labels import`, each as its own source (`import: <name>`); the original folders are
+unchanged.
 
 ## Training a model
 
-*Train a model* (`stainid train --stain X`) uses every labelled training set of that stain:
+*Train a model* (`stainid train --stain X`) uses every labelled object of that stain in the label store:
 
-- **Labels.** "Unsure" is skipped. It needs at least 10 positive and 10 negative labels; 100–200 labels is a good start.
-- **Model.** The same random forest the pipeline uses. For 6E10 it also fits the Phikon linear probe and keeps the
-  Wong 2022 CNN as a fixed ensemble member.
+- **Labels.** Each object's majority label, positive or negative; "unsure" and ties are skipped. Labels on positions no
+  candidate covers (objects people added) cannot train the classifier. It needs at least 10 positive and 10 negative
+  labels; 100–200 is a good start.
+- **Model.** The same random forest the pipeline uses, on the candidate measurements stored when the field was prepared.
 - **Thresholds.** The compact/diffuse threshold (6E10) and the tangle/pretangle threshold (AT8) come from your labels
   when there are enough, otherwise from the current model.
 - **Validation.** Leave-one-TMA-out (5-fold if there are too few TMAs). The current model is scored on the same labels,

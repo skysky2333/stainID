@@ -13,12 +13,12 @@ from stainid.training.train import activate, trained_models
 router = APIRouter(tags=["models"])
 ROLES = {
     "neun": "Decides which candidate objects on NeuN slides are neurons (random forest on shape, stain and 55 µm neighbourhood).",
-    "amyloid": "Decides which 6E10 deposits are plaques (random forest + Phikon + Wong 2022 CNN) and sorts them into compact and diffuse.",
+    "amyloid": "Decides which 6E10 deposits are plaques (random forest on shape, stain and surroundings) and sorts them into compact and diffuse.",
     "tau": "Decides which AT8 candidates are tau+ neurons (random forest on shape, stain and neighbourhood).",
     "cellpose": "Cellpose-SAM: finds cells and nuclei. Published weights, the same for every study.",
     "sam": "Segment Anything (ViT-B): draws precise object outlines. Published weights.",
-    "plaque_cnn_dir": "Published amyloid CNNs (Plaquebox 2019, Wong 2022 consensus); optional member of the 6E10 model.",
-    "huggingface_home": "Phikon pathology foundation model (owkin/phikon); used by the 6E10 model.",
+    "plaque_cnn_dir": "Published amyloid CNNs (Plaquebox 2019, Wong 2022 consensus); optional, used to compare the 6E10 model with published ones.",
+    "huggingface_home": "Phikon pathology foundation model (owkin/phikon); optional image features for analyses.",
 }
 SOURCE = {"neun": "train", "amyloid": "train", "tau": "train", "cellpose": "download", "sam": "download", "huggingface_home": "download",
           "plaque_cnn_dir": "manual"}

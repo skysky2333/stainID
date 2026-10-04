@@ -98,16 +98,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("summarize", help="one results table with every stain (results_<level>.csv)")
     p.add_argument("--level", choices=("sample_region_id", "core_id"), default="sample_region_id")
 
-    p = sub.add_parser("training-set", help="sample candidate objects to label for model training")
-    p.add_argument("--stain", required=True, choices=("NeuN", "6E10", "AT8"))
-    p.add_argument("--name", required=True)
-    p.add_argument("--fields", type=int, default=12)
-    p.add_argument("--per-field", type=int, default=10)
-    p.add_argument("--strategy", choices=("uncertain", "random"), default="uncertain")
-    p.add_argument("--enrich", action=argparse.BooleanOptionalAction, default=True)
+    p = sub.add_parser("labels", help="prepare candidate objects for labelling, or import earlier label sets")
+    p.add_argument("action", choices=("prepare", "import"))
+    p.add_argument("--stain", choices=("NeuN", "6E10", "AT8"))
+    p.add_argument("--fields", type=int, default=0, help="prepare this many more fields that are not prepared yet")
+    p.add_argument("--session", default="", help="prepare every field of this labelling session")
     p.add_argument("--seed", type=int, default=0)
 
-    p = sub.add_parser("train", help="train a stain model from labelled training sets")
+    p = sub.add_parser("train", help="train a stain model from the labels in the label store")
     p.add_argument("--stain", required=True, choices=("NeuN", "6E10", "AT8"))
 
     p = sub.add_parser("download-models", help="download the public model weights (Cellpose-SAM, SAM, Phikon)")
@@ -198,10 +196,10 @@ def main(argv: list[str] | None = None) -> None:
         from stainid.workflows.aggregate import summarize_results
 
         summarize_results(project, args.level)
-    elif args.command == "training-set":
-        from stainid.training.sets import create_training_set
+    elif args.command == "labels":
+        from stainid.labels.prepare import run
 
-        create_training_set(project, args.stain, args.name, args.fields, args.per_field, args.strategy, args.enrich, args.seed)
+        run(project, args.action, args.stain, args.fields, args.session, args.seed)
     elif args.command == "download-models":
         from stainid.workflows.downloads import download_models
 
