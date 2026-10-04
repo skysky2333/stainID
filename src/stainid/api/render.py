@@ -156,3 +156,56 @@ def object_crop(state: ProjectState, stain: str, tile_id: str, x: float, y: floa
             crop = np.asarray(image.crop((int(x) - half, int(y) - half, int(x) + half, int(y) + half)).convert("RGB"))
     Image.fromarray(crop).save(target, quality=92)
     return crop
+
+
+CORE_TILE = 1024
+
+
+def _core_tiles(state: ProjectState, core_id: str, stain: str) -> Path:
+    """The core image cut once into 1024 px JPEG tiles, so any region can be served without decoding the whole scan."""
+    folder = state.cache_dir("core_tiles") / f"{core_id}_{stain}"
+    if (folder / "size.json").exists():
+        return folder
+    image_path = state.core_image(core_id, stain)["image_path"]
+    with _IMAGE_LOCKS.setdefault(image_path, threading.Lock()):
+        if not (folder / "size.json").exists():
+            folder.mkdir(parents=True, exist_ok=True)
+            with Image.open(state.root / image_path) as image:
+                image = image.convert("RGB")
+                for ty in range(0, image.height, CORE_TILE):
+                    for tx in range(0, image.width, CORE_TILE):
+                        image.crop((tx, ty, min(tx + CORE_TILE, image.width), min(ty + CORE_TILE, image.height))).save(
+                            folder / f"{ty // CORE_TILE}_{tx // CORE_TILE}.jpg", quality=FIELD_JPEG_QUALITY)
+                (folder / "size.json").write_text(json.dumps({"width": image.width, "height": image.height}))
+    return folder
+
+
+def region_box(state: ProjectState, core_id: str, stain: str, x: int, y: int, size: int) -> tuple[int, int, int]:
+    """A size × size box centred near (x, y) in core-image pixels, kept inside the image: (x0, y0, size)."""
+    full = json.loads((_core_tiles(state, core_id, stain) / "size.json").read_text())
+    size = min(size, full["width"], full["height"])
+    return int(min(max(0, x - size // 2), full["width"] - size)), int(min(max(0, y - size // 2), full["height"] - size)), size
+
+
+def core_region(state: ProjectState, core_id: str, stain: str, x0: int, y0: int, size: int) -> np.ndarray:
+    """The full-resolution region at (x0, y0) of a core image, assembled from its tiles."""
+    folder = _core_tiles(state, core_id, stain)
+    out = np.full((size, size, 3), 255, np.uint8)
+    for ty in range(y0 // CORE_TILE, (y0 + size - 1) // CORE_TILE + 1):
+        for tx in range(x0 // CORE_TILE, (x0 + size - 1) // CORE_TILE + 1):
+            tile = np.asarray(Image.open(folder / f"{ty}_{tx}.jpg").convert("RGB"))
+            ox, oy = tx * CORE_TILE, ty * CORE_TILE
+            sx0, sy0 = max(x0, ox), max(y0, oy)
+            sx1, sy1 = min(x0 + size, ox + tile.shape[1]), min(y0 + size, oy + tile.shape[0])
+            out[sy0 - y0: sy1 - y0, sx0 - x0: sx1 - x0] = tile[sy0 - oy: sy1 - oy, sx0 - ox: sx1 - ox]
+    return out
+
+
+def region_dab(state: ProjectState, core_id: str, stain: str, rgb: np.ndarray) -> np.ndarray:
+    """RGBA overlay of the pixels above the slide's calibrated DAB threshold."""
+    tma = str(state.core_image(core_id, stain)["tma"])
+    cal = state.calibration()
+    threshold = float(cal[(cal.tma == tma) & (cal.stain == stain)].threshold_dab_od.iloc[0])
+    rgba = np.zeros((*rgb.shape[:2], 4), np.uint8)
+    rgba[np.maximum(rgb_to_hed(rgb)[..., 2], 0) >= threshold] = (255, 40, 40, 120)
+    return rgba

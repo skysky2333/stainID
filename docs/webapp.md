@@ -70,7 +70,7 @@ are marked **Made with an older model** until you run them again with *Start ove
 | Page | What it is for |
 |---|---|
 | **Home** | Your next step (with a button to it), a checklist of every step, cohort numbers and recent jobs. |
-| **Cohort & cores** | Every core of every TMA; click one to open the viewer. Layers: detections by class, outlines, DAB above the slide threshold, excluded regions, AT8 threads and field boundaries. Scroll to zoom. |
+| **Cohort & cores** | Every core of every TMA; click one to see the whole core, then click any spot for a full-resolution preview (220–660 µm) with the AI detections where detection has run and the DAB layer. Only the preview is sent over the network, never the whole scan. The analysed fields themselves are reviewed on Labels. |
 | **Stain thresholds** | The DAB threshold of every slide and why it exists. |
 | **Labels** | Labelling progress per stain, how often people and the AI agree, the labelling sessions (create, start, stop, share the link, follow people, download) and all labels as CSV. |
 | **Models** | Every model with its status and settings, download buttons, training from all labels, and trained models compared with the current one. |

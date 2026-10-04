@@ -209,3 +209,11 @@ def test_blind_queue_hides_ai_and_serves_crops(prepared):
     ann.post("/api/annotate/q/labels", json={"records": [{"task": "class", "tile_id": TILE, "x": item["x"], "y": item["y"], "value": "unsure"}]})
     assert ann.get("/api/annotate/q/next").json()["object"]["remaining"] == 11
     assert client.get("/api/labels/share").json()["links"][0].endswith("/annotate")
+
+
+def test_core_region_preview_and_detections(client):
+    region = client.get("/api/cores/LIP-1_B-2/6E10/region?x=0&y=0&size=4000").json()
+    assert region["x0"] == 0 and region["y0"] == 0 and len(region["objects"]) == 8
+    image = client.get("/api/images/cores/LIP-1_B-2/6E10/region.jpg?x=0&y=0&size=256")
+    assert image.status_code == 200 and image.headers["content-type"] == "image/jpeg"
+    assert client.get("/api/images/cores/LIP-1_B-2/6E10/region_dab.png?x=0&y=0&size=256").status_code == 200

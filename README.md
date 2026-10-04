@@ -78,7 +78,7 @@ says what each step computes.
 | ![Home](docs/images/home.png) | ![Models](docs/images/models.png) |
 | **Home**: your next step and overall progress | **Models**: download published models; train from all labels, compare, switch |
 | ![Core viewer](docs/images/viewer.jpg) | ![Labels](docs/images/labels.png) |
-| **Cohort & cores**: every core and field with detections, outlines and masks drawn on the tissue | **Labels**: progress per stain, agreement with the AI, labelling sessions and the link to share |
+| **Cohort & cores**: the whole core; click any spot for a full-resolution preview with the detections drawn on it | **Labels**: progress per stain, agreement with the AI, labelling sessions and the link to share |
 | ![Reviewing a field](docs/images/annotate.jpg) | |
 | **Reviewing a field** (at `/annotate`): the AI's calls and outlines pre-filled; people correct, add and confirm | |
 | ![Results](docs/images/results.png) | ![Settings](docs/images/settings.png) |
