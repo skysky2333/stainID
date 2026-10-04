@@ -38,6 +38,13 @@ others are `…_W<row><column>`. Detection runs on these tiles when `analysis.ti
 `whole_core`); the sampled-field summaries (`primary_four`, `extended_eight`) are still made from
 the same outputs.
 
+**Cellpose on a GPU server.** Cellpose-SAM takes about 90 s per tile on an Apple GPU, so whole
+cores (about 40 tiles per core image) are best segmented on a CUDA machine (a few seconds per
+tile). `tools/gpu_cellpose.sh push user@server:/path` copies the code, the Cellpose model, the tile
+list and the core images; `tools/gpu_cellpose.sh run <GPUs>` on the server segments every tile
+(NeuN, AT8 and 6E10); `tools/gpu_cellpose.sh pull user@server:/path` brings the masks back. The
+detection steps then reuse them and run on the local CPU.
+
 ## 3. Slide calibration — `stainid calibrate`
 
 One DAB threshold per slide (TMA × stain), computed from tissue pixels pooled across all cores
