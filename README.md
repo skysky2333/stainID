@@ -32,8 +32,9 @@ slides. Every step is also a `stainid` command.
 1. **Install once.** Download this repository (green *Code* button → *Download ZIP*), unzip it, and double-click
    **`Install stainID.command`** (macOS) or **`Install stainID.bat`** (Windows).
    On macOS the first time, right-click the file → *Open* to allow it.
-2. **Start.** Double-click **`Start stainID.command`** (or `.bat`). stainID opens in your web browser. Keep the small
-   terminal window open while you work, because closing it stops running steps.
+2. **Start.** Double-click **`Start stainID.command`** (or `.bat`). stainID opens in your web browser; the admin
+   password is `admin` until you change it in Settings. Keep the small terminal window open while you work, because
+   closing it stops running steps.
 3. **Create a project** on the welcome screen: a study name and an empty folder. Settings, core images and results
    for the study are all kept in that folder.
 4. **Describe your TMAs** on the Settings page: rows and columns of cores per slide, the core-name prefix and the
@@ -42,7 +43,8 @@ slides. Every step is also a `stainid` command.
    Anything missing has a button next to it: go to the step that makes it, download it, or get a template.
    *Run all remaining steps* queues everything in the right order.
 6. **Check and use the results.** Look at detections on the tissue (Cohort & cores), label a check set to measure
-   accuracy on your slides (Label & check), and download the results table (Results).
+   accuracy on your slides (Label & check), let other people annotate fields through a link (Annotation sessions), and
+   download the results table (Results).
 
 The Help page in the app has the same guide, answers to common questions and a glossary.
 
@@ -77,8 +79,8 @@ says what each step computes.
 | **Home**: your next step and overall progress | **Models**: download published models; create a training set, label it, train, compare, switch |
 | ![Core viewer](docs/images/viewer.jpg) | ![Labelling](docs/images/labelling.jpg) |
 | **Cohort & cores**: every core and field with detections, outlines and masks drawn on the tissue | **Label & check**: blind, keyboard-driven labelling |
-| ![Annotate together](docs/images/annotate.jpg) | |
-| **Annotate together**: several people annotate whole fields with the AI output shown, each in their own layer | |
+| ![Annotation sessions](docs/images/annotation_sessions.png) | ![Annotating](docs/images/annotate.jpg) |
+| **Annotation sessions**: create, start and stop sessions, share the link, follow results | **Annotating** (at `/annotate`): people register a name and annotate fields with the AI output shown |
 | ![Results](docs/images/results.png) | ![Settings](docs/images/settings.png) |
 | **Results**: download the main table, what every column means, plots by group | **Settings**: study layout, diagnostic groups and every file location |
 
@@ -89,7 +91,6 @@ git clone https://github.com/skysky2333/stainID.git && cd stainID
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[app,deep,slides]"
 stainid serve                              # the web app
-stainid serve --annotate --access-code X   # annotation-only server for other people (port 8766)
 stainid --project path/to/study status     # progress of every step
 stainid --project path/to/study neun       # run one step
 ```

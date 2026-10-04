@@ -16,7 +16,9 @@ def client(synthetic_project, monkeypatch, tmp_path_factory):
     monkeypatch.chdir(synthetic_project)
     monkeypatch.setattr(state, "SETTINGS", tmp_path_factory.mktemp("home") / "app.json")
     state._STATE = None
-    yield TestClient(create_app())
+    admin = TestClient(create_app(), client=("127.0.0.1", 50000))
+    assert admin.post("/api/session/admin", json={"password": "admin"}).status_code == 200
+    yield admin
     state._STATE = None
 
 
@@ -122,59 +124,80 @@ def test_missing_inputs_say_how_to_get_them(client, tmp_path):
     assert needs["model_neun"]["setting"] == "models.neun" and needs["slides_table"]["made_by"]["id"] == "slides"
 
 
-def annotation_project(client, **options):
+def annotation_session(client, **options):
     body = {"name": "plaques_together", "stain": "6E10", "n_fields": 5, "per_group": False, **options}
     created = client.post("/api/annotate", json=body)
     assert created.status_code == 200, created.text
     return created.json()
 
 
-def test_annotation_needs_sign_in_and_keeps_one_layer_per_annotator(client):
-    meta = annotation_project(client)
+def test_admin_password_guards_the_app(client):
+    visitor = TestClient(client.app)
+    assert visitor.get("/api/cores").status_code == 401
+    assert visitor.get("/api/session").json()["admin"] is False
+    refused = visitor.post("/api/session/admin", json={"password": "admin"})
+    assert refused.status_code == 403 and "default" in refused.json()["detail"]
+    assert client.put("/api/session/admin/password", json={"current": "admin", "new": "admin"}).status_code == 400
+    assert client.put("/api/session/admin/password", json={"current": "admin", "new": "s3cret-pw"}).status_code == 200
+    assert client.get("/api/cores").status_code == 200
+    assert visitor.post("/api/session/admin", json={"password": "admin"}).status_code == 403
+    assert visitor.post("/api/session/admin", json={"password": "s3cret-pw"}).status_code == 200
+    assert visitor.get("/api/cores").status_code == 200
+
+
+def test_annotation_session_lifecycle(client):
+    meta = annotation_session(client)
     tile = meta["fields"][0]
-    assert client.get("/api/annotate/plaques_together/next").status_code == 401
-    assert client.post("/api/session", json={"name": "Ann"}).json() == {"annotator": "Ann"}
-    opened = client.get(f"/api/annotate/plaques_together/fields/{tile}").json()
+    assert meta["open"] is False
+    ann, ben = TestClient(client.app), TestClient(client.app)
+    assert ann.get("/api/annotate").status_code == 401
+    assert ann.post("/api/session/annotator", json={"name": "Ann"}).json() == {"annotator": "Ann"}
+    assert ann.get("/api/annotate").json() == []
+    assert ann.get("/api/annotate/plaques_together/next").status_code == 403
+    assert ann.post("/api/annotate/plaques_together/open", json={"open": True}).status_code == 401
+    client.post("/api/annotate/plaques_together/open", json={"open": True})
+    assert [s["name"] for s in ann.get("/api/annotate").json()] == ["plaques_together"]
+
+    opened = ann.get(f"/api/annotate/plaques_together/fields/{tile}").json()
     ai = opened["ai"]["objects"]
     assert len(ai) == 8 and "model_class" in ai[0] and opened["box"]["width"] > 0
+    assert ann.get(f"/api/annotate/plaques_together/fields/{tile}/image.jpg").status_code == 200
     marks = [{"id": "obj-1", "type": "object", "label": "diffuse plaque", "points": [[ai[0]["x"], ai[0]["y"]]]},
              {"id": "p1", "type": "point", "label": "compact plaque", "points": [[10, 12]]},
              {"id": "o1", "type": "polygon", "label": "compact plaque", "points": [[0, 0], [20, 0], [20, 20]]},
              {"id": "tag:unusable", "type": "tag", "label": "unusable"}]
-    saved = client.post(f"/api/annotate/plaques_together/fields/{tile}", json={"records": marks}).json()
+    saved = ann.post(f"/api/annotate/plaques_together/fields/{tile}", json={"records": marks}).json()
     assert saved[0]["ai"]["model_class"] == ai[0]["model_class"] and all(r["annotator"] == "Ann" for r in saved)
-    bad = client.post(f"/api/annotate/plaques_together/fields/{tile}", json={"records": [{"id": "x", "type": "point", "label": "cat", "points": [[1, 1]]}]})
+    bad = ann.post(f"/api/annotate/plaques_together/fields/{tile}", json={"records": [{"id": "x", "type": "point", "label": "cat", "points": [[1, 1]]}]})
     assert bad.status_code == 400
-    client.post(f"/api/annotate/plaques_together/fields/{tile}", json={"records": [{"id": "p1", "type": "point", "deleted": True}, {"id": "done", "type": "done"}]})
-    assert {r["id"] for r in client.get(f"/api/annotate/plaques_together/fields/{tile}").json()["mine"]} == {"obj-1", "o1", "tag:unusable", "done"}
-    assert client.get("/api/annotate/plaques_together/next").json()["tile_id"] is None
+    ann.post(f"/api/annotate/plaques_together/fields/{tile}", json={"records": [{"id": "p1", "type": "point", "deleted": True}, {"id": "done", "type": "done"}]})
+    assert {r["id"] for r in ann.get(f"/api/annotate/plaques_together/fields/{tile}").json()["mine"]} == {"obj-1", "o1", "tag:unusable", "done"}
+    assert ann.get("/api/annotate/plaques_together/next").json()["tile_id"] is None
 
-    client.post("/api/session", json={"name": "Ben"})
-    assert client.get(f"/api/annotate/plaques_together/fields/{tile}").json()["mine"] == []
-    assert client.get("/api/annotate/plaques_together/next").json()["tile_id"] == tile
-    client.post(f"/api/annotate/plaques_together/fields/{tile}", json={"records": [marks[0] | {"label": "diffuse plaque"}, {"id": "done", "type": "done"}]})
+    ben.post("/api/session/annotator", json={"name": "Ben"})
+    assert ben.get(f"/api/annotate/plaques_together/fields/{tile}").json()["mine"] == []
+    assert ben.get("/api/annotate/plaques_together/next").json()["tile_id"] == tile
+    ben.post(f"/api/annotate/plaques_together/fields/{tile}", json={"records": [marks[0], {"id": "done", "type": "done"}]})
+    assert ben.get("/api/annotate/plaques_together/summary").status_code == 401 and ben.get("/api/cores").status_code == 401
     summary = client.get("/api/annotate/plaques_together/summary").json()
     assert summary["fields_covered"] == 1 and summary["agreement"] == [{"a": "Ann", "b": "Ben", "objects": 1, "agreement": 1.0}]
     export = client.get("/api/annotate/plaques_together/export.csv").text.splitlines()
     assert export[0].startswith("annotator,tile_id,type,label") and len(export) == 1 + 6
 
+    client.post("/api/annotate/plaques_together/open", json={"open": False})
+    assert ann.get(f"/api/annotate/plaques_together/fields/{tile}").status_code == 403
+    assert client.get("/api/annotate/plaques_together").status_code == 200
+    moved = client.delete("/api/annotate/plaques_together").json()["moved_to"]
+    assert ".deleted" in moved and client.get("/api/annotate").json() == []
 
-def test_shared_server_exposes_annotation_only(client, monkeypatch):
-    annotation_project(client, ai_view="positions")
-    monkeypatch.setenv("STAINID_MODE", "annotate")
-    monkeypatch.setenv("STAINID_ACCESS_CODE", "tma42")
-    assert client.get("/api/cores").status_code == 403
-    assert client.get("/api/images/fields/LIP-1_B-2_6E10_S01.jpg").status_code == 403
-    assert client.get("/api/annotate").status_code == 401
-    assert client.post("/api/session", json={"name": "Ann", "code": "nope"}).status_code == 403
-    session = client.get("/api/session").json()
-    assert session["mode"] == "annotate" and session["code_required"] and session["annotator"] is None
-    client.post("/api/session", json={"name": "Ann", "code": "tma42"})
-    tile = client.get("/api/annotate/plaques_together").json()["fields"][0]["tile_id"]
-    objects = client.get(f"/api/annotate/plaques_together/fields/{tile}").json()["ai"]["objects"]
-    assert objects and "model_class" not in objects[0]
-    assert client.get(f"/api/annotate/plaques_together/fields/{tile}/image.jpg").status_code == 200
-    assert client.post("/api/annotate", json={"name": "x", "stain": "6E10"}).status_code == 403
-    assert client.get("/api/annotate/plaques_together/export.csv").status_code == 403
-    monkeypatch.setenv("STAINID_ACCESS_CODE", "changed")
-    assert client.get("/api/annotate").status_code == 401
+
+def test_blind_session_hides_ai_classes(client):
+    annotation_session(client, ai_view="positions")
+    client.post("/api/annotate/plaques_together/open", json={"open": True})
+    ann = TestClient(client.app)
+    ann.post("/api/session/annotator", json={"name": "Ann"})
+    tile = ann.get("/api/annotate/plaques_together").json()["fields"][0]["tile_id"]
+    work = ann.get(f"/api/annotate/plaques_together/fields/{tile}").json()
+    assert work["ai"]["objects"] and "model_class" not in work["ai"]["objects"][0] and work["ai"]["layers"] == []
+    assert ann.get(f"/api/annotate/plaques_together/fields/{tile}/layer/dab.png").status_code == 404
+    assert client.get("/api/annotate-share").json()["links"][0].endswith("/annotate")

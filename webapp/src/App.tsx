@@ -1,11 +1,13 @@
-import { Link, NavLink, Navigate, Route, Routes } from 'react-router-dom'
+import { Link, NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import type { Job, Session } from './api'
+import { api } from './api'
 import { ErrorNote } from './components'
 import { useFetch, useStored } from './hooks'
 import { ProjectProvider, useProject } from './project'
-import { SessionContext, SignedIn } from './session'
-import Annotate from './pages/Annotate'
+import { AdminSignIn, Annotator, SessionContext, useSession } from './session'
 import AnnotateField from './pages/AnnotateField'
+import AnnotateHome from './pages/AnnotateHome'
+import AnnotationSessions from './pages/AnnotationSessions'
 import Calibration from './pages/Calibration'
 import Cohort from './pages/Cohort'
 import CoreView from './pages/CoreView'
@@ -23,40 +25,40 @@ import Workflow from './pages/Workflow'
 const NAV: { section: string; links: [string, string][] }[] = [
   { section: '', links: [['/', 'Home'], ['/workflow', 'Workflow']] },
   { section: 'Look at the data', links: [['/cohort', 'Cohort & cores'], ['/calibration', 'Stain thresholds']] },
-  { section: 'Improve accuracy', links: [['/label', 'Label & check'], ['/annotate', 'Annotate together'], ['/models', 'Models']] },
+  { section: 'Improve accuracy', links: [['/label', 'Label & check'], ['/annotations', 'Annotation sessions'], ['/models', 'Models']] },
   { section: 'Results', links: [['/results', 'Results']] },
   { section: '', links: [['/settings', 'Settings'], ['/help', 'Help']] },
 ]
 
 export default function App() {
   const session = useFetch<Session>('/api/session')
+  const { pathname } = useLocation()
   const [theme] = useStored<'system' | 'light' | 'dark'>('stainid.theme', 'system')
   if (theme === 'system') document.documentElement.removeAttribute('data-theme')
   else document.documentElement.setAttribute('data-theme', theme)
   if (!session.data) return <main className="main"><ErrorNote error={session.error} /></main>
+  const annotating = pathname === '/annotate' || pathname.startsWith('/annotate/')
   return (
     <SessionContext.Provider value={{ session: session.data, reload: session.reload }}>
-      {session.data.mode === 'annotate' ? <AnnotatorShell project={session.data.project} /> : <ProjectProvider><Shell /></ProjectProvider>}
+      {annotating ? <AnnotatorShell /> : session.data.admin ? <ProjectProvider><Shell /></ProjectProvider> : <AdminSignIn />}
     </SessionContext.Provider>
   )
 }
 
-/** The shared annotation server: only the annotation pages. */
-function AnnotatorShell({ project }: { project: string }) {
+/** The public annotation pages (/annotate): anyone with the link, for sessions the admin has started. */
+function AnnotatorShell() {
   return (
     <div>
       <header className="row" style={{ padding: '10px 24px', borderBottom: '1px solid var(--border)', background: 'var(--surface-2)' }}>
-        <div className="brand" style={{ margin: 0 }}><img src="/favicon.svg" alt="" />stainID</div>
-        <span className="muted small">{project} · annotation</span>
+        <Link to="/annotate" className="brand" style={{ margin: 0 }}><img src="/favicon.svg" alt="" />stainID annotation</Link>
         <span className="spacer" />
-        <SignedIn topBar />
+        <Annotator />
       </header>
       <main className="main">
         <Routes>
-          <Route path="/annotate" element={<Annotate />} />
+          <Route path="/annotate" element={<AnnotateHome />} />
           <Route path="/annotate/:name" element={<AnnotateField />} />
           <Route path="/annotate/:name/:tile" element={<AnnotateField />} />
-          <Route path="*" element={<Navigate to="/annotate" />} />
         </Routes>
       </main>
     </div>
@@ -65,6 +67,7 @@ function AnnotatorShell({ project }: { project: string }) {
 
 function Shell() {
   const { info } = useProject()
+  const { session, reload } = useSession()
   const [theme, setTheme] = useStored<'system' | 'light' | 'dark'>('stainid.theme', 'system')
   if (info && !info.configured) return <main className="main"><Welcome /></main>
 
@@ -91,10 +94,11 @@ function Shell() {
               <option value="dark">Dark</option>
             </select>
           </label>
-          <span>stainID v2</span>
+          <span className="row">stainID v2<span className="spacer" /><button className="link-btn" onClick={async () => { await api.del('/api/session/admin'); reload() }}>sign out</button></span>
         </div>
       </aside>
       <main className="main">
+        {session.default_password && <div className="instructions">The admin password is still the default (<b>admin</b>). <Link to="/settings#password">Change it in Settings</Link> before letting others on your network use stainID.</div>}
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/workflow" element={<Workflow />} />
@@ -104,9 +108,7 @@ function Shell() {
           <Route path="/calibration" element={<Calibration />} />
           <Route path="/label" element={<Reviews />} />
           <Route path="/label/*" element={<ReviewLabel />} />
-          <Route path="/annotate" element={<Annotate />} />
-          <Route path="/annotate/:name" element={<AnnotateField />} />
-          <Route path="/annotate/:name/:tile" element={<AnnotateField />} />
+          <Route path="/annotations" element={<AnnotationSessions />} />
           <Route path="/models" element={<Models />} />
           <Route path="/results" element={<Results />} />
           <Route path="/settings" element={<Settings />} />

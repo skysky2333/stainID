@@ -26,6 +26,9 @@ const FAQ: [string, React.ReactNode][] = [
     (100–200 objects is a good start), train, and switch to the new model if it scores better. Then re-run the detection step with “Start over”.</>],
   ['A step says “Made with an older model”.', <>You switched to a different model after that step ran. The existing results stay as they are
     until you run the step again with <b>Start over</b> (under Advanced options); then “Make results tables” again.</>],
+  ['How do other people annotate for me?', <>On <Link to="/annotations">Annotation sessions</Link>, create a session and press Start, then send people the link shown there
+    (it ends in /annotate). They type their name and annotate in their browser; you follow their progress and download the annotations on the same page.
+    Change the admin password in <Link to="/settings">Settings</Link> first: everything except the annotation pages needs it.</>],
   ['Is anything deleted?', <>No. “Start over” and uploads move old files aside with a date in their name; nothing is removed.</>],
 ]
 

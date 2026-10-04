@@ -77,15 +77,15 @@ export interface ModelInfo {
   size_mb?: number; modified?: string; bundle?: Record<string, unknown>
 }
 
-export interface Session { mode: 'annotate' | 'full'; annotator: string | null; code_required: boolean; project: string }
+export interface Session { admin: boolean; annotator: string | null; default_password: boolean; local: boolean; project: string | null }
 export type AiView = 'full' | 'positions' | 'none'
 export interface AnnotationMeta {
   name: string; title: string; stain: string; fields: string[]; labels: string[]; tags: string[]; tools: string[]; ai_view: AiView
-  per_field: number; instructions: string; created: number
+  per_field: number; instructions: string; created: number; open: boolean
 }
 export interface AnnotationListItem {
-  name: string; title: string; stain: string; tools: string[]; ai_view: AiView; per_field: number; created: number
-  fields: number; fields_covered: number; done_by_me: number
+  name: string; title: string; stain: string; tools: string[]; ai_view: AiView; per_field: number; created: number; open: boolean
+  fields: number; fields_covered: number; done_by_me: number; annotators: number
 }
 export interface AnnotationField { tile_id: string; done_by_me: boolean; annotators_done: number; open_by_others: number }
 export interface AnnotationDetail { meta: AnnotationMeta; fields: AnnotationField[]; annotator: string | null }

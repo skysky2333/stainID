@@ -8,11 +8,16 @@ Double-click `Start stainID.command` (macOS) or `Start stainID.bat` (Windows), o
 stainid serve                              # opens http://127.0.0.1:8765 in the browser
 stainid --project path/to/study serve      # open a specific project
 stainid serve --no-browser --port 9000
+stainid serve --host 127.0.0.1             # reachable from this computer only
 ```
 
 The app opens the project used last, or the current folder. If that folder has no `stainid.yaml`, a welcome screen
 offers to create a new project or open an existing one. If stainID is already running, starting it again just opens the
-browser. The app runs on your computer only and has no login, so do not expose it on a network.
+browser.
+
+**Admin password.** The app asks for the admin password; it is `admin` until you change it under *Settings → Admin
+password*. The app listens on your network (so annotators can reach the annotation pages), but everything except
+those pages needs the password, and while it is still `admin` you can only sign in on the computer running stainID.
 
 ## A study, from start to finish
 
@@ -68,7 +73,7 @@ are marked **Made with an older model** until you run them again with *Start ove
 | **Cohort & cores** | Every core of every TMA; click one to open the viewer. Layers: detections by class, outlines, DAB above the slide threshold, excluded regions, AT8 threads and field boundaries. Scroll to zoom. |
 | **Stain thresholds** | The DAB threshold of every slide and why it exists. |
 | **Label & check** | Training sets, check sets, the form to create a check set, and older study sets (read-only). |
-| **Annotate together** | Annotation projects where several people annotate whole fields, see the AI output, and are compared with each other and with the AI. |
+| **Annotation sessions** | Sessions in which other people annotate whole fields (optionally seeing the AI output): create, start and stop them, share the link, follow results and download annotations. |
 | **Models** | Every model with its status and settings, download buttons, the three-step training flow, and trained models compared with the current one. |
 | **Results** | The main results table (download), every other table, plots by group and region, and the meaning of every column. |
 | **Settings** | Study name, TMA layout, diagnostic groups and every file location, with a folder picker. Also opens or creates another project. |
@@ -96,39 +101,37 @@ Every set is a folder under `outputs.reviews` (`reviews/<name>` or `training/<na
 | `meta.json` | stain, label options, crop size, instructions, purpose |
 | `features.csv`, `embeddings.npy` | training sets only: the candidates' features (and Phikon embeddings for 6E10) |
 
-## Annotating together
+## Annotation sessions
 
-An **annotation project** is a set of whole fields that one or more people annotate, each signed in with their name.
-Create one on the *Annotate together* page and choose:
+Other people can annotate fields for you through their web browser; everything is managed on the *Annotation
+sessions* page.
 
-- **What people can do**: label the AI detections (click a circled object), mark objects the AI missed (points),
-  draw outlines (polygons) and tag the whole field (e.g. white matter, fold, unusable). Labels and tags are lists you
-  type in; each field also has a free-text note.
-- **What people see of the AI**: detections with their classes, outlines and DAB/exclusion/thread layers; only the
-  positions of the detections (blind to what the AI decided); or nothing.
-- **Annotators per field**: 1 shares the fields out between people; 2 or more gives independent repeat annotations, so
-  agreement can be measured. Each person is sent to the field that most needs them and that nobody else has open.
+1. **Create a session**: the stain and how many fields (drawn at random, balanced across groups, in shuffled order) or
+   a list of field IDs, and
+   - **what people can do**: label the AI detections (click a circled object), mark objects the AI missed (points),
+     draw outlines (polygons) and tag the whole field (e.g. white matter, fold, unusable); labels and tags are lists you
+     type in, and each field also has a free-text note;
+   - **what people see of the AI**: detections with their classes, outlines and DAB/exclusion/thread layers; only the
+     positions of the detections (blind to what the AI decided); or nothing;
+   - **annotators per field**: 1 shares the fields out between people; 2 or more gives independent repeat
+     annotations, so agreement can be measured. Each person is sent to the field that most needs them and that nobody
+     else has open.
+2. **Start** it. Send people the link shown on the page (`http://<this computer>:8765/annotate`). They type their name
+   and annotate; each person works in their own layer, so nobody overwrites anyone else, and they can stop and continue
+   later under the same name. Only started sessions are listed, and nothing else in stainID is reachable without the
+   admin password.
+3. **Results** shows each person's progress, agreement between people on the same AI objects, and the AI class against
+   the human label; *Download all annotations (CSV)* gives every annotation (coordinates in field-crop pixels, with
+   core, TMA, group and region). **Stop** closes the session to annotators but keeps everything; **Delete** moves it
+   aside (`sessions/.deleted`).
 
-Every annotation is saved instantly under the annotator's name, so nobody overwrites anyone else; edits and deletions
-are kept as history. The *Results* button shows each person's progress, agreement between annotators on the same AI
-objects, and the AI class against the human label, and downloads every annotation as one CSV (coordinates in
-field-crop pixels, with core, TMA, group and region).
+The link works for computers on the same network. For people elsewhere, forward the port on your router or use a
+tunnel (e.g. `cloudflared tunnel --url http://localhost:8765`); change the admin password first.
 
-**Letting other people in.** In the project folder run
-
-```bash
-stainid serve --annotate --access-code <choose a code>
-```
-
-This starts a second server (port 8766, reachable from your network) that shows only the annotation pages: running
-steps, settings, files and the rest of the cohort stay private, and project creation, results and downloads stay in
-your own app. People open the printed address, sign in with their name and the code, and continue where they left off
-on any computer. For people outside your network, put that port behind a tunnel (e.g. `cloudflared tunnel --url
-http://localhost:8766`) or a reverse proxy with HTTPS.
-
-Each project is a folder `outputs.reviews/shared/<name>` with `meta.json` (fields, labels, tools, AI view) and
-`annotations.jsonl`, one line per saved annotation (`annotator`, `tile_id`, `type`, `label`, `points`, the AI object's
-class and probability for labelled detections, `time`, `deleted`); the latest line per annotator and annotation counts.
+Each session is a folder `outputs.reviews/sessions/<name>` with `meta.json` (fields, labels, tools, AI view, whether it
+is running) and `annotations.jsonl`, one line per saved annotation (`annotator`, `tile_id`, `type`, `label`, `points`,
+the AI object's class and probability for labelled detections, `time`, `deleted`); the latest line per annotator and
+annotation counts.
 
 ## Training a model
 

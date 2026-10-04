@@ -1,7 +1,7 @@
-"""Shared field annotation: several people annotate whole fields, each in their own layer, optionally seeing the AI output.
+"""Annotation sessions: several people annotate whole fields, each in their own layer, optionally seeing the AI output.
 
-An annotation project is a folder with `meta.json` (stain, fields, labels, enabled tools, what annotators see of the AI)
-and `annotations.jsonl`, one append-only log written by every annotator (and by every server process, under a file lock).
+A session is a folder with `meta.json` (stain, fields, labels, enabled tools, what annotators see of the AI, whether it
+is open to annotators) and `annotations.jsonl`, one append-only log written by every annotator (under a file lock).
 Each line is one version of one annotation: {id, annotator, tile_id, type, label, points, ai, note, time, deleted}.
 The latest version of (annotator, id) wins, so edits and deletions keep the full history.
 
@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import shutil
 import time
 from collections import Counter
 from itertools import combinations
@@ -19,10 +20,12 @@ from pathlib import Path
 
 import pandas as pd
 
+from stainid.tables import write_text_atomic
+
 TYPES = ("object", "point", "polygon", "tag", "note", "done")
 TOOLS = ("object", "point", "polygon", "tag")
 AI_VIEWS = ("full", "positions", "none")
-FOLDER = "shared"
+FOLDER = "sessions"
 _CACHE: dict[Path, tuple[tuple[int, int], list[dict]]] = {}
 
 
@@ -39,7 +42,7 @@ def create(root: Path, name: str, title: str, stain: str, fields: list[str], lab
         raise ValueError(f"tools must come from {TOOLS} and ai_view from {AI_VIEWS}")
     target.mkdir(parents=True)
     meta = {"name": name, "title": title or name, "stain": stain, "fields": fields, "labels": labels, "tags": tags, "tools": tools,
-            "ai_view": ai_view, "per_field": per_field, "instructions": instructions, "created": time.time()}
+            "ai_view": ai_view, "per_field": per_field, "instructions": instructions, "created": time.time(), "open": False}
     (target / "meta.json").write_text(json.dumps(meta, indent=1))
     (target / "annotations.jsonl").touch()
     return meta
@@ -47,6 +50,19 @@ def create(root: Path, name: str, title: str, stain: str, fields: list[str], lab
 
 def meta(root: Path, name: str) -> dict:
     return json.loads((folder(root, name) / "meta.json").read_text())
+
+
+def set_open(root: Path, name: str, is_open: bool) -> dict:
+    updated = {**meta(root, name), "open": is_open}
+    write_text_atomic(folder(root, name) / "meta.json", json.dumps(updated, indent=1))
+    return updated
+
+
+def remove(root: Path, name: str) -> Path:
+    """Moves the session aside (into sessions/.deleted) rather than erasing its annotations."""
+    target = root / FOLDER / ".deleted" / f"{name}-{time.strftime('%Y%m%d-%H%M%S')}"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    return Path(shutil.move(folder(root, name), target))
 
 
 def names(root: Path) -> list[str]:

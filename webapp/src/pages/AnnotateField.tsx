@@ -4,10 +4,10 @@ import type { AnnotationDetail, FieldObject, FieldWork, Mark } from '../api'
 import { api, enc } from '../api'
 import { Empty, ErrorNote, PageHead, Progress, fmt } from '../components'
 import { useFetch, useStored } from '../hooks'
-import { SignIn, SignedIn, useSession } from '../session'
+import { Register, useSession } from '../session'
 import type { ImagePoint } from '../viewer'
 import { CLASS_STYLE, RASTER_LAYERS, ZoomViewer } from '../viewer'
-import { AI_VIEW_TEXT } from './Annotate'
+import { AI_VIEW_TEXT } from './AnnotationSessions'
 
 const COLORS = ['#ff4fd8', '#ff8c1a', '#facc15', '#4ade80', '#a78bfa', '#f87171', '#e2e8f0', '#22d3ee', '#2dd4bf']
 type Tool = 'object' | 'point' | 'polygon'
@@ -34,7 +34,7 @@ function inside(polygon: number[][], x: number, y: number) {
 export default function AnnotateFieldPage() {
   const { session } = useSession()
   const { name = '', tile } = useParams()
-  if (!session.annotator) return <><PageHead title="Annotate" /><SignIn /></>
+  if (!session.annotator) return <><PageHead title="Annotate" /><Register /></>
   return tile ? <Workspace key={tile} name={name} tile={tile} /> : <NextField name={name} />
 }
 
@@ -46,9 +46,9 @@ function NextField({ name }: { name: string }) {
   }, [next.data, name, navigate])
   return (
     <>
-      <PageHead title="Annotate" subtitle={<Link to="/annotate">← All annotation projects</Link>}><SignedIn /></PageHead>
+      <PageHead title="Annotate" subtitle={<Link to="/annotate">← All sessions</Link>}></PageHead>
       <ErrorNote error={next.error} />
-      {next.data && !next.data.tile_id && <Empty>You have finished every field in this project. Thank you! You can still reopen a field from the list on any field page.</Empty>}
+      {next.data && !next.data.tile_id && <Empty>You have finished every field in this session. Thank you! You can still reopen a field from the list on any field page.</Empty>}
     </>
   )
 }
@@ -200,8 +200,8 @@ function Workspace({ name, tile }: { name: string; tile: string }) {
 
   return (
     <>
-      <PageHead title={meta?.title ?? name} subtitle={<span><Link to="/annotate">← All annotation projects</Link> · {meta?.stain} · field {position + 1} of {fields.length}
-        {meta && ` · ${AI_VIEW_TEXT[meta.ai_view]}`}</span>}><SignedIn /></PageHead>
+      <PageHead title={meta?.title ?? name} subtitle={<span><Link to="/annotate">← All sessions</Link> · {meta?.stain} · field {position + 1} of {fields.length}
+        {meta && ` · ${AI_VIEW_TEXT[meta.ai_view]}`}</span>}></PageHead>
       <ErrorNote error={detail.error ?? work.error ?? error} />
       {meta?.instructions && <div className="instructions">{meta.instructions}</div>}
       {work.data && meta && (
@@ -265,7 +265,7 @@ function Workspace({ name, tile }: { name: string; tile: string }) {
                   ))}
                 </div>
               </>}
-              {!tools.length && <p className="muted small">This project only asks for field tags (below).</p>}
+              {!tools.length && <p className="muted small">This session only asks for field tags (below).</p>}
             </div>
             {(selectedMark || selectedObject) && (
               <div className="card">

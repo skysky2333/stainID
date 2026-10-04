@@ -15,11 +15,6 @@ from stainid.project import Project, load_project
 SETTINGS = Path.home() / ".stainid" / "app.json"
 
 
-def shared() -> bool:
-    """`stainid serve --annotate`: annotation pages only, and no job runner (the owner's own app runs the steps)."""
-    return os.environ.get("STAINID_MODE") == "annotate"
-
-
 def _read(path: Path, **kwargs) -> pd.DataFrame:
     return pd.read_csv(path, **kwargs) if path.exists() else pd.DataFrame()
 
@@ -157,8 +152,7 @@ def _open(path: Path | str) -> ProjectState:
     if runner is not None:
         runner.root = project.root
         state.__dict__["jobs"] = runner
-    if not shared():
-        state.jobs  # start the job runner now, inside the lock, so parallel first requests share one runner
+    state.jobs  # start the job runner now, inside the lock, so parallel first requests share one runner
     _STATE = state
     return _STATE
 

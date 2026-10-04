@@ -9,21 +9,22 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from stainid.api.routes import analysis, annotate, cohort, images, jobs, models, project, reviews, session, slides
-from stainid.api.session import shared
+from stainid.api.session import is_admin
 
 STATIC = Path(__file__).parent / "static"
-SHARED_API = re.compile(r"^/api/(session|annotate)(/|$)")
+PUBLIC_API = re.compile(r"^/api/(session|annotate)(/|$)")
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="stainID", version="2.0", docs_url=None if shared() else "/docs", redoc_url=None, openapi_url=None if shared() else "/openapi.json")
+    app = FastAPI(title="stainID", version="2.0", docs_url=None, redoc_url=None, openapi_url=None)
     for module in (project, slides, cohort, images, jobs, reviews, analysis, models, session, annotate):
         app.include_router(module.router, prefix="/api")
 
     @app.middleware("http")
-    async def shared_mode(request: Request, call_next):
-        if shared() and request.url.path.startswith("/api") and not SHARED_API.match(request.url.path):
-            return JSONResponse({"detail": "not available on the shared annotation server"}, status_code=403)
+    async def admin_only(request: Request, call_next):
+        """Everything but sign-in and the annotation pages needs the admin password."""
+        if request.url.path.startswith("/api") and not PUBLIC_API.match(request.url.path) and not is_admin(request):
+            return JSONResponse({"detail": "admin sign-in required"}, status_code=401)
         return await call_next(request)
 
     if (STATIC / "index.html").exists():

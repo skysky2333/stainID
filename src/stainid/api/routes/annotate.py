@@ -1,18 +1,20 @@
 from __future__ import annotations
 
+import os
 import re
+import socket
 import threading
 import time
 from pathlib import Path
 
 import pandas as pd
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from stainid.api import render
 from stainid.api.routes.images import OVERLAYS
-from stainid.api.session import admin_only, annotator, viewer
+from stainid.api.session import annotator, annotator_name, is_admin, require_admin
 from stainid.api.state import get_state
 from stainid.api.util import records
 from stainid.outputs import objects
@@ -31,15 +33,26 @@ def root() -> Path:
     return get_state().project.output("reviews")
 
 
-def project(name: str) -> dict:
+def viewer(request: Request) -> str | None:
+    """A registered annotator, or the admin (who may look without registering)."""
+    name = annotator_name(request)
+    if name is None and not is_admin(request):
+        raise HTTPException(401, "register with your name first")
+    return name
+
+
+def project(name: str, request: Request) -> dict:
     if not re.fullmatch(r"[A-Za-z0-9_\-]+", name) or name not in store.names(root()):
-        raise HTTPException(404, f"no annotation project {name}")
-    return store.meta(root(), name)
+        raise HTTPException(404, f"no annotation session {name}")
+    meta = store.meta(root(), name)
+    if not meta["open"] and not is_admin(request):
+        raise HTTPException(403, "this annotation session is not open at the moment")
+    return meta
 
 
 def field(meta: dict, tile_id: str) -> dict:
     if tile_id not in meta["fields"]:
-        raise HTTPException(404, f"{tile_id} is not part of this annotation project")
+        raise HTTPException(404, f"{tile_id} is not part of this annotation session")
     return get_state().tile(tile_id)
 
 
@@ -87,13 +100,20 @@ class Marks(BaseModel):
     records: list[Mark]
 
 
+class Opening(BaseModel):
+    open: bool
+
+
 @router.get("/annotate")
-def list_projects(person: str | None = Depends(viewer)) -> list[dict]:
+def list_projects(request: Request, person: str | None = Depends(viewer)) -> list[dict]:
     out = []
     for name in store.names(root()):
         meta = store.meta(root(), name)
+        if not meta["open"] and not is_admin(request):
+            continue
         done = store.done_by(store.current(root(), name))
-        out.append({**{k: meta[k] for k in ("name", "title", "stain", "tools", "ai_view", "per_field", "created")}, "fields": len(meta["fields"]),
+        out.append({**{k: meta[k] for k in ("name", "title", "stain", "tools", "ai_view", "per_field", "created", "open")}, "fields": len(meta["fields"]),
+                    "annotators": len({r["annotator"] for r in store.current(root(), name)}),
                     "fields_covered": sum(len(done.get(t, set())) >= meta["per_field"] for t in meta["fields"]),
                     "done_by_me": sum(person in done.get(t, set()) for t in meta["fields"]) if person else 0})
     return out
@@ -104,7 +124,16 @@ def defaults() -> dict:
     return {"labels": DEFAULT_LABELS, "tags": DEFAULT_TAGS, "tools": list(store.TOOLS), "ai_views": list(store.AI_VIEWS)}
 
 
-@router.post("/annotate", dependencies=[Depends(admin_only)])
+@router.get("/annotate-share")
+def share(request: Request) -> dict:
+    """Addresses at which other computers on the network reach the annotation pages."""
+    port = request.url.port or 80
+    host = socket.gethostname()
+    addresses = sorted({a[4][0] for a in socket.getaddrinfo(host, None, socket.AF_INET)} - {"127.0.0.1"})
+    return {"links": [f"http://{a}:{port}/annotate" for a in [*addresses, host]], "network": os.environ.get("STAINID_HOST", "0.0.0.0") != "127.0.0.1"}
+
+
+@router.post("/annotate", dependencies=[Depends(require_admin)])
 def create(request: NewProject) -> dict:
     if not re.fullmatch(r"[A-Za-z0-9_\-]+", request.name):
         raise HTTPException(400, "name may contain letters, digits, - and _ only")
@@ -130,15 +159,27 @@ def create(request: NewProject) -> dict:
                             request.tags if request.tags is not None else DEFAULT_TAGS, request.tools, request.ai_view, max(1, request.per_field),
                             request.instructions)
     except FileExistsError:
-        raise HTTPException(409, "an annotation project with this name exists")
+        raise HTTPException(409, "an annotation session with this name exists")
     except ValueError as error:
         raise HTTPException(400, str(error))
     return meta
 
 
+@router.post("/annotate/{name}/open", dependencies=[Depends(require_admin)])
+def set_open(name: str, body: Opening, request: Request) -> dict:
+    project(name, request)
+    return store.set_open(root(), name, body.open)
+
+
+@router.delete("/annotate/{name}", dependencies=[Depends(require_admin)])
+def delete(name: str, request: Request) -> dict:
+    project(name, request)
+    return {"moved_to": str(store.remove(root(), name))}
+
+
 @router.get("/annotate/{name}")
-def detail(name: str, person: str | None = Depends(viewer)) -> dict:
-    meta = project(name)
+def detail(name: str, request: Request, person: str | None = Depends(viewer)) -> dict:
+    meta = project(name, request)
     done = store.done_by(store.current(root(), name))
     open_now = busy(name)
     fields = [{"tile_id": t, "done_by_me": bool(person) and person in done.get(t, set()), "annotators_done": len(done.get(t, set())),
@@ -147,14 +188,14 @@ def detail(name: str, person: str | None = Depends(viewer)) -> dict:
 
 
 @router.get("/annotate/{name}/next")
-def next_field(name: str, person: str = Depends(annotator)) -> dict:
-    meta = project(name)
+def next_field(name: str, request: Request, person: str = Depends(annotator)) -> dict:
+    meta = project(name, request)
     return {"tile_id": store.next_field(meta, store.current(root(), name), person, busy(name))}
 
 
 @router.get("/annotate/{name}/fields/{tile_id}")
-def open_field(name: str, tile_id: str, person: str = Depends(annotator)) -> dict:
-    meta = project(name)
+def open_field(name: str, tile_id: str, request: Request, person: str = Depends(annotator)) -> dict:
+    meta = project(name, request)
     tile = field(meta, tile_id)
     busy(name, tile_id, person)
     state = get_state()
@@ -170,13 +211,13 @@ def open_field(name: str, tile_id: str, person: str = Depends(annotator)) -> dic
 
 
 @router.post("/annotate/{name}/fields/{tile_id}")
-def save(name: str, tile_id: str, request: Marks, person: str = Depends(annotator)) -> list[dict]:
-    meta = project(name)
+def save(name: str, tile_id: str, body: Marks, request: Request, person: str = Depends(annotator)) -> list[dict]:
+    meta = project(name, request)
     tile = field(meta, tile_id)
     busy(name, tile_id, person)
     found = None
     clean = []
-    for mark in request.records:
+    for mark in body.records:
         record = {"id": mark.id[:80], "annotator": person, "tile_id": tile_id, "type": mark.type, "label": mark.label, "points": mark.points,
                   "note": mark.note[:2000], "deleted": mark.deleted}
         if mark.type not in store.TYPES or (mark.type in store.TOOLS and mark.type not in meta["tools"]):
@@ -200,27 +241,27 @@ def save(name: str, tile_id: str, request: Marks, person: str = Depends(annotato
 
 
 @router.get("/annotate/{name}/fields/{tile_id}/image.jpg")
-def image(name: str, tile_id: str, person: str | None = Depends(viewer)) -> FileResponse:
-    field(project(name), tile_id)
+def image(name: str, tile_id: str, request: Request, person: str | None = Depends(viewer)) -> FileResponse:
+    field(project(name, request), tile_id)
     return FileResponse(render.field_jpeg(get_state(), tile_id), headers={"Cache-Control": "private, max-age=86400"})
 
 
 @router.get("/annotate/{name}/fields/{tile_id}/layer/{layer}.png")
-def layer(name: str, tile_id: str, layer: str, person: str | None = Depends(viewer)) -> FileResponse:
-    meta = project(name)
+def layer(name: str, tile_id: str, layer: str, request: Request, person: str | None = Depends(viewer)) -> FileResponse:
+    meta = project(name, request)
     tile = field(meta, tile_id)
     if meta["ai_view"] != "full" or layer not in LAYERS.get(tile["stain"], []):
         raise HTTPException(404, f"layer {layer} is not shown in this project")
     return FileResponse(OVERLAYS[layer](get_state(), tile_id), headers={"Cache-Control": "private, max-age=86400"})
 
 
-@router.get("/annotate/{name}/summary", dependencies=[Depends(admin_only)])
-def summary(name: str) -> dict:
-    return store.summary(project(name), store.current(root(), name))
+@router.get("/annotate/{name}/summary", dependencies=[Depends(require_admin)])
+def summary(name: str, request: Request) -> dict:
+    return store.summary(project(name, request), store.current(root(), name))
 
 
-@router.get("/annotate/{name}/export.csv", dependencies=[Depends(admin_only)])
-def export(name: str) -> Response:
-    project(name)
+@router.get("/annotate/{name}/export.csv", dependencies=[Depends(require_admin)])
+def export(name: str, request: Request) -> Response:
+    project(name, request)
     table = store.export(store.current(root(), name), get_state().tiles)
     return Response(table.to_csv(index=False), media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="{name}_annotations.csv"'})

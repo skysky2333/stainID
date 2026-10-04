@@ -1,79 +1,98 @@
 import { useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
 import type { AiView, AnnotationListItem, AnnotationSummary } from '../api'
 import { api } from '../api'
 import { Empty, ErrorNote, HelpBox, PageHead, Progress, withError } from '../components'
 import { useFetch } from '../hooks'
-import { SignIn, SignedIn, useSession } from '../session'
+import { useSession } from '../session'
 
 export const AI_VIEW_TEXT: Record<AiView, string> = {
   full: 'AI detections, classes and overlays shown',
   positions: 'AI positions only (blind to what the AI decided)',
   none: 'no AI shown',
 }
-const TOOL_TEXT: Record<string, string> = {
+export const TOOL_TEXT: Record<string, string> = {
   object: 'label the AI detections', point: 'mark objects the AI missed', polygon: 'draw outlines', tag: 'tag the whole field',
 }
 
-export default function Annotate() {
+export default function AnnotationSessions() {
   const { session } = useSession()
-  const admin = session.mode === 'full'
-  const list = useFetch<AnnotationListItem[]>(admin || session.annotator ? '/api/annotate' : null)
+  const list = useFetch<AnnotationListItem[]>('/api/annotate', 10000)
+  const share = useFetch<{ links: string[]; network: boolean }>('/api/annotate-share')
   const [open, setOpen] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const sessions = list.data ?? []
+  const running = sessions.filter((s) => s.open)
+
+  const setRunning = async (name: string, value: boolean) => {
+    if (await withError(() => api.post(`/api/annotate/${name}/open`, { open: value }), setError)) list.reload()
+  }
+  const remove = async (s: AnnotationListItem) => {
+    if (!window.confirm(`Delete the session “${s.title}”? It is closed to annotators and moved aside (its annotations are kept in the project folder).`)) return
+    if (await withError(() => api.del(`/api/annotate/${s.name}`), setError)) { setOpen(null); list.reload() }
+  }
 
   return (
     <>
-      <PageHead title="Annotate together" subtitle={admin ? 'Several people annotate whole fields, each in their own layer, and can see what the AI found.' : `Project ${session.project}`}>
-        <SignedIn />
-      </PageHead>
-      {admin && (
-        <HelpBox id="annotate">
-          <ul>
-            <li>Create an <b>annotation project</b> below: a set of fields, the labels people may use, and what they see of the AI.</li>
-            <li>Each person signs in with their name; every annotation is saved under that name, so nobody overwrites anyone else.
-              With 1 annotator per field the fields are shared out; with 2 or more, each field is annotated independently by several people (for agreement).</li>
-            <li>To let others in, run <code>stainid serve --annotate --access-code &lt;choose a code&gt;</code> in the project folder. It starts a second,
-              annotation-only server on port 8766 that people on your network can open (it prints the address). Running steps, settings and files stay private.</li>
-            <li>For people outside your network, put the annotation server behind a tunnel, e.g. <code>cloudflared tunnel --url http://localhost:8766</code>.</li>
-          </ul>
-        </HelpBox>
-      )}
-      {!session.annotator && <div style={{ marginBottom: 16 }}><SignIn /></div>}
-      <ErrorNote error={list.error} />
-      {list.data && (
-        <div className="card">
-          <h2>Annotation projects</h2>
-          {list.data.length ? (
-            <table>
-              <thead><tr><th>Project</th><th>Stain</th><th>Tools</th><th>AI</th><th style={{ width: 200 }}>Fields covered</th>{session.annotator && <th>Done by you</th>}<th /></tr></thead>
-              <tbody>
-                {list.data.map((p) => (
-                  <tr key={p.name}>
-                    <td>{p.title}<div className="muted small">{p.name} · {p.per_field} annotator{p.per_field > 1 ? 's' : ''} per field</div></td>
-                    <td>{p.stain}</td>
-                    <td className="small secondary wrap">{p.tools.map((t) => TOOL_TEXT[t]).join(', ')}</td>
-                    <td className="small secondary wrap">{AI_VIEW_TEXT[p.ai_view]}</td>
-                    <td><Progress done={p.fields_covered} total={p.fields} /><span className="muted small">{p.fields_covered} of {p.fields}</span></td>
-                    {session.annotator && <td className="num">{p.done_by_me}</td>}
-                    <td className="row" style={{ flexWrap: 'nowrap' }}>
-                      {session.annotator && <Link className="btn small primary" to={`/annotate/${p.name}`}>{p.done_by_me ? 'Continue' : 'Start'}</Link>}
-                      {admin && <button className="btn small" onClick={() => setOpen(open === p.name ? null : p.name)}>{open === p.name ? 'Hide results' : 'Results'}</button>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : <Empty>{admin ? 'No annotation projects yet — create one below.' : 'No annotation projects yet.'}</Empty>}
-        </div>
-      )}
-      {admin && open && <Results key={open} name={open} />}
-      {admin && <NewProject onCreated={list.reload} />}
+      <PageHead title="Annotation sessions" subtitle="Let other people annotate fields, with or without seeing the AI, and collect their annotations here." />
+      <HelpBox id="annotation-sessions">
+        <ol>
+          <li><b>Create a session</b> below: which fields, which labels and tools, and what people see of the AI.</li>
+          <li><b>Start</b> it. Annotators open the link below, type their name and annotate; each person works in their own layer, so nobody overwrites anyone else.</li>
+          <li>Follow progress and agreement under <b>Results</b>, download everything as CSV, and <b>Stop</b> the session when you have enough. Stopped sessions are closed to annotators but keep all annotations.</li>
+        </ol>
+      </HelpBox>
+      <div className="card" style={{ marginBottom: 16 }}>
+        <h2>Link for annotators</h2>
+        {share.data && (share.data.network ? <>
+          <p className="muted small">People on the same network open this address (it lists the sessions you have started). The rest of stainID stays behind your admin password.</p>
+          <div className="grid" style={{ gap: 6 }}>
+            {share.data.links.map((link) => (
+              <div key={link} className="row"><code className="path-box">{link}</code>
+                <button className="btn small" onClick={() => navigator.clipboard?.writeText(link)}>Copy</button></div>
+            ))}
+          </div>
+          <p className="muted small">For people outside your network, forward this computer's port or use a tunnel (e.g. <code>cloudflared tunnel --url http://localhost:8765</code>). On macOS, allow incoming connections for Python if asked.</p>
+        </> : <p className="small">stainID only listens on this computer. Restart it with <code>stainid serve</code> (without <code>--host 127.0.0.1</code>) so others can reach the annotation pages.</p>)}
+        {session.default_password && <p className="small" style={{ color: 'var(--warning)' }}>Your admin password is still the default. Change it in Settings before sharing the link.</p>}
+        <p className="muted small">{running.length ? `${running.length} session${running.length > 1 ? 's' : ''} running.` : 'No session is running, so annotators will see an empty list.'}</p>
+        <ErrorNote error={share.error} />
+      </div>
+      <ErrorNote error={list.error ?? error} />
+      <div className="card">
+        <h2>Sessions</h2>
+        {sessions.length ? (
+          <table>
+            <thead><tr><th>Session</th><th>Status</th><th>Stain</th><th>What people do · see</th><th style={{ width: 180 }}>Fields covered</th><th className="num">People</th><th /></tr></thead>
+            <tbody>
+              {sessions.map((s) => (
+                <tr key={s.name}>
+                  <td>{s.title}<div className="muted small">{s.name} · {s.per_field} annotator{s.per_field > 1 ? 's' : ''} per field</div></td>
+                  <td>{s.open ? <span className="badge status-running">running</span> : <span className="badge">stopped</span>}</td>
+                  <td>{s.stain}</td>
+                  <td className="small secondary wrap" style={{ maxWidth: 280 }}>{s.tools.map((t) => TOOL_TEXT[t]).join(', ')} · {AI_VIEW_TEXT[s.ai_view]}</td>
+                  <td><Progress done={s.fields_covered} total={s.fields} /><span className="muted small">{s.fields_covered} of {s.fields}</span></td>
+                  <td className="num">{s.annotators}</td>
+                  <td className="row" style={{ flexWrap: 'nowrap' }}>
+                    {s.open ? <button className="btn small" onClick={() => setRunning(s.name, false)}>Stop</button>
+                      : <button className="btn small primary" onClick={() => setRunning(s.name, true)}>Start</button>}
+                    <button className="btn small" onClick={() => setOpen(open === s.name ? null : s.name)}>{open === s.name ? 'Hide results' : 'Results'}</button>
+                    <a className="btn small" href={`/annotate/${s.name}`} target="_blank" rel="noreferrer">Annotate</a>
+                    <button className="btn small" onClick={() => remove(s)}>Delete</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : <Empty>No sessions yet — create one below.</Empty>}
+      </div>
+      {open && <Results key={open} name={open} />}
+      <NewSession onCreated={list.reload} />
     </>
   )
 }
 
 function Results({ name }: { name: string }) {
-  const summary = useFetch<AnnotationSummary>(`/api/annotate/${name}/summary`)
+  const summary = useFetch<AnnotationSummary>(`/api/annotate/${name}/summary`, 15000)
   const data = summary.data
   const labels = Array.from(new Set((data?.ai_vs_human ?? []).map((r) => r.label)))
   const classes = Array.from(new Set((data?.ai_vs_human ?? []).map((r) => r.ai_class)))
@@ -125,8 +144,7 @@ function Results({ name }: { name: string }) {
   )
 }
 
-function NewProject({ onCreated }: { onCreated: () => void }) {
-  const navigate = useNavigate()
+function NewSession({ onCreated }: { onCreated: () => void }) {
   const defaults = useFetch<{ labels: Record<string, string[]>; tags: string[]; tools: string[]; ai_views: AiView[] }>('/api/annotate-defaults')
   const [form, setForm] = useState({ name: '', title: '', stain: 'NeuN', n_fields: 20, per_group: true, tile_ids: '', labels: '', tags: '',
     tools: ['object', 'point', 'polygon', 'tag'], ai_view: 'full' as AiView, per_field: 1, instructions: '' })
@@ -146,12 +164,12 @@ function NewProject({ onCreated }: { onCreated: () => void }) {
       ...form, labels: lines(form.labels), tags: lines(form.tags), tile_ids: tileIds.length ? tileIds : null,
     }), setError)
     setBusy(false)
-    if (result) { onCreated(); navigate(`/annotate/${result.name}`) }
+    if (result) { onCreated(); setForm((f) => ({ ...f, name: '', title: '', tile_ids: '' })) }
   }
 
   return (
     <div className="card" style={{ marginTop: 16 }}>
-      <h2>New annotation project</h2>
+      <h2>New annotation session</h2>
       <div className="row" style={{ alignItems: 'flex-end' }}>
         <label className="field">Name<input type="text" value={form.name} placeholder="e.g. neun_fields_1" onChange={(e) => set('name', e.target.value.replace(/[^A-Za-z0-9_-]/g, '_'))} /></label>
         <label className="field" style={{ flex: 1 }}>Title shown to annotators<input type="text" value={form.title} onChange={(e) => set('title', e.target.value)} /></label>
@@ -160,7 +178,7 @@ function NewProject({ onCreated }: { onCreated: () => void }) {
         <label className="layer-toggle"><input type="checkbox" checked={form.per_group} onChange={() => set('per_group', !form.per_group)} />same number per group</label>
         <label className="field">Annotators per field<input type="number" min={1} value={form.per_field} style={{ width: 80 }} onChange={(e) => set('per_field', Number(e.target.value))} /></label>
       </div>
-      <p className="muted small">Fields are drawn at random (in shuffled order, so the diagnosis cannot be guessed from the order). 1 annotator per field shares the fields out; 2 or more gives independent repeat annotations.</p>
+      <p className="muted small">New sessions start stopped: press Start when you want people to annotate. Fields are drawn at random (in shuffled order, so the diagnosis cannot be guessed from the order). 1 annotator per field shares the fields out; 2 or more gives independent repeat annotations.</p>
       <div className="grid grid-3" style={{ marginTop: 10 }}>
         <div>
           <div className="small secondary" style={{ marginBottom: 4 }}>What people can do</div>
@@ -178,7 +196,7 @@ function NewProject({ onCreated }: { onCreated: () => void }) {
       <label className="field" style={{ marginTop: 10 }}>Instructions shown to annotators (optional)<textarea rows={2} value={form.instructions} onChange={(e) => set('instructions', e.target.value)} /></label>
       <label className="field" style={{ marginTop: 10 }}>Or annotate these exact fields (field IDs, optional)<textarea rows={2} value={form.tile_ids} placeholder="e.g. LIP-1_B-2_NeuN_S01, LIP-3_C-4_NeuN_S02" onChange={(e) => set('tile_ids', e.target.value)} /></label>
       <div className="row" style={{ marginTop: 10 }}>
-        <button className="btn primary" disabled={!form.name || !form.tools.length || busy} onClick={create}>{busy ? 'Creating…' : 'Create annotation project'}</button>
+        <button className="btn primary" disabled={!form.name || !form.tools.length || busy} onClick={create}>{busy ? 'Creating…' : 'Create session'}</button>
       </div>
       <ErrorNote error={error ?? defaults.error} />
     </div>

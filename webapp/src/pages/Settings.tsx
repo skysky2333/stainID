@@ -3,6 +3,7 @@ import type { Group, ProjectConfig } from '../api'
 import { api } from '../api'
 import { ErrorNote, FilePicker, HelpBox, PageHead, PathLine, withError } from '../components'
 import { useProject } from '../project'
+import { useSession } from '../session'
 import Welcome from './Welcome'
 
 const SECTION_TEXT: Record<string, [string, string]> = {
@@ -104,11 +105,45 @@ export default function Settings() {
         {saved && <span className="status-finished small">Saved.</span>}
         <ErrorNote error={error} />
       </div>
+      <AdminPassword />
       {picking && (
         <FilePicker title={`Choose ${picking.key.replaceAll('_', ' ')}`} pickFiles={/\.(csv|json|joblib|pth)$/.test(config[picking.section as 'inputs'][picking.key])}
           start={info.paths[picking.section]?.[picking.key]?.path ? `${info.root}/${info.paths[picking.section][picking.key].path}` : undefined}
           onClose={() => setPicking(null)} onPick={(path) => { setPath(picking.section as 'inputs', picking.key, path); setPicking(null) }} />
       )}
     </>
+  )
+}
+
+function AdminPassword() {
+  const { session, reload } = useSession()
+  const [form, setForm] = useState({ current: '', new: '', repeat: '' })
+  const [error, setError] = useState<string | null>(null)
+  const [saved, setSaved] = useState(false)
+  const change = async () => {
+    setSaved(false)
+    if (await withError(() => api.put('/api/session/admin/password', { current: form.current, new: form.new }), setError)) {
+      setSaved(true)
+      setForm({ current: '', new: '', repeat: '' })
+      reload()
+    }
+  }
+  return (
+    <div className="card" id="password" style={{ marginTop: 16, maxWidth: 520 }}>
+      <h2>Admin password</h2>
+      <p className="muted small">Everything except the annotation pages needs this password.
+        {session.default_password ? ' It is still the default (admin); until you change it, signing in only works on this computer.' : ''}</p>
+      <div className="grid" style={{ gap: 8 }}>
+        <label className="field">Current password<input type="password" value={form.current} onChange={(e) => setForm({ ...form, current: e.target.value })} /></label>
+        <label className="field">New password (at least 6 characters)<input type="password" value={form.new} onChange={(e) => setForm({ ...form, new: e.target.value })} /></label>
+        <label className="field">New password again<input type="password" value={form.repeat} onChange={(e) => setForm({ ...form, repeat: e.target.value })} /></label>
+      </div>
+      <div className="row" style={{ marginTop: 10 }}>
+        <button className="btn primary" disabled={!form.current || form.new.length < 6 || form.new !== form.repeat} onClick={change}>Change password</button>
+        {form.repeat && form.new !== form.repeat && <span className="muted small">The two new passwords differ.</span>}
+        {saved && <span className="status-finished small">Password changed.</span>}
+      </div>
+      <ErrorNote error={error} />
+    </div>
   )
 }
