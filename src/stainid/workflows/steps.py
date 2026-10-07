@@ -294,7 +294,9 @@ STEPS = (
          "NeuN and AT8 detection read these outlines; 6E10 uses them for plaque-neighbourhood features.",
          ("analysis_tiles", "model_cellpose"), ("nuclei",), ("nuclei",),
          (Option("stain", "Stains", "stains", ["NeuN", "AT8", "6E10"], choices=("NeuN", "AT8", "6E10")),
-          DEVICE, Option("batch_size", "Batch size", "number", 8, advanced=True), *SHARD),
+          DEVICE, Option("batch_size", "Batch size", "number", 8, advanced=True),
+          Option("workers", "Tiles at once", "number", 2, "Two tiles in flight keep the GPU busy while the other one's CPU steps run.",
+                 advanced=True), *SHARD),
          heavy=True, duration="about 90 s per tile on a Mac GPU, 4 s with CUDA", status=_nuclei_status),
     Step("neun", "2 · Detect", "Detect NeuN neurons", "Find and classify NeuN-stained neuronal profiles.",
          "Candidates come from brown-stain contours and the Cellpose cells of Find nuclei (computed here for tiles that have none yet); "

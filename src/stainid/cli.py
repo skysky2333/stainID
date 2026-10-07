@@ -76,6 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--device", default="mps")
     p.add_argument("--batch-size", type=int, default=8)
     p.add_argument("--threads", type=int, default=4)
+    p.add_argument("--workers", type=int, default=2, help="tiles in flight at once (one model); keeps the GPU busy")
     _shard(p)
 
     p = sub.add_parser("neun", help="NeuN neuron detection")
@@ -178,7 +179,7 @@ def main(argv: list[str] | None = None) -> None:
     elif args.command == "nuclei":
         from stainid.workflows.nuclei import run_nuclei
 
-        run_nuclei(project, args.stain, args.device, args.batch_size, args.threads, args.shard_index, args.shard_count)
+        run_nuclei(project, args.stain, args.device, args.batch_size, args.threads, args.shard_index, args.shard_count, args.workers)
     elif args.command == "neun":
         from stainid.workflows.neun import follow_neun, merge_neun, run_neun
 
