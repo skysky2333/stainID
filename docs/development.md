@@ -2,7 +2,7 @@
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev,app,slides]"      # add ",deep" to run Cellpose / SAM / Phikon code paths
+pip install -c constraints.txt -e ".[dev,app,slides]"      # add ",deep" to run Cellpose / SAM / Phikon code paths
 pytest
 ruff check src tests
 ```

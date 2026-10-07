@@ -1,0 +1,16 @@
+# Package versions the cohort results were produced with (Mac "tma" environment, Sept-Oct 2026).
+# The trained stain models are scikit-learn 1.7.2 pickles and do not load in later versions.
+# Install with:  pip install -c constraints.txt -e ".[deep,app,slides,dev]"
+# (CUDA machines: add --extra-index-url https://download.pytorch.org/whl/cu128)
+numpy==2.2.6
+scipy==1.15.3
+pandas==2.3.3
+scikit-learn==1.7.2
+scikit-image==0.25.2
+opencv-python-headless==4.12.0.88
+pillow==12.3.0
+joblib==1.6.0
+torch==2.8.0
+torchvision==0.23.0
+cellpose==4.2.1
+segment-anything==1.0

@@ -14,6 +14,11 @@ def _shard(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--shard-count", type=int, default=1)
 
 
+def _follow(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--follow", action="store_true",
+                        help="run alongside Find nuclei: detect each core image as soon as its nuclei exist, until all are done")
+
+
 def _fresh(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--fresh", action="store_true", help="move existing results aside and start over")
 
@@ -78,11 +83,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--threads", type=int, default=8)
     p.add_argument("--batch-size", type=int, default=1)
     p.add_argument("--merge", action="store_true", help="merge finished tiles into cohort tables")
+    _follow(p)
     _fresh(p)
     _shard(p)
 
     p = sub.add_parser("fields", help="6E10 plaque and AT8 tau field pipelines")
     p.add_argument("--stain", action="append", choices=("6E10", "AT8"))
+    _follow(p)
     _fresh(p)
     _shard(p)
 
@@ -173,7 +180,7 @@ def main(argv: list[str] | None = None) -> None:
 
         run_nuclei(project, args.stain, args.device, args.batch_size, args.threads, args.shard_index, args.shard_count)
     elif args.command == "neun":
-        from stainid.workflows.neun import merge_neun, run_neun
+        from stainid.workflows.neun import follow_neun, merge_neun, run_neun
 
         if args.merge:
             for path in merge_neun(project):
@@ -181,13 +188,16 @@ def main(argv: list[str] | None = None) -> None:
             return
         if args.fresh:
             archive_neun(project.output("neun"))
-        run_neun(project, args.device, args.threads, args.batch_size, args.shard_index, args.shard_count)
+        if args.follow:
+            follow_neun(project, args.device, args.threads, args.shard_index, args.shard_count)
+        else:
+            run_neun(project, args.device, args.threads, args.batch_size, args.shard_index, args.shard_count)
     elif args.command == "fields":
-        from stainid.workflows.fields import run_fields
+        from stainid.workflows.fields import follow_fields, run_fields
 
         if args.fresh:
             archive(project.output("fields"))
-        run_fields(project, args.stain or ["6E10", "AT8"], args.shard_index, args.shard_count)
+        (follow_fields if args.follow else run_fields)(project, args.stain or ["6E10", "AT8"], args.shard_index, args.shard_count)
     elif args.command == "masks":
         from stainid.workflows.masks import run_masks
 

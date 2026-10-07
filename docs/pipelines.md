@@ -80,7 +80,9 @@ stainid nuclei --stain NeuN --stain AT8 --stain 6E10 --device cuda
 With CUDA, matrix products use TF32 tensor cores, which give the same masks as fp32 cell for cell at
 about 2.7 times the speed; bfloat16 would be faster again but changes about 1% of cells, so it is not
 used. Use one process per GPU with `--shard-index i --shard-count N`. The detection steps reuse the
-saved outlines and run on the CPU.
+saved outlines and run on the CPU. Started with `--follow`, `stainid neun` and `stainid fields` run at the
+same time as this step and take each core image as soon as all of its tiles have outlines, so the CPU
+works alongside the GPU instead of after it.
 
 ## 6. NeuN — `stainid neun`
 

@@ -9,7 +9,7 @@ from PIL import Image
 from stainid.nuclei import CELLPOSE_SETTINGS, cellpose_masks, load_cellpose
 from stainid.pipelines.cohort_v1 import context_crop
 from stainid.project import Project
-from stainid.tables import read_csv
+from stainid.tables import file_names, read_csv
 
 Image.MAX_IMAGE_PIXELS = None
 
@@ -21,7 +21,8 @@ def run_nuclei(project: Project, stains: list[str], device: str = "mps", batch_s
     output.mkdir(parents=True, exist_ok=True)
     rows = [r for r in read_csv(project.analysis_tiles()) if r["stain"] in set(stains)]
     rows = sorted(rows, key=lambda r: (r["image_path"], int(r["selection_order"])))[shard_index::shard_count]
-    pending = [r for r in rows if not (output / f"{r['tile_id']}.npz").exists()]
+    done = file_names(output)
+    pending = [r for r in rows if f"{r['tile_id']}.npz" not in done]
     print(f"[0/{len(pending)}] {len(pending)} of {len(rows)} fields still to do", flush=True)
     CELLPOSE_SETTINGS["batch_size"] = batch_size
     model = load_cellpose(project.model("cellpose"), threads, device)

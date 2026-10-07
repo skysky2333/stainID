@@ -17,7 +17,7 @@ from stainid.qc.exclusions import rasterize_core_exclusions, read_manual_exclusi
 from stainid.stains.neun.cellpose import classify_cellpose_masks
 from stainid.stains.neun.classifier import build_matrix_from_contexts, object_contexts
 from stainid.stains.neun.profiles import combine_profile_and_cellpose_reviews, review_table_rows, segment_dab_profiles
-from stainid.tables import format_csv_value, write_csv, write_text_atomic
+from stainid.tables import file_names, format_csv_value, write_csv, write_text_atomic
 
 Image.MAX_IMAGE_PIXELS = None
 
@@ -249,9 +249,8 @@ def run_neun_cohort(
     tile_dir = output_dir / "tiles"
     tile_dir.mkdir(parents=True, exist_ok=True)
     mask_dir.mkdir(parents=True, exist_ok=True)
-    pending = [
-        row for row in rows if not (tile_dir / f"{row['tile_id']}_features.csv").exists()
-    ]
+    done = file_names(tile_dir)
+    pending = [row for row in rows if f"{row['tile_id']}_features.csv" not in done]
     if reverse:
         pending.reverse()
     provenance_path = output_dir / "provenance.json"

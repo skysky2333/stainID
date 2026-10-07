@@ -12,7 +12,7 @@ from stainid.masks.objects import segment_objects
 from stainid.masks.sam import WindowedSam
 from stainid.pipelines.cohort_v1 import context_crop
 from stainid.project import Project
-from stainid.tables import read_csv, write_records
+from stainid.tables import file_names, read_csv, write_records
 from stainid.workflows import calibration_table, tiles_for
 
 Image.MAX_IMAGE_PIXELS = None
@@ -50,9 +50,11 @@ def run_masks(project: Project, stain: str, device: str = "cpu", threads: int = 
     neun_tiles = project.output("neun") / "tiles"
     groups = tiles_for(project.analysis_tiles(), {stain}, shard_index, shard_count)
     if stain == "NeuN":
-        groups = {k: [t for t in v if (neun_tiles / f"{t['tile_id']}_objects.csv").exists()] for k, v in groups.items()}
+        detected = file_names(neun_tiles)
+        groups = {k: [t for t in v if f"{t['tile_id']}_objects.csv" in detected] for k, v in groups.items()}
     else:
-        groups = {k: v for k, v in groups.items() if (project.output("fields") / "parts" / f"{k[0]}_{stain}_objects.csv").exists()}
+        detected = file_names(project.output("fields") / "parts")
+        groups = {k: v for k, v in groups.items() if f"{k[0]}_{stain}_objects.csv" in detected}
     groups = {k: v for k, v in groups.items() if v}
     if not groups:
         raise ValueError(f"Nothing to outline for {stain} yet: run {'Detect NeuN neurons' if stain == 'NeuN' else 'Detect plaques and tau'} first")

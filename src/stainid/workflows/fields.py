@@ -13,8 +13,8 @@ from stainid.project import Project
 from stainid.qc.exclusions import rasterize_core_exclusions, read_manual_exclusions
 from stainid.stains.amyloid.field_pipeline import analyze_6e10_v2
 from stainid.stains.tau.field_pipeline import analyze_at8_v2
-from stainid.tables import write_records, write_text_atomic
-from stainid.workflows import calibration_table, tiles_for
+from stainid.tables import file_names, write_records, write_text_atomic
+from stainid.workflows import calibration_table, follow_nuclei, tiles_for
 
 Image.MAX_IMAGE_PIXELS = None
 TILE_KEYS = ("tile_id", "core_id", "tma", "donor_id", "sample_region_id", "region", "disease_group", "technical_replicate", "stain", "selection_order")
@@ -63,13 +63,14 @@ def run_fields(project: Project, stains: list[str] = ("6E10", "AT8"), shard_inde
     parts.mkdir(parents=True, exist_ok=True)
     check_models(project, project.output("fields") / "provenance.json", {"amyloid": project.model("amyloid"), "tau": project.model("tau")})
     nuclei_dir = project.output("nuclei")
-    print(f"[0/{len(groups)}] {sum(not (parts / f'{c}_{s}_features.csv').exists() for c, s in groups)} of {len(groups)} core images still to do", flush=True)
+    done, nuclei = file_names(parts), file_names(nuclei_dir)
+    print(f"[0/{len(groups)}] {sum(f'{c}_{s}_features.csv' not in done for c, s in groups)} of {len(groups)} core images still to do", flush=True)
     skipped = []
     for number, ((core_id, stain), tiles) in enumerate(groups.items(), start=1):
         feature_path = parts / f"{core_id}_{stain}_features.csv"
         if feature_path.exists():
             continue
-        if stain == "AT8" and not all((nuclei_dir / f"{t['tile_id']}.npz").exists() for t in tiles):
+        if stain == "AT8" and not all(f"{t['tile_id']}.npz" in nuclei for t in tiles):
             skipped.append(core_id)
             print(f"[{number}/{len(groups)}] {core_id} AT8 skipped: its nuclei are missing", flush=True)
             continue
@@ -86,3 +87,8 @@ def run_fields(project: Project, stains: list[str] = ("6E10", "AT8"), shard_inde
     if skipped:
         print(f"{len(skipped)} AT8 cores were skipped because Find nuclei has not processed them yet; run Find nuclei for AT8, "
               "then run this step again to finish them", flush=True)
+
+
+def follow_fields(project: Project, stains: list[str] = ("6E10", "AT8"), shard_index: int = 0, shard_count: int = 1) -> None:
+    """Detect plaques and tau on each core image as soon as Find nuclei has finished it (see `follow_nuclei`)."""
+    follow_nuclei(project, set(stains), lambda stain, core_ids: run_fields(project, [stain], core_ids=core_ids), shard_index, shard_count)

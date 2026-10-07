@@ -90,7 +90,7 @@ says what each step computes.
 ```bash
 git clone https://github.com/skysky2333/stainID.git && cd stainID
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[app,deep,slides]"
+pip install -c constraints.txt -e ".[app,deep,slides]"   # constraints.txt: the versions the trained models need
 stainid serve                              # the web app
 stainid --project path/to/study status     # progress of every step
 stainid --project path/to/study neun       # run one step

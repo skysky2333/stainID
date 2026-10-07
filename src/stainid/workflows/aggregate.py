@@ -7,7 +7,7 @@ from pathlib import Path
 from stainid.analysis import field_aggregation, mask_aggregation
 from stainid.analysis.aggregation import summarize_stain_group
 from stainid.project import Project
-from stainid.tables import read_csv, write_records
+from stainid.tables import file_names, read_csv, write_records
 
 REGION_KEYS = ("core_id", "sample_region_id", "donor_id", "tma", "region", "disease_group")
 LEVEL_NAME = {"core_id": "core", "sample_region_id": "donor_region"}
@@ -59,7 +59,8 @@ def aggregate_masks(project: Project, level: str = "sample_region_id", output: P
         processed = {p.name.rsplit(f"_{stain}_objects", 1)[0] for p in parts}
         tiles = {r["tile_id"]: r for r in manifest if r["stain"] == stain and r["core_id"] in processed}
         if stain == "NeuN":
-            tiles = {k: v for k, v in tiles.items() if (neun_tiles / f"{k}_features.csv").exists()}
+            detected = file_names(neun_tiles)
+            tiles = {k: v for k, v in tiles.items() if f"{k}_features.csv" in detected}
             for tile_id in tiles:
                 tissue[(tile_id, stain)] = float(read_csv(neun_tiles / f"{tile_id}_features.csv")[0]["tissue_area_mm2"])
         by_key, key_tiles = defaultdict(list), defaultdict(set)

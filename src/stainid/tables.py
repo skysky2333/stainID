@@ -1,8 +1,18 @@
 from __future__ import annotations
 
 import csv
+import os
 import tempfile
 from pathlib import Path
+
+
+def file_names(folder: Path) -> set[str]:
+    """Names in `folder` from one directory listing (empty if it does not exist). Use it instead of one `exists()` per
+    file when checking many outputs: on exFAT and network drives each lookup of a missing name rereads the folder."""
+    try:
+        return {entry.name for entry in os.scandir(folder)}
+    except FileNotFoundError:
+        return set()
 
 
 def write_csv(
