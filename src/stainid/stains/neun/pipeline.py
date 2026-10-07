@@ -17,7 +17,7 @@ from stainid.qc.exclusions import rasterize_core_exclusions, read_manual_exclusi
 from stainid.stains.neun.cellpose import classify_cellpose_masks
 from stainid.stains.neun.classifier import build_matrix_from_contexts, object_contexts
 from stainid.stains.neun.profiles import combine_profile_and_cellpose_reviews, review_table_rows, segment_dab_profiles
-from stainid.tables import file_names, format_csv_value, write_csv, write_text_atomic
+from stainid.tables import file_names, format_csv_value, save_npz_atomic, write_csv, write_text_atomic
 
 Image.MAX_IMAGE_PIXELS = None
 
@@ -315,7 +315,7 @@ def run_neun_cohort(
                 raw_masks = loaded["masks"]
         else:
             raw_masks = cellpose_masks(model, rgb)
-            np.savez_compressed(mask_path, masks=raw_masks.astype(np.uint32))
+            save_npz_atomic(mask_path, masks=raw_masks.astype(np.uint32))
         threshold = calibrations[row["tma"]]
         summary, objects = classify_neun_tile(
             rgb,

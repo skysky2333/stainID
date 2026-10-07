@@ -12,7 +12,7 @@ from stainid.masks.objects import segment_objects
 from stainid.masks.sam import WindowedSam
 from stainid.pipelines.cohort_v1 import context_crop
 from stainid.project import Project
-from stainid.tables import file_names, read_csv, write_records
+from stainid.tables import file_names, read_csv, save_npz_atomic, write_records
 from stainid.workflows import calibration_table, tiles_for
 
 Image.MAX_IMAGE_PIXELS = None
@@ -81,7 +81,7 @@ def run_masks(project: Project, stain: str, device: str = "cpu", threads: int = 
                 threshold = calibration[(tile["tma"], stain)]
                 objects, labels = segment_objects(sam, rgb, seeds[tile["tile_id"]], stain, threshold, pixel_size,
                                                   None if core_multiplier is None else core_multiplier * threshold)
-                np.savez_compressed(out / "labels" / f"{tile['tile_id']}.npz", labels=labels.astype(np.uint16), inner=np.array([inner[0].start, inner[1].start]))
+                save_npz_atomic(out / "labels" / f"{tile['tile_id']}.npz", labels=labels.astype(np.uint16), inner=np.array([inner[0].start, inner[1].start]))
                 rows += [{**{k: tile[k] for k in TILE_KEYS}, **obj} for obj in objects]
         write_records(target, rows, ["tile_id"])
         print(f"[{number}/{len(groups)}] {core_id} {stain}: {sum(r['mask_status'] == 'ok' for r in rows)} masks", flush=True)

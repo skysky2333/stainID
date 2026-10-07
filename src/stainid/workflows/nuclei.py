@@ -9,7 +9,7 @@ from PIL import Image
 from stainid.nuclei import CELLPOSE_SETTINGS, cellpose_masks, load_cellpose
 from stainid.pipelines.cohort_v1 import context_crop
 from stainid.project import Project
-from stainid.tables import file_names, read_csv
+from stainid.tables import file_names, read_csv, save_npz_atomic
 
 Image.MAX_IMAGE_PIXELS = None
 
@@ -35,5 +35,5 @@ def run_nuclei(project: Project, stains: list[str], device: str = "mps", batch_s
         rgb, _ = context_crop(image, int(row["x_px"]), int(row["y_px"]), int(row["width_px"]), int(row["height_px"]), project.context_px)
         started = time.time()
         masks = cellpose_masks(model, rgb)
-        np.savez_compressed(output / f"{row['tile_id']}.npz", masks=masks.astype(np.uint32))
+        save_npz_atomic(output / f"{row['tile_id']}.npz", masks=masks.astype(np.uint32))
         print(f"[{index}/{len(pending)}] {row['tile_id']}: {int(masks.max())} nuclei, {time.time() - started:.0f}s", flush=True)

@@ -15,6 +15,7 @@ from stainid.imaging.tissue import fold_mask, linear_artifact_mask
 from stainid.pipelines.cohort_v1 import context_crop
 from stainid.project import Project
 from stainid.qc.exclusions import rasterize_core_exclusions, read_manual_exclusions
+from stainid.tables import save_npz_atomic
 from stainid.workflows import calibration_table
 
 Image.MAX_IMAGE_PIXELS = None
@@ -65,7 +66,7 @@ class FieldLoader:
             self._cellpose = load_cellpose(self.project.model("cellpose"), 4, "cpu")
         masks = cellpose_masks(self._cellpose, rgb)
         cache.parent.mkdir(parents=True, exist_ok=True)
-        np.savez_compressed(cache, masks=masks.astype(np.uint32))
+        save_npz_atomic(cache, masks=masks.astype(np.uint32))
         return masks
 
 

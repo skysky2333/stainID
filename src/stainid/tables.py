@@ -40,6 +40,16 @@ def write_text_atomic(path: Path, text: str) -> None:
     Path(handle.name).replace(path)
 
 
+def save_npz_atomic(path: Path, **arrays) -> None:
+    """Compressed .npz written under a temporary name and renamed into place, so a reader that sees the file (another
+    step following this one, or a resumed run after a crash) never reads a half-written one."""
+    import numpy as np
+
+    with tempfile.NamedTemporaryFile(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False) as handle:
+        np.savez_compressed(handle, **arrays)
+    Path(handle.name).replace(path)
+
+
 def format_csv_value(value: object) -> object:
     if isinstance(value, bool):
         return str(value).lower()

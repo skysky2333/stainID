@@ -1,6 +1,8 @@
 from concurrent.futures import ThreadPoolExecutor
 
-from stainid.tables import write_text_atomic
+import numpy as np
+
+from stainid.tables import save_npz_atomic, write_text_atomic
 
 
 def test_write_text_atomic_never_exposes_partial_text(tmp_path):
@@ -23,3 +25,10 @@ def test_stale_neun_claims_are_taken_over(tmp_path):
     assert claim_field(claim)
     claim.write_text("999999999")
     assert claim_field(claim)
+
+
+def test_save_npz_atomic_leaves_only_the_finished_file(tmp_path):
+    path = tmp_path / "tile.npz"
+    save_npz_atomic(path, masks=np.arange(6).reshape(2, 3))
+    assert [p.name for p in tmp_path.iterdir()] == ["tile.npz"]
+    assert np.load(path)["masks"].tolist() == [[0, 1, 2], [3, 4, 5]]
