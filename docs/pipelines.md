@@ -70,16 +70,17 @@ Applied before any measurement (`stainid.imaging.tissue`, `stainid.qc.exclusions
 Cellpose-SAM on the RGB field (diameter 30 px, flow 0.4, cell-probability 0,
 minimum 50 px), saved as one label image per tile in `outputs.nuclei`, for every stain: NeuN
 detection uses these cells as candidates, AT8 needs them, and 6E10 uses them for peri-plaque
-nuclear features. This is the slow step (about 90 s per tile on an Apple GPU, a few seconds on a
-data-centre GPU) and the only one that benefits from a GPU. To use a GPU machine, copy the project
-folder there and run
+nuclear features. This is the slow step (about 90 s per tile on an Apple GPU, about 4 s on an
+NVIDIA A100-class GPU) and the only one that benefits from a GPU:
 
 ```bash
-stainid nuclei --stain NeuN --stain AT8 --stain 6E10 --device cuda --shard-index 0 --shard-count 1
+stainid nuclei --stain NeuN --stain AT8 --stain 6E10 --device cuda
 ```
 
-(one process per GPU with `--shard-index i --shard-count N`), then copy `outputs.nuclei` back. The
-detection steps reuse the saved outlines and run on the local CPU.
+With CUDA, matrix products use TF32 tensor cores, which give the same masks as fp32 cell for cell at
+about 2.7 times the speed; bfloat16 would be faster again but changes about 1% of cells, so it is not
+used. Use one process per GPU with `--shard-index i --shard-count N`. The detection steps reuse the
+saved outlines and run on the CPU.
 
 ## 6. NeuN — `stainid neun`
 

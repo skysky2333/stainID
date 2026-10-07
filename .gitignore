@@ -23,6 +23,7 @@ webapp/dist/
 
 # ---- OS / editors ----
 .DS_Store
+._*
 .vscode/
 .idea/
 *.swp
