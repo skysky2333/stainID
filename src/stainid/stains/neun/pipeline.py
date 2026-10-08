@@ -285,7 +285,7 @@ def run_neun_cohort(
     }
     manual_exclusions = read_manual_exclusions(manual_exclusions_path)
     CELLPOSE_SETTINGS["batch_size"] = batch_size
-    model = load_cellpose(cellpose_model_path, threads, device)
+    model = None  # loaded only for a tile without Find nuclei outlines
     image_path = None
     image = None
     for index, row in enumerate(pending, start=1):
@@ -314,6 +314,7 @@ def run_neun_cohort(
             with np.load(mask_path) as loaded:
                 raw_masks = loaded["masks"]
         else:
+            model = model or load_cellpose(cellpose_model_path, threads, device)
             raw_masks = cellpose_masks(model, rgb)
             save_npz_atomic(mask_path, masks=raw_masks.astype(np.uint32))
         threshold = calibrations[row["tma"]]
