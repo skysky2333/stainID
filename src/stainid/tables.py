@@ -15,6 +15,13 @@ def file_names(folder: Path) -> set[str]:
         return set()
 
 
+def _sync(handle) -> None:
+    """Force the file's data to disk before it is renamed into place: without this a power loss or freeze can leave the
+    rename on disk but the data not, i.e. an empty file under the final name that resumed runs take as finished."""
+    handle.flush()
+    os.fsync(handle.fileno())
+
+
 def write_csv(
     path: Path,
     rows: list[dict[str, object]],
@@ -30,6 +37,7 @@ def write_csv(
         writer = csv.DictWriter(handle, fieldnames=fieldnames, lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
+        _sync(handle)
     temporary.replace(path)
 
 
@@ -37,16 +45,18 @@ def write_text_atomic(path: Path, text: str) -> None:
     """Parallel shards write the same small files; readers must never see a half-written one."""
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False) as handle:
         handle.write(text)
+        _sync(handle)
     Path(handle.name).replace(path)
 
 
 def save_npz_atomic(path: Path, **arrays) -> None:
-    """Compressed .npz written under a temporary name and renamed into place, so a reader that sees the file (another
-    step following this one, or a resumed run after a crash) never reads a half-written one."""
+    """Compressed .npz written under a temporary name, synced and renamed into place, so a reader that sees the file
+    (another step following this one, or a resumed run after a crash) never reads a half-written one."""
     import numpy as np
 
     with tempfile.NamedTemporaryFile(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False) as handle:
         np.savez_compressed(handle, **arrays)
+        _sync(handle)
     Path(handle.name).replace(path)
 
 
