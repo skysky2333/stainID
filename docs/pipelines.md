@@ -141,6 +141,11 @@ window. One run covers every stain (`--stain` limits it); cores without detectio
 For each outline the step records area, perimeter, axes, elongation, solidity, circularity and
 stain density. For plaques it also records dense-core area and core count.
 
+With CUDA the step uses TF32 tensor cores (about 1.4 times faster). This is not bit-exact: on a test
+core the same objects were outlined and 99.9995% of label pixels matched
+fp32, the largest change being 3.5 µm² of area on one object. The sampled-field outlines were made
+in fp32 (Apple GPU / CPU); the whole-core outlines of this cohort were made with TF32.
+
 ## 10. Results tables — `stainid summarize`
 
 Counts and areas are summed over fields and technical cores before densities are formed

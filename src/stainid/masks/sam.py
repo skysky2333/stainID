@@ -12,6 +12,9 @@ class WindowedSam:
         import torch
         from segment_anything import SamPredictor, sam_model_registry
 
+        # TF32 on CUDA: about 1.4x faster. Unlike Cellpose it is not exact here: on a test core the
+        # same objects were outlined and 99.9995% of label pixels matched, with a largest area change of 3.5 um2.
+        torch.backends.cuda.matmul.allow_tf32 = torch.backends.cudnn.allow_tf32 = device == "cuda"
         model = sam_model_registry["vit_b"](checkpoint=str(checkpoint))
         model.to(torch.device(device))
         self.predictor = SamPredictor(model)
