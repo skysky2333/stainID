@@ -8,13 +8,15 @@ import numpy as np
 class WindowedSam:
     """Point- and box-prompted SAM on native-resolution windows of a large field."""
 
-    def __init__(self, checkpoint: Path, device: str = "cpu", window: int = 1024, stride: int = 768):
+    def __init__(self, checkpoint: Path, device: str = "cpu", window: int = 1024, stride: int = 768, precision: str = "fp32"):
+        """`precision` applies on CUDA only (see `Project.precision`): bf16 runs the image encoder (the expensive part) in
+        bfloat16 and the small mask decoder in fp32; tf32 uses TF32 tensor cores throughout."""
         import torch
         from segment_anything import SamPredictor, sam_model_registry
 
-        # TF32 on CUDA: about 1.4x faster. Unlike Cellpose it is not exact here: on a test core the
-        # same objects were outlined and 99.9995% of label pixels matched, with a largest area change of 3.5 um2.
-        torch.backends.cuda.matmul.allow_tf32 = torch.backends.cudnn.allow_tf32 = device == "cuda"
+        cuda = device == "cuda"
+        torch.backends.cuda.matmul.allow_tf32 = torch.backends.cudnn.allow_tf32 = cuda and precision in ("tf32", "bf16")
+        self.bf16 = cuda and precision == "bf16"
         model = sam_model_registry["vit_b"](checkpoint=str(checkpoint))
         model.to(torch.device(device))
         self.predictor = SamPredictor(model)
@@ -45,8 +47,12 @@ class WindowedSam:
     ) -> tuple[list[np.ndarray], list[float], tuple[int, int]]:
         origin = self._origin(x, y)
         if origin != self.current:
+            import torch
+
             x0, y0 = origin
-            self.predictor.set_image(self.rgb[y0 : y0 + self.window, x0 : x0 + self.window])
+            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=self.bf16):
+                self.predictor.set_image(self.rgb[y0 : y0 + self.window, x0 : x0 + self.window])
+            self.predictor.features = self.predictor.features.float()
             self.current = origin
         x0, y0 = origin
         masks, scores, _ = self.predictor.predict(

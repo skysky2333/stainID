@@ -70,32 +70,34 @@ def segment_objects(
     labels = np.zeros(rgb.shape[:2], dtype=np.int32)
     lower, upper = AREA_LIMITS_UM2[stain]
     sam.set_field(rgb)
-    rows = []
+    rows, label = [], 0
     for seed in sorted(seeds, key=lambda s: (sam._origin(float(s["x"]), float(s["y"])), s["y"], s["x"])):
         masks, scores, origin = sam.predict(float(seed["x"]), float(seed["y"]))
         x0, y0 = origin
-        local_dab = dab[y0 : y0 + masks[0].shape[0], x0 : x0 + masks[0].shape[1]]
-        mask, index = select_mask(masks, local_dab, stain)
+        window = (slice(y0, y0 + masks[0].shape[0]), slice(x0, x0 + masks[0].shape[1]))
+        mask, index = select_mask(masks, dab[window], stain)
         area = mask.sum() * pixel_size_um**2
         status = "ok"
         if not lower <= area <= upper:
             status = "size_rejected"
-        full = np.zeros(labels.shape, dtype=bool)
-        full[y0 : y0 + mask.shape[0], x0 : x0 + mask.shape[1]] = mask
-        overlap = labels[full]
+        local_labels = labels[window]  # a view: everything below works on the SAM window, not the whole field
+        overlap = local_labels[mask]
         if status == "ok" and overlap.size and (overlap > 0).mean() > 0.5:
             status = "duplicate"
         row = {**seed, "sam_output": index, "sam_score": scores[index], "mask_status": status}
         if status == "ok":
-            full &= labels == 0
-            label = int(labels.max()) + 1
-            labels[full] = label
-            ys, xs = np.nonzero(full)
+            mask = mask & (local_labels == 0)  # never empty: at most half of an accepted mask overlaps earlier ones
+            label += 1
+            local_labels[mask] = label
+            ys, xs = np.nonzero(mask)
+            ys, xs = ys + y0, xs + x0
             pad = 8
             by0, by1 = max(0, ys.min() - pad), min(labels.shape[0], ys.max() + pad + 1)
             bx0, bx1 = max(0, xs.min() - pad), min(labels.shape[1], xs.max() + pad + 1)
+            crop = np.zeros((by1 - by0, bx1 - bx0), dtype=bool)
+            crop[ys - by0, xs - bx0] = True
             row |= {"label": label, "mask_centroid_x_px": float(xs.mean()), "mask_centroid_y_px": float(ys.mean()),
-                    **shape_features(full[by0:by1, bx0:bx1], dab[by0:by1, bx0:bx1], pixel_size_um, dab_threshold, core_threshold)}
+                    **shape_features(crop, dab[by0:by1, bx0:bx1], pixel_size_um, dab_threshold, core_threshold)}
         rows.append(row)
     return rows, labels
 

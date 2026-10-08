@@ -235,6 +235,7 @@ def run_neun_cohort(
     device: str = "cpu",
     batch_size: int = 1,
     reverse: bool = False,
+    precision: str = "fp32",
 ) -> int:
     rows = [row for row in read_csv(tile_manifest) if row["stain"] == "NeuN"]
     if nested_samples:
@@ -314,7 +315,7 @@ def run_neun_cohort(
             with np.load(mask_path) as loaded:
                 raw_masks = loaded["masks"]
         else:
-            model = model or load_cellpose(cellpose_model_path, threads, device)
+            model = model or load_cellpose(cellpose_model_path, threads, device, precision)
             raw_masks = cellpose_masks(model, rgb)
             save_npz_atomic(mask_path, masks=raw_masks.astype(np.uint32))
         threshold = calibrations[row["tma"]]

@@ -60,7 +60,7 @@ def run_masks(project: Project, stain: str, device: str = "cpu", threads: int = 
         raise ValueError(f"Nothing to outline for {stain} yet: run {'Detect NeuN neurons' if stain == 'NeuN' else 'Detect plaques and tau'} first")
     calibration = calibration_table(project.input("calibration"))
     core_multiplier = float(load(project.model("amyloid"))["morphotype_threshold"]) if stain == "6E10" else None
-    sam = WindowedSam(project.model("sam"), device=device)
+    sam = WindowedSam(project.model("sam"), device=device, precision=project.precision("sam"))
     out = project.output("masks") / stain
     (out / "parts").mkdir(parents=True, exist_ok=True)
     (out / "labels").mkdir(parents=True, exist_ok=True)

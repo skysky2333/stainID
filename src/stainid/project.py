@@ -10,6 +10,7 @@ import yaml
 
 CONFIG_NAME = "stainid.yaml"
 SUPPORTED_STAINS = {"NeuN": "neun", "6E10": "amyloid", "AT8": "tau"}
+PRECISIONS = ("fp32", "tf32", "bf16")
 
 DEFAULTS: dict = {
     "name": "stainID project",
@@ -19,6 +20,10 @@ DEFAULTS: dict = {
     "tma": {"prefix": "TMA-", "rows": 5, "columns": 6},
     "groups": [],
     "analysis": {"tiles": "whole_core"},
+    # Arithmetic of the deep models on CUDA (cpu always runs fp32): fp32, tf32 or bf16. Measured on an A100-class card:
+    # Cellpose bf16 2.9 s/tile (about 1% of cells differ from fp32), tf32 3.8 s (fp32 masks cell for cell), fp32 10 s;
+    # Segment Anything tf32 1.5x fp32 (median area change 0%), bf16 1.4x (0.14%), so tf32 is its better choice.
+    "precision": {"cellpose": "bf16", "sam": "tf32"},
     "inputs": {
         "slides_dir": "data/slides",
         "slides_table": "data/slides.csv",
@@ -106,6 +111,12 @@ class Project:
     @property
     def is_configured(self) -> bool:
         return self.config_file.exists()
+
+    def precision(self, model: str) -> str:
+        value = self.config["precision"][model]
+        if value not in PRECISIONS:
+            raise ValueError(f"precision.{model} must be one of {', '.join(PRECISIONS)}, not {value!r}")
+        return value
 
     def analysis_tiles(self) -> Path:
         """The tiles detection runs on: every tissue tile of each core (whole_core) or only the sampled fields."""

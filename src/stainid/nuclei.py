@@ -41,18 +41,19 @@ CELLPOSE_SETTINGS = {
 }
 
 
-def load_cellpose(model_path: Path, threads: int, device: str):
+def load_cellpose(model_path: Path, threads: int, device: str, precision: str = "fp32"):
+    """Cellpose-SAM model. `precision` applies on CUDA only (see `Project.precision`): on an A100-class card tf32 runs
+    about 3.8 s per tile with the fp32 masks cell for cell, bf16 about 2.9 s with about 1% of cells different, fp32 10 s."""
     import torch
     from cellpose import models
 
     torch.set_num_threads(threads)
-    # TF32 tensor cores reproduce the fp32 masks cell for cell at ~2.7x the speed (and avoid the throttled fp32 path of
-    # mining-class A100 cards). bfloat16 is faster still but changes about 1% of cells, so it stays off.
-    torch.backends.cuda.matmul.allow_tf32 = torch.backends.cudnn.allow_tf32 = device == "cuda"
+    cuda = device == "cuda"
+    torch.backends.cuda.matmul.allow_tf32 = torch.backends.cudnn.allow_tf32 = cuda and precision == "tf32"
     return models.CellposeModel(
         device=torch.device(device),
         pretrained_model=str(model_path),
-        use_bfloat16=False,
+        use_bfloat16=cuda and precision == "bf16",
     )
 
 

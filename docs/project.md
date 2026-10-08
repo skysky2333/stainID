@@ -24,6 +24,9 @@ groups:                      # diagnostic group codes used in the TMA map, in pl
   - {code: AD, label: Alzheimer disease}
 analysis:
   tiles: whole_core          # detect objects in every tissue tile of each core, or: sampled_fields
+precision:                   # arithmetic on CUDA GPUs (CPU always fp32): fp32, tf32 or bf16 — keep one per cohort
+  cellpose: bf16             # tf32 reproduces fp32 masks cell for cell; bf16 is faster, ~1% of cells differ
+  sam: tf32
 
 inputs:
   slides_dir: data/slides                                        # folder with the slide scans

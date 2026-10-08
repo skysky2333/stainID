@@ -15,7 +15,7 @@ def run_neun(project: Project, device: str = "cpu", threads: int = 8, batch_size
     os.environ.setdefault("MPLCONFIGDIR", "/tmp/stainid_mpl_cache")
     run_neun_cohort(project.analysis_tiles(), project.input("calibration"), project.model("neun"), project.model("cellpose"),
                     project.output("neun"), project.output("nuclei"), project.input("manual_exclusions"), tile_ids, nested_samples, shard_index, shard_count, threads,
-                    device=device, batch_size=batch_size)
+                    device=device, batch_size=batch_size, precision=project.precision("cellpose"))
 
 
 def follow_neun(project: Project, device: str = "cpu", threads: int = 8, shard_index: int = 0, shard_count: int = 1) -> None:

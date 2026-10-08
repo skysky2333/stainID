@@ -45,7 +45,7 @@ def run_nuclei(project: Project, stains: list[str], device: str = "mps", batch_s
     pending = [r for r in rows if f"{r['tile_id']}.npz" not in done]
     print(f"[0/{len(pending)}] {len(pending)} of {len(rows)} fields still to do", flush=True)
     CELLPOSE_SETTINGS["batch_size"] = batch_size
-    model = load_cellpose(project.model("cellpose"), threads, device)
+    model = load_cellpose(project.model("cellpose"), threads, device, project.precision("cellpose"))
     images, finished = CoreImages(), itertools.count(1)
 
     def segment(row: dict) -> None:

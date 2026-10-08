@@ -77,9 +77,11 @@ NVIDIA A100-class GPU) and the only one that benefits from a GPU:
 stainid nuclei --stain NeuN --stain AT8 --stain 6E10 --device cuda
 ```
 
-With CUDA, matrix products use TF32 tensor cores, which give the same masks as fp32 cell for cell at
-about 2.7 times the speed; bfloat16 would be faster again but changes about 1% of cells, so it is not
-used. Use one process per GPU with `--shard-index i --shard-count N`. The detection steps reuse the
+With CUDA the arithmetic is the project setting `precision.cellpose` (CPU always runs fp32). Measured on
+an A100-class card: `bf16` (the default, as in Cellpose-SAM itself) about 2.9 s per tile with about 1% of
+cells different from fp32; `tf32` about 3.8 s with the fp32 masks cell for cell; `fp32` about 10 s. A
+cohort should use one setting throughout (this one used `tf32`, matching its earlier fp32 masks). Use one
+process per GPU with `--shard-index i --shard-count N`. The detection steps reuse the
 saved outlines and run on the CPU. Started with `--follow`, `stainid neun` and `stainid fields` run at the
 same time as this step and take each core image as soon as all of its tiles have outlines, so the CPU
 works alongside the GPU instead of after it.
@@ -141,10 +143,11 @@ window. One run covers every stain (`--stain` limits it); cores without detectio
 For each outline the step records area, perimeter, axes, elongation, solidity, circularity and
 stain density. For plaques it also records dense-core area and core count.
 
-With CUDA the step uses TF32 tensor cores (about 1.4 times faster). This is not bit-exact: on a test
-core the same objects were outlined and 99.9995% of label pixels matched
-fp32, the largest change being 3.5 µm² of area on one object. The sampled-field outlines were made
-in fp32 (Apple GPU / CPU); the whole-core outlines of this cohort were made with TF32.
+With CUDA the arithmetic is the project setting `precision.sam`. On a NeuN test core
+`tf32` (the default) was 1.5 times faster than fp32 with the same objects outlined, 99.9995% of label
+pixels equal and a median area change of 0% (99th percentile 0.55%); `bf16` was no faster (1.4 times)
+and less close (median 0.14%, 99th percentile 1.5%). The sampled-field outlines were made in fp32
+(Apple GPU / CPU); the whole-core outlines of this cohort use `tf32`.
 
 ## 10. Results tables — `stainid summarize`
 
