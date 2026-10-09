@@ -250,6 +250,21 @@ def summarize_stain_group(
     return summary
 
 
+INTERIOR_TISSUE_FRACTION = 0.5
+
+
+def sampling_extents(group: list[dict[str, str]]) -> list[tuple[str, object]]:
+    """Tile subsets each summary is computed on: the first four and eight sampled fields and, when the whole core was
+    tiled, every tile and the interior tiles. Interior tiles are at least half tissue; the excluded rim tiles carry
+    most edge staining (brown rims, folds), so `whole_core_interior` is the rim sensitivity analysis."""
+    order = lambda row: int(row["selection_order"])
+    extents = [("primary_four", lambda row: order(row) <= 4), ("extended_eight", lambda row: order(row) <= 8)]
+    if any(order(row) > 8 for row in group):
+        extents += [("whole_core", lambda row: True),
+                    ("whole_core_interior", lambda row: float(row.get("preview_tissue_fraction") or 1) >= INTERIOR_TISSUE_FRACTION)]
+    return extents
+
+
 def aggregate_level(
     tile_rows: list[dict[str, str]],
     object_rows: list[dict[str, str]],
@@ -267,11 +282,8 @@ def aggregate_level(
     output: list[dict[str, object]] = []
     for _, group in sorted(grouped.items()):
         first = group[0]
-        extents = [("primary_four", 4), ("extended_eight", 8)] + ([("whole_core", 10**9)] if any(int(r["selection_order"]) > 8 for r in group) else [])
-        for extent, maximum_order in extents:
-            selected = [
-                row for row in group if int(row["selection_order"]) <= maximum_order
-            ]
+        for extent, include in sampling_extents(group):
+            selected = [row for row in group if include(row)]
             tile_ids = {row["tile_id"] for row in selected}
             selected_objects = [
                 obj for tile_id in tile_ids for obj in objects_by_tile.get(tile_id, [])

@@ -121,3 +121,14 @@ class CohortAggregationTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_sampling_extents_add_whole_core_and_its_interior_only_for_tiled_cores():
+    from stainid.analysis.aggregation import sampling_extents
+
+    sampled = [{"selection_order": str(i), "preview_tissue_fraction": "1.0"} for i in range(1, 9)]
+    rim, inner = {"selection_order": "305", "preview_tissue_fraction": "0.2"}, {"selection_order": "306", "preview_tissue_fraction": "0.9"}
+    assert [name for name, _ in sampling_extents(sampled)] == ["primary_four", "extended_eight"]
+    extents = dict(sampling_extents(sampled + [rim, inner]))
+    assert [sum(map(extents[name], sampled + [rim, inner])) for name in extents] == [4, 8, 10, 9]
+    assert not extents["whole_core_interior"](rim) and extents["whole_core_interior"](inner)
