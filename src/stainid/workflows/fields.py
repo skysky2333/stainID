@@ -7,7 +7,7 @@ import numpy as np
 from joblib import load
 from PIL import Image
 
-from stainid.imaging.tissue import fold_mask, linear_artifact_mask
+from stainid.imaging.tissue import core_glass_darkness, fold_mask, linear_artifact_mask
 from stainid.pipelines.cohort_v1 import context_crop
 from stainid.project import Project
 from stainid.qc.exclusions import rasterize_core_exclusions, read_manual_exclusions
@@ -36,7 +36,7 @@ def exclusion_mask(rgb, tile, inner, pixel_size, manual):
             | rasterize_core_exclusions(manual.get(tile["image_path"], []), x - inner[1].start, y - inner[0].start, rgb.shape[:2]))
 
 
-def analyze_field(project: Project, image, tile, stain, calibration, manual, bundles, nuclei_dir):
+def analyze_field(project: Project, image, tile, stain, calibration, manual, bundles, nuclei_dir, glass=None):
     rgb, inner = context_crop(image, int(tile["x_px"]), int(tile["y_px"]), int(tile["width_px"]), int(tile["height_px"]), project.context_px)
     pixel_size = float(np.sqrt(float(tile["pixel_width_um"]) * float(tile["pixel_height_um"])))
     exclusion = exclusion_mask(rgb, tile, inner, pixel_size, manual)
@@ -44,9 +44,9 @@ def analyze_field(project: Project, image, tile, stain, calibration, manual, bun
     nuclei = np.load(nuclei_path)["masks"] if nuclei_path.exists() else np.zeros(rgb.shape[:2], dtype=np.uint32)
     threshold = calibration[(tile["tma"], stain)]
     if stain == "AT8":
-        summary, items = analyze_at8_v2(rgb, inner, nuclei, threshold, pixel_size, exclusion, bundles["tau"])
+        summary, items = analyze_at8_v2(rgb, inner, nuclei, threshold, pixel_size, exclusion, bundles["tau"], glass=glass)
     else:
-        summary, items = analyze_6e10_v2(rgb, inner, nuclei, threshold, pixel_size, exclusion, bundles["amyloid"])
+        summary, items = analyze_6e10_v2(rgb, inner, nuclei, threshold, pixel_size, exclusion, bundles["amyloid"], glass=glass)
     common = {k: tile[k] for k in TILE_KEYS}
     feature = {**common, "nuclei_available": nuclei_path.exists(), "fold_exclusion_fraction": float(fold_mask(rgb, pixel_size)[inner].mean()), **summary}
     return feature, [{**common, **item} for item in items]
@@ -77,8 +77,9 @@ def run_fields(project: Project, stains: list[str] = ("6E10", "AT8"), shard_inde
         features, objects = [], []
         with Image.open(project.root / tiles[0]["image_path"]) as image:
             image.load()
+            glass = core_glass_darkness(image)
             for tile in tiles:
-                feature, items = analyze_field(project, image, tile, stain, calibration, manual, bundles, nuclei_dir)
+                feature, items = analyze_field(project, image, tile, stain, calibration, manual, bundles, nuclei_dir, glass)
                 features.append(feature)
                 objects += items
         write_records(parts / f"{core_id}_{stain}_objects.csv", objects, ["tile_id"])

@@ -57,10 +57,11 @@ between slides do not change what counts as positive.
 Applied before any measurement (`stainid.imaging.tissue`, `stainid.qc.exclusions`):
 
 - non-tissue (brightness / saturation). For tissue **area** (the denominator of every density and
-  area fraction) the bare glass is found in each field: some scanners render it light grey
-  (about 230/255), darker than the fixed cut-off, so tissue is anything clearly darker than the
-  glass seen in that field, and enclosed holes up to ~10,000 µm² (vacuoles, small vessel lumens)
-  count as tissue;
+  area fraction) the bare glass is measured once per core image, in the slide margin around the
+  core: some scanners render it light grey (about 230/255), darker than the fixed cut-off, so tissue
+  is anything clearly darker than that glass, and enclosed holes up to ~10,000 µm² (vacuoles, small
+  vessel lumens) count as tissue. Measuring the glass per field instead mistakes pale tissue (white
+  matter, neuropil, vacuoles) for glass in fields that show none and undercounts their tissue;
 - linear folds and cut lines;
 - hematoxylin-dense fold bands (≥ 150 µm long, aspect ≥ 4);
 - manually drawn artifact polygons (`inputs.manual_exclusions`);

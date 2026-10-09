@@ -18,12 +18,13 @@ def analyze_at8_v2(
     pixel_size_um: float,
     exclusion: np.ndarray,
     tau_bundle: dict[str, object],
+    glass: float | None = None,
 ) -> tuple[dict[str, float | int], list[dict[str, object]]]:
     nuclei = clean_nuclei(nuclei, rgb)
     _, _, maps = segment_at8_network(rgb, dab_threshold, pixel_size_um, pixel_size_um, exclusion)
     valid = maps["valid"]
     inner_valid = valid[inner]
-    area_mm2 = (tissue_area_mask(rgb) & ~exclusion)[inner].sum() * pixel_size_um**2 / 1e6
+    area_mm2 = (tissue_area_mask(rgb, glass) & ~exclusion)[inner].sum() * pixel_size_um**2 / 1e6
     objects, _ = tau_neuron_candidates(rgb, nuclei, dab_threshold, pixel_size_um, exclusion)
     rows = classify_tau_neurons(add_context_features(rgb, objects, pixel_size_um), tau_bundle, pixel_size_um)
     rows = [row for row in centered_objects(rows, inner) if valid[int(row["centroid_y_px"]), int(row["centroid_x_px"])]]

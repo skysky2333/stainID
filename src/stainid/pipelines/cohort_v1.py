@@ -9,7 +9,7 @@ import numpy as np
 from joblib import load
 from PIL import Image
 
-from stainid.imaging.tissue import field_tissue_mask, linear_artifact_mask, tissue_area_mask
+from stainid.imaging.tissue import core_glass_darkness, field_tissue_mask, linear_artifact_mask, tissue_area_mask
 from stainid.qc.exclusions import rasterize_core_exclusions
 from stainid.stains.amyloid.model import classify_amyloid_objects
 from stainid.stains.amyloid.segmentation import segment_amyloid_candidates, write_amyloid_overlay
@@ -115,6 +115,7 @@ def analyze_tile(
     overlay_path: Path | None = None,
     manual_exclusion_mask: np.ndarray | None = None,
     amyloid_bundle: dict[str, object] | None = None,
+    glass: float | None = None,
 ) -> tuple[dict[str, float | int | bool | str], list[dict[str, object]]]:
     pixel_area_um2 = pixel_width_um * pixel_height_um
     automatic_artifact = linear_artifact_mask(rgb)
@@ -139,7 +140,7 @@ def analyze_tile(
             rgb, threshold, pixel_width_um, pixel_height_um, artifact
         )
         selected = centered_objects(objects, inner)
-        tissue = tissue_area_mask(rgb) & ~artifact
+        tissue = tissue_area_mask(rgb, glass) & ~artifact
         inner_tissue = tissue[inner]
         tissue_area_mm2 = inner_tissue.sum() * pixel_area_um2 / 1_000_000.0
         complete = [row for row in selected if not bool(row["touches_edge"])]
@@ -195,7 +196,7 @@ def analyze_tile(
         )
         valid = field_tissue_mask(rgb) & ~excluded
         inner_valid = valid[inner]
-        inner_area = (tissue_area_mask(rgb) & ~excluded)[inner]
+        inner_area = (tissue_area_mask(rgb, glass) & ~excluded)[inner]
         tissue_area_mm2 = inner_area.sum() * pixel_area_um2 / 1_000_000.0
         accepted = [
             row
@@ -253,7 +254,7 @@ def analyze_tile(
         valid = maps["valid"][inner]
         positive = maps["positive"][inner] & valid
         thread = maps["thread"][inner] & valid
-        area = (tissue_area_mask(rgb) & ~artifact)[inner]
+        area = (tissue_area_mask(rgb, glass) & ~artifact)[inner]
         tissue_area_mm2 = area.sum() * pixel_area_um2 / 1_000_000.0
         positive_count = int(positive.sum())
         compact_count = sum(row["source_kind"] == "compact_profile" for row in selected)
@@ -374,6 +375,7 @@ def run_cohort_inference(
         if not path.is_absolute():
             path = Path.cwd() / path
         with Image.open(path) as image:
+            glass = core_glass_darkness(image)
             for row in sorted(image_rows, key=lambda item: int(item["selection_order"])):
                 x = int(row["x_px"])
                 y = int(row["y_px"])
@@ -404,6 +406,7 @@ def run_cohort_inference(
                     overlay_path,
                     manual_mask,
                     amyloid_bundle,
+                    glass,
                 )
                 common: dict[str, object] = {
                     key: value

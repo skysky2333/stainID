@@ -24,6 +24,7 @@ def analyze_6e10_v2(
     exclusion: np.ndarray,
     amyloid_bundle: dict[str, object],
     ring_um: float = 15.0,
+    glass: float | None = None,
 ) -> tuple[dict[str, float | int], list[dict[str, object]]]:
     nuclei = clean_nuclei(nuclei, rgb)
     _, objects, plaque_labels, _, excluded = segment_amyloid_candidates(rgb, dab_threshold, pixel_size_um, pixel_size_um, exclusion, split_touching=True)
@@ -67,7 +68,7 @@ def analyze_6e10_v2(
             "ring_area_um2": float(ring_area),
         })
     inner_valid = valid[inner]
-    area_mm2 = (tissue_area_mask(rgb) & ~excluded)[inner].sum() * pixel_size_um**2 / 1e6
+    area_mm2 = (tissue_area_mask(rgb, glass) & ~excluded)[inner].sum() * pixel_size_um**2 / 1e6
     summary = {
         "v2_tissue_area_mm2": area_mm2,
         "v2_plaque_count": len(plaques),

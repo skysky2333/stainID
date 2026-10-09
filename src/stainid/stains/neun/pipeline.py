@@ -10,7 +10,7 @@ import numpy as np
 from joblib import load
 from PIL import Image
 
-from stainid.imaging.tissue import linear_artifact_mask, tissue_area_mask
+from stainid.imaging.tissue import core_glass_darkness, linear_artifact_mask, tissue_area_mask
 from stainid.nuclei import CELLPOSE_SETTINGS, cellpose_masks, load_cellpose
 from stainid.pipelines.cohort_v1 import context_crop, local_profile_density
 from stainid.qc.exclusions import rasterize_core_exclusions, read_manual_exclusions
@@ -98,10 +98,11 @@ def classify_neun_tile(
     bundle: dict[str, object],
     tile_id: str,
     context_um: float = 55.0,
+    glass: float | None = None,
 ) -> tuple[dict[str, float | int], list[dict[str, object]]]:
     rows, profile_labels, cellpose_labels = neun_candidates(rgb, raw_masks, threshold, pixel_width_um, pixel_height_um, manual_mask, tile_id)
     artifact = linear_artifact_mask(rgb) | manual_mask
-    tissue = tissue_area_mask(rgb) & ~artifact
+    tissue = tissue_area_mask(rgb, glass) & ~artifact
     inner_tissue = tissue[inner]
     pixel_area_um2 = pixel_width_um * pixel_height_um
     tissue_area_mm2 = inner_tissue.sum() * pixel_area_um2 / 1_000_000.0
@@ -299,6 +300,7 @@ def run_neun_cohort(
             image_path = row["image_path"]
             image = Image.open(image_path)
             image.load()
+            glass = core_glass_darkness(image)
         x, y = int(row["x_px"]), int(row["y_px"])
         width, height = int(row["width_px"]), int(row["height_px"])
         rgb, inner = context_crop(image, x, y, width, height, context_px)
@@ -329,6 +331,7 @@ def run_neun_cohort(
             manual_mask,
             bundle,
             row["tile_id"],
+            glass=glass,
         )
         common = {
             key: value
