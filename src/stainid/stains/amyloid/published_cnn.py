@@ -17,6 +17,17 @@ CROP_UM = 128.0
 _CACHE: dict[str, tuple] = {}
 
 
+def torch_device():
+    """Device for the plaque CNNs and Phikon: $STAINID_CNN_DEVICE (default cpu). On CUDA, TF32 is switched off so the
+    scores are the fp32 scores the frozen models were validated with."""
+    import torch
+
+    device = torch.device(os.environ.get("STAINID_CNN_DEVICE", "cpu"))
+    if device.type == "cuda":
+        torch.backends.cuda.matmul.allow_tf32 = torch.backends.cudnn.allow_tf32 = False
+    return device
+
+
 def load(name: str):
     import torch
 
@@ -32,7 +43,7 @@ def load(name: str):
             setattr(__main__, cls.__name__, cls)
         weights, norm = MODELS[name]
         model = torch.load(MODEL_DIR / weights, map_location="cpu", weights_only=False)
-        model = getattr(model, "module", model).eval()
+        model = getattr(model, "module", model).eval().to(torch_device())
         stats = np.load(MODEL_DIR / norm, allow_pickle=True).item()
         _CACHE[name] = (model, np.asarray(stats["mean"], dtype=np.float32), np.asarray(stats["std"], dtype=np.float32))
     return _CACHE[name]
@@ -44,7 +55,8 @@ def predict(name: str, images: list[np.ndarray]) -> np.ndarray:
     model, mean, std = load(name)
     x = (np.stack(images).astype(np.float32) / 255.0 - mean) / std
     with torch.inference_mode():
-        return torch.sigmoid(model(torch.from_numpy(np.ascontiguousarray(x.transpose(0, 3, 1, 2)))).contiguous()).numpy()
+        batch = torch.from_numpy(np.ascontiguousarray(x.transpose(0, 3, 1, 2))).to(torch_device())
+        return torch.sigmoid(model(batch)).contiguous().cpu().numpy()
 
 
 def consensus_probabilities(images: list[np.ndarray]) -> np.ndarray:

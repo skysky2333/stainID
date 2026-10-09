@@ -13,7 +13,7 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 from stainid.stains.amyloid.classifier import MORPHOLOGY_FEATURES, build_tabular_matrix, context_features, load_review_records
-from stainid.stains.amyloid.published_cnn import cnn_patch, consensus_probabilities
+from stainid.stains.amyloid.published_cnn import cnn_patch, consensus_probabilities, torch_device
 from stainid.stains.neun.audit import crop_with_padding
 
 IDENTITY_CLASSES = {"compact", "diffuse", "review"}
@@ -53,12 +53,12 @@ def phikon_embeddings(images: list[np.ndarray]) -> np.ndarray:
 
     if not _PHIKON:
         _PHIKON["processor"] = AutoImageProcessor.from_pretrained(PHIKON_MODEL)
-        _PHIKON["model"] = AutoModel.from_pretrained(PHIKON_MODEL).eval()
+        _PHIKON["model"] = AutoModel.from_pretrained(PHIKON_MODEL).eval().to(torch_device())
     features = []
     with torch.inference_mode():
         for start in range(0, len(images), 32):
-            batch = _PHIKON["processor"](images=images[start : start + 32], return_tensors="pt")
-            features.append(_PHIKON["model"](**batch).last_hidden_state[:, 0].numpy())
+            batch = _PHIKON["processor"](images=images[start : start + 32], return_tensors="pt").to(torch_device())
+            features.append(_PHIKON["model"](**batch).last_hidden_state[:, 0].cpu().numpy())
     return np.concatenate(features)
 
 
