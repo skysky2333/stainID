@@ -131,7 +131,7 @@ unchanged.
 - **Model.** The same random forest the pipeline uses, on the candidate measurements stored when the field was prepared.
 - **Thresholds.** The compact/diffuse threshold (6E10) and the tangle/pretangle threshold (AT8) come from your labels
   when there are enough, otherwise from the current model.
-- **Validation.** Leave-one-TMA-out (5-fold if there are too few TMAs). The current model is scored on the same labels,
+- **Validation.** Leave-one-TMA-out; if a fold would train without one class, stratified folds of whole TMAs. Every donor sits on one TMA, so no donor is ever in both training and testing. The current model is scored on the same labels,
   so the Models page can show both side by side.
 
 The model is saved to `outputs.trained_models/<stain>_<time>/bundle.joblib` with `report.json`. It is used only after
