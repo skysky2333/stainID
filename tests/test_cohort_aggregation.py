@@ -132,3 +132,15 @@ def test_sampling_extents_add_whole_core_and_its_interior_only_for_tiled_cores()
     extents = dict(sampling_extents(sampled + [rim, inner]))
     assert [sum(map(extents[name], sampled + [rim, inner])) for name in extents] == [4, 8, 10, 9]
     assert not extents["whole_core_interior"](rim) and extents["whole_core_interior"](inner)
+
+
+def test_grey_matter_extent_keeps_grey_and_unclassified_tiles():
+    from stainid.analysis.aggregation import sampling_extents
+
+    def tile(order, white_matter):
+        return {"selection_order": str(order), "preview_tissue_fraction": "1.0", "white_matter": white_matter}
+
+    rows = [tile(1, "grey"), tile(305, "white"), tile(306, "unknown"), tile(307, "unusable"), tile(308, "grey")]
+    extents = dict(sampling_extents(rows))
+    assert [r["white_matter"] for r in rows if extents["whole_core_grey"](r)] == ["grey", "unknown", "grey"]
+    assert "whole_core_grey" not in dict(sampling_extents([{k: v for k, v in r.items() if k != "white_matter"} for r in rows]))

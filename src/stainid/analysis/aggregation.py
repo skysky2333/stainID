@@ -256,12 +256,15 @@ INTERIOR_TISSUE_FRACTION = 0.5
 def sampling_extents(group: list[dict[str, str]]) -> list[tuple[str, object]]:
     """Tile subsets each summary is computed on: the first four and eight sampled fields and, when the whole core was
     tiled, every tile and the interior tiles. Interior tiles are at least half tissue; the excluded rim tiles carry
-    most edge staining (brown rims, folds), so `whole_core_interior` is the rim sensitivity analysis."""
+    most edge staining (brown rims, folds), so `whole_core_interior` is the rim sensitivity analysis. When tiles carry
+    a `white_matter` class, `whole_core_grey` keeps the grey (and unclassified) tiles: the grey-matter analysis."""
     order = lambda row: int(row["selection_order"])
     extents = [("primary_four", lambda row: order(row) <= 4), ("extended_eight", lambda row: order(row) <= 8)]
     if any(order(row) > 8 for row in group):
         extents += [("whole_core", lambda row: True),
                     ("whole_core_interior", lambda row: float(row.get("preview_tissue_fraction") or 1) >= INTERIOR_TISSUE_FRACTION)]
+        if any(row.get("white_matter") for row in group):
+            extents.append(("whole_core_grey", lambda row: row.get("white_matter", "unknown") in ("grey", "unknown")))
     return extents
 
 
@@ -352,8 +355,13 @@ def write_aggregated_tables(
     core_output: Path,
     donor_region_output: Path,
     wide_output: Path,
+    white_matter_path: Path | None = None,
 ) -> tuple[Path, Path, Path]:
     tiles = read_csv(tile_feature_path)
+    if white_matter_path is not None and white_matter_path.exists():
+        classes = {row["tile_id"]: row["white_matter"] for row in read_csv(white_matter_path)}
+        for row in tiles:
+            row["white_matter"] = classes.get(row["tile_id"], "unknown")
     objects = read_csv(object_path)
     core = aggregate_level(tiles, objects, "core")
     donor_region = aggregate_level(tiles, objects, "donor_region")
