@@ -34,9 +34,11 @@ the right and bottom image edges, so the whole core is covered without overlap
 (`inputs.whole_core_manifest`). Squares that are sampled fields keep their names (`…_S01`); the
 others are `…_W<row><column>`. Detection runs on these tiles when `analysis.tiles` is
 `whole_core` (the default; Settings → Analysis), or on the sampled fields only when it is
-`sampled_fields`. Results are then aggregated over all tiles of a core (sampling extent
-`whole_core`); the sampled-field summaries (`primary_four`, `extended_eight`) are still made from
-the same outputs.
+`sampled_fields`. `stainid summarize` pools every analysed tile of a core. The study aggregation
+(`stainid.analysis.aggregation`) writes one row per sampling extent: `primary_four` and
+`extended_eight` (the first sampled fields, which keep their names in the whole-core grid) and, for
+whole cores, `whole_core` and `whole_core_interior` (tiles at least half tissue; the rim
+sensitivity analysis, since rim tiles carry about twice the AT8-positive fraction of interior tiles).
 
 ## 3. Slide calibration — `stainid calibrate`
 
