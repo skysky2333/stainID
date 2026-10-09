@@ -3,7 +3,6 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
-import os
 from pathlib import Path
 
 import numpy as np
@@ -17,7 +16,7 @@ from stainid.qc.exclusions import rasterize_core_exclusions, read_manual_exclusi
 from stainid.stains.neun.cellpose import classify_cellpose_masks
 from stainid.stains.neun.classifier import build_matrix_from_contexts, object_contexts
 from stainid.stains.neun.profiles import combine_profile_and_cellpose_reviews, review_table_rows, segment_dab_profiles
-from stainid.tables import file_names, format_csv_value, save_npz_atomic, write_csv, write_text_atomic
+from stainid.tables import claim_field, file_names, format_csv_value, save_npz_atomic, write_csv, write_text_atomic
 
 Image.MAX_IMAGE_PIXELS = None
 
@@ -198,25 +197,6 @@ def classify_neun_tile(
         "total_artifact_exclusion_area_fraction": float(artifact[inner].mean()),
     }
     return summary, objects
-
-
-def claim_field(claim: Path) -> bool:
-    """Take a field for this process; a claim left by a process that no longer runs (stopped or crashed) is taken over."""
-    try:
-        descriptor = os.open(claim, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
-        owner = claim.read_text().strip()
-        try:
-            os.kill(int(owner), 0)
-            return False
-        except (ValueError, ProcessLookupError):
-            claim.unlink(missing_ok=True)
-            return claim_field(claim)
-        except PermissionError:
-            return False
-    os.write(descriptor, str(os.getpid()).encode())
-    os.close(descriptor)
-    return True
 
 
 def run_neun_cohort(

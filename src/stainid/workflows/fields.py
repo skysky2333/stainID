@@ -13,7 +13,7 @@ from stainid.project import Project
 from stainid.qc.exclusions import rasterize_core_exclusions, read_manual_exclusions
 from stainid.stains.amyloid.field_pipeline import analyze_6e10_v2
 from stainid.stains.tau.field_pipeline import analyze_at8_v2
-from stainid.tables import file_names, write_records, write_text_atomic
+from stainid.tables import claim_field, file_names, write_records, write_text_atomic
 from stainid.workflows import calibration_table, follow_nuclei, tiles_for
 
 Image.MAX_IMAGE_PIXELS = None
@@ -74,17 +74,25 @@ def run_fields(project: Project, stains: list[str] = ("6E10", "AT8"), shard_inde
             skipped.append(core_id)
             print(f"[{number}/{len(groups)}] {core_id} AT8 skipped: its nuclei are missing", flush=True)
             continue
-        features, objects = [], []
-        with Image.open(project.root / tiles[0]["image_path"]) as image:
-            image.load()
-            glass = core_glass_darkness(image)
-            for tile in tiles:
-                feature, items = analyze_field(project, image, tile, stain, calibration, manual, bundles, nuclei_dir, glass)
-                features.append(feature)
-                objects += items
-        write_records(parts / f"{core_id}_{stain}_objects.csv", objects, ["tile_id"])
-        write_records(feature_path, features)
-        print(f"[{number}/{len(groups)}] {core_id} {stain}", flush=True)
+        claim = parts / f"{core_id}_{stain}.claim"
+        if not claim_field(claim):  # another process is on this core image
+            continue
+        try:
+            if feature_path.exists():  # finished by another process meanwhile
+                continue
+            features, objects = [], []
+            with Image.open(project.root / tiles[0]["image_path"]) as image:
+                image.load()
+                glass = core_glass_darkness(image)
+                for tile in tiles:
+                    feature, items = analyze_field(project, image, tile, stain, calibration, manual, bundles, nuclei_dir, glass)
+                    features.append(feature)
+                    objects += items
+            write_records(parts / f"{core_id}_{stain}_objects.csv", objects, ["tile_id"])
+            write_records(feature_path, features)
+            print(f"[{number}/{len(groups)}] {core_id} {stain}", flush=True)
+        finally:
+            claim.unlink(missing_ok=True)
     if skipped:
         print(f"{len(skipped)} AT8 cores were skipped because Find nuclei has not processed them yet; run Find nuclei for AT8, "
               "then run this step again to finish them", flush=True)

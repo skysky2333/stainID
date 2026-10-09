@@ -6,6 +6,26 @@ import tempfile
 from pathlib import Path
 
 
+def claim_field(claim: Path) -> bool:
+    """Take a unit of work (a field, a core image) for this process, so any number of processes can share one queue; a
+    claim left by a process that no longer runs (stopped or crashed) is taken over."""
+    try:
+        descriptor = os.open(claim, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        owner = claim.read_text().strip()
+        try:
+            os.kill(int(owner), 0)
+            return False
+        except (ValueError, ProcessLookupError):
+            claim.unlink(missing_ok=True)
+            return claim_field(claim)
+        except PermissionError:
+            return False
+    os.write(descriptor, str(os.getpid()).encode())
+    os.close(descriptor)
+    return True
+
+
 def file_names(folder: Path) -> set[str]:
     """Names in `folder` from one directory listing (empty if it does not exist). Use it instead of one `exists()` per
     file when checking many outputs: on exFAT and network drives each lookup of a missing name rereads the folder."""
