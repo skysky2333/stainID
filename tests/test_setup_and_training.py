@@ -109,3 +109,17 @@ def test_whole_core_grid_covers_the_image_without_overlap():
 
     assert grid(5000, 2048) == [(0, 2048), (2048, 2048), (4096, 904)]
     assert grid(4200, 2048) == [(0, 2048), (2048, 2048)]
+
+
+def test_out_of_fold_never_puts_one_tma_in_training_and_testing():
+    import numpy as np
+
+    from stainid.training.train import out_of_fold
+
+    groups = np.repeat(["1", "2", "3", "4", "5"], 6)
+    y = groups != "5"
+    y[groups == "5"] = [True, False] * 3  # only TMA 5 has negatives: leaving it out fails, so whole-TMA folds are used
+    seen = []
+    oof, scheme = out_of_fold(lambda tr, te: (seen.append((set(groups[tr]), set(groups[te]))), np.zeros(len(te)))[1], len(y), y, groups)
+    assert scheme.endswith("whole TMAs per fold")
+    assert all(not (train & test) for train, test in seen) and not np.isnan(oof).any()

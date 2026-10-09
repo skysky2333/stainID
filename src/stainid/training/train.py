@@ -16,7 +16,7 @@ from joblib import dump, load
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import precision_score, recall_score, roc_auc_score
-from sklearn.model_selection import LeaveOneGroupOut, StratifiedKFold
+from sklearn.model_selection import LeaveOneGroupOut, StratifiedGroupKFold
 from sklearn.pipeline import make_pipeline
 
 from stainid.labels import pool, store
@@ -51,12 +51,18 @@ def labelled(project: Project, stain: str) -> tuple[pd.DataFrame, list[str]]:
 
 
 def out_of_fold(fit_predict, n: int, y: np.ndarray, groups: np.ndarray) -> tuple[np.ndarray, str]:
-    """Leave-one-TMA-out when every fold still sees both classes, otherwise stratified 5-fold."""
+    """Out-of-fold predictions that never split a group (TMA) between training and testing. Each donor sits on one TMA,
+    so every split is by donor: leave-one-TMA-out when every training fold still sees both classes, otherwise
+    stratified folds of whole TMAs."""
     logo = LeaveOneGroupOut()
     if len(set(groups)) >= 3 and all(len(set(y[train])) == 2 for train, _ in logo.split(np.zeros(n), y, groups)):
         splits, scheme = logo.split(np.zeros(n), y, groups), "leave-one-TMA-out"
     else:
-        splits, scheme = StratifiedKFold(min(5, int(min(y.sum(), (~y).sum()))), shuffle=True, random_state=0).split(np.zeros(n), y), "5-fold"
+        folds = min(5, len(set(groups)))
+        if folds < 2:
+            raise ValueError("Validation needs labels from at least two TMAs, so that no donor is in both training and testing")
+        splits = StratifiedGroupKFold(folds, shuffle=True, random_state=0).split(np.zeros(n), y, groups)
+        scheme = f"{folds}-fold, whole TMAs per fold"
     oof = np.full(n, np.nan)
     for train, test in splits:
         oof[test] = fit_predict(train, test)
