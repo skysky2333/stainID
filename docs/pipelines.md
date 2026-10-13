@@ -104,10 +104,10 @@ reported next to density as a cellularity-independent measure.
 
 1. Candidates are segmented from slide-calibrated DAB. Touching plaques are split by a seeded
    watershed on 3 µm-smoothed DAB, with h-maxima prominence equal to the slide threshold.
-2. Identity: the mean of three probabilities decides acceptance at P ≥ 0.5:
-   - a random forest on morphology and 140 µm context;
-   - a logistic head on Phikon foundation-model embeddings;
-   - the published Wong et al. (2022) consensus CNN.
+2. Identity: a random forest on morphology and 140 µm context decides acceptance at P ≥ 0.5. Adding a Phikon
+   foundation-model head or the published Wong et al. (2022) consensus CNN lowered leave-one-TMA-out AUC
+   (0.94 vs 0.96; `data/analysis/model_validation/components.csv`), so the deployed model uses neither. (The frozen
+   v1 pipeline that defines the primary amyloid endpoints is separate and does use the plaque CNNs.)
 3. Deposits whose outer boundary touches a lumen or tissue edge for ≥ 25 % of its length are
    classified `vascular_or_edge` and excluded from parenchymal measures.
 4. Morphotype: accepted plaques ≥ 15 µm in diameter are **compact** when their inner DAB is at
