@@ -58,10 +58,14 @@ def run_fields(project: Project, stains: list[str] = ("6E10", "AT8"), shard_inde
     groups = tiles_for(project.analysis_tiles(), set(stains), shard_index, shard_count, core_ids)
     calibration = calibration_table(project.input("calibration"))
     manual = read_manual_exclusions(project.input("manual_exclusions"))
-    bundles = {"tau": load(project.model("tau")), "amyloid": load(project.model("amyloid"))}
+    tau = load(project.model("tau"))
+    bundles = {"tau": {**tau, "probability_threshold": project.acceptance("tau", tau)}, "amyloid": load(project.model("amyloid"))}
     parts = project.output("fields") / "parts"
     parts.mkdir(parents=True, exist_ok=True)
-    check_models(project, project.output("fields") / "provenance.json", {"amyloid": project.model("amyloid"), "tau": project.model("tau")})
+    models = {"amyloid": project.model("amyloid"), "tau": project.model("tau")}
+    if project.config["acceptance"].get("tau") is not None:
+        models["tau_acceptance"] = str(bundles["tau"]["probability_threshold"])
+    check_models(project, project.output("fields") / "provenance.json", models)
     nuclei_dir = project.output("nuclei")
     done, nuclei = file_names(parts), file_names(nuclei_dir)
     print(f"[0/{len(groups)}] {sum(f'{c}_{s}_features.csv' not in done for c, s in groups)} of {len(groups)} core images still to do", flush=True)

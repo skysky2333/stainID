@@ -20,6 +20,10 @@ DEFAULTS: dict = {
     "tma": {"prefix": "TMA-", "rows": 5, "columns": 6},
     "groups": [],
     "analysis": {"tiles": "whole_core"},
+    # Probability a NeuN candidate or tau-neuron candidate needs to be counted. null keeps the cut-off stored in the model.
+    # Random audits of accepted objects found many non-neurons at the model defaults (NeuN 0.5, AT8 0.4):
+    # workspace/docs/object_acceptance_audit.md.
+    "acceptance": {"neun": None, "tau": None},
     # Arithmetic of the deep models on CUDA (cpu always runs fp32): fp32, tf32 or bf16. Measured on an A100-class card:
     # Cellpose bf16 2.9 s/tile (about 1% of cells differ from fp32), tf32 3.8 s (fp32 masks cell for cell), fp32 10 s;
     # Segment Anything tf32 1.5x fp32 (median area change 0%), bf16 1.4x (0.14%), so tf32 is its better choice.
@@ -121,6 +125,13 @@ class Project:
     def analysis_tiles(self) -> Path:
         """The tiles detection runs on: every tissue tile of each core (whole_core) or only the sampled fields."""
         return self.input("whole_core_manifest" if self.config["analysis"]["tiles"] == "whole_core" else "tile_manifest")
+
+    def acceptance(self, model: str, bundle: dict) -> float:
+        """The probability cut-off for counting an object: the project setting if given, else the model's own."""
+        value = self.config["acceptance"].get(model)
+        if value is not None:
+            return float(value)
+        return float(bundle["context_threshold"] if model == "neun" else bundle["probability_threshold"])
 
     def resolve(self, section: str, key: str) -> Path:
         path = Path(self.config[section][key])

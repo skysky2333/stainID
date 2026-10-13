@@ -98,6 +98,7 @@ def classify_neun_tile(
     tile_id: str,
     context_um: float = 55.0,
     glass: float | None = None,
+    accept_threshold: float | None = None,
 ) -> tuple[dict[str, float | int], list[dict[str, object]]]:
     rows, profile_labels, cellpose_labels = neun_candidates(rgb, raw_masks, threshold, pixel_width_um, pixel_height_um, manual_mask, tile_id)
     artifact = linear_artifact_mask(rgb) | manual_mask
@@ -112,7 +113,7 @@ def classify_neun_tile(
         if x_slice.start <= float(row["centroid_x_px"]) < x_slice.stop
         and y_slice.start <= float(row["centroid_y_px"]) < y_slice.stop
     ]
-    context_threshold = float(bundle["context_threshold"])
+    context_threshold = float(bundle["context_threshold"]) if accept_threshold is None else float(accept_threshold)
     addition_threshold = float(bundle["addition_threshold"])
     if selected_rows:
         pixel_size_um = float(np.sqrt(pixel_width_um * pixel_height_um))
@@ -217,6 +218,7 @@ def run_neun_cohort(
     batch_size: int = 1,
     reverse: bool = False,
     precision: str = "fp32",
+    accept_threshold: float | None = None,
 ) -> int:
     rows = [row for row in read_csv(tile_manifest) if row["stain"] == "NeuN"]
     if nested_samples:
@@ -247,6 +249,7 @@ def run_neun_cohort(
         | {"precision": "float32"},
         "context_px": context_px,
         "primary_rule": "context model probability >= context_threshold",
+        **({} if accept_threshold is None else {"context_threshold": float(accept_threshold)}),
         "sensitivity_rule": "stain contour or context probability >= addition_threshold",
     }
     if provenance_path.exists():
@@ -312,6 +315,7 @@ def run_neun_cohort(
             bundle,
             row["tile_id"],
             glass=glass,
+            accept_threshold=accept_threshold,
         )
         common = {
             key: value
