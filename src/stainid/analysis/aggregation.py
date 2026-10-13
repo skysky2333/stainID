@@ -26,7 +26,8 @@ def read_csv(path: Path) -> list[dict[str, str]]:
 
 
 def _number(row: dict[str, str], key: str) -> float:
-    return float(row[key])
+    value = row[key]
+    return float(value) if value != "" else float("nan")  # pandas writes missing values as empty cells
 
 
 def _sum(rows: list[dict[str, str]], key: str) -> float:
