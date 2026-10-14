@@ -143,3 +143,30 @@ def pd_rows(path):
     from stainid.tables import read_csv
 
     return read_csv(path)
+
+
+def test_the_cores_screen_shows_each_slide_and_core_pictures(slide_project, monkeypatch, tmp_path_factory):
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    from stainid.api import state
+    from stainid.api.app import create_app
+
+    dearray_slides(slide_project)
+    monkeypatch.setenv("STAINID_PROJECT", str(slide_project.root))
+    monkeypatch.setattr(state, "SETTINGS", tmp_path_factory.mktemp("home") / "app.json")
+    state._STATE = None
+    client = TestClient(create_app(), client=("127.0.0.1", 50000))
+    client.post("/api/session/admin", json={"password": "admin"})
+    slides = client.get("/api/setup/cores").json()["slides"]
+    two = next(s for s in slides if s["tma"] == "2")
+    assert two["found"] and two["image"] == "TMA_2_NeuN.jpg" and two["report"]["rows"] == 4 and two["grid_source"] == "auto"
+    assert not two["checked"]
+    marked = client.post("/api/setup/cores/checked", json={"slide_path": two["slide_path"]}).json()["slides"]
+    assert next(s for s in marked if s["tma"] == "2")["checked"]
+    picture = client.get("/api/setup/thumbs/2/A-1.jpg?size=96")
+    assert picture.status_code == 200 and picture.headers["content-type"] == "image/jpeg"
+    assert client.get("/api/setup/thumbs/2/F-5.jpg").status_code == 404
+    overview = client.get("/api/setup").json()
+    assert {s["id"]: s["state"] for s in overview["screens"]}["cores"] == "done"
+    state._STATE = None

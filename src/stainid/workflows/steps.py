@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import platform
+import shutil
 import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -16,7 +17,16 @@ from stainid.slides.table import read_slides
 from stainid.tables import read_csv
 
 STAINS = ["NeuN", "6E10", "AT8"]
-GPU = "mps" if sys.platform == "darwin" and platform.machine() == "arm64" else "cpu"
+
+
+def best_device() -> str:
+    """The processor for the deep models: the Apple GPU on Apple-silicon Macs, an NVIDIA GPU when one is installed, else the CPU."""
+    if sys.platform == "darwin" and platform.machine() == "arm64":
+        return "mps"
+    return "cuda" if shutil.which("nvidia-smi") else "cpu"
+
+
+GPU = best_device()
 
 
 @dataclass(frozen=True)

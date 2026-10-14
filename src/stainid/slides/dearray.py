@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -706,6 +707,7 @@ def dearray_preview(
         plain = cv2.resize(preview.rgb, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA) if scale < 1 else preview.rgb
         (qc_dir / "previews").mkdir(exist_ok=True)
         cv2.imwrite(str(qc_dir / "previews" / f"{slug}.jpg"), cv2.cvtColor(plain, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 85])
+        (qc_dir / "previews" / f"{slug}.json").write_text(json.dumps({"scale": scale}))  # picture pixels per preview pixel
     return records, choice
 
 

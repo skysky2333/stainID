@@ -19,6 +19,9 @@ DEFAULTS: dict = {
     "stains": dict(SUPPORTED_STAINS),
     "tma": {"prefix": "TMA-", "rows": 5, "columns": 6},
     "groups": [],
+    # How donor ids are written when the guided setup reads TMA maps and case sheets: plain numbers with at least `digits`
+    # digits (698 -> 0698; 0 keeps them as typed), prefixed ones as <PREFIX>_<number with `prefixed_digits` digits> (JOG3 -> JOG_003).
+    "donor_ids": {"digits": 4, "prefixed_digits": 3},
     "analysis": {"tiles": "whole_core"},
     # Probability a NeuN candidate or tau-neuron candidate needs to be counted. null keeps the cut-off stored in the model.
     # Random audits of accepted objects found many non-neurons at the model defaults (NeuN 0.5, AT8 0.4):
