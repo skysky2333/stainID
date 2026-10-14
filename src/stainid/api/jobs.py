@@ -1,8 +1,13 @@
 """Background pipeline jobs: the server's queue over the shared job store (`stainid.jobs`).
 
-The server starts `stainid` commands as subprocesses (through `stainid.jobs.run`, which records each exit code) with a
-cap on heavy steps at once. Steps someone runs from the command line register in the same store; the server picks
-them up every few seconds, so they show in the app, count toward the cap and make conflicting queued jobs wait.
+The server starts `stainid` commands as subprocesses (through `stainid.jobs.run`, which records each exit code). Steps
+someone runs from the command line register in the same store; the server picks them up every few seconds, so they
+show in the app, count toward the heavy-step limit and make conflicting queued jobs wait.
+
+Each open project has its own queue (a `JobManager` over its own store), but heavy steps share one limit across the
+whole server (`SLOTS`: there is one GPU), so a project's heavy step waits while other projects' fill the slots and
+says which project is using them. Heavy steps running from the command line in projects the server knows but has not
+opened count too (`HeavySlots.elsewhere`).
 """
 from __future__ import annotations
 
@@ -11,18 +16,74 @@ import subprocess
 import sys
 import threading
 import time
+import weakref
+from collections.abc import Callable
 from pathlib import Path
 
 from stainid.jobs import ACTIVE, APP, COMMAND_LINE, JOB_ENV, Job, JobStore, alive, new_id, stop
-from stainid.project import load_project
+from stainid.project import ENVIRONMENT_KEYS, load_project
 from stainid.workflows.steps import BY_ID, RESOURCES, STEPS, resource_info, to_argv, wait_reason
 
 RESCAN_SECONDS = 3.0
+ELSEWHERE_SECONDS = 10.0
+
+
+class HeavySlots:
+    """The server-wide limit on heavy steps, shared by the queues of every open project."""
+
+    def __init__(self, limit: int = 2):
+        self.limit = limit
+        self.lock = threading.RLock()  # held while a queue decides what to start, so two queues never take the last slot
+        self.managers: weakref.WeakSet[JobManager] = weakref.WeakSet()
+        self.elsewhere: Callable[[], list[tuple[str, Job]]] | None = None  # heavy runs in known projects that are not open
+        self._elsewhere: tuple[float, list[tuple[str, Job]]] = (0.0, [])
+
+    def register(self, manager: JobManager) -> None:
+        with self.lock:
+            self.managers.add(manager)
+
+    def unregister(self, manager: JobManager) -> None:
+        with self.lock:
+            self.managers.discard(manager)
+
+    def running(self, asking: JobManager) -> list[tuple[str, Job]]:
+        """Heavy steps running on this server outside `asking`'s project: (project name, job)."""
+        out = []
+        for manager in list(self.managers):
+            if manager is not asking and manager.open:
+                out += [(manager.name, j) for j in list(manager.jobs.values()) if j.status == "running" and j.workflow in BY_ID and BY_ID[j.workflow].heavy]
+        if self.elsewhere is not None:
+            when, found = self._elsewhere
+            if time.time() - when > ELSEWHERE_SECONDS:
+                try:
+                    found = self.elsewhere()
+                except Exception:  # a project folder that cannot be read does not stop the queue
+                    found = []
+                self._elsewhere = (time.time(), found)
+            out += found
+        return out
+
+
+SLOTS = HeavySlots()
+
+
+def _slot_message(own: int, own_outside: int, others: list[tuple[str, Job]], limit: int) -> str:
+    """Why a heavy step waits for a slot: how many heavy steps run, and where."""
+    total = own + len(others)
+    text = f"Waits for a free slot: {total} heavy step{'s are' if total != 1 else ' is'} already running"
+    parts = [f"{own_outside} of them from the command line"] if own_outside else []
+    by_project: dict[str, list[str]] = {}
+    for name, job in others:
+        by_project.setdefault(name, []).append(BY_ID[job.workflow].title if job.workflow in BY_ID else job.workflow)
+    parts += [f"{len(titles)} in the project “{name}” ({', '.join(dict.fromkeys(titles))})" for name, titles in by_project.items()]
+    return text + (", " + ", ".join(parts) if parts else "") + f" (at most {limit} at a time on this server)"
 
 
 class JobManager:
-    def __init__(self, project_root: Path, directory: Path, max_heavy: int = 2):
-        self.root, self.max_heavy = project_root, max_heavy
+    def __init__(self, project_root: Path, directory: Path, max_heavy: int | None = None, name: str = "", slots: HeavySlots | None = None):
+        """`max_heavy` gives this queue a limit of its own (tests); normally the server-wide `SLOTS` decide."""
+        self.root, self.name = project_root, name or Path(project_root).name
+        self.slots = slots or (HeavySlots(max_heavy) if max_heavy is not None else SLOTS)
         self.store = JobStore(directory)
         self.dir = self.store.dir
         self.lock = threading.Lock()
@@ -39,7 +100,12 @@ class JobManager:
                 self._save(job)
         self._reap()  # jobs that ended while the server was away get their real exit code; the others are followed again
         self.open = True
+        self.slots.register(self)
         threading.Thread(target=self._loop, daemon=True).start()
+
+    @property
+    def max_heavy(self) -> int:
+        return self.slots.limit
 
     def _save(self, job: Job) -> None:
         self.store.save(job)
@@ -91,6 +157,7 @@ class JobManager:
 
     def close(self) -> None:
         self.open = False
+        self.slots.unregister(self)
 
     def _loop(self) -> None:
         while self.open:
@@ -186,28 +253,38 @@ class JobManager:
     def _schedule(self) -> None:
         """Start queued jobs oldest first. A job waits while an earlier running or waiting job makes something it reads or
         writes the same file (see `wait_reason`); parts of one step with different options run side by side. A step
-        running from the command line counts as earlier than every queued job. Heavy jobs also wait for a free slot."""
+        running from the command line counts as earlier than every queued job. Heavy jobs also wait for a free slot, counted
+        over every project on this server (`SLOTS`)."""
         active = [j for j in self.jobs.values() if j.status in ACTIVE and j.workflow in BY_ID]
         running = [j for j in active if j.status == "running"]
         running_heavy = sum(BY_ID[j.workflow].heavy for j in running)
         outside = sum(BY_ID[j.workflow].heavy for j in running if j.source == COMMAND_LINE)
-        for job in sorted((j for j in active if j.status == "queued"), key=lambda j: j.created):
-            step = BY_ID[job.workflow]
-            reasons = [wait_reason(BY_ID[j.workflow], step, "command line" if j.source == COMMAND_LINE else "") for j in active
-                       if j is not job and (j.created < job.created or j.source == COMMAND_LINE)
-                       and not (j.workflow == job.workflow and j.options != job.options)]
-            reasons = [r for r in reasons if r]
-            if reasons:
-                job.waiting = reasons[0]
-            elif step.heavy and running_heavy >= self.max_heavy:
-                job.waiting = (f"Waits for a free slot: {running_heavy} heavy steps are already running"
-                               + (f", {outside} of them from the command line" if outside else "") + f" (at most {self.max_heavy} at a time)")
-            elif missing := self._missing(step):
-                self._skip(job, missing)
-            else:
-                job.waiting = ""
-                self._start(job)
-                running_heavy += step.heavy
+        others: list[tuple[str, Job]] = []  # heavy steps of other projects, looked up once a heavy step could start
+        looked = False
+        with self.slots.lock:
+            for job in sorted((j for j in active if j.status == "queued"), key=lambda j: j.created):
+                step = BY_ID[job.workflow]
+                reasons = [wait_reason(BY_ID[j.workflow], step, "command line" if j.source == COMMAND_LINE else "") for j in active
+                           if j is not job and (j.created < job.created or j.source == COMMAND_LINE)
+                           and not (j.workflow == job.workflow and j.options != job.options)]
+                reasons = [r for r in reasons if r]
+                if step.heavy and not reasons and not looked:
+                    others, looked = self.slots.running(self), True
+                if reasons:
+                    job.waiting = reasons[0]
+                elif step.heavy and running_heavy + len(others) >= self.slots.limit:
+                    job.waiting = _slot_message(running_heavy, outside, others, self.slots.limit)
+                elif missing := self._missing(step):
+                    self._skip(job, missing)
+                else:
+                    job.waiting = ""
+                    self._start(job)
+                    running_heavy += step.heavy
+
+    def _environment(self, job: Job) -> dict[str, str]:
+        """The command's environment: the server's, with this project's model folders (never another project's)."""
+        env = {k: v for k, v in os.environ.items() if k not in ENVIRONMENT_KEYS}
+        return {**env, **load_project(self.root).environment(), "STAINID_PROJECT": str(self.root), JOB_ENV: job.id}
 
     def _start(self, job: Job) -> None:
         command = [sys.executable, "-u", "-m", "stainid.cli", "--project", str(self.root), *job.argv]
@@ -215,7 +292,7 @@ class JobManager:
         self.store.exit_path(job.id).unlink(missing_ok=True)
         process = subprocess.Popen([sys.executable, "-m", "stainid.jobs.run", str(self.store.exit_path(job.id)), "--", *command],
                                    cwd=self.root, stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
-                                   env={**os.environ, JOB_ENV: job.id})
+                                   env=self._environment(job))
         log.close()
         self.processes[job.id] = process
         job.status, job.pid, job.started = "running", process.pid, time.time()

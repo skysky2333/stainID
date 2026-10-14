@@ -11,7 +11,8 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
-from stainid.api.state import get_state, open_project, recent_projects
+from stainid.api import registry
+from stainid.api.state import CURRENT, get_state, open_project, reload_project, use_project
 from stainid.api.util import records
 from stainid.project import DEFAULTS, Project, save_project
 from stainid.slides.layout import REQUIRED_COLUMNS, read_layout
@@ -66,23 +67,26 @@ def project_info() -> dict:
     project = state.project
     return {"name": project.name, "root": str(project.root), "configured": project.is_configured, "config": project.config,
             "defaults": DEFAULTS, "help": HELP, "pixel_size_um": project.pixel_size_um, "stains": project.stains,
-            "tma_prefix": project.tma_prefix, "groups": state.groups(), "paths": _paths(project), "recent": recent_projects()}
+            "tma_prefix": project.tma_prefix, "groups": state.groups(), "paths": _paths(project), "recent": registry.recent_projects(),
+            "id": state.id}
 
 
 @router.put("/project/config")
 def update_config(request: ConfigChange) -> dict:
     state = get_state()
-    open_project(save_project(state.project, request.changes).root)
+    reload_project(save_project(state.project, request.changes).root)
     return project_info()
 
+
+# Opening and creating projects belongs to the Projects page (/api/projects/open, /create). These two remain for web
+# apps of the previous release: they make the project the one opened last, which requests without a project use.
 
 @router.post("/project/open")
 def open_existing(request: OpenRequest) -> dict:
     path = Path(request.path).expanduser()
     if not (path / "stainid.yaml").exists():
         raise HTTPException(404, f"{path} is not a stainID project yet (it has no stainid.yaml). Use 'Create project' to start one there.")
-    _switch(path)
-    return project_info()
+    return _opened(path)
 
 
 @router.post("/project/create")
@@ -91,15 +95,12 @@ def create(request: OpenRequest) -> dict:
     if (path / "stainid.yaml").exists():
         raise HTTPException(409, f"{path} already contains a stainID project; open it instead.")
     save_project(Project(root=path.resolve(), config=DEFAULTS), {"name": request.name or path.name})
-    _switch(path)
-    return project_info()
+    return _opened(path)
 
 
-def _switch(path: Path) -> None:
-    try:
-        open_project(path)
-    except RuntimeError as error:
-        raise HTTPException(409, str(error))
+def _opened(path: Path) -> dict:
+    with use_project(open_project(path).id):  # describe the project just opened, whichever project the request came from
+        return project_info()
 
 
 @router.get("/summary")
@@ -128,12 +129,18 @@ def calibration() -> list[dict]:
 @router.get("/fs")
 def browse(path: str = "", show: str = "") -> dict:
     """Folder browser for picking paths (the app runs on this computer, so this lists local folders)."""
-    folder = Path(path).expanduser() if path else get_state().root
-    folder = folder if folder.is_dir() else folder.parent
+    in_project = CURRENT.get() is not None  # asked from a project's pages (not from the Projects page)
+    projects_dir = registry.projects_dir()
+    start = get_state().root if in_project else projects_dir if projects_dir and projects_dir.is_dir() else Path.home()
+    folder = Path(path).expanduser() if path else start
+    while not folder.is_dir() and folder.parent != folder:
+        folder = folder.parent
     entries = sorted((p for p in folder.iterdir() if not p.name.startswith(".")), key=lambda p: p.name.lower())
     suffixes = {".csv": {".csv"}, "slides": {".vsi", ".svs", ".ndpi", ".scn", ".mrxs", ".czi", ".tif", ".tiff"},
                 "models": {".joblib", ".pth", ".pt", ""}}.get(show, set())
-    shortcuts = [{"label": "Project folder", "path": str(get_state().root)}, {"label": "Home", "path": str(Path.home())}]
+    shortcuts = [{"label": "Project folder", "path": str(get_state().root)}] if in_project else []
+    shortcuts += [{"label": "Projects folder", "path": str(projects_dir)}] if projects_dir and projects_dir.is_dir() else []
+    shortcuts += [{"label": "Home", "path": str(Path.home())}]
     shortcuts += [{"label": p.name, "path": str(p)} for p in sorted(Path("/Volumes").iterdir())] if Path("/Volumes").exists() else []
     return {"path": str(folder), "parent": str(folder.parent) if folder.parent != folder else None,
             "dirs": [p.name for p in entries if p.is_dir() and p.suffix.lower() not in suffixes],
@@ -216,7 +223,7 @@ async def upload(kind: str, file: UploadFile = File(...)) -> dict:
     if kind == "tma_layout" and not project.config["groups"]:
         codes = [c for c in dict.fromkeys(frame["disease_group"]) if c]
         project = save_project(project, {"groups": [{"code": c, "label": c} for c in codes]})
-    open_project(project.root)
+    reload_project(project.root)
     return {"saved": project.relative(target), "rows": len(frame)}
 
 

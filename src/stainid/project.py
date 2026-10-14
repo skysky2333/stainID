@@ -11,6 +11,7 @@ import yaml
 CONFIG_NAME = "stainid.yaml"
 SUPPORTED_STAINS = {"NeuN": "neun", "6E10": "amyloid", "AT8": "tau"}
 PRECISIONS = ("fp32", "tf32", "bf16")
+ENVIRONMENT_KEYS = ("HF_HOME", "CELLPOSE_LOCAL_MODELS_PATH", "STAINID_PLAQUE_CNN_DIR")  # set per project (`Project.environment`)
 
 DEFAULTS: dict = {
     "name": "stainID project",
@@ -160,12 +161,15 @@ class Project:
     def tma_name(self, tma: str) -> str:
         return f"{self.tma_prefix}{tma}"
 
+    def environment(self) -> dict[str, str]:
+        """Where third-party model caches look for this project's models (offline, reproducible)."""
+        return {"HF_HOME": str(self.model("huggingface_home")), "HF_HUB_OFFLINE": "1",
+                "CELLPOSE_LOCAL_MODELS_PATH": str(self.model("cellpose").parent), "STAINID_PLAQUE_CNN_DIR": str(self.model("plaque_cnn_dir"))}
+
     def apply_environment(self) -> None:
-        """Point third-party model caches at the project's model folder (offline, reproducible)."""
-        os.environ.setdefault("HF_HOME", str(self.model("huggingface_home")))
-        os.environ.setdefault("HF_HUB_OFFLINE", "1")
-        os.environ.setdefault("CELLPOSE_LOCAL_MODELS_PATH", str(self.model("cellpose").parent))
-        os.environ.setdefault("STAINID_PLAQUE_CNN_DIR", str(self.model("plaque_cnn_dir")))
+        """Point third-party model caches at the project's model folder, unless the environment already says otherwise."""
+        for key, value in self.environment().items():
+            os.environ.setdefault(key, value)
 
 
 def load_project(path: Path | str | None = None) -> Project:

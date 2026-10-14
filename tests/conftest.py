@@ -10,6 +10,23 @@ import pytest
 import yaml
 
 
+@pytest.fixture(autouse=True)
+def own_app_settings(tmp_path_factory, monkeypatch):
+    """Every test gets its own app settings (projects list, password, secret) and its own server-wide heavy-step slots,
+    so no test reads this computer's ~/.stainid or sees another test's jobs; open projects are closed afterwards."""
+    from stainid.api import jobs, registry
+
+    monkeypatch.setattr(registry, "SETTINGS", tmp_path_factory.mktemp("home") / "app.json")
+    monkeypatch.setattr(jobs, "SLOTS", jobs.HeavySlots())
+    monkeypatch.delenv(registry.PROJECTS_DIR_ENV, raising=False)
+    yield
+    try:
+        from stainid.api import state
+    except ImportError:  # pragma: no cover - without the app extra
+        return
+    state.reset()
+
+
 @pytest.fixture()
 def synthetic_project(tmp_path: Path, monkeypatch) -> Path:
     """A one-core, three-stain project with tiny images and pre-made pipeline outputs."""

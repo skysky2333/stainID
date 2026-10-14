@@ -54,9 +54,11 @@ def new_id() -> str:
 class JobStore:
     """Job records in one folder: `<id>.json`, plus `<id>.log` (output of app jobs) and `<id>.exit` (their exit code)."""
 
-    def __init__(self, directory: Path):
+    def __init__(self, directory: Path, create: bool = True):
+        """`create=False` only reads: the folder is not made when it is missing (a project nothing has run in)."""
         self.dir = Path(directory)
-        self.dir.mkdir(parents=True, exist_ok=True)
+        if create:
+            self.dir.mkdir(parents=True, exist_ok=True)
 
     def path(self, job_id: str) -> Path:
         return self.dir / f"{job_id}.json"
@@ -85,6 +87,14 @@ class JobStore:
     def all(self) -> list[Job]:
         paths = (self.dir / name for name in os.listdir(self.dir) if name.endswith(".json") and not name.startswith("."))
         return [job for job in map(self.load, paths) if job is not None]
+
+    def newest(self, count: int = 40) -> list[Job]:
+        """The newest records (ids start with the time they were made), for a quick look at what is running."""
+        try:
+            names = sorted((n for n in os.listdir(self.dir) if n.endswith(".json") and not n.startswith(".")), reverse=True)[:count]
+        except OSError:
+            return []
+        return [job for job in (self.load(self.dir / name) for name in names) if job is not None]
 
     def exit_code(self, job_id: str) -> int | None:
         try:

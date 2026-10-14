@@ -19,7 +19,7 @@ from urllib.parse import quote, unquote
 
 from fastapi import HTTPException, Request
 
-from stainid.api import state
+from stainid.api import registry
 from stainid.tables import write_text_atomic
 
 ADMIN_COOKIE = "stainid_admin"
@@ -35,7 +35,7 @@ def allowed_origins(extra: list[str] = ()) -> list[str]:
 
 
 def _secret() -> bytes:
-    path = state.SETTINGS.parent / "secret"
+    path = registry.SETTINGS.parent / "secret"
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(secrets.token_hex(32))
@@ -48,7 +48,7 @@ def _signature(message: str) -> str:
 
 
 def _password_file():
-    return state.SETTINGS.parent / "admin.json"
+    return registry.SETTINGS.parent / "admin.json"
 
 
 def default_password() -> bool:

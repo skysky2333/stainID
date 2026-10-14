@@ -163,8 +163,7 @@ def test_the_cores_screen_shows_each_slide_and_core_pictures(slide_project, monk
 
     dearray_slides(slide_project)
     monkeypatch.setenv("STAINID_PROJECT", str(slide_project.root))
-    monkeypatch.setattr(state, "SETTINGS", tmp_path_factory.mktemp("home") / "app.json")
-    state._STATE = None
+    state.reset()
     client = TestClient(create_app(), client=("127.0.0.1", 50000))
     client.post("/api/session/admin", json={"password": "admin"})
     slides = client.get("/api/setup/cores").json()["slides"]
@@ -178,4 +177,4 @@ def test_the_cores_screen_shows_each_slide_and_core_pictures(slide_project, monk
     assert client.get("/api/setup/thumbs/2/F-5.jpg").status_code == 404
     overview = client.get("/api/setup").json()
     assert {s["id"]: s["state"] for s in overview["screens"]}["cores"] == "done"
-    state._STATE = None
+    state.reset()

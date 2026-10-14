@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from stainid.api.state import get_state, open_project
+from stainid.api.state import get_state, reload_project
 from stainid.training.train import activate, trained_models
 
 router = APIRouter(tags=["models"])
@@ -80,5 +80,5 @@ def use_model(request: ActivateRequest) -> dict:
     bundle = project.root / request.path
     if not (bundle.exists() and (bundle.parent / "report.json").exists()):
         raise HTTPException(404, request.path)
-    open_project(activate(project, bundle).root)
+    reload_project(activate(project, bundle).root)
     return {"ok": True}

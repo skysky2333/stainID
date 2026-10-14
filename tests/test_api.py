@@ -15,12 +15,11 @@ from stainid.api.app import create_app  # noqa: E402
 @pytest.fixture()
 def client(synthetic_project, monkeypatch, tmp_path_factory):
     monkeypatch.chdir(synthetic_project)
-    monkeypatch.setattr(state, "SETTINGS", tmp_path_factory.mktemp("home") / "app.json")
-    state._STATE = None
+    state.reset()
     admin = TestClient(create_app(), client=("127.0.0.1", 50000))
     assert admin.post("/api/session/admin", json={"password": "admin"}).status_code == 200
     yield admin
-    state._STATE = None
+    state.reset()
 
 
 def test_summary_and_cores(client):
@@ -93,7 +92,11 @@ def test_settings_can_change_while_steps_run(client, synthetic_project, tmp_path
     job.status = "running"
     assert client.put("/api/project/config", json={"changes": {"name": "Renamed"}}).status_code == 200
     assert state.get_state().jobs is runner
-    assert client.post("/api/project/create", json={"path": str(tmp_path / "other")}).status_code == 409
+    # another project can be opened while this one's steps run: it gets its own queue, and this one carries on
+    first = state.get_state().id
+    assert client.post("/api/project/create", json={"path": str(tmp_path / "other")}).status_code == 200
+    assert state.get_state().jobs is not runner and runner.open and job.status == "running"
+    assert client.get(f"/api/projects/{first}/jobs").json()[0]["id"] == job.id
     job.status = "finished"
 
 

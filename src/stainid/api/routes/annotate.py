@@ -35,12 +35,13 @@ def root() -> Path:
 
 
 def busy(name: str, tile_id: str | None = None, person: str | None = None) -> dict[str, set[str]]:
-    """Who has which field open (seen in the last 15 minutes)."""
+    """Who has which field of this project's session open (seen in the last 15 minutes)."""
     now = time.time()
+    session = (get_state().id, name)
     with _BUSY_LOCK:
         if tile_id and person:
-            _BUSY.setdefault((name, tile_id), {})[person] = now
-        return {tile: {p for p, t in people.items() if now - t < BUSY_SECONDS} for (n, tile), people in _BUSY.items() if n == name}
+            _BUSY.setdefault((session, tile_id), {})[person] = now
+        return {tile: {p for p, t in people.items() if now - t < BUSY_SECONDS} for (s, tile), people in _BUSY.items() if s == session}
 
 
 def viewer(request: Request) -> str | None:
@@ -132,17 +133,23 @@ def labels_overview() -> dict:
     listed = []
     for name in sessions.names(root()):
         meta = sessions.meta(root(), name)
-        listed.append({**{k: v for k, v in meta.items() if k != "fields"}, **session_progress(meta, labels)})
+        listed.append({**{k: v for k, v in meta.items() if k != "fields"}, **session_progress(meta, labels), "link": annotate_path(name)})
     return {"stains": stains, "sessions": listed}
 
 
 @router.get("/labels/share", dependencies=admin)
 def share(request: Request) -> dict:
-    """Addresses at which other computers on the network reach the annotation pages."""
+    """Addresses at which other computers on the network reach this project's annotation pages."""
     port = request.url.port or 80
     host = socket.gethostname()
     addresses = sorted({a[4][0] for a in socket.getaddrinfo(host, None, socket.AF_INET)} - {"127.0.0.1"})
-    return {"links": [f"http://{a}:{port}/annotate" for a in [*addresses, host]], "network": os.environ.get("STAINID_HOST", "0.0.0.0") != "127.0.0.1"}
+    return {"links": [f"http://{a}:{port}{annotate_path()}" for a in [*addresses, host]],
+            "network": os.environ.get("STAINID_HOST", "0.0.0.0") != "127.0.0.1"}
+
+
+def annotate_path(session: str = "") -> str:
+    """The web app's address of the annotation pages of this project (and of one session): /p/<project>/annotate[/name]."""
+    return f"/p/{get_state().id}/annotate" + (f"/{session}" if session else "")
 
 
 @router.post("/labels/sessions", dependencies=admin)
@@ -262,7 +269,8 @@ def list_open(request: Request, person: str | None = Depends(viewer)) -> list[di
         reviewed = store.reviewed_fields(labels, meta["stain"])
         done = sum(person in reviewed.get(t, set()) for t in meta["fields"]) if person else 0
         out.append({**{k: meta[k] for k in ("name", "title", "stain", "kind", "open")}, "fields": len(meta["fields"]), "done_by_me": done,
-                    "my_labels": int(((labels.session == name) & (labels.source == person) & (labels.task == "class")).sum())})
+                    "my_labels": int(((labels.session == name) & (labels.source == person) & (labels.task == "class")).sum()),
+                    "link": annotate_path(name)})
     return out
 
 

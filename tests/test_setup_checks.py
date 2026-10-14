@@ -105,13 +105,12 @@ def client(tmp_path, monkeypatch, tmp_path_factory):
     (tmp_path / "stainid.yaml").write_text(yaml.safe_dump({"name": "setup", "tma": {"rows": 2, "columns": 3}}))
     monkeypatch.setenv("STAINID_PROJECT", str(tmp_path))
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(state, "SETTINGS", tmp_path_factory.mktemp("home") / "app.json")
-    state._STATE = None
+    state.reset()
     app = TestClient(create_app(), client=("127.0.0.1", 50000))
     assert app.post("/api/session/admin", json={"password": "admin"}).status_code == 200
     yield app
     state.get_state().jobs.close()
-    state._STATE = None
+    state.reset()
 
 
 def test_the_guided_setup_from_slides_to_checks(client, tmp_path):

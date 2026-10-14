@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 from stainid.jobs import JOB_ENV, JobStore, command_line_job
-from stainid.project import load_project, write_default_config
+from stainid.project import CONFIG_NAME, load_project, write_default_config
 
 
 def _shard(parser: argparse.ArgumentParser) -> None:
@@ -133,6 +133,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--allow-origin", action="append", default=[], metavar="URL",
                    help="let the web app served from this address (e.g. http://lab-pc:8080) use this server; repeat for several "
                         "(also $STAINID_ALLOW_ORIGINS, comma-separated)")
+    p.add_argument("--projects-dir", type=Path, default=None, metavar="DIR",
+                   help="list every folder in DIR that holds a stainid.yaml on the Projects page (also settable there)")
     return parser
 
 
@@ -261,26 +263,32 @@ def serve(args: argparse.Namespace) -> None:
 
     import uvicorn
 
+    from stainid.api.registry import PROJECTS_DIR_ENV, project_id, remembered_project
     from stainid.api.session import allowed_origins
-    from stainid.api.state import remembered_project
 
     local = "127.0.0.1" if args.host == "0.0.0.0" else args.host
     url = f"http://{local}:{args.port}"
+    # with --project the browser opens that project; otherwise the Projects page
+    start = (args.project if args.project.is_dir() else args.project.parent).resolve() if args.project else remembered_project()
+    page = f"{url}/p/{project_id(start)}/" if args.project and (start / CONFIG_NAME).exists() else url
     with socket.socket() as probe:
         if probe.connect_ex((local, args.port)) == 0:
             print(f"stainID is already running at {url}; opening it", flush=True)
             if not args.no_browser:
-                webbrowser.open(url)
+                webbrowser.open(page)
             return
-    os.environ["STAINID_PROJECT"] = str(Path(args.project).resolve() if args.project else remembered_project())
+    os.environ["STAINID_PROJECT"] = str(start)
     os.environ["STAINID_HOST"] = args.host
+    if args.projects_dir:
+        os.environ[PROJECTS_DIR_ENV] = str(args.projects_dir.expanduser().resolve())
     origins = allowed_origins(args.allow_origin)
     os.environ["STAINID_ALLOW_ORIGINS"] = ",".join(origins)
     if not args.no_browser:
-        threading.Timer(1.5, webbrowser.open, (url,)).start()
+        threading.Timer(1.5, webbrowser.open, (page,)).start()
     print(f"stainID is running at {url}  (press Ctrl+C to stop)", flush=True)
     if args.host != "127.0.0.1":
-        print(f"Annotators on your network: http://{socket.gethostname()}:{args.port}/annotate (once you start a session in the app)", flush=True)
+        print(f"Annotators on your network: http://{socket.gethostname()}:{args.port}/p/<project>/annotate (each project's Labels page "
+              "shows its link once you start a session)", flush=True)
     if origins:
         print(f"The web app served from {', '.join(origins)} may use this server", flush=True)
     uvicorn.run("stainid.api.app:create_app", factory=True, host=args.host, port=args.port, reload=args.reload, log_level="warning")

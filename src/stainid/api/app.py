@@ -1,4 +1,10 @@
-"""FastAPI application: JSON API under /api and the built React app at /."""
+"""FastAPI application: JSON API under /api and the built React app at /.
+
+Several projects can be open at once. A request names its project in the address: `/api/projects/<id>/summary` is
+`/api/summary` for that project (`ProjectScope` takes the id off and sets it for the request; the routes call
+`state.get_state()`). An address without a project (`/api/summary`, as older web apps send) uses the project opened
+last. `/api/session` and `/api/projects` (the projects list) belong to the server as a whole.
+"""
 from __future__ import annotations
 
 import re
@@ -9,17 +15,42 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from stainid.api.routes import analysis, annotate, cohort, images, jobs, models, project, session, setup, slides
+from stainid.api import jobs as job_queue
+from stainid.api import state
+from stainid.api.routes import analysis, annotate, cohort, images, jobs, models, project, projects, session, setup, slides
 from stainid.api.session import allowed_origins, is_admin
 
 STATIC = Path(__file__).parent / "static"
 PUBLIC_API = re.compile(r"^/api/(session|annotate)(/|$)")
+SCOPED = re.compile(r"^/api/projects/([A-Za-z0-9][A-Za-z0-9_.-]*)(/.+)$")
+
+
+class ProjectScope:
+    """Turns `/api/projects/<id>/<route>` into `/api/<route>` handled for project <id> (see `state.CURRENT`)."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        match = SCOPED.match(scope.get("path", "")) if scope["type"] in ("http", "websocket") else None
+        if match is None:
+            await self.app(scope, receive, send)
+            return
+        path = "/api" + match.group(2)
+        with state.use_project(match.group(1)):
+            await self.app({**scope, "path": path, "raw_path": path.encode()}, receive, send)
 
 
 def create_app() -> FastAPI:
     app = FastAPI(title="stainID", version="2.0", docs_url=None, redoc_url=None, openapi_url=None)
-    for module in (project, slides, setup, cohort, images, jobs, analysis, models, session, annotate):
+    for module in (projects, project, slides, setup, cohort, images, jobs, analysis, models, session, annotate):
         app.include_router(module.router, prefix="/api")
+    job_queue.SLOTS.elsewhere = state.running_elsewhere  # heavy steps of known projects that are not open count too
+
+    @app.exception_handler(state.UnknownProject)
+    async def unknown_project(request: Request, error: state.UnknownProject) -> JSONResponse:
+        return JSONResponse({"detail": "This project is not on this server's list (it may have been removed). Open it from the Projects page."},
+                            status_code=404)
 
     @app.middleware("http")
     async def admin_only(request: Request, call_next):
@@ -32,6 +63,7 @@ def create_app() -> FastAPI:
     if origins:  # a web app served from these addresses may use this server (`stainid serve --allow-origin`)
         app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"],
                            allow_headers=["Authorization", "Content-Type"])
+    app.add_middleware(ProjectScope)  # outermost: every other part sees the address without the project
 
     if (STATIC / "index.html").exists():
         app.mount("/assets", StaticFiles(directory=STATIC / "assets"), name="assets")

@@ -11,7 +11,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from stainid.api import render
-from stainid.api.state import get_state, open_project
+from stainid.api.state import get_state, reload_project
 from stainid.project import save_project
 from stainid.setup import checks, donors, guide, maps
 from stainid.setup.files import parse_text, read_tables
@@ -285,7 +285,7 @@ def save_map(tma: str, request: GridCells) -> dict:
         codes = sorted({c["disease_group"] for c in cells if c["disease_group"]})
         if codes:
             save_project(project, {"groups": [{"code": c, "label": c} for c in codes]})
-    open_project(project.root)
+    reload_project(project.root)
     return map_overview()
 
 
@@ -293,7 +293,7 @@ def save_map(tma: str, request: GridCells) -> dict:
 def id_style(style: dict) -> dict:
     project = get_state().project
     save_project(project, {"donor_ids": {"digits": int(style.get("digits", 4)), "prefixed_digits": int(style.get("prefixed_digits", 3))}})
-    open_project(project.root)
+    reload_project(project.root)
     return map_overview()
 
 
@@ -305,7 +305,7 @@ def sample_ids(rule: dict) -> dict:
         raise HTTPException(400, "region must be name or code")
     save_project(project, {"sample_region_ids": {"plain_prefix": str(rule.get("plain_prefix", "")), "prefixed_prefix": str(rule.get("prefixed_prefix", "")),
                                                  "region": rule.get("region", "name")}})
-    open_project(project.root)
+    reload_project(project.root)
     return map_overview()
 
 
@@ -359,7 +359,7 @@ def save_donors(request: DonorRequest) -> dict:
         count = donors.save_donors(project.input("donor_metadata"), kept, request.mode)
     except ValueError as error:
         raise HTTPException(400, str(error))
-    open_project(project.root)
+    reload_project(project.root)
     return {"saved": project.relative(project.input("donor_metadata")), "count": count, "added": len(kept)}
 
 
@@ -377,6 +377,6 @@ def fix(request: FixRequest) -> dict:
         message = checks.apply_fix(project, request.action, request.args)
     except (ValueError, KeyError) as error:
         raise HTTPException(400, str(error))
-    open_project(project.root)
+    reload_project(project.root)
     return {"message": message, "issues": checks.project_issues(get_state().project)}
 
