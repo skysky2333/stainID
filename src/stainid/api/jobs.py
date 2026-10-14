@@ -111,7 +111,7 @@ class JobManager:
         for name in names:
             job_id = name[:-5]
             known = self.jobs.get(job_id)
-            if known is not None and known.source != COMMAND_LINE:
+            if known is not None and (known.source != COMMAND_LINE or known.ended is not None):  # only open runs change
                 continue
             mtime = self._mtime(job_id)
             if mtime == self.seen.get(job_id):
