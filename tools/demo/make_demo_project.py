@@ -14,6 +14,8 @@ Nothing is read from a real study: all values come from the random generator (fi
 files (Cellpose-SAM, Segment Anything, Phikon, plaque CNNs) are small placeholder files, and the "slide scans" are
 low-resolution overview pictures, so the demo shows every page but the slide-reading and deep-learning steps cannot
 be re-run on it. About 1 GB on disk; a few minutes on 6 cores.
+
+This project is already set up; make_setup_demo.py makes one that is not, for trying the guided setup.
 """
 from __future__ import annotations
 

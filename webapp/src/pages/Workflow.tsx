@@ -137,7 +137,7 @@ export function StepCard({ step, onChanged }: { step: Step; onChanged: () => voi
         {step.command && (active ? <button className="btn small" onClick={cancel}>Stop</button>
           : <button className={`btn small${state === 'done' ? '' : ' primary'}`} disabled={missing.length > 0} onClick={run}
             title={missing.length ? `Needs: ${missing.map((m) => m.label).join(', ')}` : step.duration ? `Typical time: ${step.duration}` : undefined}>{runLabel}</button>)}
-        {!step.command && step.id === 'slides' && <Link className="btn small primary" to="/setup/slides">Open</Link>}
+        {!step.command && step.id === 'slides' && <Link className={`btn small${state === 'done' ? '' : ' primary'}`} to="/setup/slides">Open</Link>}
       </div>
       {state === 'queued' && job?.waiting && <div className="small secondary live-line">{job.waiting}. It starts on its own.</div>}
       {state === 'running' && job?.progress.last_line && <div className="muted small live-line">{job.progress.last_line}</div>}
