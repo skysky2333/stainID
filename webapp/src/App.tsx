@@ -17,11 +17,12 @@ import Models from './pages/Models'
 import Results from './pages/Results'
 import Labels from './pages/Labels'
 import Settings from './pages/Settings'
+import Setup from './setup/Setup'
 import Welcome from './pages/Welcome'
 import Workflow from './pages/Workflow'
 
 const NAV: { section: string; links: [string, string][] }[] = [
-  { section: '', links: [['/', 'Home'], ['/workflow', 'Workflow']] },
+  { section: '', links: [['/', 'Home'], ['/setup', 'Guided setup'], ['/workflow', 'Workflow']] },
   { section: 'Look at the data', links: [['/cohort', 'Cohort & cores'], ['/calibration', 'Stain thresholds']] },
   { section: 'Improve accuracy', links: [['/labels', 'Labels'], ['/models', 'Models']] },
   { section: 'Results', links: [['/results', 'Results']] },
@@ -101,6 +102,8 @@ function Shell() {
           <Route path="/" element={<Home />} />
           <Route path="/workflow" element={<Workflow />} />
           <Route path="/setup/grids" element={<Grids />} />
+          <Route path="/setup" element={<Setup />} />
+          <Route path="/setup/:screen" element={<Setup />} />
           <Route path="/cohort" element={<Cohort />} />
           <Route path="/cores/:coreId" element={<CoreView />} />
           <Route path="/calibration" element={<Calibration />} />
@@ -122,7 +125,7 @@ function JobsIndicator() {
   const queued = (jobs.data ?? []).filter((j) => j.status === 'queued')
   if (!running.length && !queued.length) return null
   return (
-    <Link to="/workflow#jobs" className="jobs-chip">
+    <Link to="/workflow#running" className="jobs-chip">
       <span className="pulse" />
       {running.length} running{queued.length ? ` · ${queued.length} waiting` : ''}
       <div className="muted small ellipsis">{running.map((j) => j.title).join(', ')}</div>

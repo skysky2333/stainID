@@ -1,8 +1,9 @@
 import { Link } from 'react-router-dom'
-import type { Step, Summary } from '../api'
+import type { SetupOverview, Step, Summary } from '../api'
 import { ErrorNote, HelpBox, PageHead, Stat, StatusBadge, Term } from '../components'
 import { useFetch } from '../hooks'
 import { useProject } from '../project'
+import { ScreenMark } from '../setup/parts'
 import { JobsTable, MAIN_STAGES, stepState } from './Workflow'
 
 const OPTIONAL = new Set(['masks'])
@@ -11,6 +12,9 @@ export default function Home() {
   const { info, groups, groupColor, groupLabel } = useProject()
   const steps = useFetch<Step[]>('/api/steps', 5000)
   const summary = useFetch<Summary>('/api/summary', 15000)
+  const setup = useFetch<SetupOverview>('/api/setup', 10000)
+  const notSetUp = setup.data && !setup.data.set_up
+  const newSlides = setup.data?.set_up && setup.data.screens[0].state === 'todo' ? setup.data.screens[0].summary : ''
   const main = (steps.data ?? []).filter((s) => MAIN_STAGES.includes(s.stage))
   const next = main.find((s) => !OPTIONAL.has(s.id) && (s.progress.state !== 'done' || s.progress.outdated))
   const running = main.filter((s) => stepState(s) === 'running')
@@ -19,10 +23,13 @@ export default function Home() {
 
   return (
     <>
-      <PageHead title={info?.name ?? 'stainID'} subtitle={<>Project folder: <code>{info?.root}</code></>} />
+      <PageHead title={info?.name ?? 'stainID'} subtitle={<>Project folder: <code>{info?.root}</code></>}>
+        {setup.data?.set_up && <Link className="btn" to="/setup/slides">Add slides</Link>}
+      </PageHead>
       <HelpBox id="home" title="New here? Start with this">
         <ol>
-          <li><b>Workflow</b> walks you through every step, from slide scans to results tables. Run the steps in order; each card says what it needs, what it makes and where it saves it.</li>
+          <li><b>Guided setup</b> takes you from slide scans to a running analysis in six short screens: it reads the slides, finds the cores, imports your TMA maps and donor sheet, and checks that they fit together.</li>
+          <li><b>Workflow</b> lists every step with its progress; run them all with one button, or one by one with their options.</li>
           <li><b>Cohort</b> lets you look at every core and field with the detections drawn on top — use it to check results by eye.</li>
           <li><b>Label &amp; check</b> shows you objects blind (without diagnosis or the model’s answer) so you can label them, to check accuracy or to train a model on the <b>Models</b> page.</li>
           <li><b>Results</b> has the final tables (one row per donor and brain region), what every column means, and plots by group.</li>
@@ -30,7 +37,24 @@ export default function Home() {
         </ol>
       </HelpBox>
 
-      {next ? (
+      {notSetUp ? (
+        <div className="card next-card setup-card">
+          <div className="muted small">Your next step</div>
+          <h2 style={{ margin: '4px 0' }}>Set up your study</h2>
+          <p className="secondary" style={{ margin: 0 }}>A few short screens: stainID reads your slide scans, finds the cores and imports the TMA maps and donor sheet; you only confirm what it found.</p>
+          <ol className="setup-overview">
+            {setup.data!.screens.map((s, i) => <li key={s.id}><ScreenMark state={s.state} number={i + 1} /><b>{s.title}</b><span className="muted small">{s.summary}</span></li>)}
+          </ol>
+          <Link className="btn primary" to="/setup">{setup.data!.screens.some((s) => s.state === 'done') ? 'Continue the guided setup' : 'Start the guided setup'}</Link>
+        </div>
+      ) : newSlides ? (
+        <div className="card next-card">
+          <div className="muted small">New slides</div>
+          <h2 style={{ margin: '4px 0' }}>{newSlides}</h2>
+          <p className="secondary" style={{ margin: 0 }}>Add them to the study: the guided setup registers them, finds their cores and takes their TMA maps.</p>
+          <div className="row" style={{ marginTop: 12 }}><Link className="btn primary" to="/setup/slides">Add the new slides</Link></div>
+        </div>
+      ) : next ? (
         <div className="card next-card">
           <div className="muted small">{running.length ? `Running now: ${running.map((s) => s.title).join(', ')}${waiting.length ? ` · waiting: ${waiting.map((s) => s.title).join(', ')}` : ''}` : 'Your next step'}</div>
           <h2 style={{ margin: '4px 0' }}>{next.title}</h2>

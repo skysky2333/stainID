@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import type { Job, ResourceInfo, SlideRow, SlidesInfo, Step } from '../api'
+import type { Job, ResourceInfo, SetupOverview, SlideRow, SlidesInfo, Step } from '../api'
 import { api, apiUrl, runStep } from '../api'
 import { CommandLineTag, Empty, ErrorNote, FilePicker, HelpBox, OptionField, PageHead, PathLine, Progress, StatusBadge, Term, timeAgo, withError } from '../components'
 import { useFetch } from '../hooks'
@@ -19,36 +19,76 @@ export function stepState(step: Step): string {
 export default function Workflow() {
   const steps = useFetch<Step[]>('/api/steps', 3000)
   const jobs = useFetch<Job[]>('/api/jobs', 3000)
+  const setup = useFetch<SetupOverview>('/api/setup', 8000)
   const navigate = useNavigate()
   const { hash } = useLocation()
+  const [error, setError] = useState<string | null>(null)
+  const [starting, setStarting] = useState(false)
   const list = (steps.data ?? []).filter((s) => MAIN_STAGES.includes(s.stage))
   useEffect(() => {
     if (hash && steps.data) document.getElementById(hash.slice(1))?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }, [hash, steps.data === null])
-  const refresh = () => { steps.reload(); jobs.reload() }
+  const refresh = () => { steps.reload(); jobs.reload(); setup.reload() }
+  const counted = list.filter((s) => s.id !== 'masks')
+  const done = counted.filter((s) => stepState(s) === 'done').length
+  const remaining = setup.data?.remaining ?? []
+  const next = counted.find((s) => stepState(s) !== 'done')
+  const runAll = () => withError(async () => {
+    setStarting(true)
+    try { await api.post('/api/setup/run', {}); refresh() } finally { setStarting(false) }
+  }, setError)
 
   return (
     <>
-      <PageHead title="Workflow" subtitle="Every step from slide scans to results tables, in order. Run them top to bottom." />
+      <PageHead title="Workflow" subtitle="Every step from slide scans to results tables, in order.">
+        <Link className="btn" to="/setup">Guided setup</Link>
+      </PageHead>
       <HelpBox id="workflow">
         <ul>
-          <li>Each card says <b>what the step needs</b>, <b>what it makes</b> and <b>where the files go</b> (<span className="exists-dot yes" /> exists, <span className="exists-dot no" /> not yet). Use “Show in Finder” to open a location.</li>
-          <li>Press <b>Run</b>. Steps run in the background: you can switch pages or start other steps. At most two heavy steps run at the same time; others wait in line.</li>
-          <li>Steps are <b>resumable</b>: stopping or re-running a step continues where it left off. “Start over” (under Advanced) moves old results aside instead of deleting them.</li>
-          <li>If a step fails, the card shows the reason in plain words; “Show log” has the full details.</li>
-          <li>Keep the stainID window (terminal) open while steps run — closing it stops them.</li>
+          <li>Press <b>Run all remaining steps</b>, or <b>Run</b> on one step. Steps run in the background and start in the right order by themselves; you can switch pages or close the browser.</li>
+          <li>Steps are <b>resumable</b>: stopping or running a step again continues where it left off.</li>
+          <li>Click a step for the details: what it needs and makes (and where the files are), its options and its log.</li>
         </ul>
       </HelpBox>
       <ErrorNote error={steps.error} />
-      {list.length > 0 && <PipelineMap steps={list} state={stepState} onOpen={(id) => navigate(`/workflow#${id}`)} />}
-      <NowRunning jobs={jobs.data ?? []} steps={list} onChanged={refresh} />
+      {steps.data && (
+        <div className={`card next-card workflow-summary${remaining.length ? '' : ' done'}`}>
+          <div className="row">
+            <div style={{ flex: 1, minWidth: 240 }}>
+              <h2 style={{ margin: '0 0 6px' }}>{done} of {counted.length} steps done</h2>
+              <Progress done={done} total={counted.length} />
+              <p className="small secondary" style={{ margin: '6px 0 0' }}>
+                {next ? <>Next: <a href={`#${next.id}`}>{next.title}</a>. {next.summary}</> : 'Everything has run. The results are on the Results page.'}
+              </p>
+            </div>
+            {remaining.length > 0 && (
+              <div className="run-all">
+                <button className="btn primary" disabled={starting} onClick={runAll} title={remaining.map((s) => s.title).join(', ')}>
+                  {starting ? 'Starting…' : `Run all remaining steps (${remaining.length})`}</button>
+                {setup.data?.estimate.text && <span className="small muted">{setup.data.estimate.text}, roughly</span>}
+              </div>
+            )}
+          </div>
+          <ErrorNote error={error} />
+        </div>
+      )}
+      <NowRunning jobs={jobs.data ?? []} onChanged={refresh} />
       {MAIN_STAGES.map((stage) => (
         <section key={stage} className="stage">
           <h2 className="stage-title">{stage}</h2>
           {list.filter((s) => s.stage === stage).map((step) => <StepCard key={step.id} step={step} onChanged={refresh} />)}
         </section>
       ))}
-      <JobsTable />
+      {list.length > 0 && (
+        <details className="advanced">
+          <summary><span>Pipeline map</span><span className="muted small"> · which step needs which</span></summary>
+          <div className="advanced-body"><PipelineMap steps={list} state={stepState} onOpen={(id) => navigate(`/workflow#${id}`)} /></div>
+        </details>
+      )}
+      <details className="advanced" open={hash === '#jobs'}>
+        <summary><span>All jobs</span><span className="muted small"> · every run with its log</span></summary>
+        <div className="advanced-body"><JobsTable /></div>
+      </details>
     </>
   )
 }
@@ -60,95 +100,98 @@ export function StepCard({ step, onChanged }: { step: Step; onChanged: () => voi
   const [values, setValues] = useState<Record<string, unknown>>(defaults)
   useEffect(() => setValues(defaults), [defaults])
   const [advanced, setAdvanced] = useState(false)
-  const [details, setDetails] = useState(false)
   const [log, setLog] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const state = stepState(step)
   const { hash } = useLocation()
-  const [open, setOpen] = useState(state !== 'done' || hash === `#${step.id}`)
+  const [open, setOpen] = useState(hash === `#${step.id}`)
   useEffect(() => { if (hash === `#${step.id}`) setOpen(true) }, [hash, step.id])
   const missing = step.needs.filter((n) => !n.exists)
   const active = state === 'running' || state === 'queued'
   const job = step.job
   const basic = step.options.filter((o) => !o.advanced)
   const extra = step.options.filter((o) => o.advanced)
+  const progress = active && job?.progress.total ? job.progress : step.progress
 
   const run = () => withError(async () => { await runStep(step.id, values); onChanged() }, setError)
   const cancel = () => job && api.del(`/api/jobs/${job.id}`).then(onChanged)
+  const runLabel = step.progress.state === 'done' ? 'Run again' : step.progress.state === 'partial' ? 'Continue' : 'Run'
 
   return (
-    <div className={`card step-card state-${state}${open ? '' : ' collapsed'}`} id={step.id}>
-      <button className="step-head" onClick={() => setOpen(!open)} aria-expanded={open}>
-        <div>
-          <h3 className="step-title">{step.title}</h3>
-          <p className="step-summary">{step.summary}</p>
-        </div>
-        <span className="spacer" />
-        {!open && step.progress.total > 0 && <span className="muted small">{step.progress.done.toLocaleString()} {step.progress.unit}</span>}
+    <div className={`card step-card state-${state}${open ? ' open' : ''}`} id={step.id}>
+      <div className="step-row">
+        <button className="step-head" onClick={() => setOpen(!open)} aria-expanded={open}>
+          <span className="chevron">{open ? '▾' : '▸'}</span>
+          <div>
+            <h3 className="step-title">{step.title}</h3>
+            <p className="step-summary">{step.summary}</p>
+          </div>
+        </button>
+        {progress.total > 0 && (
+          <div className="step-mini">
+            <Progress done={progress.done} total={progress.total} />
+            <span className="muted small">{progress.done.toLocaleString()} of {progress.total.toLocaleString()} {step.progress.unit}</span>
+          </div>
+        )}
         <StatusBadge status={state} />
-        <span className="chevron">{open ? '▾' : '▸'}</span>
-      </button>
-      {open && <>
-      {step.progress.total > 0 && (
-        <div className="step-progress">
-          <Progress done={active && job ? job.progress.done : step.progress.done} total={active && job?.progress.total ? job.progress.total : step.progress.total} />
-          <span className="muted small">{step.progress.done.toLocaleString()} of {step.progress.total.toLocaleString()} {step.progress.unit}{step.progress.note ? ` · ${step.progress.note}` : ''}</span>
-        </div>
+        {step.command && (active ? <button className="btn small" onClick={cancel}>Stop</button>
+          : <button className={`btn small${state === 'done' ? '' : ' primary'}`} disabled={missing.length > 0} onClick={run}
+            title={missing.length ? `Needs: ${missing.map((m) => m.label).join(', ')}` : step.duration ? `Typical time: ${step.duration}` : undefined}>{runLabel}</button>)}
+        {!step.command && step.id === 'slides' && <Link className="btn small primary" to="/setup/slides">Open</Link>}
+      </div>
+      {state === 'queued' && job?.waiting && <div className="small secondary live-line">{job.waiting}. It starts on its own.</div>}
+      {state === 'running' && job?.progress.last_line && <div className="muted small live-line">{job.progress.last_line}</div>}
+      {job?.status === 'failed' && state !== 'done' && <ErrorNote error={`This step stopped with an error: ${job.progress.error || job.progress.last_line || 'see the log'}`} />}
+      {job?.status === 'skipped' && !active && <div className="warning-note">{job.progress.error}</div>}
+      {!active && missing.length > 0 && step.command && <div className="small muted step-needs">Needs first: {missing.map((m) => m.made_by ? m.label : `${m.label} (yours to provide)`).join(', ')}.
+        {' '}<button className="link-btn small" onClick={() => setOpen(true)}>Details</button></div>}
+      {step.progress.outdated && (
+        <div className="warning-note">These results were made with a different model than the one in use now. Run the step again to redo them with the current model:
+          old results are moved aside (not deleted).</div>
       )}
-      {step.progress.total === 0 && step.progress.note && <p className="small secondary" style={{ margin: '4px 0' }}>{step.progress.note}</p>}
-      <button className="link-btn" onClick={() => setDetails(!details)}>{details ? 'Less' : 'What does this step do?'}</button>
-      {details && <p className="secondary step-details">{step.details}{step.duration && <><br /><span className="muted">Typical time: {step.duration}.</span></>}</p>}
-
-      <div className="io-grid">
-        <div>
-          <div className="io-title">Needs</div>
-          {step.needs.length ? step.needs.map((n) => <NeedRow key={n.id} need={n} onChanged={onChanged} />)
-            : <span className="muted small">Nothing extra.</span>}
-          {step.uses.length > 0 && (
+      <ErrorNote error={error} />
+      {open && (
+        <div className="step-body">
+          <p className="secondary step-details">{step.details}{step.duration && <><br /><span className="muted">Typical time: {step.duration}.</span></>}</p>
+          {step.progress.note && <p className="small secondary" style={{ margin: '4px 0' }}>{step.progress.note}</p>}
+          {step.id === 'slides' && <p className="small">The <Link to="/setup/slides">guided setup</Link> does this for you; the table here is the same.</p>}
+          {step.id === 'layout' && <p className="small">Easiest: add the maps as Excel, Word or CSV files in the <Link to="/setup/map">guided setup</Link>. Or fill in the CSV:</p>}
+          {step.id === 'slides' && <SlidesPanel onSaved={onChanged} />}
+          {step.id === 'layout' && <MapUpload onSaved={onChanged} />}
+          <div className="io-grid">
+            <div>
+              <div className="io-title">Needs</div>
+              {step.needs.length ? step.needs.map((n) => <NeedRow key={n.id} need={n} onChanged={onChanged} />)
+                : <span className="muted small">Nothing extra.</span>}
+              {step.uses.length > 0 && (
+                <>
+                  <div className="io-title" style={{ marginTop: 8 }}>Uses if available</div>
+                  {step.uses.map((u) => <NeedRow key={u.id} need={u} onChanged={onChanged} optional />)}
+                </>
+              )}
+            </div>
+            <div>
+              <div className="io-title">Makes</div>
+              {step.produces.map((p) => <div key={p.id} title={p.description}><PathLine path={p.path} exists={p.exists} label={p.label} /></div>)}
+              {step.view && step.progress.done > 0 && <Link className="small" to={step.view}>See the results →</Link>}
+            </div>
+          </div>
+          {step.command && (
             <>
-              <div className="io-title" style={{ marginTop: 8 }}>Uses if available</div>
-              {step.uses.map((u) => <NeedRow key={u.id} need={u} onChanged={onChanged} optional />)}
+              {basic.length > 0 && <div className="row options">{basic.map((o) => <OptionField key={o.key} option={o} value={values[o.key]} onChange={(v) => setValues({ ...values, [o.key]: v })} />)}</div>}
+              {extra.length > 0 && <button className="link-btn small" onClick={() => setAdvanced(!advanced)}>{advanced ? 'Hide advanced options' : 'Advanced options'}</button>}
+              {advanced && <div className="row options">{extra.map((o) => <OptionField key={o.key} option={o} value={values[o.key]} onChange={(v) => setValues({ ...values, [o.key]: v })} />)}</div>}
+              <div className="row step-actions">
+                {!active && <button className="btn" disabled={missing.length > 0} onClick={run}>{runLabel} with these options</button>}
+                <span className="spacer" />
+                {job && <span className="muted small">Last run {timeAgo(job.created)} <CommandLineTag job={job} /></span>}
+                {job && <button className="link-btn small" onClick={() => setLog(!log)}>{log ? 'Hide log' : 'Show log'}</button>}
+              </div>
+              {log && job && <JobLog id={job.id} job={job} />}
             </>
           )}
         </div>
-        <div>
-          <div className="io-title">Makes</div>
-          {step.produces.map((p) => <div key={p.id} title={p.description}><PathLine path={p.path} exists={p.exists} label={p.label} /></div>)}
-          {step.view && step.progress.done > 0 && <Link className="small" to={step.view}>See the results →</Link>}
-        </div>
-      </div>
-
-      {step.progress.outdated && (
-        <div className="warning-note">These results were made with a different model than the one in use now. To redo them with the current model,
-          run the step again: <b>Start over</b> (under Advanced options) is already ticked, so old results are moved aside (not deleted) and redone.</div>
       )}
-      {step.id === 'slides' && <SlidesPanel onSaved={onChanged} />}
-      {step.id === 'layout' && <MapUpload onSaved={onChanged} />}
-
-      {step.command && (
-        <>
-          {basic.length > 0 && <div className="row options">{basic.map((o) => <OptionField key={o.key} option={o} value={values[o.key]} onChange={(v) => setValues({ ...values, [o.key]: v })} />)}</div>}
-          {extra.length > 0 && <button className="link-btn small" onClick={() => setAdvanced(!advanced)}>{advanced ? 'Hide advanced options' : 'Advanced options'}</button>}
-          {advanced && <div className="row options">{extra.map((o) => <OptionField key={o.key} option={o} value={values[o.key]} onChange={(v) => setValues({ ...values, [o.key]: v })} />)}</div>}
-          <div className="row step-actions">
-            <button className="btn primary" disabled={active || missing.length > 0} onClick={run}>
-              {step.progress.state === 'done' ? 'Run again' : step.progress.state === 'partial' ? 'Continue' : 'Run'}
-            </button>
-            {active && <button className="btn" onClick={cancel}>Stop</button>}
-            {missing.length > 0 && <span className="muted small">Waiting for: {missing.map((m) => m.label).join(', ')}</span>}
-            <span className="spacer" />
-            {job && <span className="muted small">Last run {timeAgo(job.created)} <CommandLineTag job={job} /></span>}
-            {job && <button className="link-btn small" onClick={() => setLog(!log)}>{log ? 'Hide log' : 'Show log'}</button>}
-          </div>
-          {state === 'queued' && job?.waiting && <div className="small secondary live-line">{job.waiting}. It starts on its own.</div>}
-          {state === 'running' && job?.progress.last_line && <div className="muted small live-line">{job.progress.last_line}</div>}
-          {job?.status === 'failed' && <ErrorNote error={`This step stopped with an error: ${job.progress.error || job.progress.last_line || 'see the log'}`} />}
-          {job?.status === 'skipped' && <div className="warning-note">{job.progress.error}</div>}
-          <ErrorNote error={error} />
-          {log && job && <JobLog id={job.id} job={job} />}
-        </>
-      )}
-      </>}
     </div>
   )
 }

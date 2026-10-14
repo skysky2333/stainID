@@ -42,8 +42,45 @@ export interface Step {
   command: string[] | null; options: StepOption[]; heavy: boolean; view: string | null; duration: string; progress: StepProgress; job: Job | null
   after: string[]
 }
-export interface SlideRow { slide_path: string; tma: string; stain: string }
-export interface SlidesInfo { folder: string; folder_exists: boolean; stains: string[]; saved: boolean; rows: SlideRow[] }
+export interface SlideRow { slide_path: string; tma: string; stain: string; rows?: string; columns?: string; grid_source?: string; orientation?: string; new?: boolean }
+export interface SlidesInfo {
+  folder: string; folder_path: string; folder_exists: boolean; stains: string[]; saved: boolean; rows: SlideRow[]; missing: SlideRow[]
+  tma_prefix: string; prefix_guess: string; table: string
+}
+
+/* the guided setup (/api/setup) */
+export type ScreenState = 'done' | 'todo' | 'attention' | 'warning' | 'optional' | 'running'
+export interface SetupScreen { id: string; title: string; state: ScreenState; summary: string }
+export interface Estimate { seconds: number; steps: { id: string; seconds: number }[]; device: string; slides: number; cores: number; tiles: number; text: string; slowest: string }
+export interface SetupOverview { screens: SetupScreen[]; set_up: boolean; estimate: Estimate; remaining: { id: string; title: string }[] }
+export interface GridReport {
+  rows?: number; columns?: number; grid_source?: string; score?: number; rmse_preview_px?: number; cores_on_grid?: number; positions?: number
+  positions_with_tissue?: number; tried?: { rows: number; columns: number; score: number | null }[]; error?: string; checked?: boolean; time?: number
+}
+export interface SlideReport {
+  slide_path: string; name: string; tma: string; stain: string; rows: string; columns: string; grid_source: string; orientation: string
+  image: string; report: GridReport; checked: boolean; found: boolean; error: string
+}
+export interface CoresInfo { slides: SlideReport[]; rows: number; columns: number; orientations: Record<string, string> }
+export interface MapCell {
+  label: string; raw: string; donor_id: string; region: string; region_code: string; disease_group: string; cerad: string; braak: string
+  pathology_raw: string; tissue_control: string; note: string
+}
+export interface MapSummary { positions: number; cores: number; donors: number; controls: number; empty: number; unreadable: number; groups: string[]; regions: string[] }
+export interface MapTma { tma: string; size: [number, number]; slides: string[]; positions: string[]; saved: MapSummary | null; sources: string[] }
+export interface MapOverview { tmas: MapTma[]; path: string; id_style: { digits?: number; prefixed_digits?: number }; tma_prefix: string }
+export interface ParsedMap { cells: MapCell[]; summary: MapSummary }
+export interface FoundMap extends ParsedMap { name: string; source: string; tma: string; grid: string[][] }
+export interface SavedMap extends ParsedMap { tma: string; size: [number, number]; grid: string[][]; saved: boolean }
+export interface DonorColumn { index: number; header: string; field: string; samples: string[] }
+export interface DonorPreview {
+  header_row: number; columns: DonorColumn[]; records: Record<string, string>[]; total: number; kept: number; notes: string[]
+  table_columns: string[]; fields: Record<string, string>
+}
+export interface DonorTable { path: string; count: number; columns: string[]; fields: Record<string, string>; preview: Record<string, string>[] }
+export interface SheetTable { name: string; source: string; rows: string[][] }
+export interface Fix { label: string; action: string; args: Record<string, unknown> }
+export interface Issue { id: string; level: 'problem' | 'warning' | 'note'; title: string; detail: string; items: { text: string; fixes: Fix[] }[]; more: number; fixes: Fix[] }
 export interface FsListing { path: string; parent: string | null; dirs: string[]; files: string[]; shortcuts: { label: string; path: string }[] }
 export interface Metrics { n: number; positives: number; auc: number; precision: number; recall: number }
 export interface TrainedModel {

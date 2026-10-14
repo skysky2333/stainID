@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { Job, Step } from './api'
-import { api, runStep } from './api'
+import { api } from './api'
 import { CommandLineTag, Progress, StatusBadge } from './components'
 
 const W = 118
@@ -85,50 +85,36 @@ function duration(seconds: number): string {
   return `${(seconds / 3600).toFixed(1)} h`
 }
 
-/** Running and waiting jobs: progress, elapsed time, estimated time left, and why a job is still waiting. */
-export function NowRunning({ jobs, steps, onChanged }: { jobs: Job[]; steps: Step[]; onChanged: () => void }) {
+/** Running and waiting jobs: progress, elapsed time, estimated time left, and why a job is still waiting (nothing when idle). */
+export function NowRunning({ jobs, onChanged }: { jobs: Job[]; steps?: Step[]; onChanged: () => void }) {
   const active = jobs.filter((j) => j.status === 'running' || j.status === 'queued').sort((a, b) => (a.status === b.status ? a.created - b.created : a.status === 'running' ? -1 : 1))
-  const busy = new Set(active.map((j) => j.workflow))
-  const remaining = steps.filter((s) => s.command && s.id !== 'masks' && (s.progress.state !== 'done' || s.progress.outdated) && !busy.has(s.id))
-  const runAll = async () => {
-    for (const s of remaining) await runStep(s.id, Object.fromEntries(s.options.map((o) => [o.key, o.key === 'fresh' && s.progress.outdated ? true : o.default])))
-    onChanged()
-  }
   const now = Date.now() / 1000
+  if (!active.length) return null
   return (
-    <div className="card now-running">
-      <div className="row">
-        <h2 style={{ margin: 0 }}>Now running</h2><span className="spacer" />
-        {remaining.length > 0 && (
-          <button className="btn" onClick={runAll} title={remaining.map((s) => s.title).join(', ')}>
-            Run all remaining steps ({remaining.length})
-          </button>
-        )}
-      </div>
-      {active.length ? (
-        <table>
-          <tbody>{active.map((job) => {
-            const elapsed = job.started ? now - job.started : 0
-            const { done, total } = job.progress
-            const left = job.status === 'running' && done > 0 && total > done ? (elapsed / done) * (total - done) : null
-            return (
-              <tr key={job.id}>
-                <td style={{ width: 220 }}><b>{job.title}</b> <CommandLineTag job={job} /></td>
-                <td style={{ width: 150 }}><StatusBadge status={job.status} /></td>
-                <td>
-                  {job.status === 'running' ? (
-                    <>
-                      <Progress done={done} total={total} />
-                      <div className="muted small">{total ? `${done} of ${total}` : 'starting…'} · running {duration(elapsed)}{left !== null ? ` · about ${duration(left)} left` : ''}</div>
-                    </>
-                  ) : <span className="small secondary">{job.waiting || 'Starts in a moment'}</span>}
-                </td>
-                <td style={{ width: 70 }}><button className="btn small" onClick={() => api.del(`/api/jobs/${job.id}`).then(onChanged)}>Stop</button></td>
-              </tr>
-            )
-          })}</tbody>
-        </table>
-      ) : <p className="muted small" style={{ margin: 0 }}>Nothing is running. Press Run on a step below; it starts here.</p>}
+    <div className="card now-running" id="running">
+      <h2>Now running</h2>
+      <table>
+        <tbody>{active.map((job) => {
+          const elapsed = job.started ? now - job.started : 0
+          const { done, total } = job.progress
+          const left = job.status === 'running' && done > 0 && total > done ? (elapsed / done) * (total - done) : null
+          return (
+            <tr key={job.id}>
+              <td style={{ width: 220 }}><b>{job.title}</b> <CommandLineTag job={job} /></td>
+              <td style={{ width: 150 }}><StatusBadge status={job.status} /></td>
+              <td>
+                {job.status === 'running' ? (
+                  <>
+                    <Progress done={done} total={total} />
+                    <div className="muted small">{total ? `${done} of ${total}` : 'starting…'} · running {duration(elapsed)}{left !== null ? ` · about ${duration(left)} left` : ''}</div>
+                  </>
+                ) : <span className="small secondary">{job.waiting || 'Starts in a moment'}</span>}
+              </td>
+              <td style={{ width: 70 }}><button className="btn small" onClick={() => api.del(`/api/jobs/${job.id}`).then(onChanged)}>Stop</button></td>
+            </tr>
+          )
+        })}</tbody>
+      </table>
     </div>
   )
 }
