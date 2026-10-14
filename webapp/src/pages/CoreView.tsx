@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import type { CoreDetail, FieldObject } from '../api'
-import { coreThumb, enc } from '../api'
+import { apiUrl, coreThumb, enc } from '../api'
 import { ErrorNote, GroupBadge, PageHead, fmt } from '../components'
 import { useFetch, useStored } from '../hooks'
 import { CLASS_STYLE, RASTER_LAYERS, ZoomViewer } from '../viewer'
@@ -72,8 +72,8 @@ function RegionViewer({ coreId, stain, x, y, size, onMove }: { coreId: string; s
   return (
     <div className="grid" style={{ gridTemplateColumns: 'minmax(0, 1fr) 280px', alignItems: 'start' }}>
       <div>
-        <ZoomViewer src={`/api/images/cores/${enc(coreId)}/${enc(stain)}/region.jpg?${query}`} focus={focus}
-          layers={layers.dab ? [`/api/images/cores/${enc(coreId)}/${enc(stain)}/region_dab.png?${query}`] : []}
+        <ZoomViewer src={apiUrl(`/api/images/cores/${enc(coreId)}/${enc(stain)}/region.jpg?${query}`)} focus={focus}
+          layers={layers.dab ? [apiUrl(`/api/images/cores/${enc(coreId)}/${enc(stain)}/region_dab.png?${query}`)] : []}
           title={<span className="row"><button className="btn small" onClick={() => step(-1, 0)}>←</button><button className="btn small" onClick={() => step(0, -1)}>↑</button>
             <button className="btn small" onClick={() => step(0, 1)}>↓</button><button className="btn small" onClick={() => step(1, 0)}>→</button>
             <span className="muted small">{region.data ? `x ${region.data.x0}–${region.data.x0 + region.data.size}, y ${region.data.y0}–${region.data.y0 + region.data.size} px` : 'loading…'}</span></span>}>

@@ -3,7 +3,7 @@ import type { Group, ProjectConfig } from '../api'
 import { api } from '../api'
 import { ErrorNote, FilePicker, HelpBox, PageHead, PathLine, withError } from '../components'
 import { useProject } from '../project'
-import { useSession } from '../session'
+import { ServerChoice, useSession } from '../session'
 import Welcome from './Welcome'
 
 const SECTION_TEXT: Record<string, [string, string]> = {
@@ -14,6 +14,7 @@ const SECTION_TEXT: Record<string, [string, string]> = {
 
 export default function Settings() {
   const { info, reload } = useProject()
+  const { session } = useSession()
   const [config, setConfig] = useState<ProjectConfig | null>(null)
   const [picking, setPicking] = useState<{ section: string; key: string } | null>(null)
   const [switching, setSwitching] = useState(false)
@@ -114,6 +115,14 @@ export default function Settings() {
         <ErrorNote error={error} />
       </div>
       <AdminPassword />
+      <details className="card settings-section" style={{ marginTop: 16 }}>
+        <summary><h2 style={{ display: 'inline' }}>Server</h2> <span className="muted small">Which stainID server this page uses, and using the app from other computers.</span></summary>
+        <ServerChoice />
+        <p className="muted small">Web apps served from other addresses that this server answers:{' '}
+          {session.allowed_origins?.length ? session.allowed_origins.map((o) => <code key={o}>{o} </code>) : 'none'}
+          {' '}(set with <code>stainid serve --allow-origin URL</code> or <code>STAINID_ALLOW_ORIGINS</code>). People on your network can also
+          simply open this server's address in their browser: each signs in, and several can run steps at the same time.</p>
+      </details>
       {picking && (
         <FilePicker title={`Choose ${picking.key.replaceAll('_', ' ')}`} pickFiles={/\.(csv|json|joblib|pth)$/.test(config[picking.section as 'inputs'][picking.key])}
           start={info.paths[picking.section]?.[picking.key]?.path ? `${info.root}/${info.paths[picking.section][picking.key].path}` : undefined}

@@ -65,6 +65,7 @@ export interface Job {
   id: string; workflow: string; title: string; options: Record<string, unknown>; argv: string[]; status: string
   created: number; started: number | null; ended: number | null; returncode: number | null; waiting: string
   progress: { done: number; total: number; last_line: string; error: string }
+  source?: 'app' | 'command line'; pid: number | null; log_file?: string
 }
 export interface TableInfo { name: string; path: string; columns: number; size_kb: number; donor_region: boolean; contrasts: boolean; description: string; main: boolean }
 export interface ModelInfo {
@@ -72,7 +73,7 @@ export interface ModelInfo {
   size_mb?: number; modified?: string; bundle?: Record<string, unknown>
 }
 
-export interface Session { admin: boolean; annotator: string | null; default_password: boolean; local: boolean; project: string | null }
+export interface Session { admin: boolean; annotator: string | null; default_password: boolean; local: boolean; project: string | null; allowed_origins?: string[] }
 export type AiView = 'full' | 'positions' | 'none'
 export interface StainOverview {
   stain: string; fields: number; fields_prepared: number; fields_reviewed: number; fields_with_labels: number
@@ -103,8 +104,45 @@ export interface FieldWork {
 }
 export interface QueueItem { tile_id: string; x: number; y: number; radius_px: number; ai_value: string; ai_probability: number; labels_so_far: number; remaining: number }
 
+/* Which stainID server this page talks to. Normally the one that served it (same origin: sign-in travels in cookies).
+   It can also be another one: an address chosen on the sign-in screen (kept in this browser), else `window.STAINID_SERVER`
+   from config.js (set when the web app is served from somewhere else). A server elsewhere only answers pages from the
+   addresses it was started with (`stainid serve --allow-origin URL`); sign-in then travels as a token. */
+declare global { interface Window { STAINID_SERVER?: string } }
+
+const SERVER_KEY = 'stainid.server'
+const readStored = (key: string) => { try { return localStorage.getItem(key) ?? '' } catch { return '' } }
+const writeStored = (key: string, value: string) => {
+  try { if (value) localStorage.setItem(key, value); else localStorage.removeItem(key) } catch { /* storage unavailable */ }
+}
+export const cleanServer = (address: string) => {
+  const trimmed = address.trim().replace(/\/+$/, '')
+  return trimmed && !/^https?:\/\//.test(trimmed) ? `http://${trimmed}` : trimmed
+}
+export const savedServer = readStored(SERVER_KEY)
+export const configuredServer = cleanServer(window.STAINID_SERVER ?? '')
+export const apiBase = cleanServer(savedServer) || configuredServer
+export const remote = apiBase !== '' && new URL(apiBase, location.href).origin !== location.origin
+/** The server's address as people read it. */
+export const serverName = apiBase || location.origin
+const TOKEN_KEY = `stainid.token ${apiBase}`
+let token = remote ? readStored(TOKEN_KEY) : ''
+
+/** Switch to another server ('' = the one that served this page); the page reloads. */
+export function chooseServer(address: string) {
+  writeStored(SERVER_KEY, cleanServer(address))
+  location.reload()
+}
+
+/** The full address of an API path, for what the browser loads by itself (images, downloads, links). */
+export function apiUrl(path: string) {
+  const url = apiBase + path
+  return remote && token ? `${url}${url.includes('?') ? '&' : '?'}access_token=${encodeURIComponent(token)}` : url
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init)
+  const headers = remote && token ? { ...(init?.headers as Record<string, string> | undefined), Authorization: `Bearer ${token}` } : init?.headers
+  const response = await fetch(apiBase + url, { ...init, headers })
   if (!response.ok) {
     const text = await response.text()
     let detail = text
@@ -112,7 +150,12 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     throw new Error(`${response.status}: ${detail}`)
   }
   const type = response.headers.get('content-type') ?? ''
-  return (type.includes('application/json') ? response.json() : response.text()) as Promise<T>
+  const body = await (type.includes('application/json') ? response.json() : response.text())
+  if (remote && url.startsWith('/api/session') && typeof body?.token === 'string') {  // signing in / out changes who this page is
+    token = body.token
+    writeStored(TOKEN_KEY, token)
+  }
+  return body as T
 }
 
 export const api = {
@@ -131,9 +174,9 @@ export const api = {
 
 export const runStep = (workflow: string, options: Record<string, unknown>) => api.post<Job>('/api/jobs', { workflow, options })
 export const reveal = (path: string) => api.post('/api/reveal', { path })
-export const downloadUrl = (path: string) => `/api/download?path=${encodeURIComponent(path)}`
+export const downloadUrl = (path: string) => apiUrl(`/api/download?path=${encodeURIComponent(path)}`)
 
 export const enc = encodeURIComponent
-export const coreThumb = (coreId: string, stain: string, size = 512) => `/api/images/cores/${enc(coreId)}/${enc(stain)}.jpg?size=${size}`
-export const fieldImage = (tileId: string) => `/api/images/fields/${enc(tileId)}.jpg`
-export const fieldLayer = (tileId: string, layer: string) => `/api/images/fields/${enc(tileId)}/${layer}.png`
+export const coreThumb = (coreId: string, stain: string, size = 512) => apiUrl(`/api/images/cores/${enc(coreId)}/${enc(stain)}.jpg?size=${size}`)
+export const fieldImage = (tileId: string) => apiUrl(`/api/images/fields/${enc(tileId)}.jpg`)
+export const fieldLayer = (tileId: string, layer: string) => apiUrl(`/api/images/fields/${enc(tileId)}/${layer}.png`)

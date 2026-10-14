@@ -240,6 +240,8 @@ fieldset.field legend { padding: 0; margin-bottom: 4px; }
 .settings-section { margin-top: 16px; }
 .settings-section summary { cursor: pointer; }
 .settings-section table { margin-top: 10px; }
+.server-setting { margin-top: 12px; }
+.server-setting summary { cursor: pointer; }
 .save-bar { position: sticky; bottom: 0; display: flex; gap: 12px; align-items: center; padding: 12px 0; background: var(--surface-0); }
 .main-result { border-left: 4px solid var(--good); }
 .glossary { margin: 0; display: grid; gap: 10px; max-height: 70vh; overflow: auto; }

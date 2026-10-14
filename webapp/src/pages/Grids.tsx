@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom'
+import { apiUrl } from '../api'
 import { Empty, ErrorNote, PageHead } from '../components'
 import { useFetch } from '../hooks'
 
@@ -12,8 +13,8 @@ export default function Grids() {
       {grids.data && !grids.data.length && <Empty>No grid pictures yet — run <Link to="/workflow#dearray">Find cores</Link>.</Empty>}
       <div className="grid grid-2">
         {(grids.data ?? []).map((name) => (
-          <a key={name} className="card grid-shot" href={`/api/grids/${encodeURIComponent(name)}`} target="_blank" rel="noreferrer">
-            <img src={`/api/grids/${encodeURIComponent(name)}`} alt={name} loading="lazy" />
+          <a key={name} className="card grid-shot" href={apiUrl(`/api/grids/${encodeURIComponent(name)}`)} target="_blank" rel="noreferrer">
+            <img src={apiUrl(`/api/grids/${encodeURIComponent(name)}`)} alt={name} loading="lazy" />
             <div className="small secondary">{name.replace(/\.jpg$/, '').replaceAll('_', ' ')}</div>
           </a>
         ))}

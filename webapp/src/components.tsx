@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { FsListing, StepOption } from './api'
+import type { FsListing, Job, StepOption } from './api'
 import { downloadUrl, reveal } from './api'
 import { GLOSSARY } from './glossary'
 import { useFetch, useStored } from './hooks'
@@ -73,6 +73,11 @@ const STATUS_TEXT: Record<string, string> = {
 
 export function StatusBadge({ status }: { status: string }) {
   return <span className={`badge status-${status}`}>{STATUS_TEXT[status] ?? status}</span>
+}
+
+/** Marks a step someone started from a terminal rather than from the app. */
+export function CommandLineTag({ job }: { job: Job | null | undefined }) {
+  return job?.source === 'command line' ? <span className="badge" title="Started from a terminal (a stainid command), not from the app">command line</span> : null
 }
 
 export function ErrorNote({ error }: { error: string | null }) {

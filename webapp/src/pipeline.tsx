@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import type { Job, Step } from './api'
 import { api, runStep } from './api'
-import { Progress, StatusBadge } from './components'
+import { CommandLineTag, Progress, StatusBadge } from './components'
 
 const W = 118
 const H = 50
@@ -113,7 +113,7 @@ export function NowRunning({ jobs, steps, onChanged }: { jobs: Job[]; steps: Ste
             const left = job.status === 'running' && done > 0 && total > done ? (elapsed / done) * (total - done) : null
             return (
               <tr key={job.id}>
-                <td style={{ width: 220 }}><b>{job.title}</b></td>
+                <td style={{ width: 220 }}><b>{job.title}</b> <CommandLineTag job={job} /></td>
                 <td style={{ width: 150 }}><StatusBadge status={job.status} /></td>
                 <td>
                   {job.status === 'running' ? (

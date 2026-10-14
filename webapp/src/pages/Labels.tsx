@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { AiView, LabelsOverview, SessionInfo, StainOverview } from '../api'
-import { api } from '../api'
+import { api, apiUrl } from '../api'
 import { Empty, ErrorNote, HelpBox, PageHead, Progress, fmt, withError } from '../components'
 import { useFetch } from '../hooks'
 import { useSession } from '../session'
@@ -26,7 +26,7 @@ export default function Labels() {
   return (
     <>
       <PageHead title="Labels" subtitle="What people have said about the objects and fields, and the sessions in which they say it." >
-        <a className="btn" href="/api/labels/export.csv">Download all labels (CSV)</a>
+        <a className="btn" href={apiUrl('/api/labels/export.csv')}>Download all labels (CSV)</a>
       </PageHead>
       <HelpBox id="labels">
         <ul>
@@ -129,7 +129,7 @@ function Sessions({ sessions, onChanged, onError }: { sessions: SessionInfo[]; o
                   <button className="btn small" title={s.kind === 'fields' ? 'Add 10 more unreviewed fields' : 'Prepare 10 more fields for the queue'}
                     onClick={() => act(() => api.post(`/api/labels/sessions/${s.name}/fields`, { n: 10 }))}>+10 fields</button>
                   <a className="btn small" href={`/annotate/${s.name}`} target="_blank" rel="noreferrer">Label</a>
-                  <a className="btn small" href={`/api/labels/export.csv?session=${s.name}`}>CSV</a>
+                  <a className="btn small" href={apiUrl(`/api/labels/export.csv?session=${s.name}`)}>CSV</a>
                   <button className="btn small" onClick={() => remove(s)}>Delete</button>
                 </td>
               </tr>

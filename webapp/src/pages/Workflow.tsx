@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import type { Job, ResourceInfo, SlideRow, SlidesInfo, Step } from '../api'
-import { api, runStep } from '../api'
-import { Empty, ErrorNote, FilePicker, HelpBox, OptionField, PageHead, PathLine, Progress, StatusBadge, Term, timeAgo, withError } from '../components'
+import { api, apiUrl, runStep } from '../api'
+import { CommandLineTag, Empty, ErrorNote, FilePicker, HelpBox, OptionField, PageHead, PathLine, Progress, StatusBadge, Term, timeAgo, withError } from '../components'
 import { useFetch } from '../hooks'
 import { NowRunning, PipelineMap } from '../pipeline'
 import { useProject } from '../project'
@@ -137,7 +137,7 @@ export function StepCard({ step, onChanged }: { step: Step; onChanged: () => voi
             {active && <button className="btn" onClick={cancel}>Stop</button>}
             {missing.length > 0 && <span className="muted small">Waiting for: {missing.map((m) => m.label).join(', ')}</span>}
             <span className="spacer" />
-            {job && <span className="muted small">Last run {timeAgo(job.created)}</span>}
+            {job && <span className="muted small">Last run {timeAgo(job.created)} <CommandLineTag job={job} /></span>}
             {job && <button className="link-btn small" onClick={() => setLog(!log)}>{log ? 'Hide log' : 'Show log'}</button>}
           </div>
           {state === 'queued' && job?.waiting && <div className="small secondary live-line">{job.waiting}. It starts on its own.</div>}
@@ -145,7 +145,7 @@ export function StepCard({ step, onChanged }: { step: Step; onChanged: () => voi
           {job?.status === 'failed' && <ErrorNote error={`This step stopped with an error: ${job.progress.error || job.progress.last_line || 'see the log'}`} />}
           {job?.status === 'skipped' && <div className="warning-note">{job.progress.error}</div>}
           <ErrorNote error={error} />
-          {log && job && <JobLog id={job.id} />}
+          {log && job && <JobLog id={job.id} job={job} />}
         </>
       )}
       </>}
@@ -185,7 +185,7 @@ function NeedRow({ need, onChanged, optional = false }: { need: ResourceInfo; on
         <div className="format-box">
           <pre>{need.format}</pre>
           <div className="row">
-            {need.template && <a className="btn small" href={`/api/templates/${need.template}.csv`}>Download template</a>}
+            {need.template && <a className="btn small" href={apiUrl(`/api/templates/${need.template}.csv`)}>Download template</a>}
             {need.template && <label className="btn small primary">Upload filled-in file…<input type="file" accept=".csv" hidden onChange={(e) => upload(e.target.files?.[0])} /></label>}
             {need.setting && !need.template && <button className="btn small" onClick={() => setPicking(true)}>Choose…</button>}
           </div>
@@ -267,10 +267,10 @@ function MapUpload({ onSaved }: { onSaved: () => void }) {
         Leave <code>donor_id</code> empty for orientation / control cores. Save it as CSV from Excel.
       </p>
       <div className="row">
-        <a className="btn small" href="/api/templates/tma_layout.csv">Download template (all positions filled in)</a>
+        <a className="btn small" href={apiUrl('/api/templates/tma_layout.csv')}>Download template (all positions filled in)</a>
         <label className="btn small primary">Upload TMA map (CSV)…<input type="file" accept=".csv" hidden onChange={(e) => upload('tma_layout', e.target.files?.[0])} /></label>
         <label className="btn small">Upload donor information (optional)…<input type="file" accept=".csv" hidden onChange={(e) => upload('donor_metadata', e.target.files?.[0])} /></label>
-        <a className="btn small" href="/api/templates/donor_metadata.csv">Donor template</a>
+        <a className="btn small" href={apiUrl('/api/templates/donor_metadata.csv')}>Donor template</a>
       </div>
       {message && <p className="small status-finished">{message}</p>}
       <ErrorNote error={error} />
@@ -292,7 +292,7 @@ export function JobsTable({ limit }: { limit?: number }) {
             <tbody>
               {list.map((job) => (
                 <tr key={job.id}>
-                  <td>{job.title}<div className="muted small ellipsis" title={`stainid ${job.argv.join(' ')}`}><code>stainid {job.argv.join(' ')}</code></div></td>
+                  <td>{job.title} <CommandLineTag job={job} /><div className="muted small ellipsis" title={`stainid ${job.argv.join(' ')}`}><code>stainid {job.argv.join(' ')}</code></div></td>
                   <td><StatusBadge status={job.status} /></td>
                   <td><Progress done={job.progress.done} total={job.progress.total} />
                     <div className="muted small ellipsis">{job.status === 'failed' ? job.progress.error || job.progress.last_line : job.status === 'queued' ? job.waiting : job.progress.last_line}</div></td>
@@ -307,12 +307,20 @@ export function JobsTable({ limit }: { limit?: number }) {
           </table>
         </div>
       ) : <Empty>No jobs yet. Press Run on a step to start one.</Empty>}
-      {openLog && <JobLog id={openLog} />}
+      {openLog && <JobLog id={openLog} job={list.find((j) => j.id === openLog)} />}
     </div>
   )
 }
 
-export function JobLog({ id }: { id: string }) {
+export function JobLog({ id, job }: { id: string; job?: Job }) {
   const log = useFetch<string>(`/api/jobs/${id}/log`, 3000)
-  return <div className="log">{log.data || '(no output yet)'}</div>
+  return (
+    <>
+      {job && <div className="muted small" style={{ marginTop: 10 }}>
+        Started from {job.source === 'command line' ? 'the command line' : 'the app'}{job.pid ? ` · process ${job.pid}` : ''}
+        {job.returncode !== null ? ` · exit code ${job.returncode}` : ''}{job.log_file ? <> · output in <code>{job.log_file}</code></> : ''}
+      </div>}
+      <div className="log">{log.data || '(no output yet)'}</div>
+    </>
+  )
 }

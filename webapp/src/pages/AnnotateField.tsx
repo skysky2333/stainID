@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import type { FieldObjectLite, FieldWork, Label, QueueItem, SessionDetail } from '../api'
-import { api, enc } from '../api'
+import { api, apiUrl, enc } from '../api'
 import { Empty, ErrorNote, PageHead, Progress, fmt } from '../components'
 import { useFetch, useStored } from '../hooks'
 import { Register, useSession } from '../session'
@@ -252,8 +252,8 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
       {work.data && (
         <div className="grid" style={{ gridTemplateColumns: 'minmax(0, 1fr) 340px', alignItems: 'start' }}>
           <div>
-            <ZoomViewer src={`/api/annotate/${name}/fields/${enc(tile)}/image.jpg`}
-              layers={work.data.layers.filter((l) => layers[l]).map((l) => `/api/annotate/${name}/fields/${enc(tile)}/layer/${l}.png`)}
+            <ZoomViewer src={apiUrl(`/api/annotate/${name}/fields/${enc(tile)}/image.jpg`)}
+              layers={work.data.layers.filter((l) => layers[l]).map((l) => apiUrl(`/api/annotate/${name}/fields/${enc(tile)}/layer/${l}.png`))}
               title={<span className="row"><h3 style={{ margin: 0 }}>{tile}</h3>{done && <span className="badge status-done">finished</span>}{saving && <span className="muted small">saving…</span>}</span>}
               cursor={active?.id === 'label' ? 'pointer' : 'crosshair'} onClick={click} onMove={move}>
               {(_zoom, _size, unit) => <>
@@ -433,7 +433,7 @@ function Queue({ detail }: { detail: SessionDetail }) {
         <div className="grid" style={{ gridTemplateColumns: 'minmax(300px, 520px) 1fr', alignItems: 'start' }}>
           <div className="card">
             <div style={{ position: 'relative' }}>
-              <img src={`/api/annotate/${meta.name}/object.jpg?tile_id=${enc(item.tile_id)}&x=${item.x}&y=${item.y}`} alt="object" style={{ width: '100%', display: 'block', borderRadius: 8 }} />
+              <img src={apiUrl(`/api/annotate/${meta.name}/object.jpg?tile_id=${enc(item.tile_id)}&x=${item.x}&y=${item.y}`)} alt="object" style={{ width: '100%', display: 'block', borderRadius: 8 }} />
               <svg viewBox="0 0 100 100" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
                 <path d="M50 42 V46 M50 54 V58 M42 50 H46 M54 50 H58" stroke="#00e5ff" strokeWidth={0.8} />
               </svg>

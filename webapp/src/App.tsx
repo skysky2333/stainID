@@ -1,10 +1,10 @@
 import { Link, NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import type { Job, Session } from './api'
-import { api } from './api'
+import { api, remote } from './api'
 import { ErrorNote } from './components'
 import { useFetch, useStored } from './hooks'
 import { ProjectProvider, useProject } from './project'
-import { AdminSignIn, Annotator, SessionContext, useSession } from './session'
+import { AdminSignIn, Annotator, ServerSetting, SessionContext, useSession } from './session'
 import AnnotateField from './pages/AnnotateField'
 import AnnotateHome from './pages/AnnotateHome'
 import Calibration from './pages/Calibration'
@@ -34,7 +34,7 @@ export default function App() {
   const [theme] = useStored<'system' | 'light' | 'dark'>('stainid.theme', 'system')
   if (theme === 'system') document.documentElement.removeAttribute('data-theme')
   else document.documentElement.setAttribute('data-theme', theme)
-  if (!session.data) return <main className="main"><ErrorNote error={session.error} /></main>
+  if (!session.data) return <main className="main"><ErrorNote error={session.error} />{session.error && <ServerSetting open={remote} />}</main>
   const annotating = pathname === '/annotate' || pathname.startsWith('/annotate/')
   return (
     <SessionContext.Provider value={{ session: session.data, reload: session.reload }}>
