@@ -22,14 +22,17 @@ npm run build                              # production build into src/stainid/a
 ```
 
 The production build in `src/stainid/api/static/` is committed so that installing stainID does not need Node:
-run `npm run build` and commit the result whenever the front end changes.
+run `tools/build_webapp.sh` and commit the result whenever the front end changes. The script runs `npm ci`, `tsc` and
+`vite build`, in a temporary copy of `webapp/` when the checkout is on a drive without symlinks (exFAT), and uses
+`~/.local/node/bin` when Node is not on the PATH.
 
 React 19 + TypeScript + Vite, with no UI framework:
 
 | path | |
 |---|---|
 | `src/index.css` | design tokens (light / dark) |
-| `src/api.ts` | typed API client |
+| `src/api.ts` | typed API client; `apiBase` / `apiUrl` decide which server it talks to |
+| `public/config.js` | optional `window.STAINID_SERVER` for a copy of the app served from somewhere else |
 | `src/hooks.ts` | `useFetch`, `useStored` |
 | `src/project.tsx` | project context: group labels / colours, TMA names |
 | `src/glossary.ts` | glossary behind hover definitions and the Help page |
@@ -53,14 +56,51 @@ React 19 + TypeScript + Vite, with no UI framework:
    pipeline map and the Workflow page pick the step up without further changes. A new input file gets a `Resource`
    with its `download`, `template`, `setting` or `format`, which gives the missing-file buttons on the step card.
 
+## Architecture
+
+```
+ browser: web app (webapp/, built into stainid/api/static)
+    │  JSON over HTTP, /api/...  (cookies; or a token when the app is served from another address)
+    ▼
+ server: FastAPI app (stainid/api) ── reads project files for the pages; queues and starts steps (stainid/api/jobs.py)
+    │  writes / reads
+    ▼
+ job store: outputs.jobs/<id>.json, <id>.log, <id>.exit  (stainid/jobs)
+    ▲                                   ▲
+    │ python -m stainid.jobs.run        │ registers itself
+ app jobs: `stainid <step>` subprocesses      command-line runs: `stainid <step>` typed in a terminal
+```
+
+- **The web app only talks to the server.** Every request goes through `src/api.ts`: `api.get/post/...` for JSON and
+  `apiUrl(path)` for what the browser loads by itself (images, downloads, links). `apiBase` there decides which server:
+  the one that served the page (normal), one chosen on the sign-in screen, or `window.STAINID_SERVER` from
+  `config.js`. Never write `/api/...` into an `<img src>` or `href` directly.
+- **The server runs nothing itself.** Each step runs as `python -m stainid.cli --project ROOT <step> ...`, started
+  through `python -m stainid.jobs.run EXIT_FILE -- ...`: the runner puts the command in its own process group, passes
+  SIGTERM / SIGINT / SIGHUP on to the whole group and writes the exit code atomically when it ends. The server sets
+  `STAINID_JOB_ID` for these commands. Steps survive a server restart: the restarted server adopts the running ones by
+  process number and finishes them with the exit code from `<id>.exit`.
+- **One job store.** `stainid.jobs` holds the `Job` record (`source`: `app` or `command line`; `log_file`) and its
+  atomic JSON files. A workflow command typed in a terminal (one whose words match a step's `command`, without
+  `STAINID_JOB_ID`) registers itself with its process number, arguments, options and, when its output goes to a file,
+  that file as its log; it records how it ended (finished, failed with the error, or stopped by Ctrl+C / SIGTERM). The
+  server rescans the store every 3 s, so these runs show in the app, count toward the heavy-step limit and make
+  conflicting queued jobs wait (`wait_reason`). A run whose process is gone without a final record is marked
+  interrupted; Stop in the app sends SIGTERM to its process group (or to the process alone when it does not lead
+  one, e.g. one of several commands started by a script).
+- **Several people at once.** The server keeps no per-browser state besides the signed sign-in; every browser sees the
+  same project, job list and queue.
+
 ## API
 
 The server is a FastAPI app (`stainid.api`). It serves the built front end from `stainid/api/static` and a JSON API
-under `/api`, binds to localhost only and has no authentication. Steps run as `stainid` subprocesses
-(`stainid/api/jobs.py`); job records and logs are in `outputs.jobs`. The last-used project is remembered in
-`~/.stainid/app.json`.
+under `/api`. Everything except `/api/session` and `/api/annotate` needs the admin sign-in (`stainid/api/session.py`):
+a signed cookie, or for a web app served from another address the token that sign-in returns, sent as
+`Authorization: Bearer <token>` (or `?access_token=` on plain GETs). CORS is off unless `stainid serve --allow-origin
+URL` (or `STAINID_ALLOW_ORIGINS`) names the addresses allowed. Job records and logs are in `outputs.jobs`. The
+last-used project is remembered in `~/.stainid/app.json`.
 
-Interactive docs are at `/docs` while the server runs. Main routes:
+Main routes:
 
 | Route | |
 |---|---|

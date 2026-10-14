@@ -9,6 +9,7 @@ stainid serve                              # opens http://127.0.0.1:8765 in the 
 stainid --project path/to/study serve      # open a specific project
 stainid serve --no-browser --port 9000
 stainid serve --host 127.0.0.1             # reachable from this computer only
+stainid serve --allow-origin http://lab-pc:8080   # also answer a copy of the web app served from there (see below)
 ```
 
 The app opens the project used last, or the current folder. If that folder has no `stainid.yaml`, a welcome screen
@@ -18,6 +19,11 @@ browser.
 **Admin password.** The app asks for the admin password; it is `admin` until you change it under *Settings → Admin
 password*. The app listens on your network (so annotators can reach the annotation pages), but everything except
 those pages needs the password, and while it is still `admin` you can only sign in on the computer running stainID.
+
+**Several people at once.** Anyone on your network can open `http://<the computer running stainID>:8765` in their
+browser. Each person signs in (or, on the annotation pages, gives a name), and everyone sees the same project, the
+same job list and the same queue: two people can press Run at the same time, and the queue orders their steps as if
+one person had pressed both.
 
 ## A study, from start to finish
 
@@ -61,9 +67,43 @@ waiting for. Just before a step starts, the queue checks that everything it need
 **skipped** and its card says what is missing and which step makes it. When a step fails or is stopped, the steps
 waiting for it are skipped too, instead of failing one after another.
 
-Steps keep running when the browser is closed, but stop when the stainID terminal window is closed; running a step
-again continues where it stopped. When you switch to a different stain model, the detection steps made with the old one
-are marked **Made with an older model** until you run them again with *Start over* (under Advanced options).
+Steps keep running when the browser is closed, and when stainID itself is stopped: started again, it picks up the steps
+still running and records how each one ended. A step that was stopped can be run again and continues where it stopped.
+When you switch to a different stain model, the detection steps made with the old one are marked **Made with an older
+model** until you run them again with *Start over* (under Advanced options).
+
+### Steps run from the command line
+
+Every step is also a `stainid` command (the job list shows it under each job, e.g. `stainid neun --threads 8`).
+Running one in a terminal puts it in the same job list, with a small **command line** tag:
+
+```bash
+stainid --project path/to/study neun --threads 8 > neun.log 2>&1   # with "> file", the app can show its log and progress
+```
+
+The queue treats it like a step started in the app: it counts toward the two heavy steps, and a step queued in the app
+that needs its results waits for it ("Waits for “Detect NeuN neurons”, running from the command line, to finish").
+*Stop* in the app stops it. When it ends, the job list shows whether it finished, failed (with the error) or was
+stopped; if its process disappears without saying (closed terminal, computer restarted), the job shows as
+interrupted. The log panel of every job also shows its process number, exit code and log file.
+
+## Serving the web app from another computer
+
+Normally the stainID server also serves the web app, and nothing needs setting up. The web app is only a page that
+talks to the server, so it can also come from elsewhere, e.g. a copy of `src/stainid/api/static` on any web server
+for static files. Two things are needed:
+
+1. **The server must accept the page.** Start it with the address the page is served from (scheme, host and port):
+   `stainid serve --allow-origin http://lab-pc:8080`. Repeat the option for several addresses, or set
+   `STAINID_ALLOW_ORIGINS=http://lab-pc:8080,https://stainid.example.org`. Without it, the server answers only pages it
+   served itself. *Settings → Server* lists the addresses it accepts.
+2. **The page must know the server.** On the sign-in screen, open *Server: … · connect to another server* (folded
+   under the password) and enter the server's address, e.g. `http://analysis-pc:8765`; the browser remembers it, and
+   *Back to …* returns to the default. For a copy everyone uses, set it once in that copy's `config.js` (next to
+   `index.html`): `window.STAINID_SERVER = 'http://analysis-pc:8765'`, no rebuild needed.
+
+Sign-in then works as usual (the default password still only works on the computer running stainID); the page keeps
+the sign-in as a token instead of a cookie.
 
 ## Other pages
 
@@ -75,7 +115,7 @@ are marked **Made with an older model** until you run them again with *Start ove
 | **Labels** | Labelling progress per stain, how often people and the AI agree, the labelling sessions (create, start, stop, share the link, follow people, download) and all labels as CSV. |
 | **Models** | Every model with its status and settings, download buttons, training from all labels, and trained models compared with the current one. |
 | **Results** | The main results table (download), every other table, plots by group and region, and the meaning of every column. |
-| **Settings** | Study name, TMA layout, diagnostic groups and every file location, with a folder picker. Also opens or creates another project. |
+| **Settings** | Study name, TMA layout, diagnostic groups and every file location, with a folder picker. Also opens or creates another project, changes the admin password and (folded away) chooses the server. |
 | **Help** | Getting started, common questions and a glossary. Words with a dotted underline show their definition on hover. |
 
 ## Labels
