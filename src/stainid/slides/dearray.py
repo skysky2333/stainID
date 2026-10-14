@@ -71,25 +71,21 @@ def _at_least(fraction: float, positions: int) -> int:
     return max(3, int(np.ceil(fraction * positions)))
 
 
-def find_components(mask: np.ndarray, positions: int = 30) -> tuple[Component, ...]:
-    """Tissue blobs that could be cores; size limits scale with the grid (for a 5 x 6 grid: 0.07-6% of the slide)."""
+def tissue_blobs(mask: np.ndarray) -> tuple[Component, ...]:
+    """Every connected piece of tissue on the slide preview."""
     count, _, stats, centroids = cv2.connectedComponentsWithStats(mask.astype(np.uint8), 8)
+    return tuple(
+        Component(x=float(centroids[i, 0]), y=float(centroids[i, 1]), width=int(stats[i, 2]), height=int(stats[i, 3]), area=int(stats[i, 4]))
+        for i in range(1, count)
+    )
+
+
+def find_components(mask: np.ndarray, positions: int = 30, blobs: tuple[Component, ...] | None = None) -> tuple[Component, ...]:
+    """Tissue blobs that could be cores; size limits scale with the grid (for a 5 x 6 grid: 0.07-6% of the slide)."""
     cell_area = mask.shape[0] * mask.shape[1] / positions
     minimum_area = cell_area * 0.021
     maximum_area = cell_area * 1.8
-    components = []
-    for index in range(1, count):
-        _, _, width, height, area = stats[index]
-        if minimum_area <= area <= maximum_area:
-            components.append(
-                Component(
-                    x=float(centroids[index, 0]),
-                    y=float(centroids[index, 1]),
-                    width=int(width),
-                    height=int(height),
-                    area=int(area),
-                )
-            )
+    components = [blob for blob in (tissue_blobs(mask) if blobs is None else blobs) if minimum_area <= blob.area <= maximum_area]
     if len(components) < _at_least(0.4, positions):
         raise ValueError(f"Only {len(components)} core-sized tissue pieces were found on the slide preview; "
                          "check the rows and columns in Settings and that the scan shows the whole TMA")
@@ -107,18 +103,20 @@ def fit_axis(profile: np.ndarray, count: int) -> tuple[float, float]:
     best_pitch = 0.0
     for pitch in np.linspace(dimension / (count + 1.2), dimension / (count - 0.8), 280):
         maximum_origin = dimension - (count - 1) * pitch
-        for origin in np.linspace(-0.08 * pitch, maximum_origin + 0.08 * pitch, 320):
-            centers = origin + np.arange(count) * pitch
-            if np.any(centers < 0) or np.any(centers > dimension - 1):
-                continue
-            center_score = np.interp(centers, coordinates, smooth).sum()
-            gaps = origin + (np.arange(count - 1) + 0.5) * pitch
-            gap_score = np.interp(gaps, coordinates, smooth).sum()
-            score = center_score - 0.3 * gap_score
-            if score > best_score:
-                best_score = score
-                best_origin = float(origin)
-                best_pitch = float(pitch)
+        origins = np.linspace(-0.08 * pitch, maximum_origin + 0.08 * pitch, 320)
+        centers = origins[:, None] + np.arange(count) * pitch
+        inside = ~(np.any(centers < 0, axis=1) | np.any(centers > dimension - 1, axis=1))
+        if not inside.any():
+            continue
+        center_score = np.interp(centers[inside], coordinates, smooth).sum(axis=1)
+        gaps = origins[inside][:, None] + (np.arange(count - 1) + 0.5) * pitch
+        gap_score = np.interp(gaps, coordinates, smooth).sum(axis=1)
+        score = center_score - 0.3 * gap_score
+        best = int(np.argmax(score))  # the first of equal scores, as one origin after the other would give
+        if score[best] > best_score:
+            best_score = float(score[best])
+            best_origin = float(origins[inside][best])
+            best_pitch = float(pitch)
     if not np.isfinite(best_score):
         raise ValueError("Could not fit a regular grid axis")
     return best_origin, best_pitch
@@ -137,11 +135,25 @@ def _weighted_affine(
     return coefficients
 
 
-def fit_grid(mask: np.ndarray, rows: int, columns: int, strict_threshold: float) -> GridFit:
+def fit_grid(
+    mask: np.ndarray,
+    rows: int,
+    columns: int,
+    strict_threshold: float,
+    blobs: tuple[Component, ...] | None = None,
+    axes: dict | None = None,
+) -> GridFit:
+    """Fit a rows x columns lattice to the tissue mask. `blobs` (from `tissue_blobs`) and `axes` (a dict filled with
+    the axis fits) let several grid sizes be tried on one slide without repeating the shared work."""
     positions = rows * columns
-    components = find_components(mask, positions)
-    origin_x, pitch_x = fit_axis(mask.mean(axis=0), columns)
-    origin_y, pitch_y = fit_axis(mask.mean(axis=1), rows)
+    components = find_components(mask, positions, blobs)
+    axes = {} if axes is None else axes
+    if ("x", columns) not in axes:
+        axes["x", columns] = fit_axis(mask.mean(axis=0), columns)
+    if ("y", rows) not in axes:
+        axes["y", rows] = fit_axis(mask.mean(axis=1), rows)
+    origin_x, pitch_x = axes["x", columns]
+    origin_y, pitch_y = axes["y", rows]
     initial_centers = np.array(
         [
             [origin_x + column * pitch_x, origin_y + row * pitch_y]
@@ -223,6 +235,139 @@ def fit_grid(mask: np.ndarray, rows: int, columns: int, strict_threshold: float)
         rmse=rmse,
         strict_threshold=strict_threshold,
     )
+
+
+# ---------------------------------------------------------------- choosing the grid size when a slide has none set
+
+GRID_SIZES = range(2, 13)   # rows and columns tried when looking for a slide's grid size
+KEEP_DEFAULT_MARGIN = 0.03  # the project's grid size is kept unless another size fits clearly better
+
+
+@dataclass(frozen=True)
+class GridChoice:
+    rows: int
+    columns: int
+    fit: GridFit
+    score: float
+    source: str  # "set": the size was given; "auto": found by trying sizes
+    tried: tuple[tuple[int, int, float | None], ...] = ()
+
+
+def core_like(blobs: tuple[Component, ...], shape: tuple[int, int]) -> tuple[Component, ...]:
+    """The blobs about the size of the larger ones (the cores), whatever the grid: crumbs and smears are left out."""
+    pieces = [b for b in blobs if b.area >= 0.0002 * shape[0] * shape[1] and 0.4 <= b.width / b.height <= 2.5]
+    if not pieces:
+        return ()
+    areas = np.sort([b.area for b in pieces])
+    reference = float(np.median(areas[len(areas) // 2:]))
+    return tuple(b for b in pieces if 0.3 * reference <= b.area <= 3.0 * reference)
+
+
+def count_lines(values: np.ndarray, size: float) -> int:
+    """How many rows (or columns) the core centres fall into: centres closer than half a core belong to one line."""
+    if len(values) == 0:
+        return 0
+    ordered = np.sort(values)
+    return int(1 + np.sum(np.diff(ordered) > 0.5 * size))
+
+
+def estimate_grid(cores: tuple[Component, ...]) -> tuple[int, int]:
+    """Rows and columns read off the core positions (a first guess; the fit decides)."""
+    if not cores:
+        return 0, 0
+    size = float(np.median([np.sqrt(c.area) for c in cores]))
+    return count_lines(np.array([c.y for c in cores]), size), count_lines(np.array([c.x for c in cores]), size)
+
+
+def grid_score(fit: GridFit, rows: int, columns: int, cores: int) -> float:
+    """How well a grid size explains the slide (0-1): most positions hold a core (too many rows or columns leave
+    empty ones), most cores sit on a position (too few leave cores out), and the cores lie on a regular lattice."""
+    matched = len(fit.inlier_components)
+    filled = matched / (rows * columns)
+    explained = matched / max(cores, matched, 1)
+    if not filled or not explained:
+        return 0.0
+    pitch = min(np.linalg.norm(fit.column_vector), np.linalg.norm(fit.row_vector))
+    regular = 1 - 0.5 * min(1.0, fit.rmse / (0.12 * pitch)) ** 2
+    return float(2 * filled * explained / (filled + explained) * regular)
+
+
+def tissue_window(cores: tuple[Component, ...], shape: tuple[int, int]) -> tuple[int, int, int, int] | None:
+    """The part of the preview the cores occupy, with a margin of about half a core spacing: a grid is fitted on the
+    assumption that it fills the picture, which an array scanned with wide empty margins does not."""
+    if len(cores) < 4:
+        return None
+    points = np.array([[c.x, c.y] for c in cores])
+    gaps = np.sort(np.linalg.norm(points[:, None] - points[None], axis=2), axis=1)[:, 1]
+    margin = 0.7 * float(np.median(gaps))
+    x0, y0 = (max(0, int(v - margin)) for v in points.min(axis=0))
+    x1, y1 = int(min(shape[1], points[:, 0].max() + margin)), int(min(shape[0], points[:, 1].max() + margin))
+    return x0, y0, x1, y1
+
+
+def _moved(fit: GridFit, dx: float, dy: float) -> GridFit:
+    shift = lambda components: tuple(Component(c.x + dx, c.y + dy, c.width, c.height, c.area) for c in components)  # noqa: E731
+    return GridFit(fit.origin + np.array([dx, dy]), fit.column_vector, fit.row_vector, fit.radius, shift(fit.components),
+                   shift(fit.inlier_components), fit.rmse, fit.strict_threshold)
+
+
+def choose_grid(
+    mask: np.ndarray,
+    strict_threshold: float,
+    rows: int | None = None,
+    columns: int | None = None,
+    default: tuple[int, int] = (5, 6),
+) -> GridChoice:
+    """The slide's grid: the given rows and columns when both are set, otherwise the best-fitting size among the project
+    default and the sizes around the number of core rows and columns counted on the slide (2-12 each). Sizes are also
+    fitted on the part of the slide the cores occupy, so wide empty margins do not push the fit to a wrong size."""
+    blobs = tissue_blobs(mask)
+    cores = core_like(blobs, mask.shape)
+    if rows and columns:
+        fit = fit_grid(mask, rows, columns, strict_threshold, blobs)
+        return GridChoice(rows, columns, fit, grid_score(fit, rows, columns, len(cores)), "set")
+    rows_seen, columns_seen = estimate_grid(cores)
+    candidates = {(r, c) for r in (rows_seen - 1, rows_seen, rows_seen + 1) for c in (columns_seen - 1, columns_seen, columns_seen + 1)}
+    candidates = sorted(s for s in candidates | {default} if s[0] in GRID_SIZES and s[1] in GRID_SIZES)
+    window = tissue_window(cores, mask.shape)
+    views = [(mask, blobs, 0, 0, {})]  # (mask, its blobs, offset x, offset y, axis fits)
+    if window and window != (0, 0, mask.shape[1], mask.shape[0]):
+        x0, y0, x1, y1 = window
+        part = mask[y0:y1, x0:x1]
+        views.append((part, tissue_blobs(part), x0, y0, {}))
+    fits: dict[tuple[int, int], tuple[GridFit, float]] = {}
+    for size in candidates:
+        for number, (view, view_blobs, dx, dy, axes) in enumerate(views):
+            if number == 0 and size != default and len(views) > 1:
+                continue  # the whole slide is only tried for the project's size, as Find cores always did
+            try:
+                fit = _moved(fit_grid(view, *size, strict_threshold, view_blobs, axes), dx, dy)
+            except ValueError:
+                continue
+            score = grid_score(fit, *size, len(cores))
+            if size not in fits or score > fits[size][1] + (KEEP_DEFAULT_MARGIN if number else 0):
+                fits[size] = (fit, score)
+    tried = tuple((r, c, round(fits[r, c][1], 3) if (r, c) in fits else None) for r, c in candidates)
+    if not fits:
+        raise ValueError(f"No grid of 2-12 rows and columns fits this slide ({len(cores)} core-sized tissue pieces found); "
+                         "check that the scan shows the whole TMA, or set the slide's rows and columns")
+    best = max(fits, key=lambda size: (fits[size][1], size == default))
+    if default in fits and fits[best][1] - fits[default][1] <= KEEP_DEFAULT_MARGIN:
+        best = default
+    return GridChoice(*best, *fits[best], "auto", tried)
+
+
+ORIENTATIONS = {"": "as scanned", "rotate_180": "turned 180°", "flip_left_right": "mirrored left to right",
+                "flip_top_bottom": "mirrored top to bottom"}
+
+
+def oriented(row: int, column: int, rows: int, columns: int, orientation: str = "") -> tuple[int, int]:
+    """The map position (row, column) of the fitted grid position, for a slide that lies turned or mirrored on the scan."""
+    if orientation not in ORIENTATIONS:
+        raise ValueError(f"Unknown slide orientation {orientation!r}: use one of {', '.join(o for o in ORIENTATIONS if o)}")
+    flip_rows = orientation in ("rotate_180", "flip_top_bottom")
+    flip_columns = orientation in ("rotate_180", "flip_left_right")
+    return (rows - 1 - row if flip_rows else row), (columns - 1 - column if flip_columns else column)
 
 
 def coverage_mask(rgb: np.ndarray) -> tuple[np.ndarray, float]:
@@ -353,14 +498,16 @@ def core_records(
     columns: int,
     tma: str,
     stain: str,
+    orientation: str = "",
 ) -> list[dict]:
     tissue, coverage_threshold = coverage_mask(preview.rgb)
     refinements = refine_core_centers(fit, rows, columns)
     crop_radius = CROP_RADIUS_SCALE * fit.radius
     records = []
-    for row in range(rows):
-        for column in range(columns):
-            refinement = refinements[row, column]
+    for fitted_row in range(rows):
+        for fitted_column in range(columns):
+            refinement = refinements[fitted_row, fitted_column]
+            row, column = oriented(fitted_row, fitted_column, rows, columns, orientation)
             center = refinement.center
             fraction = core_coverage(tissue, center, crop_radius)
             full_x = center[0] * preview.scale_x
@@ -416,7 +563,7 @@ def core_records(
     return records
 
 
-def draw_qc(preview: SlidePreview, fit: GridFit, records: list[dict]) -> np.ndarray:
+def draw_qc(preview: SlidePreview, fit: GridFit, records: list[dict], note: str = "") -> np.ndarray:
     image = cv2.cvtColor(preview.rgb, cv2.COLOR_RGB2BGR)
     colors = {
         "substantial": (40, 150, 40),
@@ -460,7 +607,7 @@ def draw_qc(preview: SlidePreview, fit: GridFit, records: list[dict]) -> np.ndar
             cv2.LINE_AA,
         )
     title = (
-        f"{preview.path.stem} | inliers={len(fit.inlier_components)} | "
+        f"{preview.path.stem} | {note + ' | ' if note else ''}inliers={len(fit.inlier_components)} | "
         f"RMSE={fit.rmse:.1f}px | crop diameter="
         f"{float(records[0]['diameter_x_px']) / preview.scale_x:.1f}px"
     )
@@ -524,24 +671,54 @@ def write_table(records: list[dict], path: Path, delimiter: str = ",") -> None:
         writer.writerows(records)
 
 
+PREVIEW_LONG_SIDE = 1600  # the plain slide picture kept for core thumbnails (qc/grids/previews)
+
+
+def slide_slug(path: Path) -> str:
+    return Path(path).stem.replace(" ", "_")
+
+
+def dearray_preview(
+    preview: SlidePreview,
+    tma: str,
+    stain: str,
+    rows: int | None = None,
+    columns: int | None = None,
+    qc_dir: Path | None = None,
+    orientation: str = "",
+    default: tuple[int, int] = (5, 6),
+) -> tuple[list[dict], GridChoice]:
+    """Find the cores on one slide preview: the given grid size, or the best-fitting one when rows / columns are not set.
+    With `qc_dir`, writes `<slide>.jpg` (the fitted grid drawn on the slide) and `previews/<slide>.jpg` (the plain
+    slide, for core thumbnails)."""
+    strict_mask, strict_threshold = segment_for_grid(preview.rgb)
+    choice = choose_grid(strict_mask, strict_threshold, rows, columns, default)
+    records = core_records(preview, choice.fit, choice.rows, choice.columns, tma, stain, orientation)
+    if qc_dir is not None:
+        slug = slide_slug(preview.path)
+        qc_path = qc_dir / f"{slug}.jpg"
+        qc_path.parent.mkdir(parents=True, exist_ok=True)
+        how = "found automatically" if choice.source == "auto" else "as set"
+        note = f"{choice.rows} x {choice.columns} grid ({how})" + (f", {ORIENTATIONS[orientation]}" if orientation else "")
+        if not cv2.imwrite(str(qc_path), draw_qc(preview, choice.fit, records, note)):
+            raise OSError(f"Could not write QC image: {qc_path}")
+        scale = min(1.0, PREVIEW_LONG_SIDE / max(preview.rgb.shape[:2]))
+        plain = cv2.resize(preview.rgb, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA) if scale < 1 else preview.rgb
+        (qc_dir / "previews").mkdir(exist_ok=True)
+        cv2.imwrite(str(qc_dir / "previews" / f"{slug}.jpg"), cv2.cvtColor(plain, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 85])
+    return records, choice
+
+
 def process_slide(
     path: Path,
     tma: str,
     stain: str,
-    rows: int,
-    columns: int,
+    rows: int | None,
+    columns: int | None,
     target_long_side: int,
     qc_dir: Path | None = None,
-) -> list[dict]:
+    orientation: str = "",
+    default: tuple[int, int] = (5, 6),
+) -> tuple[list[dict], GridChoice]:
     preview = read_slide_preview(path, target_long_side)
-    strict_mask, strict_threshold = segment_for_grid(preview.rgb)
-    fit = fit_grid(strict_mask, rows, columns, strict_threshold)
-    records = core_records(preview, fit, rows, columns, tma, stain)
-    slug = path.stem.replace(" ", "_")
-
-    if qc_dir is not None:
-        qc_path = qc_dir / f"{slug}.jpg"
-        qc_path.parent.mkdir(parents=True, exist_ok=True)
-        if not cv2.imwrite(str(qc_path), draw_qc(preview, fit, records)):
-            raise OSError(f"Could not write QC image: {qc_path}")
-    return records
+    return dearray_preview(preview, tma, stain, rows, columns, qc_dir, orientation, default)

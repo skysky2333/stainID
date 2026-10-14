@@ -54,6 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("dearray", help="find the cores on every slide in the slides table")
     p.add_argument("--redo", action="store_true")
+    p.add_argument("--slide", action="append", default=None, help="only this slide (file name; repeat for several), found again")
     sub.add_parser("layout", help="attach the TMA map (donor, region, group) to the core table")
     for name, text in (("export", "export native-resolution core images"), ("qc", "core tissue and focus QC")):
         p = sub.add_parser(name, help=text)
@@ -181,7 +182,7 @@ def run(args: argparse.Namespace, project) -> None:
         from stainid.workflows import slides
 
         if args.command == "dearray":
-            slides.dearray_slides(project, args.redo)
+            slides.dearray_slides(project, args.redo, only=args.slide)
         elif args.command == "layout":
             slides.attach_map(project)
         elif args.command == "export":

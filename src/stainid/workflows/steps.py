@@ -246,12 +246,16 @@ STEPS = (
          "Pick the folder with your whole-slide scans. stainID lists them and guesses the TMA number and stain from each file name; "
          "check the guesses and fix any that are wrong, then save.", ("slides_dir",), ("slides_table",), None, status=_slides_status),
     Step("dearray", "1 · Set up", "Find cores", "Locate every core on each slide by fitting the TMA grid.",
-         "Reads a small preview of each slide, fits a rows × columns grid (set in Settings) and re-centres each core on its tissue. "
-         "Check the grid pictures afterwards: every circle should sit on a core. The first time, stainID downloads the Bio-Formats "
-         "slide reader (about 60 MB, needs internet); later runs start straight away.",
+         "Reads a small preview of each slide, fits the grid of cores and re-centres each core on its tissue. A slide without its own "
+         "rows and columns in the slides table gets the grid size that fits best (the size in Settings unless another fits clearly "
+         "better), and the size it chose is written to the slides table. Check the grid pictures afterwards: every circle should sit "
+         "on a core. The first time, stainID downloads the Bio-Formats slide reader (about 60 MB, needs internet); later runs start "
+         "straight away.",
          ("slides_table",), ("core_manifest", "grid_images"), ("dearray",),
-         (Option("redo", "Redo all slides", "bool", False, "Fit the grid again on slides that were already done.", advanced=True),),
-         heavy=True, view="/setup/grids", duration="about 1 minute per slide", status=_dearray_status, writes=("core_manifest",)),
+         (Option("redo", "Redo all slides", "bool", False, "Fit the grid again on slides that were already done.", advanced=True),
+          Option("slide", "Only these slides", "text", "", "File names of slides to find again, separated by commas (the others are left as they are).",
+                 advanced=True)),
+         heavy=True, view="/setup/cores", duration="about 1 minute per slide", status=_dearray_status, writes=("core_manifest", "slides_table")),
     Step("layout", "1 · Set up", "Attach TMA map", "Say which donor, region and group sits at each core position.",
          "Upload a spreadsheet (CSV) with one row per core position: tma, core_label (e.g. B-2), donor_id, region and disease_group. "
          "Leave donor_id empty for orientation or control cores. Download the template to start.",
