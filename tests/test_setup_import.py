@@ -80,6 +80,39 @@ WORD_MAP = [["", "A", "B", "C"],
             ["2", "JOG3 FR", "1 9 35 OCC", ""], ["", "ASYMAD", "AD", ""], ["", "C:A - B:3", "", ""]]
 
 
+def lab_word_map(rows: int) -> list[list[str]]:
+    """A Word map as the lab draws it: 6 columns, three table rows per core position (id + region / group /
+    pathology), the control core's text on the middle line, no header row or column (title and row numbers are
+    outside the table), with the typing slips of real maps."""
+    ids = ["1673 FR", "17 00  FR", "1 9 35   FR", "JOG 14   FR", "1696   OC C", "2323 OCC"]
+    group = ["AD", "A D", "CT", "AD", "CT", "AD"]
+    pathology = ["C:C - B:6", "C: C  - B: 6", "C:C  –  B : 6", "C:C - B6", "C:0 - B:0", "C:B - B:3"]
+    table = []
+    for r in range(rows):
+        shift = lambda values: values[r % 6:] + values[:r % 6]  # noqa: E731
+        lines = [shift(ids), shift(group), shift(pathology)]
+        if r == 0:  # the control core sits at A-1: its "CBLM" is in the group line, the other two lines are empty
+            lines[0][0], lines[1][0], lines[2][0] = "", "CBLM", ""
+        table += lines
+    return table
+
+
+@pytest.mark.parametrize("rows", [5, 4])
+def test_the_labs_word_maps_three_table_rows_per_position(rows):
+    content = docx([("LIP- 8", lab_word_map(rows))])
+    found = maps.read_maps(read_tables("LIP8.docx", content), GROUPS, ["8"])
+    assert len(found) == 1 and found[0]["tma"] == "8"
+    cells = {c["label"]: c for c in maps.parse_map(found[0]["grid"], GROUPS)}
+    assert len(cells) == 6 * rows and len(found[0]["grid"]) == rows
+    assert (cells["A-1"]["tissue_control"], cells["A-1"]["donor_id"], cells["A-2"]["tissue_control"]) == ("CBLM", "", "")
+    read = [(cells[f"{c}-1"]["donor_id"], cells[f"{c}-1"]["region"], cells[f"{c}-1"]["disease_group"], cells[f"{c}-1"]["cerad"],
+             cells[f"{c}-1"]["braak"]) for c in "BCDEF"]
+    assert read == [("1700", "frontal", "AD", "C", "6"), ("1935", "frontal", "CT", "C", "6"), ("JOG_014", "frontal", "AD", "C", "6"),
+                    ("1696", "occipital", "CT", "0", "0"), ("2323", "occipital", "AD", "B", "3")]
+    assert all(not c["note"] for c in cells.values())
+    assert cells[f"A-{rows}"]["donor_id"] and cells[f"F-{rows}"]["disease_group"]
+
+
 def test_a_word_map_with_three_table_rows_per_map_row():
     tables = read_tables("LIP8.docx", docx([("TMA LIP-8", WORD_MAP)]))
     assert tables[0].name == "TMA LIP-8" and tables[0].source == "LIP8.docx"

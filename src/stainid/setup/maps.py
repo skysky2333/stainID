@@ -119,13 +119,22 @@ def cell_text(row: dict[str, str]) -> str:
 # ---------------------------------------------------------------- a table as a map grid
 
 def _kind(text: str, groups: Groups) -> str:
-    """identity (a donor or a control: a new map row starts here), info (only a group, region or pathology) or empty."""
+    """What one table cell holds: identity (a donor or a control core), group, pathology, other or empty."""
     if not key(text):
         return "empty"
     cell = parse_cell(text, groups)
     if cell["donor_id"] or cell["tissue_control"] or (cell["note"] == UNREADABLE and re.search(r"\d", text)):
         return "identity"
-    return "info"
+    if cell["cerad"] or cell["braak"]:
+        return "pathology"
+    return "group" if cell["disease_group"] else "other"
+
+
+def _row_kind(row: list[str], groups: Groups) -> str:
+    """What most cells of a table row hold: a row of donors (with a control core among them) is an identity row, a row
+    of groups with one "CBLM" among them is still a group row."""
+    kinds = Counter(k for k in (_kind(c, groups) for c in row) if k != "empty")
+    return kinds.most_common(1)[0][0] if kinds else "empty"
 
 
 def _is_title(row: list[str]) -> bool:
@@ -134,9 +143,15 @@ def _is_title(row: list[str]) -> bool:
 
 
 def map_grid(rows: list[list[str]], groups: Groups) -> list[list[str]]:
-    """The map cells of a table, one list per map row: header rows (A, B, C …) and columns (1, 2, 3 …) and title rows
-    are dropped, and a map row drawn over several table rows (donor / group / pathology) is joined into one."""
-    rows = [[clean(c) for c in row] for row in rows if any(clean(c) for c in row) and not _is_title([clean(c) for c in row])]
+    """The map cells of a table, one list per map row. Header rows (A, B, C …), header columns (1, 2, 3 …) and title rows
+    are dropped. A map row may be drawn over k table rows (Word maps: donor and region / group / pathology, k = 3):
+    k is the usual distance between rows of donors, and every k table rows from the first one make one map row,
+    each cell joining its k lines. A cell that holds all its lines itself gives k = 1."""
+    rows = [[clean(c) for c in row] for row in rows if not _is_title([clean(c) for c in row])]
+    while rows and not any(rows[-1]):
+        rows.pop()
+    while rows and not any(rows[0]):
+        rows.pop(0)
     if not rows:
         return []
     if all(re.fullmatch(r"[A-Z]", c.upper()) for c in rows[0] if c) and sum(bool(c) for c in rows[0]) >= 2:
@@ -147,15 +162,21 @@ def map_grid(rows: list[list[str]], groups: Groups) -> list[list[str]]:
         rows = [r[1:] for r in rows]
     width = max(len(r) for r in rows)
     rows = [(r + [""] * width)[:width] for r in rows]
-    grid: list[list[list[str]]] = []
-    for row in rows:
-        if any(_kind(c, groups) == "identity" for c in row) or not grid:
-            grid.append([[c] if c else [] for c in row])
-        else:
-            for parts, c in zip(grid[-1], row):
-                if c:
-                    parts.append(c)
-    cells = [["\n".join(parts) for parts in row] for row in grid]
+    starts = [i for i, row in enumerate(rows) if _row_kind(row, groups) == "identity"]
+    gaps = Counter(b - a for a, b in zip(starts, starts[1:]))
+    if gaps:
+        span = gaps.most_common(1)[0][0]
+    elif starts:
+        span = len(rows) - starts[0]
+    else:
+        span = 1
+    begin = starts[0] if starts else 0
+    cells = []
+    for top in range(begin, len(rows), span):
+        block = rows[top:top + span]
+        line = ["\n".join(row[c] for row in block if row[c]) for c in range(width)]
+        if any(line):
+            cells.append(line)
     while cells and all(not any(r[-1:]) for r in cells) and len(cells[0]) > 1:  # empty columns on the right
         cells = [r[:-1] for r in cells]
     return cells
