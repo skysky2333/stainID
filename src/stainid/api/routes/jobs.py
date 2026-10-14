@@ -4,8 +4,8 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
-from stainid.api.jobs import NOISE
 from stainid.api.state import get_state
+from stainid.jobs import NOISE
 from stainid.workflows.steps import describe
 
 router = APIRouter(tags=["jobs"])
@@ -50,7 +50,9 @@ def cancel(job_id: str) -> dict:
 @router.get("/jobs/{job_id}/log", response_class=PlainTextResponse)
 def log(job_id: str, tail: int = 400) -> str:
     path = get_state().jobs.log_path(job_id)
-    if not path.exists():
+    if path is None:
+        return "(This run prints to its terminal. Start it with `> run.log` at the end to follow its output here.)"
+    if not path.is_file():
         return ""
     lines = path.read_text(errors="replace").splitlines()
     return "\n".join(line for line in lines[-tail:] if not NOISE.search(line))

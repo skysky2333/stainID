@@ -367,14 +367,15 @@ def _default(step_id: str, key: str):
     return next((o.default for o in BY_ID[step_id].options if o.key == key), False)
 
 
-def wait_reason(earlier: Step, later: Step) -> str:
+def wait_reason(earlier: Step, later: Step, running_from: str = "") -> str:
     """Why a later step must wait for an earlier running / waiting one ("" = no need): it makes something the later step reads,
-    or both write the same file (e.g. the core table)."""
+    or both write the same file (e.g. the core table). `running_from` names where the earlier one runs, if not in the app."""
+    which = f"“{earlier.title}”" + (f", running from the {running_from}," if running_from else "")
     made = set(earlier.produces) & later.reads()
     if made:
-        return f"Waits for “{earlier.title}” to finish (needs: {', '.join(RESOURCES[r].label for r in sorted(made))})"
+        return f"Waits for {which} to finish (needs: {', '.join(RESOURCES[r].label for r in sorted(made))})"
     shared = set(earlier.writes + earlier.produces) & set(later.writes + later.produces)
-    return f"Waits for “{earlier.title}” to finish (both write: {RESOURCES[sorted(shared)[0]].label})" if shared else ""
+    return f"Waits for {which} to finish (both write: {RESOURCES[sorted(shared)[0]].label})" if shared else ""
 
 
 def depends_on(step: Step) -> list[str]:

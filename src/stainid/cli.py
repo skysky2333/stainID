@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 import time
 from pathlib import Path
 
+from stainid.jobs import JOB_ENV, JobStore, command_line_job
 from stainid.project import load_project, write_default_config
 
 
@@ -127,10 +129,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--no-browser", action="store_true", help="do not open the web browser")
     p.add_argument("--reload", action="store_true")
+    p.add_argument("--allow-origin", action="append", default=[], metavar="URL",
+                   help="let the web app served from this address (e.g. http://lab-pc:8080) use this server; repeat for several "
+                        "(also $STAINID_ALLOW_ORIGINS, comma-separated)")
     return parser
 
 
+def _workflow_step(argv: list[str]):
+    """The workflow step a command runs (the one whose `command` starts its arguments, else None), and the arguments
+    without --project, as the app shows them."""
+    from stainid.workflows.steps import STEPS
+
+    words = [w for i, w in enumerate(argv) if not w.startswith("--project") and not (i and argv[i - 1] == "--project")]
+    return next((s for s in STEPS if s.command and tuple(words[:len(s.command)]) == s.command), None), words
+
+
 def main(argv: list[str] | None = None) -> None:
+    argv = sys.argv[1:] if argv is None else list(argv)
     args = build_parser().parse_args(argv)
     if args.command == "init":
         print(write_default_config(args.project or Path.cwd()))
@@ -140,6 +155,16 @@ def main(argv: list[str] | None = None) -> None:
         return
     project = load_project(args.project)
     os.chdir(project.root)
+    step, words = _workflow_step(argv)
+    if step is None or os.environ.get(JOB_ENV):  # not a workflow step, or started by the app (which keeps its own record)
+        run(args, project)
+        return
+    options = {o.key: o.default if getattr(args, o.key, None) is None else getattr(args, o.key) for o in step.options}
+    with command_line_job(JobStore(project.output("jobs")), step.id, options, words):
+        run(args, project)
+
+
+def run(args: argparse.Namespace, project) -> None:
     if args.command == "info":
         print(f"project: {project.name}  root: {project.root}")
         for section in ("inputs", "models", "outputs"):
@@ -228,6 +253,12 @@ def main(argv: list[str] | None = None) -> None:
         train_model(project, args.stain)
 
 
+def allowed_origins(extra: list[str] = ()) -> list[str]:
+    """Addresses of web apps served elsewhere that may use this server (--allow-origin and $STAINID_ALLOW_ORIGINS)."""
+    origins = [o.strip().rstrip("/") for o in [*os.environ.get("STAINID_ALLOW_ORIGINS", "").split(","), *extra]]
+    return list(dict.fromkeys(o for o in origins if o))
+
+
 def serve(args: argparse.Namespace) -> None:
     import socket
     import threading
@@ -247,11 +278,15 @@ def serve(args: argparse.Namespace) -> None:
             return
     os.environ["STAINID_PROJECT"] = str(Path(args.project).resolve() if args.project else remembered_project())
     os.environ["STAINID_HOST"] = args.host
+    origins = allowed_origins(args.allow_origin)
+    os.environ["STAINID_ALLOW_ORIGINS"] = ",".join(origins)
     if not args.no_browser:
         threading.Timer(1.5, webbrowser.open, (url,)).start()
     print(f"stainID is running at {url}  (press Ctrl+C to stop)", flush=True)
     if args.host != "127.0.0.1":
         print(f"Annotators on your network: http://{socket.gethostname()}:{args.port}/annotate (once you start a session in the app)", flush=True)
+    if origins:
+        print(f"The web app served from {', '.join(origins)} may use this server", flush=True)
     uvicorn.run("stainid.api.app:create_app", factory=True, host=args.host, port=args.port, reload=args.reload, log_level="warning")
 
 
