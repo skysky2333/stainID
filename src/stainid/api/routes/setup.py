@@ -68,6 +68,11 @@ def _style() -> IdStyle:
     return IdStyle.from_config(get_state().project.config)
 
 
+def _sample_ids() -> maps.SampleIds:
+    project = get_state().project
+    return maps.sample_ids_for(project.config, maps.read_layout_rows(project.input("tma_layout")))
+
+
 def _rows(path: Path) -> list[dict[str, str]]:
     return read_csv(path) if path.exists() else []
 
@@ -212,12 +217,12 @@ def map_overview() -> dict:
     out = []
     for tma in tmas:
         saved = [r for r in layout if r["tma"] == tma]
-        cells = maps.parse_map(maps.grid_of(saved), _groups(), _style()) if saved else []
+        cells = maps.parse_map(maps.grid_of(saved), _groups(), _style(), _sample_ids()) if saved else []
         out.append({"tma": tma, "size": list(sizes.get(tma, (0, 0))), "slides": [s["stain"] for s in slides if s["tma"] == tma],
                     "positions": positions.get(tma, []), "saved": maps.summary(cells) if saved else None,
                     "sources": sorted({r.get("map_source", "") for r in saved} - {""})})
     return {"tmas": out, "path": project.relative(project.input("tma_layout")), "id_style": project.config.get("donor_ids", {}),
-            "tma_prefix": project.tma_prefix}
+            "tma_prefix": project.tma_prefix, "sample_ids": _sample_ids().describe(), "sample_ids_setting": project.config.get("sample_region_ids", {})}
 
 
 @router.get("/map/{tma}")
@@ -230,7 +235,7 @@ def map_of(tma: str) -> dict:
 
 
 def _parsed(grid: list[list[str]]) -> dict:
-    cells = maps.parse_map(grid, _groups(), _style())
+    cells = maps.parse_map(grid, _groups(), _style(), _sample_ids())
     return {"cells": cells, "summary": maps.summary(cells)}
 
 
@@ -270,7 +275,7 @@ def parse(request: GridCells) -> dict:
 def save_map(tma: str, request: GridCells) -> dict:
     state = get_state()
     project = state.project
-    cells = maps.parse_map(request.grid, _groups(), _style())
+    cells = maps.parse_map(request.grid, _groups(), _style(), _sample_ids())
     rows = maps.layout_rows(tma, cells, request.source)
     try:
         maps.save_map(project.input("tma_layout"), tma, rows)
@@ -288,6 +293,18 @@ def save_map(tma: str, request: GridCells) -> dict:
 def id_style(style: dict) -> dict:
     project = get_state().project
     save_project(project, {"donor_ids": {"digits": int(style.get("digits", 4)), "prefixed_digits": int(style.get("prefixed_digits", 3))}})
+    open_project(project.root)
+    return map_overview()
+
+
+@router.put("/sample-ids")
+def sample_ids(rule: dict) -> dict:
+    """The `sample_region_ids` setting (used while no saved map shows the project's own naming)."""
+    project = get_state().project
+    if rule.get("region", "name") not in ("name", "code"):
+        raise HTTPException(400, "region must be name or code")
+    save_project(project, {"sample_region_ids": {"plain_prefix": str(rule.get("plain_prefix", "")), "prefixed_prefix": str(rule.get("prefixed_prefix", "")),
+                                                 "region": rule.get("region", "name")}})
     open_project(project.root)
     return map_overview()
 

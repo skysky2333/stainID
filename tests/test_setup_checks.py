@@ -131,10 +131,15 @@ def test_the_guided_setup_from_slides_to_checks(client, tmp_path):
     client.delete(f"/api/jobs/{changed['job']['id']}")
     assert client.put("/api/setup/cores/grid", json={"slide_path": nine["slide_path"], "rows": 2}).status_code == 400
 
+    rule = client.put("/api/setup/sample-ids", json={"plain_prefix": "BRC_", "prefixed_prefix": "", "region": "code"}).json()["sample_ids"]
+    assert rule["source"] == "setting" and rule["examples"] == ["BRC_1673_FR", "JOG_003_OCC"]
     read = client.post("/api/setup/map/read", files={"file": ("LIP8.docx", docx([("TMA LIP-8", WORD_MAP)]))}).json()
     found = read["maps"][0]
     assert found["tma"] == "8" and found["summary"]["donors"] == 4 and found["summary"]["controls"] == 1
     saved = client.put("/api/setup/map/8", json={"grid": found["grid"], "source": "LIP8.docx"}).json()
+    assert {r["donor_id"]: r["sample_region_id"] for r in read_csv(tmp_path / "data" / "tma_layout.csv") if r["region"] == "frontal"} == \
+        {"1673": "BRC_1673_FR", "1700": "BRC_1700_FR", "JOG_003": "JOG_003_FR"}
+    assert saved["sample_ids"]["source"] == "layout" and saved["sample_ids"]["regions"]["occipital"] == "OCC"
     eight = next(t for t in saved["tmas"] if t["tma"] == "8")
     assert eight["saved"]["donors"] == 4 and eight["sources"] == ["LIP8.docx"]
     assert [g["code"] for g in client.get("/api/project").json()["config"]["groups"]] == ["AD", "ASYMP", "CT"]
@@ -142,6 +147,7 @@ def test_the_guided_setup_from_slides_to_checks(client, tmp_path):
     assert again["saved"] and again["grid"][0][0].startswith("1673 frontal")
     pasted = client.post("/api/setup/map/read-text", json={"text": "1141 FR AD\t1141 OCC AD\n", "name": "TMA 9"}).json()
     assert pasted["maps"][0]["tma"] == "9"
+    assert pasted["maps"][0]["cells"][1]["sample_region_id"] == "BRC_1141_OCC"  # previewed with the project's naming
     assert client.post("/api/setup/map/read", files={"file": ("map.jpg", b"\xff\xd8")}).status_code == 400
 
     tables = client.post("/api/setup/donors/read", files={"file": ("cases.xlsx", xlsx({"Cases": CASES}))}).json()["tables"]

@@ -55,7 +55,9 @@ has got, and any screen can be opened again later.
 
 The setup writes the same files as the step cards (`slides.csv`, `tma_layout.csv`, `donor_metadata.csv`): saving a map
 replaces that TMA's rows and keeps the others; saving donors updates the table. Donor ids follow one rule for maps and
-sheets (*Map → Advanced → How donor ids are written*, `donor_ids` in `stainid.yaml`).
+sheets (*Map → Advanced → How donor ids are written*, `donor_ids` in `stainid.yaml`). Each map cell's donor-region (`sample_region_id`) is named the
+way the project's saved maps name them (e.g. `BRC_1673_FR`, `JOG_003_FR`) and shown in the preview before saving; a
+project without saved maps uses the rule under *Map → Advanced* (`sample_region_ids`).
 
 ## The Workflow page
 

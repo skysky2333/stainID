@@ -20,6 +20,7 @@ tma:
   rows: 5                    # core grid on each slide
   columns: 6
 donor_ids: {digits: 4, prefixed_digits: 3}   # how the guided setup writes donor ids: 698 -> 0698, JOG3 -> JOG_003
+sample_region_ids: {plain_prefix: "", prefixed_prefix: "", region: name}   # donor-region names while no saved map shows one (see tma_layout)
 groups:                      # diagnostic group codes used in the TMA map, in plot order
   - {code: CT, label: Control, color: 3}     # color = palette slot 1-8 (optional)
   - {code: AD, label: Alzheimer disease}
@@ -103,7 +104,7 @@ found by *Find cores* already listed.
 | `tissue_control` | non-empty for control / orientation cores (e.g. `CBLM`) |
 | `map_source`, `map_pathology_raw` | optional; the file the map was read from and the pathology as written |
 | `cerad`, `braak` | optional neuropathology |
-| `sample_region_id` | optional; defaults to `<donor_id>_<region>` |
+| `sample_region_id` | optional; defaults to `<donor_id>_<region>`. The guided setup writes it in the project's own naming, learned from the rows already saved (e.g. `BRC_1673_FR`, `BRC_1673_OCC`, `JOG_003_FR`: `BRC_` before plain numeric ids, nothing before prefixed ones, frontal → FR, occipital → OCC); with no saved rows it uses `sample_region_ids` (`plain_prefix`, `prefixed_prefix`, `region`: `name` or `code`), editable under *Map → Advanced* |
 
 **`donor_metadata.csv`**: one row per donor.
 

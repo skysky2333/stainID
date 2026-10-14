@@ -92,7 +92,7 @@ export default function MapScreen({ next, back, onChanged }: ScreenProps) {
 
       <Advanced hint="TMA map file, CSV template, donor id style">
         <PathLine label="TMA map file" path={overview.data.path} exists={tmas.some((t) => t.saved)} wrap />
-        <p className="small secondary">One row per core position: <code>tma, core_label, donor_id, region, disease_group</code> (and <code>tissue_control, cerad, braak, map_source</code>).
+        <p className="small secondary">One row per core position: <code>tma, core_label, donor_id, region, disease_group</code> (and <code>sample_region_id, tissue_control, cerad, braak, map_source</code>).
           Saving a map here replaces that TMA's rows and keeps the others. You can also fill the whole file in Excel:</p>
         <div className="row">
           <a className="btn small" href={apiUrl('/api/templates/tma_layout.csv')}>Download template (all positions filled in)</a>
@@ -101,6 +101,7 @@ export default function MapScreen({ next, back, onChanged }: ScreenProps) {
           }, setError)} /></label>
         </div>
         <IdStyle overview={overview.data} onSaved={() => { overview.reload(); setDrafts([]) }} />
+        <SampleIdRule overview={overview.data} onSaved={() => { overview.reload(); setDrafts([]) }} />
       </Advanced>
       <ScreenFoot back={back} next={next} nextLabel={drafts.length ? 'Next (unsaved maps are dropped)' : 'Next: donor information'} />
     </div>
@@ -157,6 +158,7 @@ function DraftCard({ draft, tmas, onChange, onCancel, onSaved }: {
       <Found tone={draft.parsed.summary.unreadable || sizeDiffers ? 'warn' : 'good'}>
         Read a {shape} map: <MapSummaryLine summary={draft.parsed.summary} />
         {sizeDiffers && <> The slides of TMA {draft.tma} have {target!.size[0]} × {target!.size[1]} positions: check that the map is the right one and lies the same way.</>}
+        {draft.parsed.cells.some((c) => c.sample_region_id) && <>{' '}Donor-regions are named like <code>{draft.parsed.cells.find((c) => c.sample_region_id)?.sample_region_id}</code>, as in the rest of the project (Advanced).</>}
         {draft.parsed.summary.unreadable > 0 && <> Cells with a yellow edge could not be read completely: correct them in the grid (e.g. <code>1673 FR AD</code>).</>}
       </Found>
       <p className="small muted">Each cell: donor id, region, group and (optional) pathology, e.g. <code>1673 FR</code> / <code>AD</code> / <code>C:C - B:6</code>. Control tissue such as <code>CBLM</code> is a control core. You can paste cells copied from Excel.</p>
@@ -166,6 +168,34 @@ function DraftCard({ draft, tmas, onChange, onCancel, onSaved }: {
         <button className="btn primary" disabled={!draft.tma || busy} onClick={save}>
           {busy ? 'Saving…' : target?.saved ? `Save as the map of TMA ${draft.tma} (replaces the saved one)` : draft.tma ? `Save as the map of TMA ${draft.tma}` : 'Choose the TMA first'}</button>
         <button className="btn" onClick={onCancel}>Cancel</button>
+      </div>
+      <ErrorNote error={error} />
+    </div>
+  )
+}
+
+function SampleIdRule({ overview, onSaved }: { overview: MapOverview; onSaved: () => void }) {
+  const rule = overview.sample_ids
+  const setting = overview.sample_ids_setting
+  const [plain, setPlain] = useState(setting.plain_prefix ?? '')
+  const [prefixed, setPrefixed] = useState(setting.prefixed_prefix ?? '')
+  const [region, setRegion] = useState(setting.region ?? 'name')
+  const [error, setError] = useState<string | null>(null)
+  const save = () => withError(async () => { await api.put('/api/setup/sample-ids', { plain_prefix: plain, prefixed_prefix: prefixed, region }); onSaved() }, setError)
+  return (
+    <div className="panel">
+      <b className="small">How donor-regions are named (sample_region_id)</b>
+      <span className="small secondary">
+        Now: <code>{rule.examples.join(', ')}</code>{' '}
+        {rule.source === 'layout'
+          ? <>— learned from the maps already saved{Object.keys(rule.regions).length ? ` (${Object.entries(rule.regions).map(([r, c]) => `${r} → ${c}`).join(', ')})` : ''}, so new TMAs match the rest of the project. The setting below applies while no map is saved.</>
+          : <>— from the setting below (no saved map shows another naming yet).</>}
+      </span>
+      <div className="row">
+        <label className="field">Before plain donor ids (e.g. BRC_)<input type="text" value={plain} style={{ width: 90 }} onChange={(e) => setPlain(e.target.value)} /></label>
+        <label className="field">Before prefixed ids (e.g. JOG_003)<input type="text" value={prefixed} style={{ width: 90 }} onChange={(e) => setPrefixed(e.target.value)} /></label>
+        <label className="field">Region as<select value={region} onChange={(e) => setRegion(e.target.value)}><option value="name">name (frontal)</option><option value="code">code (FR)</option></select></label>
+        <button className="btn small" onClick={save}>Save</button>
       </div>
       <ErrorNote error={error} />
     </div>

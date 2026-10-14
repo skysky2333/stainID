@@ -22,6 +22,10 @@ DEFAULTS: dict = {
     # How donor ids are written when the guided setup reads TMA maps and case sheets: plain numbers with at least `digits`
     # digits (698 -> 0698; 0 keeps them as typed), prefixed ones as <PREFIX>_<number with `prefixed_digits` digits> (JOG3 -> JOG_003).
     "donor_ids": {"digits": 4, "prefixed_digits": 3},
+    # How the guided setup names a core's donor-region (sample_region_id) when no saved TMA map shows the project's own
+    # naming: <plain_prefix or prefixed_prefix><donor_id>_<region name, or its code with region: code>. The default gives
+    # 1673_frontal, as when the column is left empty; plain_prefix BRC_ with region code gives BRC_1673_FR and JOG_003_FR.
+    "sample_region_ids": {"plain_prefix": "", "prefixed_prefix": "", "region": "name"},
     "analysis": {"tiles": "whole_core"},
     # Probability a NeuN candidate or tau-neuron candidate needs to be counted. null keeps the cut-off stored in the model.
     # Random audits of accepted objects found many non-neurons at the model defaults (NeuN 0.5, AT8 0.4):

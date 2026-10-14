@@ -52,6 +52,7 @@ function CellReading({ cell }: { cell: MapCell }) {
     <span title={cell.note}>
       <b>{cell.donor_id}</b> {cell.region || <i>no region</i>}{cell.disease_group ? ` · ${cell.disease_group}` : ''}{pathology}
       {cell.note && <span className="cell-note"> · {cell.note}</span>}
+      {cell.sample_region_id && <span className="muted sample-id"> {cell.sample_region_id}</span>}
     </span>
   )
 }

@@ -189,3 +189,29 @@ def test_choosing_and_saving_donors(tmp_path):
     table = {r["donor_id"]: r for r in donors.read_donor_table(path)}
     assert table["0001"]["age"] == "70" and table["1673"]["disease_group"] == "CT" and path.read_text().startswith("donor_id,tma,disease_group,age")
     assert donors.save_donors(path, kept, "replace") == 3
+
+
+# ---------------------------------------------------------------- sample-region ids
+
+PROJECT_LAYOUT = [{"tma": "1", "core_label": "A-1", "donor_id": "1673", "region": "frontal", "sample_region_id": "BRC_1673_FR"},
+                  {"tma": "1", "core_label": "B-1", "donor_id": "1673", "region": "occipital", "sample_region_id": "BRC_1673_OCC"},
+                  {"tma": "1", "core_label": "C-1", "donor_id": "JOG_003", "region": "frontal", "sample_region_id": "JOG_003_FR"},
+                  {"tma": "1", "core_label": "D-1", "donor_id": "", "region": "", "sample_region_id": ""}]
+
+
+def test_sample_region_ids_follow_the_projects_saved_maps():
+    rule = maps.infer_sample_ids(PROJECT_LAYOUT)
+    assert (rule.source, rule.plain_prefix, rule.prefixed_prefix, rule.regions) == ("layout", "BRC_", "", {"frontal": "FR", "occipital": "OCC"})
+    cells = {c["label"]: c for c in maps.parse_map([["2002 FR AD", "JOG7 OC C AD", "2002 frontal", "2003 TEMP", "CBLM"]], GROUPS, sample_ids=rule)}
+    assert [cells[p]["sample_region_id"] for p in ("A-1", "B-1", "C-1", "D-1", "E-1")] == ["BRC_2002_FR", "JOG_007_OCC", "BRC_2002_FR", "BRC_2003_TEMP", ""]
+    assert maps.layout_rows("9", [cells["A-1"]])[0]["sample_region_id"] == "BRC_2002_FR"
+
+
+def test_sample_region_ids_without_saved_maps_use_the_setting():
+    from stainid.project import DEFAULTS
+
+    rule = maps.sample_ids_for(DEFAULTS, [])
+    assert rule.source == "setting" and rule.make("1673", "frontal", "FR") == "1673_frontal"  # the same as an empty column gives
+    coded = maps.sample_ids_for({"sample_region_ids": {"plain_prefix": "BRC_", "region": "code"}}, [])
+    assert (coded.make("1673", "frontal", "FR"), coded.make("JOG_003", "frontal", "FR"), coded.make("1141", "hippocampus", "")) == \
+        ("BRC_1673_FR", "JOG_003_FR", "BRC_1141_HIP")

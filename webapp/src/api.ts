@@ -64,11 +64,15 @@ export interface SlideReport {
 export interface CoresInfo { slides: SlideReport[]; rows: number; columns: number; orientations: Record<string, string> }
 export interface MapCell {
   label: string; raw: string; donor_id: string; region: string; region_code: string; disease_group: string; cerad: string; braak: string
-  pathology_raw: string; tissue_control: string; note: string
+  pathology_raw: string; tissue_control: string; note: string; sample_region_id?: string
 }
+export interface SampleIdRule { plain_prefix: string; prefixed_prefix: string; region: 'name' | 'code'; regions: Record<string, string>; source: 'layout' | 'setting'; examples: string[] }
 export interface MapSummary { positions: number; cores: number; donors: number; controls: number; empty: number; unreadable: number; groups: string[]; regions: string[] }
 export interface MapTma { tma: string; size: [number, number]; slides: string[]; positions: string[]; saved: MapSummary | null; sources: string[] }
-export interface MapOverview { tmas: MapTma[]; path: string; id_style: { digits?: number; prefixed_digits?: number }; tma_prefix: string }
+export interface MapOverview {
+  tmas: MapTma[]; path: string; id_style: { digits?: number; prefixed_digits?: number }; tma_prefix: string
+  sample_ids: SampleIdRule; sample_ids_setting: { plain_prefix?: string; prefixed_prefix?: string; region?: string }
+}
 export interface ParsedMap { cells: MapCell[]; summary: MapSummary }
 export interface FoundMap extends ParsedMap { name: string; source: string; tma: string; grid: string[][] }
 export interface SavedMap extends ParsedMap { tma: string; size: [number, number]; grid: string[][]; saved: boolean }

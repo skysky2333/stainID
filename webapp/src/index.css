@@ -389,3 +389,4 @@ details.advanced[open] > summary { border-bottom: 1px solid var(--border); }
 .step-card .live-line, .step-card > .error-note, .step-card > .warning-note { margin-left: 22px; }
 .workflow-summary .progress { max-width: 420px; }
 .run-all { display: grid; gap: 4px; justify-items: end; }
+.sample-id { display: block; font-size: 11px; }

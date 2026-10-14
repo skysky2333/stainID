@@ -13,17 +13,21 @@ TMA's rows into the project's `tma_layout` (the other TMAs are kept).
 from __future__ import annotations
 
 import re
+from collections import Counter
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from stainid.setup.files import Table
 from stainid.setup.naming import (
     EMPTY_MARKS,
+    REGIONS,
     Groups,
     IdStyle,
     clean,
     control_tissue,
     donor_id,
     find_pathology,
+    id_prefix,
     key,
     region_name,
     tma_number,
@@ -34,7 +38,7 @@ from stainid.tables import read_csv, write_csv
 TITLE = re.compile(r"\b(TMA|LIP|MAP|ARRAY|SLIDE|BLOCK|LAYOUT)\b", re.I)
 CELL_ID = re.compile(r"([A-Z]*?)(\d+)([A-Z]*)")
 UNREADABLE = "The donor could not be read from this cell"
-LAYOUT_COLUMNS = list(REQUIRED_COLUMNS) + ["tissue_control", "cerad", "braak", "map_source", "map_pathology_raw"]
+LAYOUT_COLUMNS = list(REQUIRED_COLUMNS) + ["sample_region_id", "tissue_control", "cerad", "braak", "map_source", "map_pathology_raw"]
 
 
 def column_label(index: int) -> str:
@@ -189,11 +193,74 @@ def read_maps(tables: list[Table], groups: Groups, known_tmas: list[str] = ()) -
     return maps
 
 
+# ---------------------------------------------------------------- sample-region ids
+
+@dataclass(frozen=True)
+class SampleIds:
+    """How a core's donor-region is named (`sample_region_id`): <prefix><donor_id>_<region>. `plain_prefix` goes before
+    plain numeric donor ids (BRC_1673_FR), `prefixed_prefix` before ids that already carry one (JOG_003_FR); the region
+    is its name (frontal) or its code (FR), or what `regions` says for it. `source` says where the rule comes from:
+    "layout" (learned from the saved map rows) or "setting" (`sample_region_ids` in stainid.yaml)."""
+    plain_prefix: str = ""
+    prefixed_prefix: str = ""
+    region: str = "name"  # name | code
+    regions: dict = field(default_factory=dict)
+    source: str = "setting"
+
+    @classmethod
+    def from_config(cls, config: dict) -> SampleIds:
+        rule = config.get("sample_region_ids") or {}
+        return cls(str(rule.get("plain_prefix", "")), str(rule.get("prefixed_prefix", "")), str(rule.get("region", "name")))
+
+    def make(self, donor: str, region: str, region_code: str = "") -> str:
+        if not donor:
+            return ""
+        if region in self.regions:
+            suffix = self.regions[region]
+        elif self.region == "code":
+            suffix = key(region_code) if region_code and key(region_code) != key(region) else REGIONS.get(region, (key(region),))[0]
+        else:
+            suffix = region
+        prefix = self.prefixed_prefix if id_prefix(donor) else self.plain_prefix
+        return f"{prefix}{donor}_{suffix}" if suffix else f"{prefix}{donor}"
+
+    def describe(self) -> dict:
+        return {"plain_prefix": self.plain_prefix, "prefixed_prefix": self.prefixed_prefix, "region": self.region, "regions": self.regions,
+                "source": self.source, "examples": [self.make("1673", "frontal", "FR"), self.make("JOG_003", "occipital", "OCC")]}
+
+
+def infer_sample_ids(rows: list[dict[str, str]], fallback: SampleIds = SampleIds()) -> SampleIds:
+    """The naming the saved map rows use, e.g. BRC_1673_FR and JOG_003_OCC -> plain prefix "BRC_", region codes
+    frontal -> FR, occipital -> OCC. `fallback` when no row shows it."""
+    plain, prefixed, suffixes = Counter(), Counter(), {}
+    for row in rows:
+        donor, region, sample = row.get("donor_id", ""), row.get("region", ""), row.get("sample_region_id", "")
+        at = sample.find(f"{donor}_") if donor and sample else -1
+        if at < 0:
+            continue
+        (prefixed if id_prefix(donor) else plain)[sample[:at]] += 1
+        suffixes.setdefault(region, Counter())[sample[at + len(donor) + 1:]] += 1
+    if not suffixes:
+        return fallback
+    regions = {region: counts.most_common(1)[0][0] for region, counts in suffixes.items() if region}
+    coded = any(suffix != region for region, suffix in regions.items())
+    pick = lambda counts, default: counts.most_common(1)[0][0] if counts else default  # noqa: E731
+    return SampleIds(pick(plain, fallback.plain_prefix), pick(prefixed, fallback.prefixed_prefix), "code" if coded else "name", regions, "layout")
+
+
+def sample_ids_for(config: dict, layout: list[dict[str, str]]) -> SampleIds:
+    """The project's rule: learned from its saved map rows when they show one, else its `sample_region_ids` setting."""
+    return infer_sample_ids(layout, SampleIds.from_config(config))
+
+
 # ---------------------------------------------------------------- parsed maps and the layout file
 
-def parse_map(grid: list[list[str]], groups: Groups, style: IdStyle = IdStyle()) -> list[dict]:
-    """Every cell of a map grid, read, with its core label."""
-    return [{"label": position(r, c), **parse_cell(text, groups, style)} for r, row in enumerate(grid) for c, text in enumerate(row)]
+def parse_map(grid: list[list[str]], groups: Groups, style: IdStyle = IdStyle(), sample_ids: SampleIds = SampleIds()) -> list[dict]:
+    """Every cell of a map grid, read, with its core label and sample-region id."""
+    cells = [{"label": position(r, c), **parse_cell(text, groups, style)} for r, row in enumerate(grid) for c, text in enumerate(row)]
+    for cell in cells:
+        cell["sample_region_id"] = sample_ids.make(cell["donor_id"], cell["region"], cell["region_code"])
+    return cells
 
 
 def summary(cells: list[dict]) -> dict:
@@ -207,7 +274,8 @@ def summary(cells: list[dict]) -> dict:
 def layout_rows(tma: str, cells: list[dict], source: str = "") -> list[dict[str, str]]:
     """Rows of `tma_layout` for one TMA (one per map position)."""
     return [{"tma": str(tma), "core_label": c["label"], "donor_id": c["donor_id"], "region": c["region"],
-             "disease_group": c["disease_group"] if c["donor_id"] else "", "tissue_control": c["tissue_control"],
+             "disease_group": c["disease_group"] if c["donor_id"] else "", "sample_region_id": c.get("sample_region_id", ""),
+             "tissue_control": c["tissue_control"],
              "cerad": c["cerad"], "braak": c["braak"], "map_source": source, "map_pathology_raw": c.get("pathology_raw", "")}
             for c in cells]
 
