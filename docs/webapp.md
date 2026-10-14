@@ -30,29 +30,52 @@ one person had pressed both.
 | | Where | What you do |
 |---|---|---|
 | 1 | Welcome screen | Create a project: a study name and an empty folder. |
-| 2 | **Settings** | Rows and columns of cores per slide, the core-name prefix (`LIP-` gives cores like `LIP-3_B-2`) and the diagnostic groups (code, label, colour, plot order). |
+| 2 | **Guided setup** | Slides, cores, TMA maps, donor information and checks, in six short screens (see [The guided setup](#the-guided-setup)); it ends with *Run everything*. |
 | 3 | **Models** | Download the published models. Add the NeuN, 6E10 and AT8 models, or train them (see [Training a model](#training-a-model)). |
-| 4 | **Workflow** | Register the slides, upload the TMA map, then run the steps from top to bottom (or press *Run all remaining steps*). |
+| 4 | **Workflow** | Follow the steps as they run; run any step on its own with its options. |
 | 5 | **Cohort & cores** | Look at the detections on the tissue, core by core. |
 | 6 | **Labels** | Review fields (alone or with others) to measure how accurate the detections are and to collect labels for training. |
 | 7 | **Results** | Download the results table (one row per donor and region) and read what every column means. |
 
+## The guided setup
+
+*Guided setup* (in the sidebar; Home leads a new project there, and *Add slides* on Home opens it later) has six short
+screens. Each shows what stainID worked out by itself and asks only for what it could not; file locations, full tables,
+step options and logs are folded under **Advanced** on each screen. The steps along the top show how far each screen
+has got, and any screen can be opened again later.
+
+| Screen | What stainID does | What you do |
+|---|---|---|
+| **Slides** | Lists the scans in the slides folder and reads the TMA number and stain from each file name (`TMA LIP-3 AT8.vsi` → TMA 3, AT8); suggests the core-name prefix (`LIP-`). New scans are marked *new*. | Check the table, correct anything it got wrong, *Save and continue*. |
+| **Cores** | *Find cores* fits the grid of cores on every slide. A slide without its own rows and columns gets the size that fits best (the project's size unless another fits clearly better); the size is written to the slides table. One picture per slide shows the fitted grid, with how well it fits. | *Looks right*, or *Fix*: give the slide its rows and columns, or say it lies turned (180°) or mirrored, and its cores are found again. |
+| **Map** | Reads the maps from the files you add: Excel sheets, Word tables, CSV, or cells pasted from a spreadsheet. A map is a grid like the array (rows 1, 2, … columns A, B, …); a cell names the donor and region, and usually the group and pathology (`1673 FR` / `AD` / `C:C - B:6`), on one to three lines or over three table rows per map row. Stray spaces (`17 00 FR`, `OC C`), en dashes, prefixed ids (`JOG3 FR` → `JOG_003`) and control cores (`CBLM`, `STOM`) are read through. Each map is guessed to the TMA in its name. | Check the preview grid (cells it could not read have a yellow edge; type into any cell to correct it) and save it as the map of its TMA. A map that is only a photo: *Type it in* opens an empty grid with a picture of the core at each position. |
+| **Donors** (optional) | Reads the case sheet: finds the header row by its column names and matches each column (donor id, group, age, sex, race, PMI/PMD, APOE, CERAD, Braak, TMA, diagnoses …); section rows (“CONTROL <65 (90 cases)”) give the group, a repeated header (“JOG#”) starts its own id series, “~15” and “>90” are read as numbers (kept as written beside them). Keeps the donors on the maps and on the study's TMAs. | Check the preview and *Save*. Under Advanced: change a column match, keep every donor, replace instead of update. |
+| **Checks** | Compares the map, the donor table and the slides: TMAs with slides but no map, core positions not on the map (which would stop *Attach TMA map*), donors on the map but not in the sheet and the other way round, TMA, group and pathology disagreements (“Donor 2323: map says CERAD B, donor table says 0. Use the donor table?”), ids used twice in the sheet (keep the row on the map's TMA), donor-regions with one core where replicates are the rule, new group codes. | Press the fix next to each one, or correct the file. |
+| **Run** | Lists the steps left and estimates how long they take on this computer (from the number of slides, cores and tiles and whether there is a GPU). | *Run everything*. |
+
+The setup writes the same files as the step cards (`slides.csv`, `tma_layout.csv`, `donor_metadata.csv`): saving a map
+replaces that TMA's rows and keeps the others; saving donors updates the table. Donor ids follow one rule for maps and
+sheets (*Map → Advanced → How donor ids are written*, `donor_ids` in `stainid.yaml`).
+
 ## The Workflow page
 
-- **Pipeline map.** Every step is a box, arranged in the order steps can run. An arrow means "needs the result of".
-  Colours show done, partly done, running, waiting, failed and "made with an older model". Hover over a step to
-  highlight what it needs and what needs it; click it to open its card.
-- **Now running.** Running and waiting steps, with progress, elapsed time, time left and why a step is waiting.
-  *Run all remaining steps* queues every unfinished step (except the optional outlines).
-- **Step cards**, one per step, in order. Finished steps fold away. Each card shows:
+- **Summary.** How many steps are done, the next one, and **Run all remaining steps** (with a rough time), which queues
+  every unfinished step except the optional outlines.
+- **Now running** (while something runs): progress, elapsed time, time left and why a step is waiting.
+- **Steps**, one row each, in order: what it does, its progress, its state and one button (*Run*, *Continue*,
+  *Run again* or *Stop*). A step that cannot start yet says what it needs first; a failed step says why in plain words.
+  Click a step for its details:
   - what the step does and how long it takes;
   - **Needs** and **Makes**: every file with its location and whether it exists. A missing file has a button: go to
     the step that makes it, download it, or show the expected format and a template;
-  - options, with advanced ones hidden;
-  - Run / Continue / Run again, a progress bar, *Show log*, and a plain-language reason when a step fails.
+  - options, with advanced ones hidden, and *Run with these options*;
+  - *Show log*.
+- **Pipeline map** (folded): every step as a box in the order steps can run; an arrow means "needs the result of".
+  Colours show done, partly done, running, waiting, failed and "made with an older model".
+- **All jobs** (folded): every run with its command and log.
 
-The *Register slides* card holds the slides-table editor, and the *Attach TMA map* card holds the template download and
-the CSV upload.
+The *Register slides* step holds the slides-table editor, and *Attach TMA map* the template download and the CSV
+upload, for those who prefer them to the guided setup.
 
 ## How steps run
 
@@ -109,7 +132,7 @@ the sign-in as a token instead of a cookie.
 
 | Page | What it is for |
 |---|---|
-| **Home** | Your next step (with a button to it), a checklist of every step, cohort numbers and recent jobs. |
+| **Home** | Your next step (the guided setup while the study is not set up, or new slides to add), a checklist of every step, cohort numbers and recent jobs. |
 | **Cohort & cores** | Every core of every TMA; click one to see the whole core, then click any spot for a full-resolution preview (220–660 µm) with the AI detections where detection has run and the DAB layer. Only the preview is sent over the network, never the whole scan. The analysed fields themselves are reviewed on Labels. |
 | **Stain thresholds** | The DAB threshold of every slide and why it exists. |
 | **Labels** | Labelling progress per stain, how often people and the AI agree, the labelling sessions (create, start, stop, share the link, follow people, download) and all labels as CSV. |

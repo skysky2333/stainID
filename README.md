@@ -23,7 +23,8 @@ slides. Every step is also a `stainid` command.
 | | Where it comes from |
 |---|---|
 | **Slide scans**, one per TMA and stain (`.vsi`, `.svs`, `.ndpi`, `.czi`, `.tif`, …) | your scanner |
-| **TMA map**: which donor, brain region and diagnostic group sits at each core position | a CSV you fill in; the app gives a template with every core position listed |
+| **TMA map**: which donor, brain region and diagnostic group sits at each core position | the maps your lab already has (Excel, Word or CSV), read by the guided setup; a map that is only a photo is typed into a grid |
+| Donor information, optional (age, sex, APOE, PMI, …) | your case spreadsheet, read by the guided setup |
 | **Stain models** (NeuN, 6E10, AT8) | trained in the app on objects you label, or copied from an earlier study with the same staining |
 | **Published models** (Cellpose-SAM, Segment Anything, Phikon) | downloaded by the app (Models page) |
 | Published plaque CNN weights (Wong et al. 2022; Tang et al. 2019), optional, used by the 6E10 model | copied by hand into `data/models/plaque_cnn` (they have no download link) |
@@ -39,11 +40,14 @@ slides. Every step is also a `stainid` command.
    closing it stops running steps.
 3. **Create a project** on the welcome screen: a study name and an empty folder. Settings, core images and results
    for the study are all kept in that folder.
-4. **Describe your TMAs** on the Settings page: rows and columns of cores per slide, the core-name prefix and the
-   diagnostic groups.
-5. **Run the Workflow page from top to bottom.** Each step says what it needs, what it makes and where the files go.
-   Anything missing has a button next to it: go to the step that makes it, download it, or get a template.
-   *Run all remaining steps* queues everything in the right order.
+4. **Follow the guided setup** (Home → *Start the guided setup*). Six short screens: the slides are matched to
+   their TMA and stain from the file names, the cores are found on each slide (the grid size too), the TMA maps and
+   the donor sheet are read from the files your lab keeps them in, and a check says in plain words what does not fit
+   together. You confirm what was found; every technical detail is under *Advanced*. *Run everything* then starts
+   all the analysis steps. Adding slides later works the same way (Home → *Add slides*); see
+   [Adding new slides to a study](docs/guide_adding_slides.md).
+5. **Follow the run on the Workflow page.** Each step shows its progress; *Details* shows what it needs, what it
+   makes, where the files go, its options and its log, and any step can be run on its own.
 6. **Check and use the results.** Look at detections on the tissue (Cohort & cores), review fields alone or with
    others through a link to measure accuracy and collect labels (Labels), train better models from those labels
    (Models), and download the results table (Results).
@@ -55,7 +59,7 @@ The Help page in the app has the same guide, answers to common questions and a g
 | | Step | What it does | Command |
 |---|---|---|---|
 | **Slides** | Register slides | say which scan is which TMA and stain (guessed from file names) | *web app* |
-| | Find cores | fit the TMA grid on each slide | `stainid dearray` |
+| | Find cores | fit the TMA grid on each slide (the grid size is found when a slide has none set) | `stainid dearray` |
 | | Attach TMA map | donor, brain region and diagnostic group for each core | `stainid layout` |
 | | Export cores | native-resolution core images | `stainid export` |
 | | Check core quality | tissue coverage, fragments, focus | `stainid qc` |
@@ -110,10 +114,11 @@ front end.
 
 Read in this order:
 
-1. [Using the app](docs/webapp.md): every page, how steps are queued, labelling and training models.
-2. [Project files](docs/project.md): the project settings (`stainid.yaml`), the input tables and every output file.
-3. [Methods](docs/pipelines.md): what each step computes, with its parameters, and the models.
-4. [Development](docs/development.md): tests, front end, the API and adding a step.
+1. [Adding new slides to a study](docs/guide_adding_slides.md): the guided setup, step by step, for people new to stainID.
+2. [Using the app](docs/webapp.md): every page, how steps are queued, labelling and training models.
+3. [Project files](docs/project.md): the project settings (`stainid.yaml`), the input tables and every output file.
+4. [Methods](docs/pipelines.md): what each step computes, with its parameters, and the models.
+5. [Development](docs/development.md): tests, front end, the API and adding a step.
 
 ## Repository layout
 

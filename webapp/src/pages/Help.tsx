@@ -5,8 +5,13 @@ import { GLOSSARY } from '../glossary'
 import { useProject } from '../project'
 
 const FAQ: [string, React.ReactNode][] = [
-  ['What do I need to start?', <>Your slide scans (one per TMA and stain), and a spreadsheet saying which donor, brain region and diagnostic group sits at each core position.
-    Create a project, then follow the <Link to="/workflow">Workflow</Link> page from the top.</>],
+  ['What do I need to start?', <>Your slide scans (one per TMA and stain) and the TMA maps saying which donor sits at each core position, in whatever form your lab keeps
+    them (Excel, Word, CSV, or a photo you type in); optionally the case spreadsheet with donor information. Create a project, then follow
+    the <Link to="/setup">guided setup</Link>.</>],
+  ['How do I add new slides?', <>Copy the scans into the slides folder and press <b>Add slides</b> on Home: the <Link to="/setup/slides">guided setup</Link> lists the new
+    scans, finds their cores and reads their maps, then <b>Run everything</b> analyses them. The study's other slides are left as they are.</>],
+  ['Find cores put the circles in the wrong places.', <>Open the <Link to="/setup/cores">Cores</Link> screen of the guided setup and press <b>Fix</b> under that slide:
+    enter its rows and columns, or say that it lies turned or mirrored, and its cores are found again.</>],
   ['How long does a full study take?', <>Setting up (finding and exporting cores) takes about an hour for 20 slides. Detection is the slow part: roughly a minute per field
     and stain on a laptop, so a few hours to a day for a large study. Everything is resumable, so you can stop and continue later.</>],
   ['What runs when? Why does a step say “Waiting to start”?', <>You can press Run on several steps at once; stainID starts them in the right order.
@@ -44,9 +49,10 @@ export default function Help() {
           <h2>Getting started</h2>
           <ol className="guide">
             <li><b>Create a project</b> for your study (Settings → Open or create another project). All files for the study are kept in its folder{info ? <> — currently <code>{info.root}</code></> : null}.</li>
-            <li><b>Describe your TMAs</b> in <Link to="/settings">Settings</Link>: rows and columns of cores per slide, the name prefix, and the diagnostic group codes.</li>
+            <li><b>Follow the <Link to="/setup">guided setup</Link></b>: slides → cores → TMA maps → donor information → checks → run. Each screen shows what stainID found
+              by itself; you confirm or correct it. The details are under “Advanced”.</li>
             <li><b>Get the models</b> on <Link to="/models">Models</Link>: download the published ones; put in (or train) the NeuN / 6E10 / AT8 models.</li>
-            <li><b>Follow the Workflow</b> from the top: register slides → find cores → attach the TMA map → export cores → check quality → choose fields → calibrate → detect → results.</li>
+            <li><b>Follow the run</b> on the <Link to="/workflow">Workflow</Link> page; any step can also be run on its own with its options.</li>
             <li><b>Check</b> detections in <Link to="/cohort">Cohort</Link> and by reviewing fields on <Link to="/labels">Labels</Link>.</li>
             <li><b>Use the results</b>: download the main table on <Link to="/results">Results</Link>, which also explains every column.</li>
           </ol>

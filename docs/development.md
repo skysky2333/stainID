@@ -39,6 +39,23 @@ React 19 + TypeScript + Vite, with no UI framework:
 | `src/components.tsx`, `src/charts.tsx` | shared pieces (help boxes, folder picker, path lines, option fields, charts) |
 | `src/pages/` | one file per page |
 
+## The guided setup
+
+The guided setup (web app `/setup`, API `/api/setup/...` in `stainid/api/routes/setup.py`) only calls library
+functions in `stainid/setup`, each tested on its own:
+
+| module | |
+|---|---|
+| `files.py` | Excel, Word (.docx tables, read from the zip's XML), CSV and pasted text into rows of cell texts |
+| `naming.py` | donor ids, brain regions, diagnostic groups and CERAD / Braak as people type them |
+| `maps.py` | TMA map grids (cells over one to three lines or table rows) into `tma_layout` rows, one TMA at a time |
+| `donors.py` | the case sheet: header found by its column names, section rows, id series, approximate values |
+| `checks.py` | map, donor table and slides compared, as issues with fixes (`find_issues`, `apply_fix`) |
+| `guide.py` | the state of each setup screen, the slide reports of *Find cores*, the run-time estimate |
+
+Grid-size detection is in `stainid/slides/dearray.py` (`choose_grid`, `grid_score`). To try the setup by hand or
+take its screenshots, `tools/demo/make_setup_demo.py OUT_DIR` makes a synthetic study that is not set up yet.
+
 ## Adding a workflow step
 
 1. Implement it in `stainid/workflows/<step>.py` as a function of a `Project`. Print one `[i/n] …` line per unit of

@@ -19,6 +19,7 @@ tma:
   prefix: TMA-               # core names are <prefix><tma>_<column><row>, e.g. TMA-3_B-2
   rows: 5                    # core grid on each slide
   columns: 6
+donor_ids: {digits: 4, prefixed_digits: 3}   # how the guided setup writes donor ids: 698 -> 0698, JOG3 -> JOG_003
 groups:                      # diagnostic group codes used in the TMA map, in plot order
   - {code: CT, label: Control, color: 3}     # color = palette slot 1-8 (optional)
   - {code: AD, label: Alzheimer disease}
@@ -73,8 +74,8 @@ steps.
 
 | Table | Made by |
 |---|---|
-| `tma_layout.csv` | you (template on the *Attach TMA map* card) |
-| `donor_metadata.csv` | you, optional: only used by your own downstream statistics |
+| `tma_layout.csv` | the guided setup's Map screen (from your Excel, Word or CSV maps), or you (template on the *Attach TMA map* card) |
+| `donor_metadata.csv` | optional: the guided setup's Donors screen (from your case sheet), or you; only used by your own downstream statistics |
 | `manual_exclusions` | you, optional |
 | `slides.csv` | *Register slides* |
 | core table (`core_manifest`) | *Find cores*, then updated by *Attach TMA map*, *Export cores* and *Check core quality* |
@@ -82,9 +83,14 @@ steps.
 | whole-core tiles (`whole_core_manifest`) | *Cut whole cores into tiles* |
 | `calibration` | *Calibrate stain thresholds* |
 
-**`slides.csv`**: one row per scan, written by the *Register slides* step: `slide_path`, `tma`, `stain`. Optional
-`rows` and `columns` give a slide its own core grid when it differs from the project's TMA layout (e.g. a 4 x 6 array
-in a 5 x 6 study); empty means the project setting.
+**`slides.csv`**: one row per scan, written by the *Register slides* step: `slide_path`, `tma`, `stain`. Optional:
+
+| column | |
+|---|---|
+| `rows`, `columns` | the slide's own core grid (e.g. a 4 x 6 array in a 5 x 6 study). Empty: *Find cores* tries the project's size and the sizes around the number of core rows and columns it counts (2-12 each), keeps the best fit (the project's size unless another fits clearly better) and writes it here |
+| `grid_source` | `auto` (found by *Find cores*) or `manual` (set by you, e.g. on the Cores screen); a size that is set is always used as it is |
+| `orientation` | empty (as scanned), `rotate_180`, `flip_left_right` or `flip_top_bottom` when the slide lies turned or mirrored, so that A-1 is the map's top-left position |
+
 Supported scan formats are those Bio-Formats reads: `.vsi`, `.svs`, `.ndpi`, `.scn`, `.mrxs`, `.czi`, `.tif`.
 
 **`tma_layout.csv`**: one row per core position of the TMA map. The web app offers a template with every position
@@ -94,7 +100,8 @@ found by *Find cores* already listed.
 |---|---|
 | `tma`, `core_label` | array and position (e.g. `B-2`) |
 | `donor_id`, `region`, `disease_group` | sample identity |
-| `tissue_control` | non-empty for control / orientation cores |
+| `tissue_control` | non-empty for control / orientation cores (e.g. `CBLM`) |
+| `map_source`, `map_pathology_raw` | optional; the file the map was read from and the pathology as written |
 | `cerad`, `braak` | optional neuropathology |
 | `sample_region_id` | optional; defaults to `<donor_id>_<region>` |
 
@@ -126,7 +133,7 @@ core-image pixel coordinates) to drop before measurement.
 | `outputs.fields` | `parts/<core>_<stain>_{features,objects}.csv`: 6E10 plaques, AT8 tau neurons and field summaries |
 | `outputs.masks` | per-core SAM outlines and shape features |
 | `outputs.tables` | `results_<level>.csv` (every stain in one table) and `neun_`, `fields_`, `masks_<level>.csv` (level = `donor_region` or `core`) |
-| `outputs.qc` | `grids/<slide>.jpg`: the fitted core grid on every slide |
+| `outputs.qc` | `grids/<slide>.jpg`: the fitted core grid on every slide; `grids/<slide>.json`: the grid size, how it was chosen, how well it fits (and whether someone marked it as right); `grids/previews/<slide>.jpg`: the plain slide picture behind the core thumbnails |
 | `outputs.trained_models` | `<stain>_<time>/bundle.joblib` and `report.json` for every model trained in the app |
 | `outputs.reviews` | `reviews/<name>/`: review sets (see [webapp.md](webapp.md)) |
 | `outputs.jobs` | job records and logs from the web app |
