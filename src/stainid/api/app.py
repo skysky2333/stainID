@@ -1,10 +1,12 @@
 """FastAPI application: JSON API under /api and the built React app at /."""
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -26,6 +28,11 @@ def create_app() -> FastAPI:
         if request.url.path.startswith("/api") and not PUBLIC_API.match(request.url.path) and not is_admin(request):
             return JSONResponse({"detail": "admin sign-in required"}, status_code=401)
         return await call_next(request)
+
+    origins = [o.strip().rstrip("/") for o in os.environ.get("STAINID_ALLOW_ORIGINS", "").split(",") if o.strip()]
+    if origins:  # a web app served from these addresses may use this server (`stainid serve --allow-origin`)
+        app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"],
+                           allow_headers=["Authorization", "Content-Type"])
 
     if (STATIC / "index.html").exists():
         app.mount("/assets", StaticFiles(directory=STATIC / "assets"), name="assets")

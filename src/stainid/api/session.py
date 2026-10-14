@@ -3,6 +3,10 @@
 The admin password guards the whole app; it is `admin` until changed and is stored hashed in ~/.stainid/admin.json.
 While it is still the default, the admin may only sign in from this computer. Annotators register with a name on the
 public /annotate pages; both identities travel in signed cookies, so the server attributes every annotation.
+
+A web app served from another address (see `stainid serve --allow-origin`) cannot use this server's cookies, so signing
+in also returns the same identities as a token, which it sends as `Authorization: Bearer <token>`, or as
+`?access_token=<token>` on the images and downloads a browser fetches by itself.
 """
 from __future__ import annotations
 
@@ -72,8 +76,26 @@ def is_local(request: Request) -> bool:
     return request.client is not None and request.client.host in LOCAL_HOSTS
 
 
+def _token_parts(request: Request) -> dict[str, str]:
+    """The identities in the request's token: {"admin": ..., "annotator": ...} (see `session_token`)."""
+    header = request.headers.get("authorization", "")
+    token = header[7:].strip() if header[:7].lower() == "bearer " else ""
+    if not token and request.method in ("GET", "HEAD"):
+        token = request.query_params.get("access_token", "")
+    return dict(part.split(".", 1) for part in token.split(",") if "." in part)
+
+
+def session_token(admin: bool, annotator: str | None) -> str:
+    """Who the caller is, for a web app served elsewhere: the admin and annotator credentials joined by a comma."""
+    parts = [f"admin.{admin_token()}"] if admin else []
+    return ",".join(parts + ([f"annotator.{sign_annotator(annotator)}"] if annotator else []))
+
+
 def is_admin(request: Request) -> bool:
-    return hmac.compare_digest(request.cookies.get(ADMIN_COOKIE, ""), admin_token())
+    if default_password() and not is_local(request):
+        return False
+    token = admin_token()
+    return hmac.compare_digest(request.cookies.get(ADMIN_COOKIE, ""), token) or hmac.compare_digest(_token_parts(request).get("admin", ""), token)
 
 
 def require_admin(request: Request) -> None:
@@ -86,7 +108,10 @@ def sign_annotator(name: str) -> str:
 
 
 def annotator_name(request: Request) -> str | None:
-    token = request.cookies.get(ANNOTATOR_COOKIE, "")
+    return _annotator(request.cookies.get(ANNOTATOR_COOKIE, "")) or _annotator(_token_parts(request).get("annotator", ""))
+
+
+def _annotator(token: str) -> str | None:
     if "." not in token:
         return None
     encoded, signature = token.rsplit(".", 1)

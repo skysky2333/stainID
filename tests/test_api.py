@@ -217,3 +217,44 @@ def test_core_region_preview_and_detections(client):
     image = client.get("/api/images/cores/LIP-1_B-2/6E10/region.jpg?x=0&y=0&size=256")
     assert image.status_code == 200 and image.headers["content-type"] == "image/jpeg"
     assert client.get("/api/images/cores/LIP-1_B-2/6E10/region_dab.png?x=0&y=0&size=256").status_code == 200
+
+
+def test_tokens_for_a_web_app_served_elsewhere(client):
+    """Bearer tokens (and `access_token` on plain GETs) carry the same identities as the cookies."""
+    remote = TestClient(client.app)  # another computer, without cookies
+    local_token = client.post("/api/session/admin", json={"password": "admin"}).json()["token"]
+    assert remote.get("/api/session", headers={"Authorization": f"Bearer {local_token}"}).json()["admin"] is False  # default password
+    assert client.put("/api/session/admin/password", json={"current": "admin", "new": "s3cret-pw"}).status_code == 200
+    token = remote.post("/api/session/admin", json={"password": "s3cret-pw"}).json()["token"]
+    remote.cookies.clear()
+    bearer = {"Authorization": f"Bearer {token}"}
+    assert remote.get("/api/cores").status_code == 401
+    assert remote.get("/api/session", headers=bearer).json()["admin"] is True
+    assert remote.get("/api/cores", headers=bearer).status_code == 200
+    assert remote.get("/api/cores", params={"access_token": token}).status_code == 200
+    assert remote.post("/api/project/open", params={"access_token": token}, json={"path": "."}).status_code == 401  # GET only
+    assert remote.get("/api/cores", headers={"Authorization": "Bearer admin.forged"}).status_code == 401
+
+    both = remote.post("/api/session/annotator", json={"name": "Ann, Lee"}, headers=bearer).json()["token"]
+    remote.cookies.clear()
+    session = remote.get("/api/session", headers={"Authorization": f"Bearer {both}"}).json()
+    assert session["admin"] is True and session["annotator"] == "Ann, Lee"
+    signed_out = remote.delete("/api/session/admin", headers={"Authorization": f"Bearer {both}"}).json()["token"]
+    session = remote.get("/api/session", headers={"Authorization": f"Bearer {signed_out}"}).json()
+    assert session["admin"] is False and session["annotator"] == "Ann, Lee"
+
+
+def test_cross_origin_requests_only_for_allowed_origins(client, monkeypatch):
+    preflight = {"Origin": "http://lab-pc:8080", "Access-Control-Request-Method": "GET", "Access-Control-Request-Headers": "authorization"}
+    assert "access-control-allow-origin" not in client.options("/api/session", headers=preflight).headers
+    assert "access-control-allow-origin" not in client.get("/api/session", headers={"Origin": "http://lab-pc:8080"}).headers
+
+    monkeypatch.setenv("STAINID_ALLOW_ORIGINS", "http://lab-pc:8080/, https://stainid.example.org")
+    app = TestClient(create_app(), client=("127.0.0.1", 50000))
+    allowed = app.options("/api/cores", headers=preflight)
+    assert allowed.status_code == 200 and allowed.headers["access-control-allow-origin"] == "http://lab-pc:8080"
+    assert allowed.headers["access-control-allow-credentials"] == "true" and "authorization" in allowed.headers["access-control-allow-headers"].lower()
+    refused = app.get("/api/cores", headers={"Origin": "http://lab-pc:8080"})
+    assert refused.status_code == 401 and refused.headers["access-control-allow-origin"] == "http://lab-pc:8080"  # the app can read the 401
+    other = app.options("/api/cores", headers={**preflight, "Origin": "http://elsewhere:8080"})
+    assert "access-control-allow-origin" not in other.headers

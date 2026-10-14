@@ -31,18 +31,18 @@ def current(request: Request) -> dict:
 
 
 @router.post("/session/annotator")
-def register(request: Register, response: Response) -> dict:
+def register(request: Register, http: Request, response: Response) -> dict:
     name = " ".join(request.name.split())
     if not 1 <= len(name) <= 40:
         raise HTTPException(400, "enter a name of 1–40 characters")
     response.set_cookie(session.ANNOTATOR_COOKIE, session.sign_annotator(name), max_age=YEAR, httponly=True, samesite="lax")
-    return {"annotator": name}
+    return {"annotator": name, "token": session.session_token(session.is_admin(http), name)}
 
 
 @router.delete("/session/annotator")
-def unregister(response: Response) -> dict:
+def unregister(request: Request, response: Response) -> dict:
     response.delete_cookie(session.ANNOTATOR_COOKIE)
-    return {"ok": True}
+    return {"ok": True, "token": session.session_token(session.is_admin(request), None)}
 
 
 @router.post("/session/admin")
@@ -52,21 +52,21 @@ def admin_sign_in(body: Password, request: Request, response: Response) -> dict:
     if session.default_password() and not session.is_local(request):
         raise HTTPException(403, "the admin password is still the default; change it on the computer running stainID (Settings) before signing in from elsewhere")
     response.set_cookie(session.ADMIN_COOKIE, session.admin_token(), max_age=30 * 24 * 3600, httponly=True, samesite="lax")
-    return {"admin": True}
+    return {"admin": True, "token": session.session_token(True, session.annotator_name(request))}
 
 
 @router.delete("/session/admin")
-def admin_sign_out(response: Response) -> dict:
+def admin_sign_out(request: Request, response: Response) -> dict:
     response.delete_cookie(session.ADMIN_COOKIE)
-    return {"ok": True}
+    return {"ok": True, "token": session.session_token(False, session.annotator_name(request))}
 
 
 @router.put("/session/admin/password", dependencies=[Depends(session.require_admin)])
-def change_password(body: NewPassword, response: Response) -> dict:
+def change_password(body: NewPassword, request: Request, response: Response) -> dict:
     if not session.check_password(body.current):
         raise HTTPException(403, "the current password is wrong")
     if len(body.new) < 6 or body.new == session.DEFAULT_PASSWORD:
         raise HTTPException(400, "choose a password of at least 6 characters (not 'admin')")
     session.set_password(body.new)
     response.set_cookie(session.ADMIN_COOKIE, session.admin_token(), max_age=30 * 24 * 3600, httponly=True, samesite="lax")
-    return {"ok": True}
+    return {"ok": True, "token": session.session_token(True, session.annotator_name(request))}
