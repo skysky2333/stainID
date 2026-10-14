@@ -390,3 +390,21 @@ details.advanced[open] > summary { border-bottom: 1px solid var(--border); }
 .workflow-summary .progress { max-width: 420px; }
 .run-all { display: grid; gap: 4px; justify-items: end; }
 .sample-id { display: block; font-size: 11px; }
+
+/* slides table editor */
+.slide-table td { vertical-align: middle; }
+.slide-thumb { display: block; width: 210px; height: 80px; object-fit: contain; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-1); }
+.slide-thumb.empty { display: grid; place-items: center; }
+.scan-name { overflow-wrap: anywhere; }
+.from-name { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+/* projects */
+.project-chip .project-current { overflow-wrap: anywhere; }
+.project-select { font-size: 12px; margin-top: 6px; width: 100%; }
+.projects-page { min-height: 100vh; }
+.projects-top { padding: 12px 24px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
+.projects-main { max-width: 1100px; margin: 0 auto; }
+.project-list td { vertical-align: middle; }
+.project-name { font-weight: 600; font-size: 15px; }
+.project-list .badge .pulse { width: 7px; height: 7px; }
+.new-study { margin-bottom: 16px; }

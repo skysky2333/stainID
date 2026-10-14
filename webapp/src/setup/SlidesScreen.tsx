@@ -4,10 +4,9 @@ import { api } from '../api'
 import { Empty, ErrorNote, FilePicker, PathLine, withError } from '../components'
 import { useFetch } from '../hooks'
 import { useProject } from '../project'
+import { fileName as name, SlideTable, slideProblems } from '../slides'
 import { Advanced, Found, ScreenFoot } from './parts'
 import type { ScreenProps } from './Setup'
-
-const name = (path: string) => path.split(/[\\/]/).pop() ?? path
 
 export default function SlidesScreen({ next, onChanged }: ScreenProps) {
   const { info: project, reload: reloadProject } = useProject()
@@ -22,12 +21,11 @@ export default function SlidesScreen({ next, onChanged }: ScreenProps) {
     setRows(info.data.rows)
     setPrefix(info.data.tma_prefix === 'TMA-' && info.data.prefix_guess ? info.data.prefix_guess : info.data.tma_prefix)
   }, [info.data])
-  const edit = (i: number, key: keyof SlideRow, value: string) => setRows(rows.map((r, j) => (j === i ? { ...r, [key]: value } : r)))
   const tmas = useMemo(() => [...new Set(rows.map((r) => r.tma).filter(Boolean))].sort((a, b) => Number(a) - Number(b)), [rows])
   const stains = useMemo(() => [...new Set(rows.map((r) => r.stain).filter(Boolean))], [rows])
-  const unsure = rows.filter((r) => !r.tma || !r.stain)
+  const problems = slideProblems(rows, info.data?.stains ?? [])
   const fresh = rows.filter((r) => r.new)
-  const twice = rows.filter((r, i) => r.tma && r.stain && rows.findIndex((x) => x.tma === r.tma && x.stain === r.stain) !== i)
+  const fromName = rows.filter((r) => r.from_name?.tma && r.from_name?.stain).length
 
   const chooseFolder = (path: string) => withError(async () => {
     await api.put('/api/project/config', { changes: { inputs: { slides_dir: path } } })
@@ -59,27 +57,14 @@ export default function SlidesScreen({ next, onChanged }: ScreenProps) {
           <Empty>No slide scans in <code>{data.folder}</code>. Copy the scans there, or choose another folder.</Empty>
         ) : (
           <>
-            <Found tone={unsure.length || twice.length ? 'warn' : 'good'}>
-              Found <b>{rows.length} scans</b> in <code>{data.folder}</code>: {tmas.length} TMAs ({tmas.join(', ')}) × {stains.length} stains ({stains.join(', ')}).
+            <Found tone={problems.ok ? 'good' : 'warn'}>
+              Found <b>{rows.length} scans</b> in <code>{data.folder}</code>{tmas.length > 0 && <>: {tmas.length} TMAs ({tmas.join(', ')}) × {stains.length} stains ({stains.join(', ')})</>}.
               {fresh.length > 0 && data.saved && <> <b>{fresh.length} new</b> since last time.</>}
-              {unsure.length > 0 && <> For {unsure.length} the TMA or stain could not be read from the file name: please fill them in below.</>}
-              {twice.length > 0 && <> Some TMAs have the same stain twice: please correct.</>}
-              {!unsure.length && !twice.length && <> The TMA and stain were read from each file name; check them and press Save.</>}
+              {fromName > 0 && <> For {fromName === rows.length ? 'every scan' : `${fromName} scans`} the file name says the TMA and the stain clearly: they are filled in and marked <i>from the file name</i>.</>}
+              {!problems.ok && <> <b>{problems.text}</b>: choose {problems.needTma.length && problems.needStain.length ? 'them' : 'it'} in the highlighted rows.</>}
+              {problems.ok && <> Check them and press Save.</>}
             </Found>
-            <div className="table-wrap" style={{ maxHeight: 420 }}>
-              <table>
-                <thead><tr><th>Scan</th><th style={{ width: 110 }}>TMA</th><th style={{ width: 130 }}>Stain</th><th style={{ width: 60 }} /></tr></thead>
-                <tbody>{rows.map((r, i) => (
-                  <tr key={r.slide_path} className={!r.tma || !r.stain ? 'row-attention' : ''}>
-                    <td title={r.slide_path}>{name(r.slide_path)}</td>
-                    <td><input type="text" value={r.tma} style={{ width: 80 }} onChange={(e) => edit(i, 'tma', e.target.value)} aria-label={`TMA of ${name(r.slide_path)}`} /></td>
-                    <td><select value={r.stain} onChange={(e) => edit(i, 'stain', e.target.value)} aria-label={`Stain of ${name(r.slide_path)}`}>
-                      <option value="">choose…</option>{data.stains.map((s) => <option key={s}>{s}</option>)}</select></td>
-                    <td>{r.new && data.saved && <span className="badge status-running">new</span>}</td>
-                  </tr>
-                ))}</tbody>
-              </table>
-            </div>
+            <SlideTable info={data} rows={rows} prefix={prefix} onChange={setRows} />
             <div className="row naming">
               <label className="field">Core names start with
                 <input type="text" value={prefix} style={{ width: 90 }} onChange={(e) => setPrefix(e.target.value)} />
@@ -105,7 +90,8 @@ export default function SlidesScreen({ next, onChanged }: ScreenProps) {
         )}
       </Advanced>
 
-      <ScreenFoot next={rows.length ? save : next} nextLabel={rows.length ? 'Save and continue' : 'Next'} busy={busy} disabled={rows.length > 0 && (unsure.length > 0 || twice.length > 0)} />
+      <ScreenFoot next={rows.length ? save : next} nextLabel={rows.length ? 'Save and continue' : 'Next'} busy={busy} disabled={rows.length > 0 && !problems.ok}
+        extra={rows.length > 0 && !problems.ok && <span className="small cell-note">{problems.text}</span>} />
       {picking && <FilePicker title="Choose the folder with your slide scans" show="slides" start={data.folder_exists ? data.folder_path : undefined} onPick={chooseFolder} onClose={() => setPicking(false)} />}
     </div>
   )

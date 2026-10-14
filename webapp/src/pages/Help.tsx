@@ -32,9 +32,12 @@ const FAQ: [string, React.ReactNode][] = [
   ['A step says “Made with an older model”.', <>You switched to a different model after that step ran. The existing results stay as they are
     until you run the step again with <b>Start over</b> (under Advanced options); then “Make results tables” again.</>],
   ['How do other people label for me?', <>On <Link to="/labels">Labels</Link>, create a session and press Start, then send people the link shown there
-    (it ends in /annotate). They type their name and label in their browser; you follow their progress and download the labels on the same page.
+    (it ends in /annotate and names the study). They type their name and label in their browser; you follow their progress and download the labels on the same page.
     Change the admin password in <Link to="/settings">Settings</Link> first: everything except the annotation pages needs it.</>],
-  ['Is anything deleted?', <>No. “Start over” and uploads move old files aside with a date in their name; nothing is removed.</>],
+  ['Is anything deleted?', <>No. “Start over” and uploads move old files aside with a date in their name; nothing is removed.
+    “Remove from list” on the Projects page only takes a study off the list.</>],
+  ['Can several people work at once?', <>Yes, in the same study or in different ones: each person picks a study on the <a href="/">Projects</a> page, and switching
+    study in one browser changes nothing for anyone else. Steps that need a lot of computing take turns across all studies; a waiting step says which study it waits for.</>],
 ]
 
 export default function Help() {
@@ -48,7 +51,7 @@ export default function Help() {
         <div className="card">
           <h2>Getting started</h2>
           <ol className="guide">
-            <li><b>Create a project</b> for your study (Settings → Open or create another project). All files for the study are kept in its folder{info ? <> — currently <code>{info.root}</code></> : null}.</li>
+            <li><b>Create a project</b> for your study: <a href="/">Projects</a> (the project menu at the top left → All projects) → New study. All files for the study are kept in its folder{info ? <> — currently <code>{info.root}</code></> : null}.</li>
             <li><b>Follow the <Link to="/setup">guided setup</Link></b>: slides → cores → TMA maps → donor information → checks → run. Each screen shows what stainID found
               by itself; you confirm or correct it. The details are under “Advanced”.</li>
             <li><b>Get the models</b> on <Link to="/models">Models</Link>: download the published ones; put in (or train) the NeuN / 6E10 / AT8 models.</li>

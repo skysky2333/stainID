@@ -6,6 +6,7 @@ import { CommandLineTag, Empty, ErrorNote, FilePicker, HelpBox, OptionField, Pag
 import { useFetch } from '../hooks'
 import { NowRunning, PipelineMap } from '../pipeline'
 import { useProject } from '../project'
+import { SlideTable, slideProblems } from '../slides'
 
 export const MAIN_STAGES = ['1 · Set up', '2 · Detect', '3 · Results']
 
@@ -242,14 +243,14 @@ function NeedRow({ need, onChanged, optional = false }: { need: ResourceInfo; on
 }
 
 function SlidesPanel({ onSaved }: { onSaved: () => void }) {
-  const { reload: reloadProject } = useProject()
+  const { info: project, reload: reloadProject } = useProject()
   const info = useFetch<SlidesInfo>('/api/slides')
   const [rows, setRows] = useState<SlideRow[]>([])
   const [picking, setPicking] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
   useEffect(() => { if (info.data) setRows(info.data.rows) }, [info.data])
-  const edit = (i: number, key: keyof SlideRow, value: string) => { setSaved(false); setRows(rows.map((r, j) => (j === i ? { ...r, [key]: value } : r))) }
+  const problems = slideProblems(rows, info.data?.stains ?? [])
   const chooseFolder = (path: string) => withError(async () => {
     await api.put('/api/project/config', { changes: { inputs: { slides_dir: path } } })
     setPicking(false)
@@ -265,24 +266,14 @@ function SlidesPanel({ onSaved }: { onSaved: () => void }) {
         <button className="btn small" onClick={() => setPicking(true)}>Choose folder…</button>
       </div>
       {info.data && !info.data.folder_exists && <p className="small muted">This folder does not exist yet — choose the folder that holds your slide scans.</p>}
-      {rows.length > 0 && (
+      {rows.length > 0 && info.data && (
         <>
-          <p className="small secondary">{rows.length} scans found. The TMA number and stain were guessed from each file name — please check them.</p>
-          <div className="table-wrap" style={{ maxHeight: 320 }}>
-            <table>
-              <thead><tr><th>Scan</th><th style={{ width: 110 }}>TMA</th><th style={{ width: 130 }}>Stain</th></tr></thead>
-              <tbody>{rows.map((r, i) => (
-                <tr key={r.slide_path}>
-                  <td title={r.slide_path}>{r.slide_path.split('/').pop()}</td>
-                  <td><input type="text" value={r.tma} style={{ width: 80 }} onChange={(e) => edit(i, 'tma', e.target.value)} /></td>
-                  <td><select value={r.stain} onChange={(e) => edit(i, 'stain', e.target.value)}>
-                    <option value="">choose…</option>{info.data?.stains.map((s) => <option key={s}>{s}</option>)}</select></td>
-                </tr>
-              ))}</tbody>
-            </table>
-          </div>
+          <p className="small secondary">{rows.length} scans found. Choose the TMA and the stain of each one; values marked <i>from the file name</i> were read
+            from a file name that said them clearly.</p>
+          <SlideTable info={info.data} rows={rows} prefix={project?.tma_prefix ?? ''} onChange={(next) => { setSaved(false); setRows(next) }} />
           <div className="row" style={{ marginTop: 8 }}>
-            <button className="btn primary" onClick={save}>Save slides table</button>
+            <button className="btn primary" disabled={!problems.ok} onClick={save}>Save slides table</button>
+            {!problems.ok && <span className="small cell-note">{problems.text}</span>}
             {saved && <span className="small status-finished">Saved.</span>}
           </div>
         </>

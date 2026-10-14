@@ -4,7 +4,6 @@ import { api } from '../api'
 import { ErrorNote, FilePicker, HelpBox, PageHead, PathLine, withError } from '../components'
 import { useProject } from '../project'
 import { ServerChoice, useSession } from '../session'
-import Welcome from './Welcome'
 
 const SECTION_TEXT: Record<string, [string, string]> = {
   inputs: ['Study files', 'Tables stainID reads or makes during set-up. You rarely need to change these.'],
@@ -17,7 +16,6 @@ export default function Settings() {
   const { session } = useSession()
   const [config, setConfig] = useState<ProjectConfig | null>(null)
   const [picking, setPicking] = useState<{ section: string; key: string } | null>(null)
-  const [switching, setSwitching] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
   useEffect(() => { if (info) setConfig(structuredClone(info.config)) }, [info])
@@ -33,12 +31,10 @@ export default function Settings() {
     reload()
   }, setError)
 
-  if (switching) return <><button className="btn" onClick={() => setSwitching(false)}>← Back to settings</button><Welcome /></>
-
   return (
     <>
       <PageHead title="Settings" subtitle={<>Saved in <code>{info.root}/stainid.yaml</code>. Paths are relative to the project folder.</>}>
-        <button className="btn" onClick={() => setSwitching(true)}>Open or create another project…</button>
+        <a className="btn" href="/">Open or create another project…</a>
       </PageHead>
       <HelpBox id="settings">
         Most studies only need the first two boxes: the study name, how the TMA slides are laid out, and the diagnostic groups used in the TMA map.

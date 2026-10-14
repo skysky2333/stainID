@@ -1,6 +1,6 @@
 import { createContext, useContext, useState } from 'react'
 import type { Session } from './api'
-import { api, chooseServer, cleanServer, configuredServer, remote, savedServer, serverName } from './api'
+import { api, appPath, chooseServer, cleanServer, configuredServer, remote, savedServer, serverName } from './api'
 import { ErrorNote, withError } from './components'
 
 export const SessionContext = createContext<{ session: Session; reload: () => void } | null>(null)
@@ -26,7 +26,7 @@ export function AdminSignIn() {
         <label className="field">Admin password<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus /></label>
         <button className="btn primary" style={{ marginTop: 12, width: '100%' }} disabled={!password}>Sign in</button>
         {session.default_password && session.local && <p className="muted small">The password is <b>admin</b> until you change it in Settings.</p>}
-        <p className="muted small">Here to annotate? Go to <a href="/annotate">the annotation page</a>.</p>
+        <p className="muted small">Here to annotate? Go to <a href={appPath('/annotate')}>the annotation page</a>.</p>
         <ErrorNote error={error} />
         <ServerSetting />
       </form>

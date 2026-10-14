@@ -1,6 +1,8 @@
 import { createContext, useContext, useMemo } from 'react'
 import type { ReactNode } from 'react'
-import type { ProjectInfo } from './api'
+import { useLocation } from 'react-router-dom'
+import type { ProjectInfo, ProjectsInfo } from './api'
+import { projectId, projectPath } from './api'
 import { useFetch } from './hooks'
 
 interface ProjectContextValue {
@@ -37,4 +39,33 @@ export function useProject() {
   const value = useContext(Context)
   if (!value) throw new Error('useProject must be used inside ProjectProvider')
   return value
+}
+
+const ALL = '__all'
+
+/** The page to show in another project: the same section (a core or a setup screen of this project has no twin there). */
+function samePage(pathname: string) {
+  const section = pathname.split('/')[1] ?? ''
+  return section === 'cores' ? '/cohort' : section ? `/${section}` : '/'
+}
+
+/** The current project, and a menu to switch to another one or to the list of all projects. */
+export function ProjectSwitcher() {
+  const { info } = useProject()
+  const list = useFetch<ProjectsInfo>('/api/projects')
+  const { pathname } = useLocation()
+  const projects = list.data?.projects.filter((p) => p.exists) ?? []
+  const others = projects.filter((p) => p.id !== projectId)
+  const go = (id: string) => { if (id) location.assign(id === ALL ? '/' : projectPath(id, samePage(pathname))) }
+  return (
+    <div className="project-chip" title={info?.root}>
+      <span className="muted small">Project</span>
+      <span className="project-current">{info?.name ?? '…'}</span>
+      <select className="project-select" value="" aria-label="Switch to another project" onChange={(e) => go(e.target.value)}>
+        <option value="">Switch project…</option>
+        {others.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+        <option value={ALL}>All projects…</option>
+      </select>
+    </div>
+  )
 }

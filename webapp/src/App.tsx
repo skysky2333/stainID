@@ -1,9 +1,10 @@
+import { useEffect } from 'react'
 import { Link, NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom'
-import type { Job, Session } from './api'
-import { api, remote } from './api'
+import type { Job, ProjectsInfo, Session } from './api'
+import { api, projectId, projectPath, remote } from './api'
 import { ErrorNote } from './components'
 import { useFetch, useStored } from './hooks'
-import { ProjectProvider, useProject } from './project'
+import { ProjectProvider, ProjectSwitcher, useProject } from './project'
 import { AdminSignIn, Annotator, ServerSetting, SessionContext, useSession } from './session'
 import AnnotateField from './pages/AnnotateField'
 import AnnotateHome from './pages/AnnotateHome'
@@ -14,11 +15,11 @@ import Grids from './pages/Grids'
 import Help from './pages/Help'
 import Home from './pages/Home'
 import Models from './pages/Models'
+import Projects from './pages/Projects'
 import Results from './pages/Results'
 import Labels from './pages/Labels'
 import Settings from './pages/Settings'
 import Setup from './setup/Setup'
-import Welcome from './pages/Welcome'
 import Workflow from './pages/Workflow'
 
 const NAV: { section: string; links: [string, string][] }[] = [
@@ -37,11 +38,23 @@ export default function App() {
   else document.documentElement.setAttribute('data-theme', theme)
   if (!session.data) return <main className="main"><ErrorNote error={session.error} />{session.error && <ServerSetting open={remote} />}</main>
   const annotating = pathname === '/annotate' || pathname.startsWith('/annotate/')
-  return (
-    <SessionContext.Provider value={{ session: session.data, reload: session.reload }}>
-      {annotating ? <AnnotatorShell /> : session.data.admin ? <ProjectProvider><Shell /></ProjectProvider> : <AdminSignIn />}
-    </SessionContext.Provider>
-  )
+  const admin = session.data.admin
+  let page
+  if (annotating) page = <AnnotatorShell />  // in a project, or (old links) the project opened last
+  else if (!admin) page = <AdminSignIn />
+  else if (projectId) page = <ProjectProvider><Shell /></ProjectProvider>
+  else if (pathname === '/' || pathname === '/projects') page = <Projects />
+  else page = <ToLastProject />
+  return <SessionContext.Provider value={{ session: session.data, reload: session.reload }}>{page}</SessionContext.Provider>
+}
+
+/** An address of the previous release (/workflow, /cohort …): the same page of the project opened last. */
+function ToLastProject() {
+  const { pathname, search, hash } = useLocation()
+  const projects = useFetch<ProjectsInfo>('/api/projects')
+  const target = projects.data ? (projects.data.default ? projectPath(projects.data.default, `${pathname}${search}${hash}`) : '/') : null
+  useEffect(() => { if (target) location.replace(target) }, [target])
+  return <main className="main"><ErrorNote error={projects.error} /></main>
 }
 
 /** The public annotation pages (/annotate): anyone with the link, for sessions the admin has started. */
@@ -65,16 +78,24 @@ function AnnotatorShell() {
 }
 
 function Shell() {
-  const { info } = useProject()
+  const { info, error } = useProject()
   const { session, reload } = useSession()
   const [theme, setTheme] = useStored<'system' | 'light' | 'dark'>('stainid.theme', 'system')
-  if (info && !info.configured) return <main className="main"><Welcome /></main>
+  if (error && !info) {
+    return <main className="main"><div className="card" style={{ maxWidth: 560 }}><h2>This project cannot be opened</h2><ErrorNote error={error} />
+      <a className="btn primary" href="/">Go to the projects</a></div></main>
+  }
+  if (info && !info.configured) {
+    return <main className="main"><div className="card" style={{ maxWidth: 560 }}><h2>Not a stainID project</h2>
+      <p className="secondary">The folder <code>{info.root}</code> has no <code>stainid.yaml</code>.</p>
+      <a className="btn primary" href="/">Choose or create a project</a></div></main>
+  }
 
   return (
     <div className="layout">
       <aside className="sidebar">
         <div className="brand"><img src="/favicon.svg" alt="" />stainID</div>
-        {info && <Link to="/settings" className="project-chip" title={info.root}><span className="muted small">Project</span>{info.name}</Link>}
+        <ProjectSwitcher />
         <JobsIndicator />
         {NAV.map((group, i) => (
           <div key={i}>

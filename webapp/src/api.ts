@@ -42,10 +42,27 @@ export interface Step {
   command: string[] | null; options: StepOption[]; heavy: boolean; view: string | null; duration: string; progress: StepProgress; job: Job | null
   after: string[]
 }
-export interface SlideRow { slide_path: string; tma: string; stain: string; rows?: string; columns?: string; grid_source?: string; orientation?: string; new?: boolean }
+export interface SlideRow {
+  slide_path: string; tma: string; stain: string; rows?: string; columns?: string; grid_source?: string; orientation?: string; new?: boolean
+  /** which values the file name gave clearly (new scans only) */
+  from_name?: { tma: boolean; stain: boolean }
+  /** what an unclear file name might mean */
+  options?: { tma: string[]; stain: string[] }
+}
 export interface SlidesInfo {
   folder: string; folder_path: string; folder_exists: boolean; stains: string[]; saved: boolean; rows: SlideRow[]; missing: SlideRow[]
-  tma_prefix: string; prefix_guess: string; table: string
+  tma_prefix: string; prefix_guess: string; table: string; tmas: string[]
+}
+
+/* the projects this server knows (/api/projects) */
+export type ProjectState = 'not_set_up' | 'set_up' | 'running' | 'results' | 'missing'
+export interface ProjectEntry {
+  id: string; name: string; path: string; last_opened: number | null; in_projects_dir: boolean; exists: boolean
+  status: { state: ProjectState; text: string; running: string[] }
+}
+export interface ProjectsInfo {
+  projects: ProjectEntry[]; default: string | null; projects_dir: string; projects_dir_from: '' | 'setting' | 'command line'
+  copyable: Record<string, string>
 }
 
 /* the guided setup (/api/setup) */
@@ -175,15 +192,34 @@ export function chooseServer(address: string) {
   location.reload()
 }
 
+/* Which project this page shows. It is part of the page's address, /p/<project>/..., which the router uses as its base
+   (main.tsx), so the app's own links need no project. Every API call of the page then goes to /api/projects/<project>/...,
+   except the routes that belong to the server as a whole (sign-in, the projects list). This is the only place that adds
+   the project; pages write plain /api/... paths. Without a project in the address (the Projects page, and the
+   addresses of the previous release) calls stay unscoped, which the server answers for the project opened last. */
+const PROJECT_IN_ADDRESS = /^\/p\/([A-Za-z0-9][A-Za-z0-9_.-]*)(?=\/|$)/
+const SERVER_WIDE = /^\/api\/(session|projects)(\/|\?|$)/
+export const projectId = location.pathname.match(PROJECT_IN_ADDRESS)?.[1] ?? ''
+/** The base of this project's pages ('' on the Projects page). */
+export const appBase = projectId ? `/p/${projectId}` : ''
+/** A page of this project as a plain address, for an <a href> or a link to send someone (router links need no prefix). */
+export const appPath = (path: string) => `${appBase}${path}`
+/** The address of a project's pages; going there loads the page afresh, for that project. */
+export const projectPath = (id: string, page = '/') => `/p/${id}${page}`
+
+function scoped(path: string) {
+  return projectId && path.startsWith('/api/') && !SERVER_WIDE.test(path) ? `/api/projects/${projectId}${path.slice(4)}` : path
+}
+
 /** The full address of an API path, for what the browser loads by itself (images, downloads, links). */
 export function apiUrl(path: string) {
-  const url = apiBase + path
+  const url = apiBase + scoped(path)
   return remote && token ? `${url}${url.includes('?') ? '&' : '?'}access_token=${encodeURIComponent(token)}` : url
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const headers = remote && token ? { ...(init?.headers as Record<string, string> | undefined), Authorization: `Bearer ${token}` } : init?.headers
-  const response = await fetch(apiBase + url, { ...init, headers })
+  const response = await fetch(apiBase + scoped(url), { ...init, headers })
   if (!response.ok) {
     const text = await response.text()
     let detail = text
@@ -214,6 +250,7 @@ export const api = {
 }
 
 export const runStep = (workflow: string, options: Record<string, unknown>) => api.post<Job>('/api/jobs', { workflow, options })
+export const slidePicture = (slidePath: string, size = 320) => apiUrl(`/api/slides/picture?path=${encodeURIComponent(slidePath)}&size=${size}`)
 export const reveal = (path: string) => api.post('/api/reveal', { path })
 export const downloadUrl = (path: string) => apiUrl(`/api/download?path=${encodeURIComponent(path)}`)
 
