@@ -1,4 +1,5 @@
-"""Slides table: which whole-slide scan is which TMA and stain (`slide_path,tma,stain`)."""
+"""Slides table: which whole-slide scan is which TMA and stain (`slide_path,tma,stain`), and optionally the slide's
+own grid size (`rows`, `columns`) when it differs from the project's TMA layout."""
 from __future__ import annotations
 
 import re
@@ -8,6 +9,7 @@ from stainid.tables import read_csv, write_records
 
 SLIDE_SUFFIXES = (".vsi", ".svs", ".ndpi", ".scn", ".mrxs", ".czi", ".tif", ".tiff")
 COLUMNS = ["slide_path", "tma", "stain"]
+GRID_COLUMNS = ["rows", "columns"]  # optional per-slide grid size
 
 
 def find_slides(folder: Path) -> list[Path]:
@@ -39,4 +41,8 @@ def save_slides(table: Path, rows: list[dict[str, str]], stains: list[str]) -> N
     problems += [f"TMA {t} has more than one {s} slide" for t, s in sorted(set(pairs)) if pairs.count((t, s)) > 1]
     if problems:
         raise ValueError("; ".join(problems))
-    write_records(table, [{c: row[c] for c in COLUMNS} for row in rows], COLUMNS)
+    known = {row["slide_path"]: row for row in read_slides(table)}
+    grid = [c for c in GRID_COLUMNS if any(row.get(c) or known.get(row["slide_path"], {}).get(c) for row in rows)]
+    # a per-slide grid size set in the table is kept when the editor does not send it back
+    records = [{**{c: row[c] for c in COLUMNS}, **{c: row.get(c) or known.get(row["slide_path"], {}).get(c, "") for c in grid}} for row in rows]
+    write_records(table, records, COLUMNS + grid)

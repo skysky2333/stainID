@@ -28,7 +28,8 @@ def dearray_slides(project: Project, redo: bool = False, target_long_side: int =
     rows, columns = int(project.config["tma"]["rows"]), int(project.config["tma"]["columns"])
     for number, slide in enumerate(pending, start=1):
         path = Path(slide["slide_path"])
-        records = process_slide(path, slide["tma"], slide["stain"], rows, columns, target_long_side, project.output("qc") / "grids")
+        grid = int(slide.get("rows") or rows), int(slide.get("columns") or columns)  # a slide can have its own grid size
+        records = process_slide(path, slide["tma"], slide["stain"], *grid, target_long_side, project.output("qc") / "grids")
         existing = [row for row in existing if row["slide_path"] != str(path.resolve())] + records
         write_records(manifest, existing)
         found = sum(r["provisional_tissue_status"] != "empty" for r in records)

@@ -82,7 +82,9 @@ steps.
 | whole-core tiles (`whole_core_manifest`) | *Cut whole cores into tiles* |
 | `calibration` | *Calibrate stain thresholds* |
 
-**`slides.csv`**: one row per scan, written by the *Register slides* step: `slide_path`, `tma`, `stain`.
+**`slides.csv`**: one row per scan, written by the *Register slides* step: `slide_path`, `tma`, `stain`. Optional
+`rows` and `columns` give a slide its own core grid when it differs from the project's TMA layout (e.g. a 4 x 6 array
+in a 5 x 6 study); empty means the project setting.
 Supported scan formats are those Bio-Formats reads: `.vsi`, `.svs`, `.ndpi`, `.scn`, `.mrxs`, `.czi`, `.tif`.
 
 **`tma_layout.csv`**: one row per core position of the TMA map. The web app offers a template with every position
