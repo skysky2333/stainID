@@ -4,8 +4,9 @@ Case sheets are made for people, not programs, so the importer reads them the wa
 
 - the header row is the row whose cells look most like column names (Age, Sex, PMI, APOE, CERAD, Braak, TMA, …);
   each column is matched to a stainID column by its name, and the match can be changed;
-- a row with only its first cell filled ("CONTROL <65 (90 cases)") is a section heading that gives the group of the
-  rows below it (Control, asymptomatic AD, AD, or a group code of the project);
+- a row with only its first cell filled whose name is a group ("CONTROL <65 (90 cases)", "High AD (218 cases) - …")
+  is a section heading that gives the group of the rows below it (also when it stands just above the header row);
+  other such rows ("JOG 74 removed (…)") are notes and change nothing;
 - a row that repeats the header ("JOG#", "Age", …) starts a sub-table whose ids form their own series: plain numbers
   there are written with that prefix (JOG_007) when the TMA map uses it (or, without a map, for every series but the
   first);
@@ -143,7 +144,10 @@ def read_donors(rows: list[list[str]], groups: Groups, style: IdStyle = IdStyle(
     if id_column is None:
         raise ValueError("No column is matched to the donor ID: choose it in the column list")
     kinds = [series(names[id_column])] if series(names[id_column]) else []
-    kind, section, sections, skipped = (kinds[0] if kinds else ""), "", {}, 0
+    above = [clean(r[0]) for r in rows[:header] if sum(bool(clean(c)) for c in r) == 1 and clean(r[0]) and groups.section(r[0])]
+    kind, section, sections, skipped = (kinds[0] if kinds else ""), (above[-1] if above else ""), {}, 0
+    if section:
+        sections[section] = 0
     records = []
     for number_, row in enumerate(rows[header + 1:], start=header + 2):
         row = (row + [""] * len(names))[:len(names)]
@@ -157,9 +161,10 @@ def read_donors(rows: list[list[str]], groups: Groups, style: IdStyle = IdStyle(
             continue
         ident = clean(row[id_column])
         is_id = bool(re.fullmatch(r"[A-Z]*\d+", key(ident)))
-        if len(filled) == 1 and not is_id:  # a section heading: the group of the rows below
-            section = clean(filled[0])
-            sections.setdefault(section, 0)
+        if len(filled) == 1 and not is_id:  # a section heading (the group of the rows below), or a note
+            if groups.section(filled[0]):
+                section = clean(filled[0])
+                sections.setdefault(section, 0)
             continue
         if not is_id:
             skipped += 1
@@ -169,7 +174,7 @@ def read_donors(rows: list[list[str]], groups: Groups, style: IdStyle = IdStyle(
             sections[section] += 1
     notes = [f"Column names found on row {header + 1}."]
     if sections:
-        notes.append("Sections: " + "; ".join(f"“{s}” → {groups.section(s) or 'no group'} ({n} donors)" for s, n in sections.items()) + ".")
+        notes.append("Sections: " + "; ".join(f"“{s}” → {groups.section(s)} ({n} donors)" for s, n in sections.items() if n) + ".")
     if len(kinds) > 1:
         notes.append("Sub-tables with their own id series: " + ", ".join(
             f"{k} ({'ids written ' + k + '_001 …' if _prefix(k, kinds, map_prefixes) else 'ids as written'})" for k in kinds) + ".")

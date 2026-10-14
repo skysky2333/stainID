@@ -130,7 +130,8 @@ class Groups:
         return self.aliases.get(key(text), "")
 
     def find(self, text: str) -> tuple[str, tuple[int, int] | None]:
-        """The last group word in a longer text, and where it is (for map cells such as "1673 FR AD")."""
+        """The group a longer text names, and where (map cells such as "1673 FR AD"): whole words only, the most specific
+        match first (the longest: "ASYMAD" beats "AD"), and of equally long ones the last."""
         found: tuple[str, tuple[int, int] | None] = ("", None)
         words = list(re.finditer(WORD, text))
         i = 0
@@ -141,20 +142,19 @@ class Groups:
                 span = (words[i].start(), words[i + width - 1].end())
                 code = self.aliases.get(key(text[span[0]:span[1]]))
                 if code:
-                    found = (code, span)
+                    if not found[1] or len(key(text[span[0]:span[1]])) >= len(key(text[found[1][0]:found[1][1]])):
+                        found = (code, span)
                     i += width - 1
                     break
             i += 1
         return found
 
     def section(self, text: str) -> str:
-        """The group a section heading such as "CONTROL <65 (90 cases)" or "ASYMAD" stands for."""
-        words = re.findall(r"[A-Za-z][A-Za-z']*", text)
-        for count in (3, 2, 1):
-            code = self.aliases.get(key("".join(words[:count])))
-            if code:
-                return code
-        return self.code(text) or self.find(text)[0]
+        """The group a section heading stands for: "CONTROL <65 (90 cases)" -> control, "High AD (218 cases) - Braak
+        5/6" -> AD, "ASYMAD A+T (15 cases) - asymptomatic" -> asymptomatic AD. Only the heading's name counts (the
+        part before "(", " - " or ":"), so a note such as "JOG 74 removed (…) - ASYMAD A only" is no heading ("")."""
+        name = re.split(r"\(|\s[-\u2013]\s|:", clean(text), maxsplit=1)[0]
+        return self.code(name) or self.find(name)[0]
 
 
 # ---------------------------------------------------------------- neuropathology scores

@@ -197,6 +197,36 @@ def test_the_case_sheet_is_read_like_a_person_would():
     assert any("Sections" in n and "CT" in n for n in sheet.notes) and any("approximate" in n for n in sheet.notes)
 
 
+LAB_GROUPS = Groups([{"code": "CT", "label": "Control"}, {"code": "ASYMP", "label": "ASYMAD"}, {"code": "AD", "label": "AD"}])
+LAB_HEADINGS = {"ASYMAD A+T (15 cases) - asymptomatic, Braak 3-6, CERAD A-C": "ASYMP", "CONTROL <65 (90 cases)": "CT",
+                "CONTROL >65 (32 cases)": "CT", "High AD (218 cases) - Braak 5/6, CERAD C": "AD",
+                "ASYMAD A beta only (29 cases) - no tau in frontal or occipital gyri": "ASYMP",
+                "Intermediate AD (40 cases) - MCI/dementia, Braak 3/4, CERAD (sparse-freq)": "AD",
+                "JOG 74 removed (frozen CBLM, BS only) - ASYMAD A only": "", "Notes": ""}
+
+
+@pytest.mark.parametrize("heading, group", LAB_HEADINGS.items())
+def test_the_labs_section_headings(heading, group):
+    assert LAB_GROUPS.section(heading) == group
+
+
+def test_the_most_specific_group_word_wins():
+    assert LAB_GROUPS.find("ASYMAD AD")[0] == "ASYMP" and LAB_GROUPS.find("AD ASYMAD")[0] == "ASYMP"
+
+
+def test_sections_above_the_header_and_note_rows():
+    header = ["BRC#", "Age", "Sex", "TMA"]
+    rows = [["ASYMAD A+T (15 cases) - asymptomatic, Braak 3-6, CERAD A-C", "", "", ""], header, ["1141", ">90", "F", "LIP-8"],
+            ["CONTROL <65 (90 cases)", "", "", ""], ["1673", "62", "F", "LIP-8"],
+            ["JOG 24 removed (inflammation frontal cortex) - control <65, DNA batch 2", "", "", ""], ["1700", "70", "M", "LIP-8"],
+            ["High AD (218 cases) - Braak 5/6, CERAD C", "", "", ""], ["2323", "80", "M", "LIP-9"],
+            ["Intermediate AD (40 cases) - MCI/dementia, Braak 3/4, CERAD (sparse-freq)", "", "", ""], ["2400", "81", "F", "LIP-9"],
+            ["JOG 74 removed (frozen CBLM, BS only) - ASYMAD A only", "", "", ""]]
+    sheet = donors.read_donors(rows, LAB_GROUPS)
+    assert {r["donor_id"]: r["disease_group"] for r in sheet.records} == {"1141": "ASYMP", "1673": "CT", "1700": "CT", "2323": "AD", "2400": "AD"}
+    assert "removed" not in next(n for n in sheet.notes if n.startswith("Sections"))
+
+
 def test_without_a_map_the_first_id_series_stays_plain():
     sheet = donors.read_donors(read_tables("cases.xlsx", xlsx({"Cases": CASES}))[0].rows, GROUPS)
     assert [r["donor_id"] for r in sheet.records][-2:] == ["JOG_003", "JOG_007"]
