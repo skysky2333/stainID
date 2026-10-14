@@ -10,6 +10,7 @@ changes the project's files. An issue is a dict:
 """
 from __future__ import annotations
 
+import re
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -20,12 +21,24 @@ from stainid.tables import read_csv, write_csv
 SHOW = 12  # items listed per issue; the fixes apply to all
 
 
+def one(text: str) -> str:
+    """Counts of one read as one: "1 donors on the map are" -> "1 donor on the map is"."""
+    text = re.sub(r"\b1 donors\b", "1 donor", text)
+    if not text.startswith("1 "):
+        return text
+    if not text.startswith("1 donor ") or text.startswith("1 donor ids"):
+        text = re.sub(r"^1 ((?:\w+[ -])*?)(\w+?)s\b", r"1 \1\2", text, count=1)
+    for many, single in ((" are ", " is "), (" have ", " has "), (" were ", " was ")):
+        text = text.replace(many, single, 1)
+    return text
+
+
 def _fix(label: str, action: str, **args) -> dict:
-    return {"label": label, "action": action, "args": args}
+    return {"label": one(label), "action": action, "args": args}
 
 
 def _issue(id_: str, level: str, title: str, detail: str = "", items: list[dict] | None = None, fixes: list[dict] | None = None) -> dict:
-    return {"id": id_, "level": level, "title": title, "detail": detail, "items": (items or [])[:SHOW], "more": max(0, len(items or []) - SHOW),
+    return {"id": id_, "level": level, "title": one(title), "detail": detail, "items": (items or [])[:SHOW], "more": max(0, len(items or []) - SHOW),
             "fixes": fixes or []}
 
 
@@ -198,6 +211,10 @@ def _write(path: Path, rows: list[dict[str, str]]) -> None:
 
 def apply_fix(project: Project, action: str, args: dict) -> str:
     """Carry out one fix; returns what was done, in plain words."""
+    return one(_apply(project, action, args))
+
+
+def _apply(project: Project, action: str, args: dict) -> str:
     layout_path, donors_path = project.input("tma_layout"), project.input("donor_metadata")
     layout, donors = _rows(layout_path), _rows(donors_path)
     chosen = set(args.get("donors") or [])

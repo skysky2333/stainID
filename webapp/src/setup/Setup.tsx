@@ -43,8 +43,8 @@ export default function Setup() {
 
   return (
     <>
-      <PageHead title={setUp ? 'Add slides or change the setup' : 'Set up your study'}
-        subtitle={<>Six short steps from slide scans to results. You can leave at any time and come back; nothing is lost. <Link to="/workflow">All steps in detail</Link></>} />
+      <PageHead title="Guided setup"
+        subtitle={<>{setUp ? 'Add new slides, or change what was set up. ' : 'Six short steps from slide scans to results. '}You can leave at any time and come back; nothing is lost. <Link to="/workflow">All steps in detail</Link></>} />
       <nav className="stepper" aria-label="Setup steps">
         {SCREENS.map((s, i) => {
           const info = overview.data?.screens.find((x) => x.id === s)

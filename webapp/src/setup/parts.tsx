@@ -97,7 +97,7 @@ function MapRow({ row, r, width, byLabel, onEdit, thumbs, onSlide }: {
               {thumbs && !missing && <Thumb src={apiUrl(`${thumbs}/${label}.jpg?size=96`)} />}
             </div>
             {onEdit ? (
-              <textarea rows={2} value={row[c] ?? ''} placeholder="donor region group" onChange={(e) => onEdit(r, c, e.target.value)}
+              <textarea rows={3} value={row[c] ?? ''} placeholder="donor region group" onChange={(e) => onEdit(r, c, e.target.value)}
                 onPaste={(e) => {
                   const text = e.clipboardData.getData('text')
                   if (text.includes('\t')) { e.preventDefault(); pasteBlock(text, r, c, onEdit) }
@@ -121,12 +121,14 @@ function Thumb({ src }: { src: string }) {
   return failed ? null : <img className="map-thumb" src={src} alt="" loading="lazy" onError={() => setFailed(true)} />
 }
 
+export const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString()} ${n === 1 ? one : many}`
+
 export function MapSummaryLine({ summary }: { summary: { positions: number; cores: number; donors: number; controls: number; empty: number; unreadable: number; groups: string[] } }) {
   return (
     <span className="small secondary">
-      {summary.cores} donor cores from {summary.donors} donors{summary.controls ? `, ${summary.controls} control cores` : ''}{summary.empty ? `, ${summary.empty} empty positions` : ''}
+      {plural(summary.cores, 'donor core')} from {plural(summary.donors, 'donor')}{summary.controls ? `, ${plural(summary.controls, 'control core')}` : ''}{summary.empty ? `, ${plural(summary.empty, 'empty position')}` : ''}
       {summary.groups.length ? ` · groups ${summary.groups.join(', ')}` : ''}
-      {summary.unreadable > 0 && <b className="status-outdated"> · {summary.unreadable} cells need a look</b>}
+      {summary.unreadable > 0 && <b className="status-outdated"> · {summary.unreadable === 1 ? '1 cell needs' : `${summary.unreadable} cells need`} a look</b>}
     </span>
   )
 }

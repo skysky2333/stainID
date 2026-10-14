@@ -143,7 +143,7 @@ export function StepCard({ step, onChanged }: { step: Step; onChanged: () => voi
       {state === 'running' && job?.progress.last_line && <div className="muted small live-line">{job.progress.last_line}</div>}
       {job?.status === 'failed' && state !== 'done' && <ErrorNote error={`This step stopped with an error: ${job.progress.error || job.progress.last_line || 'see the log'}`} />}
       {job?.status === 'skipped' && !active && <div className="warning-note">{job.progress.error}</div>}
-      {!active && missing.length > 0 && step.command && <div className="small muted step-needs">Needs first: {missing.map((m) => m.made_by ? m.label : `${m.label} (yours to provide)`).join(', ')}.
+      {!active && missing.length > 0 && step.command && <div className="small muted step-needs">Needs first: {missing.map((m) => m.download ? `${m.label} (download on the Models page)` : m.format ? `${m.label} (yours to provide)` : m.label).join(', ')}.
         {' '}<button className="link-btn small" onClick={() => setOpen(true)}>Details</button></div>}
       {step.progress.outdated && (
         <div className="warning-note">These results were made with a different model than the one in use now. Run the step again to redo them with the current model:

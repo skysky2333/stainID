@@ -3,7 +3,7 @@ import type { FoundMap, MapOverview, MapTma, ParsedMap, SavedMap } from '../api'
 import { api, apiUrl } from '../api'
 import { Empty, ErrorNote, PathLine, withError } from '../components'
 import { useFetch } from '../hooks'
-import { Advanced, Found, MapGrid, MapSummaryLine, ScreenFoot } from './parts'
+import { Advanced, Found, MapGrid, MapSummaryLine, ScreenFoot, plural } from './parts'
 import type { ScreenProps } from './Setup'
 
 /** A map being looked at before it is saved: from a file, pasted, or typed in. */
@@ -59,7 +59,7 @@ export default function MapScreen({ next, back, onChanged }: ScreenProps) {
               <tr key={t.tma}>
                 <td style={{ width: 110 }}><b>TMA {t.tma}</b></td>
                 <td className="small secondary">{t.slides.length ? t.slides.join(', ') : 'no slides'} · {t.size[0]} × {t.size[1]} positions</td>
-                <td>{t.saved ? <span className="small"><span className="status-done">✓</span> {t.saved.cores} donor cores, {t.saved.donors} donors{t.saved.controls ? `, ${t.saved.controls} controls` : ''}
+                <td>{t.saved ? <span className="small"><span className="status-done">✓</span> {plural(t.saved.cores, 'donor core')}, {plural(t.saved.donors, 'donor')}{t.saved.controls ? `, ${plural(t.saved.controls, 'control')}` : ''}
                   {t.sources.length > 0 && <span className="muted"> · from {t.sources.join(', ')}</span>}</span>
                   : <span className="small status-outdated">No map yet</span>}</td>
                 <td style={{ width: 120, textAlign: 'right' }}><button className="btn small" onClick={() => typeIn(t)}>{t.saved ? 'Edit' : 'Type it in'}</button></td>

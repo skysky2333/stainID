@@ -155,7 +155,7 @@ def test_the_guided_setup_from_slides_to_checks(client, tmp_path):
     assert issues["group_disagrees"]["items"][0]["text"] == "Donor 1673: map says AD, donor table says CT"
     assert "1935" in issues["map_donor_not_in_sheet"]["items"][0]["text"]
     fix = issues["group_disagrees"]["items"][0]["fixes"][0]
-    assert client.post("/api/setup/checks/fix", json=fix).json()["message"] == "Group taken from the donor table for 1 donors"
+    assert client.post("/api/setup/checks/fix", json=fix).json()["message"] == "Group taken from the donor table for 1 donor"
     left = next(i for i in client.get("/api/setup/checks").json() if i["id"] == "group_disagrees")
     assert [i["text"] for i in left["items"]] == ["Donor JOG_003: map says ASYMP, donor table says AD"]
     assert client.post("/api/setup/checks/fix", json={"action": "nothing", "args": {}}).status_code == 400

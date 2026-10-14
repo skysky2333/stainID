@@ -126,9 +126,9 @@ export default function DonorsScreen({ next, back, onChanged }: ScreenProps) {
         {table.data && <PathLine label="Donor table" path={table.data.path} exists={table.data.count > 0} wrap />}
         <p className="small secondary">Required columns: <code>donor_id</code>, <code>disease_group</code>; anything else (age, sex, APOE, PMI …) is used by your own statistics.
           A filled-in CSV can also be uploaded directly: <a href={apiUrl('/api/templates/donor_metadata.csv')}>template</a>.</p>
-        <label className="btn small">Upload donor table (CSV)…<input type="file" accept=".csv" hidden onChange={(e) => e.target.files?.[0] && withError(async () => {
+        <div><label className="btn small">Upload donor table (CSV)…<input type="file" accept=".csv" hidden onChange={(e) => e.target.files?.[0] && withError(async () => {
           await api.upload('/api/upload/donor_metadata', e.target.files![0]); table.reload(); onChanged(); setMessage('Donor table uploaded.')
-        }, setError)} /></label>
+        }, setError)} /></label></div>
       </Advanced>
       <ScreenFoot back={back} next={next} nextLabel="Next: checks" />
     </div>

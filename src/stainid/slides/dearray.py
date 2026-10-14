@@ -255,8 +255,10 @@ class GridChoice:
 
 
 def core_like(blobs: tuple[Component, ...], shape: tuple[int, int]) -> tuple[Component, ...]:
-    """The blobs about the size of the larger ones (the cores), whatever the grid: crumbs and smears are left out."""
-    pieces = [b for b in blobs if b.area >= 0.0002 * shape[0] * shape[1] and 0.4 <= b.width / b.height <= 2.5]
+    """The blobs about the size of the larger ones (the cores), whatever the grid: crumbs, smears and rectangles (the
+    slide label, an edge of the cover glass) are left out; a round core fills about 80% of its bounding box."""
+    pieces = [b for b in blobs if b.area >= 0.0002 * shape[0] * shape[1] and 0.4 <= b.width / b.height <= 2.5
+              and b.area <= 0.92 * b.width * b.height]
     if not pieces:
         return ()
     areas = np.sort([b.area for b in pieces])

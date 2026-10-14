@@ -63,6 +63,15 @@ def test_a_size_that_is_set_is_used_as_it_is():
     assert (choose_grid(mask, 1.0, rows=5, columns=6).rows, choose_grid(mask, 1.0, rows=5, columns=6).source) == (5, "set")
 
 
+def test_the_slide_label_is_not_taken_for_a_column_of_cores():
+    mask = array_mask(3, 5).astype(np.uint8)
+    mask[20:180, mask.shape[1] - 200:mask.shape[1] - 20] = 1  # a label rectangle about the size of a core, top right
+    mask = np.pad(mask, ((0, 0), (0, 300)))
+    mask[20:180, -220:-40] = 1
+    choice = choose_grid(mask.astype(bool), 1.0, default=(3, 5))
+    assert (choice.rows, choice.columns) == (3, 5)
+
+
 def test_counting_rows_and_columns_ignores_crumbs():
     mask = array_mask(3, 7, debris=20, seed=3)
     assert estimate_grid(core_like(tissue_blobs(mask), mask.shape)) == (3, 7)

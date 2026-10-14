@@ -131,7 +131,8 @@ def read_donors(rows: list[list[str]], groups: Groups, style: IdStyle = IdStyle(
     columns = []
     for index, name in enumerate(names):
         chosen = (mapping or {}).get(index, match_column(name) if name else SKIP)
-        samples = [clean(r[index]) for r in rows[header + 1:] if index < len(r) and clean(r[index])][:4]
+        samples = [clean(r[index]) for r in rows[header + 1:] if index < len(r) and clean(r[index]) and sum(bool(clean(c)) for c in r) > 1
+                   and _score(r) < 2][:4]  # data rows only, not section headings or repeated headers
         columns.append({"index": index, "header": clean(name), "field": chosen, "samples": samples})
     taken: set[str] = set()
     for column in columns:  # a stainID column is filled from the first sheet column matched to it
