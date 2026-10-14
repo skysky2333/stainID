@@ -253,12 +253,6 @@ def run(args: argparse.Namespace, project) -> None:
         train_model(project, args.stain)
 
 
-def allowed_origins(extra: list[str] = ()) -> list[str]:
-    """Addresses of web apps served elsewhere that may use this server (--allow-origin and $STAINID_ALLOW_ORIGINS)."""
-    origins = [o.strip().rstrip("/") for o in [*os.environ.get("STAINID_ALLOW_ORIGINS", "").split(","), *extra]]
-    return list(dict.fromkeys(o for o in origins if o))
-
-
 def serve(args: argparse.Namespace) -> None:
     import socket
     import threading
@@ -266,6 +260,7 @@ def serve(args: argparse.Namespace) -> None:
 
     import uvicorn
 
+    from stainid.api.session import allowed_origins
     from stainid.api.state import remembered_project
 
     local = "127.0.0.1" if args.host == "0.0.0.0" else args.host

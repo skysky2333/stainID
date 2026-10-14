@@ -1,7 +1,6 @@
 """FastAPI application: JSON API under /api and the built React app at /."""
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 
@@ -11,7 +10,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from stainid.api.routes import analysis, annotate, cohort, images, jobs, models, project, session, slides
-from stainid.api.session import is_admin
+from stainid.api.session import allowed_origins, is_admin
 
 STATIC = Path(__file__).parent / "static"
 PUBLIC_API = re.compile(r"^/api/(session|annotate)(/|$)")
@@ -29,7 +28,7 @@ def create_app() -> FastAPI:
             return JSONResponse({"detail": "admin sign-in required"}, status_code=401)
         return await call_next(request)
 
-    origins = [o.strip().rstrip("/") for o in os.environ.get("STAINID_ALLOW_ORIGINS", "").split(",") if o.strip()]
+    origins = allowed_origins()
     if origins:  # a web app served from these addresses may use this server (`stainid serve --allow-origin`)
         app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"],
                            allow_headers=["Authorization", "Content-Type"])

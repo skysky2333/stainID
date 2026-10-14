@@ -27,7 +27,8 @@ class NewPassword(BaseModel):
 def current(request: Request) -> dict:
     admin = session.is_admin(request)
     return {"admin": admin, "annotator": session.annotator_name(request), "default_password": session.default_password(),
-            "local": session.is_local(request), "project": get_state().project.name if admin else None}
+            "local": session.is_local(request), "project": get_state().project.name if admin else None,
+            "allowed_origins": session.allowed_origins() if admin else []}
 
 
 @router.post("/session/annotator")

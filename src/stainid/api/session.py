@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
 import secrets
 from urllib.parse import quote, unquote
 
@@ -25,6 +26,12 @@ ADMIN_COOKIE = "stainid_admin"
 ANNOTATOR_COOKIE = "stainid_annotator"
 DEFAULT_PASSWORD = "admin"
 LOCAL_HOSTS = ("127.0.0.1", "::1", "localhost")
+
+
+def allowed_origins(extra: list[str] = ()) -> list[str]:
+    """Addresses of web apps served elsewhere that may use this server: `--allow-origin` and $STAINID_ALLOW_ORIGINS."""
+    origins = [o.strip().rstrip("/") for o in [*os.environ.get("STAINID_ALLOW_ORIGINS", "").split(","), *extra]]
+    return list(dict.fromkeys(o for o in origins if o))
 
 
 def _secret() -> bytes:

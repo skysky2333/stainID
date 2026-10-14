@@ -258,3 +258,5 @@ def test_cross_origin_requests_only_for_allowed_origins(client, monkeypatch):
     assert refused.status_code == 401 and refused.headers["access-control-allow-origin"] == "http://lab-pc:8080"  # the app can read the 401
     other = app.options("/api/cores", headers={**preflight, "Origin": "http://elsewhere:8080"})
     assert "access-control-allow-origin" not in other.headers
+    app.post("/api/session/admin", json={"password": "admin"})
+    assert app.get("/api/session").json()["allowed_origins"] == ["http://lab-pc:8080", "https://stainid.example.org"]
