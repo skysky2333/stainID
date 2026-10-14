@@ -1,4 +1,5 @@
 import csv
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,6 +11,7 @@ from stainid.slides.field_export import build_export_rows, export_field
 
 
 class FieldExportTest(unittest.TestCase):
+    @unittest.skipIf(shutil.which("vips") is None, "needs the libvips command-line tool (vips)")
     def test_native_crop_matches_source_pixels(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
