@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { FsListing, Job, StepOption } from './api'
-import { downloadUrl, reveal } from './api'
+import { downloadUrl, onActivity, reveal } from './api'
 import { GLOSSARY } from './glossary'
 import { useFetch, useStored } from './hooks'
 import { useProject } from './project'
@@ -82,6 +82,36 @@ export function CommandLineTag({ job }: { job: Job | null | undefined }) {
 
 export function ErrorNote({ error }: { error: string | null }) {
   return error ? <div className="error-note" role="alert">{error.replace(/^\d{3}: /, '')}</div> : null
+}
+
+/** A placeholder while something loads; use it wherever a page waits for data instead of showing nothing. */
+export function Loading({ label = 'Loading…', inline = false }: { label?: ReactNode; inline?: boolean }) {
+  return <div className={inline ? 'loading inline' : 'loading'} role="status" aria-live="polite"><span className="spinner" aria-hidden="true" />{label}</div>
+}
+
+/** Shows `children(data)` once a `useFetch` result has data; a loading placeholder before that, and the error if it failed.
+ *  Later reloads keep showing the old data (no flashing). */
+export function Loaded<T>({ state, label, children }: {
+  state: { data: T | null; error: string | null }; label?: ReactNode; children: (data: T) => ReactNode
+}) {
+  if (state.data !== null && state.data !== undefined) return <>{children(state.data)}</>
+  if (state.error) return <ErrorNote error={state.error} />
+  return <Loading label={label} />
+}
+
+/** A thin bar along the top of the window while a request has taken longer than a moment (quick polls never show it). */
+export function ActivityBar() {
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const stop = onActivity((count) => {
+      clearTimeout(timer)
+      if (count > 0) timer = setTimeout(() => setBusy(true), 300)
+      else setBusy(false)
+    })
+    return () => { clearTimeout(timer); stop() }
+  }, [])
+  return busy ? <div className="activity-bar" role="progressbar" aria-label="Loading" /> : null
 }
 
 export function Empty({ children }: { children: ReactNode }) {

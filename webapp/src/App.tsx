@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import { Link, NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import type { Job, ProjectsInfo, Session } from './api'
 import { api, projectId, projectPath, remote } from './api'
-import { ErrorNote } from './components'
+import { ActivityBar, ErrorNote, Loading } from './components'
 import { useFetch, useStored } from './hooks'
 import { ProjectProvider, ProjectSwitcher, useProject } from './project'
 import { AdminSignIn, Annotator, ServerSetting, SessionContext, useSession } from './session'
@@ -36,7 +36,7 @@ export default function App() {
   const [theme] = useStored<'system' | 'light' | 'dark'>('stainid.theme', 'system')
   if (theme === 'system') document.documentElement.removeAttribute('data-theme')
   else document.documentElement.setAttribute('data-theme', theme)
-  if (!session.data) return <main className="main"><ErrorNote error={session.error} />{session.error && <ServerSetting open={remote} />}</main>
+  if (!session.data) return <main className="main">{session.error ? <><ErrorNote error={session.error} /><ServerSetting open={remote} /></> : <Loading />}</main>
   const annotating = pathname === '/annotate' || pathname.startsWith('/annotate/')
   const admin = session.data.admin
   let page
@@ -45,7 +45,7 @@ export default function App() {
   else if (projectId) page = <ProjectProvider><Shell /></ProjectProvider>
   else if (pathname === '/' || pathname === '/projects') page = <Projects />
   else page = <ToLastProject />
-  return <SessionContext.Provider value={{ session: session.data, reload: session.reload }}>{page}</SessionContext.Provider>
+  return <SessionContext.Provider value={{ session: session.data, reload: session.reload }}><ActivityBar />{page}</SessionContext.Provider>
 }
 
 /** An address of the previous release (/workflow, /cohort …): the same page of the project opened last. */
@@ -54,7 +54,7 @@ function ToLastProject() {
   const projects = useFetch<ProjectsInfo>('/api/projects')
   const target = projects.data ? (projects.data.default ? projectPath(projects.data.default, `${pathname}${search}${hash}`) : '/') : null
   useEffect(() => { if (target) location.replace(target) }, [target])
-  return <main className="main"><ErrorNote error={projects.error} /></main>
+  return <main className="main">{projects.error ? <ErrorNote error={projects.error} /> : <Loading />}</main>
 }
 
 /** The public annotation pages (/annotate): anyone with the link, for sessions the admin has started. */

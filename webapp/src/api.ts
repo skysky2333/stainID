@@ -217,7 +217,24 @@ export function apiUrl(path: string) {
   return remote && token ? `${url}${url.includes('?') ? '&' : '?'}access_token=${encodeURIComponent(token)}` : url
 }
 
+// Requests in flight, for the loading bar at the top of the page (see ActivityBar in components.tsx).
+let inFlight = 0
+const activityListeners = new Set<(count: number) => void>()
+export function onActivity(listener: (count: number) => void): () => void {
+  activityListeners.add(listener)
+  return () => { activityListeners.delete(listener) }
+}
+function setInFlight(change: number) {
+  inFlight += change
+  activityListeners.forEach((listener) => listener(inFlight))
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
+  setInFlight(1)
+  try { return await send<T>(url, init) } finally { setInFlight(-1) }
+}
+
+async function send<T>(url: string, init?: RequestInit): Promise<T> {
   const headers = remote && token ? { ...(init?.headers as Record<string, string> | undefined), Authorization: `Bearer ${token}` } : init?.headers
   const response = await fetch(apiBase + scoped(url), { ...init, headers })
   if (!response.ok) {
