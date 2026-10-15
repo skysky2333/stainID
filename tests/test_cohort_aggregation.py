@@ -145,3 +145,15 @@ def test_grey_matter_extent_keeps_grey_and_unclassified_tiles():
     extents = dict(sampling_extents(rows))
     assert [r["white_matter"] for r in rows if extents["whole_core_grey"](r)] == ["grey", "unknown", "grey"]
     assert "whole_core_grey" not in dict(sampling_extents([{k: v for k, v in r.items() if k != "white_matter"} for r in rows]))
+
+
+def test_a_core_without_interior_tiles_has_only_its_whole_core_row(monkeypatch):
+    """A small core whose tiles are all rim tiles has no interior subset: that row is left out, not an error."""
+    from stainid.analysis import aggregation
+
+    monkeypatch.setattr(aggregation, "summarize_stain_group", lambda rows, objects: {"tiles": len(rows)})
+    common = {c: "x" for c in aggregation.COMMON_COLUMNS}
+    rim = [{**common, "core_id": "LIP-9_A-1", "stain": "6E10", "technical_replicate": "1", "tile_id": f"t{i}",
+            "selection_order": str(100 + i), "preview_tissue_fraction": "0.2"} for i in range(3)]
+    rows = aggregation.aggregate_level(rim, [], "core")
+    assert [(r["sampling_extent"], r["tiles"]) for r in rows] == [("whole_core", 3)]

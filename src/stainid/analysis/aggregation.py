@@ -285,6 +285,8 @@ def aggregate_level(
         first = group[0]
         for extent, include in sampling_extents(group):
             selected = [row for row in group if include(row)]
+            if not selected:  # e.g. a small core with no interior tile: no row for that subset (missing downstream)
+                continue
             tile_ids = {row["tile_id"] for row in selected}
             selected_objects = [
                 obj for tile_id in tile_ids for obj in objects_by_tile.get(tile_id, [])
