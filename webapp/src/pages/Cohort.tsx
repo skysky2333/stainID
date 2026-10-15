@@ -1,108 +1,183 @@
-import { useMemo } from 'react'
-import { useNavigate } from 'react-router-dom'
-import type { CoreRow, Row, Summary } from '../api'
-import { coreThumb } from '../api'
-import { Empty, ErrorNote, GroupBadge, HelpBox, PageHead } from '../components'
+import { useEffect, useState } from 'react'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { coreThumb, enc } from '../api'
+import { Empty, GroupBadge, HelpBox, Loaded, Loading, PageHead, Progress, StatusBadge } from '../components'
 import { useFetch, useStored } from '../hooks'
 import { useProject } from '../project'
 
+interface CohortInfo { tmas: { tma: string; cores: number; stains: string[] }[]; stains: string[] }
+type Detection = 'done' | 'partial' | 'not_run'
+interface GridCell {
+  core_label: string; core_id: string | null; tissue_control: string | null; donor_id?: string | null; region?: string | null
+  disease_group?: string | null; technical_replicate?: string | null; thumb?: boolean; detection?: Detection
+}
+interface TmaGrid { tma: string; stain: string; columns: string[]; rows: number[]; cells: GridCell[]; thumbs_waiting: number; detection: { done: number; total: number } }
+
+const DETECTION_TEXT: Record<Detection, string> = { done: 'detected', partial: 'detection part-way', not_run: 'not detected yet' }
+const DETECTION_STATUS: Record<Detection, string> = { done: 'done', partial: 'partial', not_run: 'todo' }
+
 export default function Cohort() {
-  const { groups, groupColor, groupLabel, tmaName } = useProject()
-  const summary = useFetch<Summary>('/api/summary')
-  const [storedTma, setTma] = useStored('stainid.cohort.tma', '1')
-  const [storedStain, setStain] = useStored('stainid.cohort.stain', 'NeuN')
-  const [view, setView] = useStored<'grid' | 'table'>('stainid.cohort.view', 'grid')
-  const tmas = summary.data?.tmas ?? []
-  const tma = tmas.includes(storedTma) ? storedTma : tmas[0] ?? storedTma
-  const cores = useFetch<CoreRow[]>(`/api/cores?tma=${tma}`)
-  const layout = useFetch<Row[]>(`/api/tmas/${tma}/layout`)
-  const navigate = useNavigate()
-  const stains = summary.data ? Object.keys(summary.data.fields) : ['NeuN', '6E10', 'AT8']
-  const stain = stains.includes(storedStain) ? storedStain : stains[0] ?? storedStain
-
-  const grid = useMemo(() => {
-    const cells = (layout.data ?? []).map((r) => String(r.core_label))
-    const cols = Array.from(new Set(cells.map((c) => c.split('-')[0]))).sort()
-    const rows = Array.from(new Set(cells.map((c) => Number(c.split('-')[1])))).sort((a, b) => a - b)
-    return { cols, rows }
-  }, [layout.data])
-  const byLabel = useMemo(() => new Map((cores.data ?? []).map((c) => [c.core_label, c])), [cores.data])
-  const layoutByLabel = useMemo(() => new Map((layout.data ?? []).map((r) => [String(r.core_label), r])), [layout.data])
-
+  const cohort = useFetch<CohortInfo>('/api/cohort')
   return (
     <>
-      <PageHead title="Cohort & cores" subtitle="Every core of every TMA. Border colour = diagnostic group; click a core to see its fields with the detections drawn on top.">
-        <label className="field">TMA
-          <select value={tma} onChange={(e) => setTma(e.target.value)}>{(summary.data?.tmas ?? [tma]).map((t) => <option key={t} value={t}>{tmaName(t)}</option>)}</select>
-        </label>
-        <label className="field">Stain
-          <select value={stain} onChange={(e) => setStain(e.target.value)}>{stains.map((s) => <option key={s}>{s}</option>)}</select>
-        </label>
-        <label className="field">View
-          <select value={view} onChange={(e) => setView(e.target.value as 'grid' | 'table')}><option value="grid">Grid</option><option value="table">Table</option></select>
-        </label>
-      </PageHead>
+      <PageHead title="Cores" subtitle="Every core of each TMA. Open one to look at it closely, with what the AI found drawn on top." />
       <HelpBox id="cohort">
-        Use this page to check the results by eye. In the core view, the yellow squares are the analysed <b>fields</b>; open one to zoom in and switch
-        layers: detected objects (coloured by class), outlines, stained area above the slide threshold, and excluded regions (folds, holes, artifacts).
+        Pick a TMA and a stain to see all its cores as they sit on the slide; the coloured frame is the diagnostic group. Click a core to open it:
+        you can zoom in down to single cells, and switch on what the AI detected (neurons, plaques, tau tangles), the stained area and the
+        sampled fields. A <DetectionMark detection="not_run" /> marks a core the AI has not looked at yet, <DetectionMark detection="partial" /> one it is part-way through.
       </HelpBox>
-      {summary.data && !summary.data.cores && <Empty>No cores yet — run the set-up steps on the Workflow page first.</Empty>}
-      <ErrorNote error={cores.error ?? layout.error} />
-      <div className="row small" style={{ marginBottom: 12 }}>
-        {groups.map((g) => <span key={g} className="row" style={{ gap: 5 }}><span className="swatch" style={{ background: groupColor(g) }} />{groupLabel(g)}</span>)}
-        <span className="row" style={{ gap: 5 }}><span className="swatch" style={{ border: '1px dashed var(--text-muted)' }} />control / empty position</span>
-      </div>
-      {view === 'grid' ? (
-        <div className="card">
-          <div className="core-grid" style={{ gridTemplateColumns: `28px repeat(${grid.cols.length}, minmax(70px, 220px))` }}>
-            <div />
-            {grid.cols.map((c) => <div key={c} className="muted small" style={{ textAlign: 'center' }}>{c}</div>)}
-            {grid.rows.map((r) => (
-              <FragmentRow key={r} row={r} cols={grid.cols} stain={stain} byLabel={byLabel} layoutByLabel={layoutByLabel} onOpen={(id) => navigate(`/cores/${id}?stain=${stain}`)} />
-            ))}
-          </div>
-        </div>
-      ) : (
-        <div className="table-wrap">
-          <table>
-            <thead><tr><th>Core</th><th>Donor</th><th>Group</th><th>Region</th><th>Replicate</th><th>Stains</th></tr></thead>
-            <tbody>
-              {(cores.data ?? []).map((c) => (
-                <tr key={c.core_id} className="clickable" onClick={() => navigate(`/cores/${c.core_id}?stain=${stain}`)}>
-                  <td>{c.core_id}</td><td>{c.donor_id}</td><td><GroupBadge group={c.disease_group} /></td><td>{c.region}</td>
-                  <td>{c.technical_replicate}</td><td>{c.stains.join(', ')}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      <Loaded state={cohort} label="Loading the TMAs…">
+        {(data) => data.tmas.length ? <CohortGrid info={data} /> : (
+          <Empty>There are no core pictures yet. They are made when the cores are cut out of the slides.<div style={{ marginTop: 10 }}><Link className="btn primary" to="/workflow">Go to Run</Link></div></Empty>
+        )}
+      </Loaded>
     </>
   )
 }
 
-function FragmentRow({ row, cols, stain, byLabel, layoutByLabel, onOpen }: {
-  row: number; cols: string[]; stain: string; byLabel: Map<string, CoreRow>; layoutByLabel: Map<string, Row>; onOpen: (id: string) => void
-}) {
-  const { groupColor } = useProject()
+function CohortGrid({ info }: { info: CohortInfo }) {
+  const { tmaName } = useProject()
+  const [params, setParams] = useSearchParams()
+  const [storedTma, storeTma] = useStored('stainid.cohort.tma', info.tmas[0].tma)
+  const [storedStain, storeStain] = useStored('stainid.cohort.stain', info.stains[0])
+  const [view, setView] = useStored<'grid' | 'table'>('stainid.cohort.view', 'grid')
+  const tmas = info.tmas.map((t) => t.tma)
+  const wantedTma = params.get('tma') ?? storedTma
+  const tma = tmas.includes(wantedTma) ? wantedTma : tmas[0]
+  const stains = info.tmas.find((t) => t.tma === tma)?.stains ?? info.stains
+  const wantedStain = params.get('stain') ?? storedStain
+  const stain = stains.includes(wantedStain) ? wantedStain : stains[0]
+  const choose = (next: { tma?: string; stain?: string }) => {
+    const t = next.tma ?? tma
+    const s = next.stain ?? stain
+    storeTma(t)
+    storeStain(s)
+    setParams({ tma: t, stain: s }, { replace: true })
+  }
+  const at = tmas.indexOf(tma)
+
   return (
     <>
-      <div className="muted small" style={{ alignSelf: 'center', textAlign: 'center' }}>{row}</div>
-      {cols.map((col) => {
-        const label = `${col}-${row}`
-        const core = byLabel.get(label)
-        const info = layoutByLabel.get(label)
-        if (!core || !core.stains.includes(stain)) {
-          return <div key={label} className="core-cell empty" title={info ? `${label} ${info.tissue_control ?? ''}` : label}><span className="tag">{label}</span></div>
-        }
-        return (
-          <div key={label} className="core-cell" style={{ borderColor: core.disease_group ? groupColor(core.disease_group) : 'var(--border)' }}
-            title={`${core.core_id} · donor ${core.donor_id} · ${core.region}`} onClick={() => onOpen(core.core_id)}>
-            <img loading="lazy" src={coreThumb(core.core_id, stain, 256)} alt={core.core_id} />
-            <span className="tag">{label}{core.region ? ` · ${core.region}` : ''}</span>
-          </div>
-        )
-      })}
+      <div className="cohort-bar">
+        <div className="row">
+          <button className="btn" disabled={at <= 0} onClick={() => choose({ tma: tmas[at - 1] })} aria-label="Previous TMA" title="Previous TMA">‹</button>
+          <select value={tma} onChange={(e) => choose({ tma: e.target.value })} aria-label="TMA">
+            {info.tmas.map((t) => <option key={t.tma} value={t.tma}>{tmaName(t.tma)} · {t.cores} cores</option>)}
+          </select>
+          <button className="btn" disabled={at >= tmas.length - 1} onClick={() => choose({ tma: tmas[at + 1] })} aria-label="Next TMA" title="Next TMA">›</button>
+        </div>
+        <div className="segmented" role="tablist" aria-label="Stain">
+          {stains.map((s) => <button key={s} role="tab" aria-selected={s === stain} className={s === stain ? 'active' : ''} onClick={() => choose({ stain: s })}>{s}</button>)}
+        </div>
+        <span className="spacer" />
+        <div className="segmented" aria-label="Layout">
+          <button className={view === 'grid' ? 'active' : ''} onClick={() => setView('grid')}>Pictures</button>
+          <button className={view === 'table' ? 'active' : ''} onClick={() => setView('table')}>List</button>
+        </div>
+      </div>
+      <TmaCores key={`${tma}-${stain}`} tma={tma} stain={stain} view={view} />
     </>
   )
+}
+
+function TmaCores({ tma, stain, view }: { tma: string; stain: string; view: 'grid' | 'table' }) {
+  const { tmaName } = useProject()
+  const navigate = useNavigate()
+  const [poll, setPoll] = useState(false)
+  const grid = useFetch<TmaGrid>(`/api/tmas/${enc(tma)}/grid?stain=${enc(stain)}`, poll ? 3000 : undefined)
+  // while pictures are being made, ask again every few seconds (asking also keeps them queued)
+  useEffect(() => setPoll((grid.data?.thumbs_waiting ?? 0) > 0), [grid.data])
+  const open = (cell: GridCell) => cell.core_id && navigate(`/cores/${enc(cell.core_id)}?stain=${enc(stain)}`)
+
+  return (
+    <Loaded state={grid} label={`Loading ${tmaName(tma)}…`}>
+      {(g) => (
+        <>
+          <GridStatus grid={g} />
+          {view === 'grid' ? <CoreGrid grid={g} onOpen={open} /> : <CoreTable grid={g} onOpen={open} />}
+        </>
+      )}
+    </Loaded>
+  )
+}
+
+function GridStatus({ grid }: { grid: TmaGrid }) {
+  const { groups, groupColor, groupLabel, tmaName } = useProject()
+  const { done, total } = grid.detection
+  return (
+    <div className="card cohort-status">
+      <div className="row">
+        <span><b>AI detection</b> on {tmaName(grid.tma)} {grid.stain}:</span>
+        {done === total ? <StatusBadge status="done" /> : done === 0 ? <span className="badge status-todo">Not detected yet</span>
+          : <span className="row" style={{ gap: 8 }}><span>{done} of {total} cores</span><span style={{ width: 120 }}><Progress done={done} total={total} /></span></span>}
+        <span className="spacer" />
+        {grid.thumbs_waiting > 0 && <Loading inline label={`Making pictures of ${grid.thumbs_waiting} core${grid.thumbs_waiting === 1 ? '' : 's'} (first visit only)…`} />}
+      </div>
+      <div className="row small legend">
+        {groups.map((g) => <span key={g} className="row"><span className="swatch" style={{ background: groupColor(g) }} />{groupLabel(g)}</span>)}
+        <span className="row"><span className="swatch outline dashed" />control tissue or empty</span>
+        <span className="row"><DetectionMark detection="not_run" /> not detected yet</span>
+        <span className="row"><DetectionMark detection="partial" /> detection part-way</span>
+      </div>
+    </div>
+  )
+}
+
+function CoreGrid({ grid, onOpen }: { grid: TmaGrid; onOpen: (cell: GridCell) => void }) {
+  const { groupColor, groupLabel } = useProject()
+  const byLabel = new Map(grid.cells.map((c) => [c.core_label, c]))
+  return (
+    <div className="card">
+      <div className="core-grid" style={{ gridTemplateColumns: `20px repeat(${grid.columns.length}, minmax(0, 200px))` }}>
+        <div />
+        {grid.columns.map((c) => <div key={c} className="muted small core-axis">{c}</div>)}
+        {grid.rows.map((row) => [
+          <div key={`r${row}`} className="muted small core-axis" style={{ alignSelf: 'center' }}>{row}</div>,
+          ...grid.columns.map((col) => {
+            const label = `${col}-${row}`
+            const cell = byLabel.get(label)
+            if (!cell?.core_id) {
+              return <div key={label} className="core-cell empty" title={cell?.tissue_control ? `${label}: control tissue (${cell.tissue_control})` : `${label}: no core`}>
+                <span className="tag">{label}{cell?.tissue_control ? ` · ${cell.tissue_control}` : ''}</span></div>
+            }
+            const detection = cell.detection ?? 'not_run'
+            const about = [label, cell.donor_id && `donor ${cell.donor_id}`, cell.region, cell.disease_group && groupLabel(cell.disease_group), DETECTION_TEXT[detection]].filter(Boolean).join(' · ')
+            return (
+              <button key={label} className="core-cell" style={{ borderColor: cell.disease_group ? groupColor(cell.disease_group) : 'var(--border)' }} title={about} aria-label={about} onClick={() => onOpen(cell)}>
+                {cell.thumb ? <img loading="lazy" src={coreThumb(cell.core_id, grid.stain, 256)} alt="" />
+                  : <span className="core-cell-wait"><span className="spinner" aria-hidden="true" /></span>}
+                {detection !== 'done' && <DetectionMark detection={detection} corner />}
+                <span className="tag">{label}{cell.region ? ` · ${cell.region}` : ''}</span>
+              </button>
+            )
+          }),
+        ])}
+      </div>
+    </div>
+  )
+}
+
+function CoreTable({ grid, onOpen }: { grid: TmaGrid; onOpen: (cell: GridCell) => void }) {
+  const cores = grid.cells.filter((c) => c.core_id)
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead><tr><th>Position</th><th>Donor</th><th>Group</th><th>Region</th><th className="num">Replicate</th><th>AI detection</th></tr></thead>
+        <tbody>
+          {cores.map((c) => (
+            <tr key={c.core_label} className="clickable" onClick={() => onOpen(c)}>
+              <td>{c.core_label}</td><td>{c.donor_id ?? '—'}</td><td><GroupBadge group={c.disease_group} /></td><td>{c.region ?? '—'}</td>
+              <td className="num">{c.technical_replicate ?? '—'}</td>
+              <td><StatusBadge status={DETECTION_STATUS[c.detection ?? 'not_run']} /></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+/** The small ring on a core the AI has not (fully) looked at: hollow = not yet, half filled = part-way. */
+function DetectionMark({ detection, corner = false }: { detection: Detection; corner?: boolean }) {
+  return <span className={`det-mark det-${detection}${corner ? ' corner' : ''}`} aria-hidden="true" />
 }
