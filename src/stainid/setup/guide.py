@@ -13,7 +13,7 @@ from stainid.slides.table import find_slides
 from stainid.workflows.steps import best_device
 
 # seconds per unit of work, roughly (the step cards give the same figures in words)
-SECONDS = {"dearray": 60, "export": 90, "qc": 3, "tiles": 3, "calibrate": 60, "neun": 5, "fields": 60, "summarize": 60}
+SECONDS = {"dearray": 60, "export": 90, "qc": 3, "tiles": 3, "images": 3, "calibrate": 60, "neun": 5, "fields": 60, "summarize": 60}
 NUCLEI_SECONDS = {"cuda": 4, "mps": 90, "cpu": 400}  # Cellpose-SAM per ~560 µm tile
 TILE_UM = 560
 
@@ -54,7 +54,13 @@ def estimate(project: Project, remaining: list[str]) -> dict:
     """Rough run time of the steps in `remaining` on this computer, from the number of slides, cores and tiles."""
     slides = len(_rows(project.input("slides_table")))
     manifest = _rows(project.input("core_manifest"))
-    if manifest:
+    if not project.is_tma:  # image sets: one core image per image; whole slides: about 30 regions of tissue per slide
+        images = len(_rows(project.input("image_list")))
+        cores = len(_rows(project.input("core_images"))) or images * (30 if project.kind == "slides" else 1)
+        slides, manifest = len({r["tma"] for r in _rows(project.input("core_images"))}) or max(1, images // 20), []
+        biological = cores
+        diameter = 1700.0 if project.kind == "slides" else 400.0
+    elif manifest:
         positions = len(manifest)
         biological = sum(r.get("core_role") == "biological" for r in manifest) or sum(r.get("provisional_tissue_status") != "empty" for r in manifest)
         diameters = sorted(float(r["estimated_core_diameter_um"]) for r in manifest if r.get("estimated_core_diameter_um"))
@@ -64,7 +70,7 @@ def estimate(project: Project, remaining: list[str]) -> dict:
         biological, diameter = int(positions * 0.9), 1500.0
     tiles = len(_rows(project.analysis_tiles())) or int(biological * max(1.0, 0.85 * (diameter / TILE_UM) ** 2))
     device = best_device()
-    units = {"dearray": slides, "export": slides, "qc": biological, "tiles": biological, "calibrate": slides,
+    units = {"dearray": slides, "export": slides, "qc": biological, "tiles": biological, "images": biological, "calibrate": slides,
              "neun": tiles / 3, "fields": biological * 2 / 3, "summarize": 1}
     steps = []
     for step in remaining:
@@ -101,6 +107,8 @@ def screens(project: Project, steps: list[dict] | None = None) -> list[dict]:
     from stainid.workflows.steps import describe
 
     steps = steps if steps is not None else describe(project)
+    if not project.is_tma:
+        return image_screens(project, steps)
     by_id = {s["id"]: s for s in steps}
     in_folder = find_slides(project.input("slides_dir"))
     slides = _rows(project.input("slides_table"))
@@ -135,6 +143,42 @@ def screens(project: Project, steps: list[dict] | None = None) -> list[dict]:
         entry("checks", "Checks", "attention" if problems else "warning" if warnings else "done" if layout else "todo",
               ", ".join(part for part in (f"{len(problems)} to fix" if problems else "", f"{len(warnings)} to look at" if warnings else "") if part)
               if problems or warnings else "Everything fits together" if layout else "After the map"),
+        entry("run", "Run", "done" if not remaining else "running" if any(by_id[s["id"]].get("job") and by_id[s["id"]]["job"]["status"] in ("running", "queued")
+                                                                          for s in remaining) else "todo",
+              f"{count(len(remaining), 'step')} left" if remaining else "Everything has run"),
+    ]
+
+
+def image_screens(project: Project, steps: list[dict]) -> list[dict]:
+    """The guided setup of an image set or whole slides: Images (or Slides) -> Donors -> Checks -> Run. There is no TMA
+    map and no core grid: every image, or every tissue region of a slide, is analysed like a core."""
+    from stainid.imageset.table import read_images
+    from stainid.imaging.settings import analysis_stain
+
+    by_id = {s["id"]: s for s in steps}
+    images = read_images(project)
+    thing = "slide" if project.kind == "slides" else "image"
+    analysed = [r for r in images if analysis_stain(project, r.get("stain", ""))]
+    donors = _rows(project.input("donor_metadata"))
+    issues = project_issues(project) if images else []
+    problems = [i for i in issues if i["level"] == "problem"]
+    warnings = [i for i in issues if i["level"] == "warning"]
+    remaining = [s for s in steps if s["stage"] in ("1 · Set up", "2 · Detect", "3 · Results") and s["command"] and s["id"] != "masks"
+                 and (s["progress"]["state"] != "done" or s["progress"].get("outdated"))]
+    ready = bool(images) and all(r.get("donor_id") for r in images) and bool(analysed)
+    on_images = {r["donor_id"] for r in images if r.get("donor_id")}
+
+    def entry(id_: str, title: str, state: str, summary: str) -> dict:
+        return {"id": id_, "title": title, "state": state, "summary": summary}
+
+    listed = f"{count(len(images), thing)} from {count(len(on_images), 'donor')}" + ("" if len(analysed) == len(images) else f", {len(analysed)} analysed")
+    return [
+        entry("images", "Slides" if project.kind == "slides" else "Images", "done" if ready else "attention" if images else "todo",
+              listed if images else f"No {thing}s yet"),
+        entry("donors", "Donors", "done" if donors else "optional", count(len(donors), "donor") if donors else "Optional: group, age, sex and other details per donor"),
+        entry("checks", "Checks", "attention" if problems else "warning" if warnings else "done" if images else "todo",
+              ", ".join(part for part in (f"{len(problems)} to fix" if problems else "", f"{len(warnings)} to look at" if warnings else "") if part)
+              if problems or warnings else "Everything fits together" if images else f"After the {thing}s"),
         entry("run", "Run", "done" if not remaining else "running" if any(by_id[s["id"]].get("job") and by_id[s["id"]]["job"]["status"] in ("running", "queued")
                                                                           for s in remaining) else "todo",
               f"{count(len(remaining), 'step')} left" if remaining else "Everything has run"),

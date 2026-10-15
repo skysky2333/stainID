@@ -64,6 +64,16 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("tiles", help="core image table, and every core cut into tissue tiles (detection runs on these)")
     p.add_argument("--tile-size", "--field-size", dest="tile_size", type=int, default=2048, help="side of each square tile in pixels")
 
+    p = sub.add_parser("images", help="image sets and whole slides: core images at the analysis scale, tiles, and a dataset package's labels")
+    p.add_argument("--tile-size", dest="tile_size", type=int, default=2048, help="largest side of a tile in pixels")
+
+    p = sub.add_parser("package", help="make a project from a dataset package (dataset.yaml, images.csv, annotations.csv, donors.csv)")
+    p.add_argument("package", type=Path, help="the package folder (or the dataset folder holding package/)")
+    p.add_argument("folder", type=Path, help="the new project's folder")
+    p.add_argument("--name", default="")
+
+    sub.add_parser("score", help="score the active models on the labels imported from a dataset package")
+
     p = sub.add_parser("calibrate", help="per-slide DAB thresholds (TMA x stain) from every tile of every core")
     p.add_argument("--stain", action="append")
     p.add_argument("--redo", action="store_true", help="calibrate slides again that already have a threshold")
@@ -153,6 +163,12 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "serve":
         serve(args)
         return
+    if args.command == "package":
+        from stainid.imageset.package import create_project
+
+        project = create_project(args.package, args.folder, args.name)
+        print(f"{project.name}: a new {project.kind} project in {project.root}; next: stainid --project {project.root} images", flush=True)
+        return
     project = load_project(args.project)
     os.chdir(project.root)
     step, words = _workflow_step(argv)
@@ -192,6 +208,15 @@ def run(args: argparse.Namespace, project) -> None:
         from stainid.sampling.whole_core import write_whole_core_manifest
 
         write_whole_core_manifest(project, args.tile_size)
+    elif args.command == "images":
+        from stainid.imageset.prepare import prepare_images
+
+        prepare_images(project, args.tile_size)
+    elif args.command == "score":
+        from stainid.imageset.scoring import score
+
+        for line in score(project)["summary"]:
+            print(line, flush=True)
     elif args.command == "calibrate":
         from stainid.workflows.calibrate import calibrate_slides
 

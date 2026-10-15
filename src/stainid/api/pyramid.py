@@ -30,6 +30,7 @@ import numpy as np
 
 from stainid.api.state import ProjectState
 from stainid.imaging.color import rgb_to_hed
+from stainid.imaging.core_images import read_bgr
 from stainid.imaging.thumbnails import THUMB_BASE, base_path, jpeg, shrink, without_outlines, write_atomic, write_base
 from stainid.qc.core_qc import overlay_path
 
@@ -127,7 +128,7 @@ def _fresh(path: Path, source: Path) -> bool:
 
 def _read(source: Path, flag: int = cv2.IMREAD_COLOR) -> np.ndarray:
     with DECODE:
-        bgr = cv2.imread(str(source), flag)
+        bgr = read_bgr(source, flag)
     if bgr is None:
         raise FileNotFoundError(f"could not read {source}")
     return bgr

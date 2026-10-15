@@ -10,6 +10,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+from stainid.imaging.core_images import read_bgr
 from stainid.project import Project
 from stainid.qc.core_qc import tissue_mask
 from stainid.sampling.analysis_manifest import write_analysis_manifest
@@ -30,7 +31,7 @@ def grid(width: int, field: int) -> list[tuple[int, int]]:
 
 def core_tiles(project: Project, row: dict, known: dict[tuple[int, int], dict], field: int) -> list[dict]:
     """The tissue tiles of one core image; `known` maps (x, y) to an earlier sampled field at that square."""
-    preview = cv2.cvtColor(cv2.imread(str(project.root / row["image_path"]), cv2.IMREAD_REDUCED_COLOR_8), cv2.COLOR_BGR2RGB)
+    preview = cv2.cvtColor(read_bgr(project.root / row["image_path"], cv2.IMREAD_REDUCED_COLOR_8), cv2.COLOR_BGR2RGB)
     width, height = int(row["native_width_px"]), int(row["native_height_px"])
     tissue, _, _ = tissue_mask(preview)
     sy, sx = tissue.shape[0] / height, tissue.shape[1] / width

@@ -30,6 +30,7 @@ from scipy import ndimage
 from stainid.api import pyramid
 from stainid.api.render import crop_origin
 from stainid.api.state import ProjectState
+from stainid.imaging.core_images import open_image
 from stainid.nuclei import clean_nuclei
 from stainid.pipelines.cohort_v1 import context_crop
 from stainid.qc.exclusions import read_manual_exclusions
@@ -147,7 +148,7 @@ def _trace_core(state: ProjectState, tiles: list[dict], job: _Job) -> list[dict]
     image_path = tiles[0]["image_path"]
     manual = {image_path: read_manual_exclusions(project.input("manual_exclusions")).get(image_path, [])}
     nuclei_dir = project.output("nuclei")
-    with pyramid.DECODE, Image.open(project.root / image_path) as image:
+    with pyramid.DECODE, open_image(project.root / image_path) as image:
         image.load()
         crops = [context_crop(image, int(t["x_px"]), int(t["y_px"]), int(t["width_px"]), int(t["height_px"]), project.context_px) for t in tiles]
     with ProcessPoolExecutor(WORKERS, mp_context=multiprocessing.get_context("spawn")) as pool:

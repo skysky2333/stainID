@@ -8,6 +8,7 @@ import numpy as np
 from joblib import load
 from PIL import Image
 
+from stainid.imaging.core_images import open_image
 from stainid.masks.objects import segment_objects
 from stainid.masks.sam import WindowedSam
 from stainid.pipelines.cohort_v1 import context_crop
@@ -71,7 +72,7 @@ def run_masks(project: Project, stain: str, device: str = "cpu", threads: int = 
             continue
         seeds = load_seeds(stain, tiles, project.output("fields") / "parts", neun_tiles, project.context_px)
         rows = []
-        with Image.open(project.root / tiles[0]["image_path"]) as image:
+        with open_image(project.root / tiles[0]["image_path"]) as image:
             image.load()
             for tile in tiles:
                 if not seeds.get(tile["tile_id"]):

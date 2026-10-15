@@ -12,6 +12,7 @@ from PIL import Image
 from stainid.api import pyramid
 from stainid.api.state import ProjectState
 from stainid.imaging.color import rgb_to_hed
+from stainid.imaging.core_images import open_image
 from stainid.imaging.tissue import field_tissue_mask, fold_mask, linear_artifact_mask
 from stainid.qc.exclusions import rasterize_core_exclusions, read_manual_exclusions
 from stainid.stains.neun.audit import crop_with_padding
@@ -45,7 +46,7 @@ def field_rgb(state: ProjectState, tile_id: str) -> np.ndarray:
 def _crop_field(state: ProjectState, tile: dict, target: Path) -> None:
     """Cut one tile (with its context margin) out of its core image."""
     context = state.project.context_px
-    with pyramid.DECODE, Image.open(state.root / tile["image_path"]) as image:
+    with pyramid.DECODE, open_image(state.root / tile["image_path"]) as image:
         x0, y0 = crop_origin(tile, context)
         x1 = min(int(tile["x_px"]) + int(tile["width_px"]) + context, image.width)
         y1 = min(int(tile["y_px"]) + int(tile["height_px"]) + context, image.height)
@@ -144,7 +145,7 @@ def object_crop(state: ProjectState, stain: str, tile_id: str, x: float, y: floa
     elif pilot.exists():
         crop = crop_with_padding(np.asarray(Image.open(pilot).convert("RGB")), x, y, 2 * half)
     else:
-        with pyramid.DECODE, Image.open(state.root / state.core_image(tile_id, stain)["image_path"]) as image:
+        with pyramid.DECODE, open_image(state.root / state.core_image(tile_id, stain)["image_path"]) as image:
             crop = np.asarray(image.crop((int(x) - half, int(y) - half, int(x) + half, int(y) + half)).convert("RGB"))
     Image.fromarray(crop).save(target, quality=92)
     return crop
