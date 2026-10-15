@@ -5,10 +5,11 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from stainid.api.state import get_state
-from stainid.jobs import NOISE
+from stainid.jobs import ACTIVE, NOISE
 from stainid.workflows.steps import describe
 
 router = APIRouter(tags=["jobs"])
+LOG_BYTES = 400_000
 
 
 class JobRequest(BaseModel):
@@ -18,12 +19,16 @@ class JobRequest(BaseModel):
 
 @router.get("/steps")
 def steps() -> list[dict]:
-    """Every workflow step with what it needs / produces (and whether those exist), its options, progress and latest job."""
+    """Every workflow step with what it needs / produces (and whether those exist), its options, progress, latest job and
+    the jobs of it running or waiting now (a step can run in several parts)."""
     state = get_state()
     latest: dict[str, dict] = {}
+    active: dict[str, list[dict]] = {}
     for job in sorted(state.jobs.jobs.values(), key=lambda j: j.created):
-        latest[job.workflow] = state.jobs.describe(job)
-    return [{**step, "job": latest.get(step["id"])} for step in describe(state.project)]
+        latest[job.workflow] = info = state.jobs.describe(job)
+        if job.status in ACTIVE:
+            active.setdefault(job.workflow, []).append(info)
+    return [{**step, "job": latest.get(step["id"]), "active": active.get(step["id"], [])} for step in describe(state.project)]
 
 
 @router.get("/jobs")
@@ -54,5 +59,8 @@ def log(job_id: str, tail: int = 400) -> str:
         return "(This run prints to its terminal. Start it with `> run.log` at the end to follow its output here.)"
     if not path.is_file():
         return ""
-    lines = path.read_text(errors="replace").splitlines()
+    with path.open("rb") as handle:  # only the end: a long run's log can be many MB
+        start = max(0, handle.seek(0, 2) - LOG_BYTES)
+        handle.seek(start)
+        lines = handle.read().decode(errors="replace").splitlines()[1 if start else 0:]  # not a cut-off first line
     return "\n".join(line for line in lines[-tail:] if not NOISE.search(line))

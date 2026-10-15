@@ -41,6 +41,8 @@ export interface Step {
   id: string; stage: string; title: string; summary: string; details: string; needs: ResourceInfo[]; uses: ResourceInfo[]; produces: ResourceInfo[]
   command: string[] | null; options: StepOption[]; heavy: boolean; view: string | null; duration: string; progress: StepProgress; job: Job | null
   after: string[]
+  /** the jobs of this step running or waiting now (a step can run in several parts) */
+  active?: Job[]
 }
 export interface SlideRow {
   slide_path: string; tma: string; stain: string; rows?: string; columns?: string; grid_source?: string; orientation?: string; new?: boolean

@@ -142,8 +142,10 @@ class Project:
         return float(bundle["context_threshold"] if model == "neun" else bundle["probability_threshold"])
 
     def resolve(self, section: str, key: str) -> Path:
+        """A configured path, relative ones taken from the project folder; `..` is folded in (`stainID/../scans` is
+        `scans`), so the same file always has the same name, e.g. in the slides table and in a folder listing."""
         path = Path(self.config[section][key])
-        return path if path.is_absolute() else self.root / path
+        return path if path.is_absolute() else Path(os.path.normpath(self.root / path))
 
     def input(self, key: str) -> Path:
         return self.resolve("inputs", key)
