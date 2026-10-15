@@ -864,3 +864,32 @@ th.num .col-head { justify-items: end; }
   .picker-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
   .field-grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
 }
+
+/* ---- results page: ICC and group tests per measure (results2 agent) ---- */
+.measure-filters { display: grid; gap: 6px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-1); }
+.measure-filter-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: space-between; }
+.measure-filter-row select { font-size: 12.5px; padding: 3px 6px; max-width: 100%; }
+.measure-filters details.advanced { margin: 2px 0 0; border-radius: 8px; }
+.measure-filters details.advanced > summary { padding: 6px 10px; font-size: 12.5px; }
+.measure-filters .advanced-body { padding: 10px; gap: 8px; }
+.measure-filters .inline-field { flex-wrap: wrap; }
+.measure-filters input[type='number'] { width: 72px; padding: 3px 6px; }
+.measure-filters .spinner { display: inline-block; width: 10px; height: 10px; vertical-align: -1px; }
+.filter-note { margin: 0; }
+.source-files summary { cursor: pointer; }
+.source-list { margin: 4px 0; padding-left: 16px; }
+.source-list code { overflow-wrap: anywhere; white-space: normal; }
+.measure-item-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.measure-test { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.measure-item.selected .measure-test { color: inherit; }
+.icc-chip { flex: none; display: inline-block; padding: 0 6px; border-radius: 999px; font-size: 11px; font-weight: 600; line-height: 17px; white-space: nowrap;
+  font-variant-numeric: tabular-nums; cursor: help; border: 1px solid color-mix(in srgb, currentColor 35%, transparent); background: color-mix(in srgb, currentColor 9%, transparent); }
+.icc-good { color: var(--good); }
+.icc-fair { color: var(--warning); }
+.icc-weak { color: var(--critical); }
+.icc-none { color: var(--text-muted); }
+.measure-head .icc-chip { font-size: 12px; line-height: 20px; padding: 0 9px; }
+.test-line { margin: 0; max-width: 760px; }
+.test-mark { display: inline-block; padding: 0 7px; margin-right: 2px; border-radius: 6px; font-size: 11.5px; font-weight: 650; color: var(--text-secondary); background: var(--surface-0); border: 1px solid var(--border); }
+.test-mark.significant { color: var(--accent); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
+tr.significant-row td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
