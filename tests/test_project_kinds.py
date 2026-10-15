@@ -186,3 +186,103 @@ def test_setup_steps_follow_the_kind(tmp_path):
 
     screens = [s["id"] for s in guide.screens(project)]
     assert screens == ["images", "donors", "checks", "run"]
+
+
+def test_image_list_from_a_folder_and_checks(tmp_path):
+    from stainid.imageset import table as image_table
+    from stainid.project import Project, save_project
+    from stainid.setup.checks import apply_fix, project_issues
+
+    folder = tmp_path / "scans"
+    for donor, name in (("case1", "case1_4G8_frontal.png"), ("case1", "case1_AT8.png"), ("case2", "c2 PHF-1.tif")):
+        (folder / donor).mkdir(parents=True, exist_ok=True)
+        (folder / donor / name).write_bytes(b"")
+    rows = image_table.scan_folder(folder, ["4G8"], slides=False)
+    assert [(r["donor_id"], r["stain"]) for r in rows] == [("case1", "4G8"), ("case1", "AT8"), ("case2", "PHF-1")]
+    project = save_project(Project(root=tmp_path / "p", config=load_project(tmp_path / "p").config), {"kind": "images"})
+    image_table.save_images(project, rows + [{"path": str(folder / "missing.png"), "stain": "IBA1", "donor_id": ""}])
+    issues = {i["id"]: i for i in project_issues(project)}
+    assert issues["images_without_donor"]["level"] == "problem" and issues["stains_not_analysed"]["level"] == "warning"
+    assert "image_files_missing" in issues
+    (project.root / "data" / "donor_metadata.csv").write_text("donor_id,disease_group\ncase1,AD\n")
+    fix = next(i for i in project_issues(project) if i["id"] == "donors_not_in_table")["fixes"][0]
+    assert apply_fix(project, fix["action"], fix["args"]) == "1 donor added to the donor table"
+
+
+# ---------------------------------------------------------------- the web app's routes
+
+@pytest.fixture()
+def client(tmp_path, monkeypatch):
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    from stainid.api import state
+    from stainid.api.app import create_app
+
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "stainid.yaml").write_text("name: Home\n")
+    monkeypatch.setenv("STAINID_PROJECT", str(home))
+    state.reset()
+    client = TestClient(create_app(), client=("127.0.0.1", 50000))
+    assert client.post("/api/session/admin", json={"password": "admin"}).status_code == 200
+    yield client
+    state.reset()
+
+
+def test_package_import_setup_and_scoring_through_the_app(client, tmp_path):
+    folder, truth = tiles_with_points(tmp_path / "dataset")
+    preview = client.post("/api/projects/package-preview", json={"package": str(folder.parent)}).json()  # the dataset folder works too
+    assert preview["kind"] == "images" and preview["images"] == 3 and preview["raters"] == {"expert1": 12, "expert2": 15}
+    assert preview["stains"][0]["family"] == "amyloid" and preview["class_map"]["diffuse"] == "diffuse plaque" and preview["files_found"] == 3
+    made = client.post("/api/projects/from-package", json={"package": str(folder), "path": str(tmp_path / "study"), "name": "Points",
+                                                               "class_map": {"diffuse": "ignore"}}).json()
+    assert made["kind"] == "images" and made["kind_label"] == "Image set"
+    base = f"/api/projects/{made['id']}"
+    setup = client.get(f"{base}/setup").json()
+    assert [s["id"] for s in setup["screens"]] == ["images", "donors", "checks", "run"] and setup["set_up"]
+    assert [r["id"] for r in setup["remaining"]][0] == "images"
+    images = client.get(f"{base}/setup/images").json()
+    assert images["total"] == 3 and images["donors"] == 2 and images["stains"][0]["analysed_as"] == "6E10"
+    assert client.get(f"{base}/setup/images/tile0/picture.jpg?analysis=1").headers["content-type"] == "image/jpeg"
+    changed = client.put(f"{base}/setup/images/imaging", json={"native_pixel_size_um": 0.5, "rescale": "on_import",
+                                                                "stains": {"4G8": {"family": "amyloid", "chromogen": "Fast Red"}}}).json()
+    assert changed["stains"][0]["chromogen"] == "FastRed" and changed["imaging"]["native_pixel_size_um"] == 0.5
+    bad = client.put(f"{base}/setup/images/imaging", json={"stains": {"4G8": {"family": "glia"}}})
+    assert bad.status_code == 400
+    client.put(f"{base}/setup/images/imaging", json={"stains": {"4G8": {"family": "amyloid", "chromogen": "DAB"}}})
+    project = load_project(tmp_path / "study")
+    prepare.prepare_images(project, log=_quiet)  # what the Prepare images step runs
+    imported = client.get(f"{base}/labels/imported").json()
+    assert imported["placed"] == {"expert1": 12, "expert2": 12, "consensus": 12}  # expert2's diffuse plaque is ignored by the class map
+    assert client.post(f"{base}/models/score").status_code == 400  # no detections yet
+    tiles = table(project.analysis_tiles())
+    fake_plaques(project.root, tiles, {image: [(x * 0.5 / 0.2738, y * 0.5 / 0.2738) for x, y in centres] for image, centres in truth.items()})
+    scores = client.post(f"{base}/models/score").json()["scores"]
+    assert {(r["rater"], r["recall"]) for r in scores["rows"]} == {("expert1", 1.0), ("expert2", 1.0), ("consensus", 1.0)}
+    assert client.get(f"{base}/models/score.csv").text.startswith("stain,rater,kind")
+    remapped = client.put(f"{base}/labels/imported/class-map", json={"class_map": {**imported["class_map"], "diffuse": "diffuse plaque"}}).json()
+    assert remapped["placed"]["expert2"] == 15
+    # imported sessions are read-only
+    client.post("/api/session/annotator", json={"name": "Ann"})
+    name = "import-synthetic_points-expert1"
+    session = sessions.meta(project.output("reviews"), name)
+    refused = client.post(f"{base}/annotate/{name}/labels", json={"records": [{"task": "class", "tile_id": session["fields"][0], "x": 5, "y": 5,
+                                                                                  "value": "not a plaque"}]})
+    assert refused.status_code == 403
+    listed = {p["id"]: p for p in client.get("/api/projects").json()["projects"]}
+    assert listed[made["id"]]["kind"] == "images" and listed[made["id"]]["status"]["state"] == "set_up"
+
+
+def test_new_study_of_each_kind(client, tmp_path):
+    for kind, rescale in (("images", "on_import"), ("slides", "on_the_fly")):
+        made = client.post("/api/projects/create", json={"path": str(tmp_path / kind), "name": kind, "kind": kind}).json()
+        project = load_project(tmp_path / kind)
+        assert made["kind"] == kind and project.kind == kind and project.config["imaging"]["rescale"] == rescale
+        steps = [s["id"] for s in client.get(f"/api/projects/{made['id']}/steps").json()]
+        assert "images" in steps and "dearray" not in steps
+        checks = client.get(f"/api/projects/{made['id']}/setup/checks").json()
+        assert checks[0]["id"] == "no_images"
+    assert client.post("/api/projects/create", json={"path": str(tmp_path / "x"), "kind": "puzzle"}).status_code == 400
+    tma = client.post("/api/projects/create", json={"path": str(tmp_path / "tma"), "name": "tma"}).json()
+    assert tma["kind"] == "tma" and "dearray" in [s["id"] for s in client.get(f"/api/projects/{tma['id']}/steps").json()]

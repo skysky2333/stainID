@@ -115,7 +115,8 @@ def create(request: CreateRequest) -> dict:
         raise HTTPException(400, f"kind must be one of {', '.join(KINDS)}")
     changes = {"name": request.name.strip() or path.name, "kind": request.kind}
     if request.kind != "tma":  # another lab's ids are kept as written; whole slides are read region by region, not copied
-        changes |= {"donor_ids": {"digits": 0, "prefixed_digits": 0}, "imaging": {"rescale": "on_the_fly" if request.kind == "slides" else "on_import"}}
+        changes |= {"donor_ids": {"digits": 0, "prefixed_digits": 0}, "tma": {"prefix": ""},
+                    "imaging": {"rescale": "on_the_fly" if request.kind == "slides" else "on_import"}}
     if request.copy_from:
         source = _entry(request.copy_from)
         changes = {**copied_settings(load_project(source.path), request.settings), **changes}
@@ -124,7 +125,7 @@ def create(request: CreateRequest) -> dict:
     return describe(_entry(opened.id))
 
 
-@router.post("/package/preview")
+@router.post("/package-preview")
 def package_preview(request: PackageRequest) -> dict:
     """What a dataset package holds, before a project is made from it."""
     try:
@@ -133,7 +134,7 @@ def package_preview(request: PackageRequest) -> dict:
         raise HTTPException(400, str(error))
 
 
-@router.post("/package/create")
+@router.post("/from-package")
 def package_create(request: PackageCreate) -> dict:
     """A new project from a dataset package: its kind, imaging settings, image list (linked, not copied) and donors. The
     labels are placed on the tiles when its images are prepared (Set up → Run)."""

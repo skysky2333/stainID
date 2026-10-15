@@ -211,7 +211,7 @@ def create_project(path: Path | str, folder: Path | str, name: str = "", class_m
         raise FileExistsError(f"{root} already holds a stainID project")
     mapping = {**default_class_map(package), **(class_map or {})}
     changes = {"name": name.strip() or package.title, "kind": package.kind, "imaging": imaging_settings(package, stains),
-               "donor_ids": {"digits": 0, "prefixed_digits": 0},
+               "donor_ids": {"digits": 0, "prefixed_digits": 0}, "tma": {"prefix": ""},
                "dataset": {"id": package.id, "title": package.title, "package": str(package.folder),
                            "licence": str(package.meta.get("licence") or package.meta.get("license") or ""),
                            "citation": str(package.meta.get("citation") or ""), "doi": str(package.meta.get("doi") or ""),

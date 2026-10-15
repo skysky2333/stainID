@@ -293,7 +293,7 @@ def import_package_labels(project: Project, redo: bool = True, log=print) -> Pat
     write_text_atomic(out / "import.json", json.dumps(summary, indent=1))
     for note in notes:
         log(note, flush=True)
-    log(f"{len(placed):,} annotations placed; {len(made)} read-only labelling sessions", flush=True)
+    log(f"{len(placed):,} annotations placed; {len(made)} read-only labelling {'session' if len(made) == 1 else 'sessions'}", flush=True)
     return out / "annotations.csv"
 
 

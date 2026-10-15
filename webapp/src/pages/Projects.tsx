@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import type { ProjectEntry, ProjectsInfo, ProjectState } from '../api'
+import type { ProjectEntry, ProjectKind, ProjectsInfo, ProjectState } from '../api'
 import { api, projectPath } from '../api'
 import { Empty, ErrorNote, FilePicker, HelpBox, Modal, PageHead, timeAgo, withError } from '../components'
 import { useFetch } from '../hooks'
 import { useSession } from '../session'
 import { Advanced, ScreenData } from '../setup/parts'
+import { folderName, FromPackage, StudyPlace } from './NewFromPackage'
 
 const STATE: Record<ProjectState, { word: string; tone: string }> = {
   running: { word: 'Running', tone: 'status-running' }, results: { word: 'Results ready', tone: 'status-finished' }, set_up: { word: 'Set up', tone: 'status-done' },
@@ -84,6 +85,7 @@ function ProjectRow({ project: p, onRemove }: { project: ProjectEntry; onRemove:
         {p.exists ? <a href={projectPath(p.id)} className="project-name" title={p.path}>{p.name}</a> : <span className="project-name muted" title={p.path}>{p.name}</span>}
         <div className="row small project-status">
           <span className={`badge ${state.tone}`}>{p.status.state === 'running' && <span className="pulse" />}{state.word}</span>
+          {p.kind && p.kind !== 'tma' && <span className="badge">{p.kind_label}</span>}
           {detail && <span className="secondary ellipsis" title={detail}>{detail}</span>}
           <span className="muted">{p.last_opened ? `opened ${timeAgo(p.last_opened)}` : p.in_projects_dir ? 'in the projects folder' : ''}</span>
         </div>
@@ -115,9 +117,37 @@ function RemoveProject({ project, onClose, onRemoved }: { project: ProjectEntry;
   )
 }
 
-const folderName = (name: string) => name.trim().replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, ' ')
+
+type NewKind = ProjectKind | 'package'
+const NEW_KINDS: { id: NewKind; title: string; text: string }[] = [
+  { id: 'tma', title: 'TMA study', text: 'Slide scans of tissue microarrays, with a TMA map saying which donor sits on each core.' },
+  { id: 'images', title: 'Image set', text: 'A folder of image tiles or regions (PNG, JPEG, TIFF), each from a known donor.' },
+  { id: 'slides', title: 'Whole slides', text: 'Whole-slide scans (.svs, .ndpi, .tif, .czi, OME-Zarr), one or more per donor.' },
+  { id: 'package', title: 'From a dataset package', text: 'A public or shared dataset prepared as a package (dataset.yaml): images, donors and their labels.' },
+]
 
 function NewStudy({ info, onClose }: { info: ProjectsInfo; onClose: () => void }) {
+  const [kind, setKind] = useState<NewKind>('tma')
+  return (
+    <div className="card new-study">
+      <h2>New study</h2>
+      <fieldset className="new-study-kinds">
+        <legend className="small secondary">What will you analyse?</legend>
+        <div className="choice-grid">
+          {NEW_KINDS.map((k) => (
+            <label key={k.id} className={`choice-card${kind === k.id ? ' chosen' : ''}`}>
+              <input type="radio" name="new-study-kind" checked={kind === k.id} onChange={() => setKind(k.id)} />
+              <span><b>{k.title}</b><span className="small secondary">{k.text}</span></span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
+      {kind === 'package' ? <FromPackage info={info} onClose={onClose} /> : <StudyForm info={info} kind={kind} onClose={onClose} />}
+    </div>
+  )
+}
+
+function StudyForm({ info, kind, onClose }: { info: ProjectsInfo; kind: ProjectKind; onClose: () => void }) {
   const [name, setName] = useState('')
   const [parent, setParent] = useState(info.projects_dir)
   const [picking, setPicking] = useState(false)
@@ -129,7 +159,7 @@ function NewStudy({ info, onClose }: { info: ProjectsInfo; onClose: () => void }
   const create = () => withError(async () => {
     setBusy(true)
     try {
-      const entry = await api.post<ProjectEntry>('/api/projects/create', { path: folder, name: name.trim(), copy_from: source, settings: parts })
+      const entry = await api.post<ProjectEntry>('/api/projects/create', { path: folder, name: name.trim(), kind, copy_from: source, settings: parts })
       location.assign(projectPath(entry.id, '/setup'))
     } finally { setBusy(false) }
   }, setError)
@@ -137,18 +167,11 @@ function NewStudy({ info, onClose }: { info: ProjectsInfo; onClose: () => void }
   const missing = !name.trim() ? 'Give the study a name' : !parent ? 'Choose where to keep it' : ''
 
   return (
-    <div className="card new-study">
-      <h2>New study</h2>
+    <>
       <div className="new-study-form">
-        <label className="field">Study name<input type="text" value={name} placeholder="e.g. Alzheimer TMA 2026" autoFocus onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && folder && !busy) create() }} /></label>
-        <div className="field">Where to keep it
-          <div className="row">
-            <code className="path-box new-study-path" title={folder || parent}>{folder || (parent ? `${parent}/…` : 'no folder chosen yet')}</code>
-            <button className="btn small" onClick={() => setPicking(true)}>{parent ? 'Change…' : 'Choose…'}</button>
-          </div>
-          <span className="muted small">stainID makes a new folder with the study's name there and keeps everything for the study in it.</span>
-        </div>
+        <label className="field">Study name<input type="text" value={name} placeholder={kind === 'tma' ? 'e.g. Alzheimer TMA 2026' : 'e.g. Temporal cortex 4G8'} autoFocus
+          onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && folder && !busy) create() }} /></label>
+        <StudyPlace folder={folder} parent={parent} onChoose={() => setPicking(true)} />
         {others.length > 0 && (
           <div className="field">Start with the settings of
             <select value={source} onChange={(e) => setSource(e.target.value)}>
@@ -173,7 +196,7 @@ function NewStudy({ info, onClose }: { info: ProjectsInfo; onClose: () => void }
       </div>
       {picking && <FilePicker title="Choose where to keep the new study" start={parent || undefined} onClose={() => setPicking(false)}
         onPick={(path) => { setParent(path); setPicking(false) }} />}
-    </div>
+    </>
   )
 }
 
