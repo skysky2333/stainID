@@ -7,24 +7,24 @@ export function useFetch<T>(url: string | null, refreshMs?: number) {
   const [loading, setLoading] = useState(false)
   const [tick, setTick] = useState(0)
   const reload = useCallback(() => setTick((t) => t + 1), [])
+  const inFlight = useRef(0)
 
   useEffect(() => {
     if (!url) return
     let active = true
     setLoading(true)
+    inFlight.current += 1
     api.get<T>(url)
       .then((value) => { if (active) { setData(value); setError(null) } })
       .catch((reason: Error) => { if (active) setError(reason.message) })
-      .finally(() => { if (active) setLoading(false) })
+      .finally(() => { inFlight.current -= 1; if (active) setLoading(false) })
     return () => { active = false }
   }, [url, tick])
 
-  // a poll waits while the previous request is still on its way, so a slow endpoint is not asked again and again
-  const inFlight = useRef(false)
-  inFlight.current = loading
+  // polling: skip a turn while the previous request is still running (slow server) or the tab is hidden
   useEffect(() => {
     if (!refreshMs) return
-    const timer = setInterval(() => { if (!inFlight.current) reload() }, refreshMs)
+    const timer = setInterval(() => { if (!inFlight.current && !document.hidden) reload() }, refreshMs)
     return () => clearInterval(timer)
   }, [refreshMs, reload])
 

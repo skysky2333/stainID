@@ -344,3 +344,16 @@ def test_cross_origin_requests_only_for_allowed_origins(client, monkeypatch):
     assert "access-control-allow-origin" not in other.headers
     app.post("/api/session/admin", json={"password": "admin"})
     assert app.get("/api/session").json()["allowed_origins"] == ["http://lab-pc:8080", "https://stainid.example.org"]
+
+
+def test_steps_list_every_running_part(client):
+    from stainid.jobs import COMMAND_LINE, Job
+
+    runner = state.get_state().jobs
+    for index in range(2):  # two parts of one step, run from a terminal (no process to follow here)
+        job = Job(id=f"part-{index}", workflow="nuclei", options={"shard_index": index, "shard_count": 2}, argv=["nuclei"], status="running",
+                  source=COMMAND_LINE)
+        runner.jobs[job.id] = job
+    steps = {s["id"]: s for s in client.get("/api/steps").json()}
+    assert sorted(j["id"] for j in steps["nuclei"]["active"]) == ["part-0", "part-1"]
+    assert steps["neun"]["active"] == [] and steps["nuclei"]["job"]["id"] in ("part-0", "part-1")

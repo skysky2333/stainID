@@ -5,11 +5,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from stainid import cache
 from stainid.project import Project
 from stainid.setup.checks import project_issues
 from stainid.slides.dearray import slide_slug
-from stainid.slides.table import find_slides, read_slides
-from stainid.tables import read_csv
+from stainid.slides.table import find_slides
 from stainid.workflows.steps import best_device
 
 # seconds per unit of work, roughly (the step cards give the same figures in words)
@@ -19,7 +19,8 @@ TILE_UM = 560
 
 
 def _rows(path: Path) -> list[dict[str, str]]:
-    return read_csv(path) if Path(path).exists() else []
+    """A table's rows, shared and read-only (see `stainid.cache`): the overview is asked for every few seconds."""
+    return cache.rows(path)
 
 
 def slide_reports(project: Project) -> list[dict]:
@@ -28,7 +29,7 @@ def slide_reports(project: Project) -> list[dict]:
     folder = project.output("qc") / "grids"
     in_manifest = {r["slide_path"] for r in _rows(project.input("core_manifest"))}
     out = []
-    for slide in read_slides(project.input("slides_table")):
+    for slide in _rows(project.input("slides_table")):
         path = Path(slide["slide_path"])
         slug = slide_slug(path)
         report_path = folder / f"{slug}.json"
@@ -51,7 +52,7 @@ def mark_checked(project: Project, slide_path: str, checked: bool = True) -> Non
 
 def estimate(project: Project, remaining: list[str]) -> dict:
     """Rough run time of the steps in `remaining` on this computer, from the number of slides, cores and tiles."""
-    slides = len(read_slides(project.input("slides_table")))
+    slides = len(_rows(project.input("slides_table")))
     manifest = _rows(project.input("core_manifest"))
     if manifest:
         positions = len(manifest)
@@ -98,7 +99,7 @@ def screens(project: Project, steps: list[dict] | None = None) -> list[dict]:
     steps = steps if steps is not None else describe(project)
     by_id = {s["id"]: s for s in steps}
     in_folder = find_slides(project.input("slides_dir"))
-    slides = read_slides(project.input("slides_table"))
+    slides = _rows(project.input("slides_table"))
     known = {s["slide_path"] for s in slides}
     new = [p for p in in_folder if str(p) not in known]
     reports = slide_reports(project)

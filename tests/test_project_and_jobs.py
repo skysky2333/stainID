@@ -17,6 +17,13 @@ def test_write_default_config_roundtrip(tmp_path):
     assert load_project(tmp_path).config == DEFAULTS
 
 
+def test_relative_paths_fold_dot_dot(tmp_path):
+    """A folder given as ../scans names files the same way the slides table does (one spelling per file)."""
+    (tmp_path / "study").mkdir()
+    (tmp_path / "study" / "stainid.yaml").write_text("inputs:\n  slides_dir: ../scans\n")
+    assert load_project(tmp_path / "study").input("slides_dir") == tmp_path.resolve() / "scans"
+
+
 def test_job_argv():
     assert to_argv("nuclei", {"stain": ["AT8", "6E10"], "device": "mps", "shard_index": 0, "reverse": False}) == [
         "nuclei", "--stain", "AT8", "--stain", "6E10", "--device", "mps", "--shard-index", "0"]

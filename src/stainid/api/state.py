@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from stainid import cache
 from stainid.api import registry
 from stainid.jobs import Job, JobStore, alive
 from stainid.project import Project, load_project
@@ -31,6 +32,17 @@ class UnknownProject(KeyError):
 
 def _read(path: Path, **kwargs) -> pd.DataFrame:
     return pd.read_csv(path, **kwargs) if path.exists() else pd.DataFrame()
+
+
+def _table(path: Path) -> pd.DataFrame:
+    """A project table, read again only when the file changes (shared between requests: never change it in place)."""
+    return cache.memo(("frame", str(path)), [path], lambda: _read(path, dtype={"tma": str, "donor_id": str}))
+
+
+def _count(folder: Path, names) -> int:
+    """How many of these file names are in the folder (one listing, see `stainid.cache.names`)."""
+    existing = cache.names(folder)
+    return sum(name in existing for name in names)
 
 
 @dataclass
@@ -57,26 +69,26 @@ class ProjectState:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    @cached_property
+    @property
     def tiles(self) -> pd.DataFrame:
-        return _read(self.project.input("tile_manifest"), dtype={"tma": str, "donor_id": str})
+        return _table(self.project.input("tile_manifest"))
 
-    @cached_property
+    @property
     def analysis_tiles(self) -> pd.DataFrame:
         """The tiles detection runs on (whole-core tiles or the sampled fields, per Settings → Analysis)."""
-        return _read(self.project.analysis_tiles(), dtype={"tma": str, "donor_id": str})
+        return _table(self.project.analysis_tiles())
 
-    @cached_property
+    @property
     def core_images(self) -> pd.DataFrame:
-        return _read(self.project.input("core_images"), dtype={"tma": str, "donor_id": str})
+        return _table(self.project.input("core_images"))
 
-    @cached_property
+    @property
     def layout(self) -> pd.DataFrame:
-        return _read(self.project.input("tma_layout"), dtype={"tma": str, "donor_id": str})
+        return _table(self.project.input("tma_layout"))
 
-    @cached_property
+    @property
     def donors(self) -> pd.DataFrame:
-        return _read(self.project.input("donor_metadata"), dtype={"tma": str, "donor_id": str})
+        return _table(self.project.input("donor_metadata"))
 
     def groups(self) -> list[dict[str, str]]:
         """Diagnostic groups in plot order: from the project settings, else as found in the data."""
@@ -110,13 +122,13 @@ class ProjectState:
             stain_tiles = tiles[tiles.stain == stain]
             cores = set(stain_tiles.core_id)
             if stain == "NeuN":
-                done = sum((self.project.output("neun") / "tiles" / f"{t}_features.csv").exists() for t in stain_tiles.tile_id)
+                done = _count(self.project.output("neun") / "tiles", (f"{t}_features.csv" for t in stain_tiles.tile_id))
                 detection = {"done": done, "total": len(stain_tiles), "unit": "fields"}
             else:
-                done = sum((fields_parts / f"{c}_{stain}_features.csv").exists() for c in cores)
+                done = _count(fields_parts, (f"{c}_{stain}_features.csv" for c in cores))
                 detection = {"done": done, "total": len(cores), "unit": "cores"}
-            nuclei = sum((self.project.output("nuclei") / f"{t}.npz").exists() for t in stain_tiles.tile_id)
-            mask_done = sum((masks / stain / "parts" / f"{c}_{stain}_objects.csv").exists() for c in cores)
+            nuclei = _count(self.project.output("nuclei"), (f"{t}.npz" for t in stain_tiles.tile_id))
+            mask_done = _count(masks / stain / "parts", (f"{c}_{stain}_objects.csv" for c in cores))
             status[stain] = {"detection": detection, "nuclei": {"done": nuclei, "total": len(stain_tiles), "unit": "fields"},
                              "masks": {"done": mask_done, "total": len(cores), "unit": "cores"}}
         return status
@@ -145,11 +157,25 @@ def open_project(path: Path | str) -> ProjectState:
     """Open a project (or bring an open one forward): it becomes the project opened last, and is remembered."""
     global _LAST
     with _LOCK:
+        new = registry.project_id(path) not in _STATES
         state = _load(path)
         _LAST = state.id
         if state.project.is_configured:
             registry.remember(state.root)
+            if new:
+                threading.Thread(target=_warm_up, args=(state.project,), daemon=True).start()
         return state
+
+
+def _warm_up(project: Project) -> None:
+    """Read what the step overview needs once, in the background, so the first page to ask for it does not wait for the
+    big tables to be read (see `stainid.cache`)."""
+    from stainid.workflows.steps import describe
+
+    try:
+        describe(project)
+    except Exception:  # a half-set-up project: the page that asks will say what is wrong
+        pass
 
 
 def reload_project(path: Path | str) -> ProjectState:
