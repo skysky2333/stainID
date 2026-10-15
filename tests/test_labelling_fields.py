@@ -25,6 +25,7 @@ def client(synthetic_project, monkeypatch):
 
     monkeypatch.chdir(synthetic_project)
     monkeypatch.setattr(annotate, "prepare_job", lambda *args, **kwargs: None)
+    monkeypatch.setattr(annotate, "measure_added_soon", lambda *args, **kwargs: None)
     root = synthetic_project
     analysis = root / "data" / "analysis"
     tiles = pd.read_csv(analysis / "cohort_whole_core_tiles.csv", dtype=str)

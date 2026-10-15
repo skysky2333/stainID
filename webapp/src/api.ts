@@ -109,6 +109,7 @@ export interface Metrics { n: number; positives: number; auc: number; precision:
 export interface TrainedModel {
   stain: string; created: number; validation: string; threshold: number; sets?: string[]; sources?: Record<string, number>; new_model: Metrics; current_model: Metrics | null
   current_model_path: string; path: string; active: boolean; sessions?: { name: string; title: string; objects: number }[]
+  person_added?: { objects: number; positive: number; could_not_be_measured: number; detection: Detection }
 }
 export interface CoreRow {
   core_id: string; tma: string; core_label: string; donor_id: string | null; sample_region_id: string | null
@@ -140,7 +141,16 @@ export interface StainOverview {
   objects_labelled: number; objects_added: number; values: Record<string, number>; outlines: number; outlines_edited: number
   people: string[]; agreement: number | null; objects_with_several_labels: number
   ai: { n: number; agreement: number | null; precision: number | null; recall: number | null }; tags: Record<string, number>
+  detection?: Detection & { not_checked: number }; added?: AddedObjects
 }
+/** Of the real objects people labelled: how many the AI finds, and why it misses the others (never proposed, or proposed but rejected). */
+export interface Detection {
+  real: number; found: number; never_proposed: number; rejected: number
+  recall: number | null; never_proposed_share: number | null; rejected_share: number | null
+}
+/** Objects people added where the AI proposed nothing, and whether each could be measured (so it can train the model). */
+export interface AddedObjects { objects: number; measured: number; could_not_be_measured: number; waiting: number }
+export interface AddedState { x: number; y: number; state: 'proposed' | 'measured' | 'could_not_be_measured' | 'measuring'; reason: string }
 export interface SessionInfo {
   name: string; title: string; stain: string; kind: 'fields' | 'queue'; tools: string[]; ai_view: AiView; per_field: number; rule: string
   instructions: string; created: number; open: boolean; people: number; labels: number
@@ -161,7 +171,7 @@ export interface Label {
 export interface FieldObjectLite { x: number; y: number; radius_px: number; ai_value?: string; ai_probability?: number }
 export interface FieldWork {
   tile_id: string; box: { x: number; y: number; width: number; height: number }; objects: FieldObjectLite[]
-  outlines: { x: number; y: number; points: number[][] }[]; layers: string[]; mine: Label[]
+  outlines: { x: number; y: number; points: number[][] }[]; layers: string[]; mine: Label[]; added?: AddedState[]
 }
 export interface QueueItem { tile_id: string; x: number; y: number; radius_px: number; ai_value: string; ai_probability: number; labels_so_far: number; remaining: number }
 

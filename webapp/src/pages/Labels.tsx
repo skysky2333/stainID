@@ -4,7 +4,7 @@ import type { AiView, LabelsOverview, Labeller, ReferenceLabels, SessionInfo, St
 import { api, apiUrl, appPath } from '../api'
 import { Empty, ErrorNote, HelpBox, Loaded, Modal, PageHead, Progress, fmt, timeAgo, withError } from '../components'
 import { useFetch } from '../hooks'
-import { AI_VIEW_TEXT, ConfirmDialog, CopyButton, KIND_TEXT, TOOL_TEXT, objectsOf, percent } from '../labelling'
+import { AI_VIEW_TEXT, ConfirmDialog, CopyButton, DetectionLine, KIND_TEXT, TOOL_TEXT, objectsOf, percent } from '../labelling'
 import { SessionLabelsView } from '../labels/examine'
 import { FIELD_TEXT, FieldChoice, SessionFields } from '../labels/fields'
 import { Advanced } from '../setup/parts'
@@ -254,7 +254,7 @@ function LabelledSoFar({ stains, onChanged }: { stains: StainOverview[]; onChang
         {total > 0 && <Link className="btn small" to="/models">Train a model from these labels →</Link>}</div>
       <div className="table-scroll">
         <table className="labelled-table">
-          <thead><tr><th>Stain</th><th className="num">Objects labelled</th><th>Fields with labels</th><th>What people said</th></tr></thead>
+          <thead><tr><th>Stain</th><th className="num">Objects labelled</th><th>Fields with labels</th><th>What people said</th><th>How the AI does on them</th></tr></thead>
           <tbody>{stains.map((s) => (
             <tr key={s.stain}>
               <td><b>{s.stain}</b></td>
@@ -263,10 +263,13 @@ function LabelledSoFar({ stains, onChanged }: { stains: StainOverview[]; onChang
                 <span className="small secondary">{s.fields_with_labels.toLocaleString()} of {s.fields.toLocaleString()}
                   {s.fields_reviewed > 0 && <span className="muted"> · {s.fields_reviewed.toLocaleString()} fully checked</span>}</span></div></td>
               <td className="small secondary wrap-cell">{Object.entries(s.values).map(([k, v]) => `${k} ${v.toLocaleString()}`).join(' · ') || '—'}</td>
+              <td className="small wrap-cell">{s.detection ? <DetectionLine d={s.detection} stain={s.stain} /> : '—'}</td>
             </tr>
           ))}</tbody>
         </table>
       </div>
+      <p className="muted small">“Never proposed”: real objects people labelled where the AI had circled nothing (added with “Add a missed object”) — its blind spots.
+        “Proposed but rejected”: the AI looked at the object and said no.</p>
       <Advanced hint="agreement, AI against people, outlines, tags, sources, preparing fields">
         <div className="grid grid-3">{stains.map((s) => <StainDetails key={s.stain} s={s} onChanged={onChanged} />)}</div>
       </Advanced>
@@ -285,14 +288,20 @@ function StainDetails({ s, onChanged }: { s: StainOverview; onChanged: () => voi
       <table className="compact"><tbody>
         {row('fields fully checked (every object)', fmt(s.fields_reviewed))}
         {row('fields prepared for labelling', fmt(s.fields_prepared))}
-        {row(`${objectsOf(s.stain)} people added (AI missed)`, fmt(s.objects_added))}
+        {row(`${objectsOf(s.stain)} people added where the AI proposed nothing`, fmt(s.objects_added))}
+        {s.added && s.added.objects > 0 && row('of those added in sessions: measured · could not be measured · waiting',
+          `${fmt(s.added.measured)} · ${fmt(s.added.could_not_be_measured)} · ${fmt(s.added.waiting)}`)}
+        {s.detection && row(`real ${objectsOf(s.stain)}: found · never proposed · rejected`,
+          `${fmt(s.detection.found)} · ${fmt(s.detection.never_proposed)} · ${fmt(s.detection.rejected)}`)}
+        {s.detection && s.detection.not_checked > 0 && row('real objects on fields not prepared (not counted)', fmt(s.detection.not_checked))}
         {row('outlines (edited by people)', `${fmt(s.outlines)} (${fmt(s.outlines_edited)})`)}
         {row(`people agree (${fmt(s.objects_with_several_labels)} objects with ≥2 labels)`, percent(s.agreement))}
         {row(`AI agrees with people (${fmt(s.ai.n)} objects)`, percent(s.ai.agreement))}
-        {row('AI precision · recall', `${fmt(s.ai.precision, 2)} · ${fmt(s.ai.recall, 2)}`)}
+        {row('AI precision · recall, among proposed objects only', `${fmt(s.ai.precision, 2)} · ${fmt(s.ai.recall, 2)}`)}
         {Object.entries(s.tags).map(([k, v]) => <tr key={k}><td className="secondary">fields tagged “{k}”</td><td className="num">{fmt(v)}</td></tr>)}
       </tbody></table>
       <p className="muted small">The AI figures include objects the current model was trained on; the cross-validated estimate is on Models.
+        The older recall counts only objects the AI proposed, so it cannot see what the AI never looked at.
         Sources: {s.people.length ? s.people.join(', ') : 'none yet'}.</p>
       <button className="btn small" disabled={asked} onClick={prepare} title="Finds the candidate objects in 20 more fields in the background, so queues have more to draw from">
         {asked ? 'Preparing 20 more fields…' : 'Prepare 20 more fields'}</button>

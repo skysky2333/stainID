@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import type { Job, LabelSet, LabelsOverview, Metrics, ModelInfo, TrainedModel } from '../api'
+import type { Detection, Job, LabelSet, LabelsOverview, Metrics, ModelInfo, TrainedModel } from '../api'
 import { api, runStep } from '../api'
 import { Empty, ErrorNote, HelpBox, Loaded, Modal, PageHead, PathLine, Progress, Term, fmt, timeAgo, withError } from '../components'
 import { useFetch } from '../hooks'
-import { ConfirmDialog, QualityBadge, QualityLine, objectsOf, quality } from '../labelling'
+import { ConfirmDialog, DetectionLine, QualityBadge, QualityLine, objectsOf, quality } from '../labelling'
 import { useProject } from '../project'
 import { Advanced } from '../setup/parts'
 
@@ -65,6 +65,7 @@ export default function Models() {
               <StainModel key={m.key} info={m} versions={(trained.data ?? []).filter((t) => t.stain === m.stain)} versionsLoading={!trained.data && !trained.error}
                 job={latest('train', m.stain ?? '')} otherTraining={training && trainingStain !== m.stain}
                 labelled={labels.data?.stains.find((s) => s.stain === m.stain)?.objects_labelled ?? null}
+                detection={labels.data?.stains.find((s) => s.stain === m.stain)?.detection}
                 onChanged={() => { jobs.reload(); trained.reload(); models.reload() }} />
             ))}
           </div>
@@ -79,8 +80,9 @@ export default function Models() {
 
 /* ---------- one stain ---------- */
 
-function StainModel({ info, versions, versionsLoading, job, otherTraining, labelled, onChanged }: {
-  info: ModelInfo; versions: TrainedModel[]; versionsLoading: boolean; job: Job | null; otherTraining: boolean; labelled: number | null; onChanged: () => void
+function StainModel({ info, versions, versionsLoading, job, otherTraining, labelled, detection, onChanged }: {
+  info: ModelInfo; versions: TrainedModel[]; versionsLoading: boolean; job: Job | null; otherTraining: boolean; labelled: number | null
+  detection?: Detection; onChanged: () => void
 }) {
   const { reload: reloadProject } = useProject()
   const stain = info.stain ?? ''
@@ -108,16 +110,19 @@ function StainModel({ info, versions, versionsLoading, job, otherTraining, label
         {!info.exists ? <p>There is no {stain} model yet. Label some {objectsOf(stain)} on <Link to="/labels">Labels</Link>, then train one.</p>
           : versionsLoading ? <p className="muted small">Loading its test results…</p>
           : inUse ? <>
-            <div className="small muted">In use · trained {day(inUse.created)} from {inUse.new_model.n.toLocaleString()} labelled objects{trainedOn(inUse)}</div>
-            <div className="quality-line"><QualityLine m={inUse.new_model} stain={stain} /></div>
+            <div className="small muted">In use · trained {day(inUse.created)} from {inUse.new_model.n.toLocaleString()} labelled objects{trainedOn(inUse)}{addedNote(inUse)}</div>
+            <div className="quality-line"><QualityLine m={inUse.new_model} stain={stain} d={inUse.person_added?.detection} /></div>
           </> : <p className="small secondary">The model in use was not trained in this project, so it has no test score here. Train one to compare.</p>}
+        {info.exists && detection && detection.real > 0 && (
+          <div className="small detection-line" title="Every real object people labelled counts, also the ones they added where the AI circled nothing">
+            Checked on all labels so far (it learned from some of them): <DetectionLine d={detection} stain={stain} /></div>)}
       </div>
 
       {fresh && !training && (
         <div className={`fresh-model ${freshBetter ? 'better' : ''}`}>
           <div className="row"><b>New model, trained {day(fresh.created)}</b><QualityBadge m={fresh.new_model} /></div>
-          {fresh.sessions && <div className="small muted">Learned from {fresh.new_model.n.toLocaleString()} objects{trainedOn(fresh)}</div>}
-          <div className="small"><QualityLine m={fresh.new_model} stain={stain} /></div>
+          {fresh.sessions && <div className="small muted">Learned from {fresh.new_model.n.toLocaleString()} objects{trainedOn(fresh)}{addedNote(fresh)}</div>}
+          <div className="small"><QualityLine m={fresh.new_model} stain={stain} d={fresh.person_added?.detection} /></div>
           <div className="small secondary">{inUse ? (freshBetter ? 'Scores better than the model in use.' : 'Does not score better than the model in use — keeping the current one is fine.') : 'Not in use yet.'}</div>
           <button className={`btn small${freshBetter ? ' primary' : ''}`} onClick={() => setAsking(fresh)}>Use the new model</button>
         </div>
@@ -147,7 +152,7 @@ function StainModel({ info, versions, versionsLoading, job, otherTraining, label
               <tr key={v.path}>
                 <td className="small">{day(v.created)}<div className="muted">{v.new_model.n.toLocaleString()} labels{trainedOn(v)}</div></td>
                 <td><QualityBadge m={v.new_model} /></td>
-                <td className="small wrap-cell"><QualityLine m={v.new_model} stain={stain} /></td>
+                <td className="small wrap-cell"><QualityLine m={v.new_model} stain={stain} d={v.person_added?.detection} /></td>
                 <td className="num"><button className="btn small" onClick={() => setAsking(v)}>Use</button></td>
               </tr>
             ))}
@@ -171,14 +176,22 @@ function StainModel({ info, versions, versionsLoading, job, otherTraining, label
       {asking === 'train' && <TrainDialog stain={stain} onClose={() => setAsking(null)} onStart={train} />}
       {asking && asking !== 'train' && (
         <ConfirmDialog title={`Use the ${stain} model trained ${day(asking.created)}?`} confirm="Switch model" onClose={() => setAsking(null)} onConfirm={() => use(asking)}>
-          {quality(asking.new_model) && <p>Its test score: <b>{quality(asking.new_model)!.word}</b> — <QualityLine m={asking.new_model} stain={stain} />.
-            {inUse && <> The model in use: <QualityLine m={inUse.new_model} stain={stain} />.</>}</p>}
+          {quality(asking.new_model) && <p>Its test score: <b>{quality(asking.new_model)!.word}</b> — <QualityLine m={asking.new_model} stain={stain} d={asking.person_added?.detection} />.
+            {inUse && <> The model in use: <QualityLine m={inUse.new_model} stain={stain} d={inUse.person_added?.detection} />.</>}</p>}
           <p>New detections use it from now on. Results you already have stay as they are; to redo them with this model, run “{DETECT_STEP[stain]}” again
             on the <Link to="/workflow">Run</Link> page with “Start over”. You can switch back at any time.</p>
         </ConfirmDialog>
       )}
     </section>
   )
+}
+
+/** ", including 12 that people added": the objects the AI never proposed that a model learned from (measured where people added them). */
+function addedNote(model: TrainedModel): string {
+  const added = model.person_added
+  if (!added || !(added.objects || added.could_not_be_measured)) return ''
+  const unmeasured = added.could_not_be_measured ? ` (${added.could_not_be_measured.toLocaleString()} more could not be measured)` : ''
+  return `, including ${added.objects.toLocaleString()} that people added where the AI proposed nothing${unmeasured}`
 }
 
 /** " · from Round 1 and AI reference labels": the sessions a model learned from (models trained before sessions were recorded say nothing). */
@@ -244,7 +257,8 @@ function VersionTable({ versions }: { versions: TrainedModel[] }) {
             <tr key={t.path}>
               <td className="small">{day(t.created)}<div className="muted ellipsis" title={Object.keys(t.sources ?? {}).join(', ')}>
                 {t.sessions ? t.sessions.map((s) => s.title).join(', ') : t.sources ? `${Object.keys(t.sources).length} label sources` : (t.sets ?? []).join(', ')}</div></td>
-              <td className="num">{t.new_model.n.toLocaleString()}<div className="muted small">{t.new_model.positives.toLocaleString()} positive</div></td>
+              <td className="num">{t.new_model.n.toLocaleString()}<div className="muted small">{t.new_model.positives.toLocaleString()} positive</div>
+                {t.person_added && t.person_added.objects > 0 && <div className="muted small">{t.person_added.objects.toLocaleString()} added by people</div>}</td>
               <td className="small">{t.validation}</td>
               <td><MetricLine m={t.new_model} /></td>
               <td>{t.current_model ? <MetricLine m={t.current_model} /> : <span className="muted small">none</span>}</td>

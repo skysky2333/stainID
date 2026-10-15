@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import type { FieldObjectLite, FieldWork, Label, QueueItem, SessionDetail } from '../api'
+import type { AddedState, FieldObjectLite, FieldWork, Label, QueueItem, SessionDetail } from '../api'
 import { api, apiUrl, enc } from '../api'
 import { Empty, ErrorNote, Loaded, Loading, PageHead, Progress, fmt } from '../components'
 import { useFetch, useStored } from '../hooks'
@@ -14,7 +14,7 @@ const COLORS = ['#ff4fd8', '#ff8c1a', '#facc15', '#4ade80', '#a78bfa', '#f87171'
 type Tool = 'label' | 'add' | 'outline'
 const TOOLS: { id: Tool; needs: string; key: string; name: string; hint: string }[] = [
   { id: 'label', needs: 'class', key: 'v', name: 'Label objects', hint: 'Click an object to give it the chosen class. Dashed = the AI’s call, not yet checked by you; solid = your decision. Click again with the same class to go back to the AI’s call.' },
-  { id: 'add', needs: 'point', key: 'a', name: 'Add missed objects', hint: 'Click on an object the AI did not circle to add it with the chosen class. Click one of your added objects to select it; Delete removes it.' },
+  { id: 'add', needs: 'point', key: 'a', name: 'Add a missed object', hint: 'Click an object the AI did not circle to add it with the chosen class. It shows as a diamond. Click one of your diamonds to select it; Delete removes it.' },
   { id: 'outline', needs: 'outline', key: 'o', name: 'Fix outlines', hint: 'Click an object to select it, then drag the corners of its outline or press Redraw. Clicking empty tissue starts a new outline (a new object): click its corners, then the first corner or Enter.' },
 ]
 
@@ -130,11 +130,13 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [layers, setLayers] = useStored<Record<string, boolean>>('stainid.label.layers', { negatives: true, outlines: true, mine: true, box: true })
+  const [addedStates, setAddedStates] = useState<AddedState[]>([])
 
   useEffect(() => {
     if (!work.data) return
     setMine(Object.fromEntries(work.data.mine.map((m) => [m.id, m])))
     setNote(work.data.mine.find((m) => m.task === 'note')?.value ?? '')
+    setAddedStates(work.data.added ?? [])
   }, [work.data])
 
   const classes = meta.classes
@@ -155,6 +157,15 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
   const position = fields.findIndex((f) => f.tile_id === tile)
   const all = [...objects.map((o) => ({ x: o.x, y: o.y, r: o.radius_px })), ...added.map((m) => ({ x: m.x!, y: m.y!, r: 8 }))]
   const selectedObject = selected ? all.find((o) => rkey(o.x, o.y) === selected) : undefined
+  const addedState = (x: number, y: number) => addedStates.find((a) => rkey(a.x, a.y) === rkey(x, y))?.state ?? 'measuring'
+  const measuring = added.some((m) => addedState(m.x!, m.y!) === 'measuring')
+  useEffect(() => {  // follow objects people added while the server measures them (a few seconds each)
+    if (!measuring) return
+    const timer = setTimeout(() => {
+      api.get<AddedState[]>(`/api/annotate/${name}/fields/${enc(tile)}/added`).then(setAddedStates).catch(() => undefined)
+    }, 3000)
+    return () => clearTimeout(timer)
+  }, [measuring, addedStates, name, tile])
   const outlineOf = (x: number, y: number) => myOutline(x, y)?.points ?? aiOutlines[rkey(x, y)]
 
   const save = useCallback(async (records: Partial<Label>[]) => {
@@ -354,9 +365,16 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
                       </circle>
                     )
                   })}
-                  {layers.mine && added.map((m) => (
-                    <circle key={m.id} cx={m.x!} cy={m.y!} r={6 * unit} fill={color(m.value)} stroke={rkey(m.x!, m.y!) === selected ? '#fff' : '#000'} strokeWidth={(rkey(m.x!, m.y!) === selected ? 2.5 : 1.2) * unit} />
-                  ))}
+                  {layers.mine && added.map((m) => {
+                    const chosen = rkey(m.x!, m.y!) === selected
+                    const d = 9 * unit
+                    return (
+                      <polygon key={m.id} points={`${m.x!},${m.y! - d} ${m.x! + d},${m.y!} ${m.x!},${m.y! + d} ${m.x! - d},${m.y!}`} fill={color(m.value)}
+                        stroke={chosen ? '#fff' : '#000'} strokeWidth={(chosen ? 2.5 : 1.2) * unit}>
+                        <title>{`added by you: ${m.value}`}</title>
+                      </polygon>
+                    )
+                  })}
                   {editing && <>
                     <polygon points={editing.map((p) => p.join(',')).join(' ')} fill={color(selectedValue)} fillOpacity={0.15} stroke="#fff" strokeWidth={2 * unit} />
                     {editing.map((p, i) => (
@@ -383,6 +401,7 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
                   ))}
                 </div>
                 {active && <p className="small secondary tool-hint">{redrawing ? 'Click the corners of the new outline, then the first corner or press Enter.' : active.hint}</p>}
+                {tools.some((t) => t.id === 'add') && <MissedCallout adding={active?.id === 'add'} count={added.length} onAdd={() => { setTool('add'); setDraft([]) }} />}
                 <h3 style={{ marginTop: 14 }}>2 · Class</h3>
                 <div className="class-list">
                   {classes.map((c, i) => (
@@ -399,6 +418,8 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
                   {selectedAi?.ai_value && <p className="small">The AI’s guess: <b>{selectedAi.ai_value}</b></p>}
                   <p className="small">{myClass(selectedObject.x, selectedObject.y) ? <>Your class: <b>{myClass(selectedObject.x, selectedObject.y)!.value}</b></> : 'Not changed by you'}
                     {!objectKeys.has(selected!) && ' (added by you)'}</p>
+                  {!objectKeys.has(selected!) && <AddedNote state={addedState(selectedObject.x, selectedObject.y)}
+                    reason={addedStates.find((a) => rkey(a.x, a.y) === selected)?.reason ?? ''} />}
                   <div className="row">
                     {myClass(selectedObject.x, selectedObject.y) && objectKeys.has(selected!) &&
                       <button className="btn small" onClick={() => save([{ task: 'class', x: selectedObject.x, y: selectedObject.y, deleted: true }])}>Back to the AI’s guess</button>}
@@ -429,7 +450,7 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
                 {data.layers.map((l) => (
                   <label key={l} className="layer-toggle"><input type="checkbox" checked={!!layers[l]} onChange={() => toggle(l)} /><span className="swatch" style={{ background: RASTER_LAYERS[l].color }} />{RASTER_LAYERS[l].label}</label>
                 ))}
-                <label className="layer-toggle"><input type="checkbox" checked={!!layers.mine} onChange={() => toggle('mine')} />objects I added</label>
+                <label className="layer-toggle"><input type="checkbox" checked={!!layers.mine} onChange={() => toggle('mine')} />objects I added (diamonds)</label>
                 <label className="layer-toggle"><input type="checkbox" checked={!!layers.box} onChange={() => toggle('box')} />field boundary (yellow)</label>
               </details>
               <details className="card side-details">
@@ -450,6 +471,35 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
         )}
       </Loaded>
     </div>
+  )
+}
+
+/** "Did the AI miss something?": the add tool, explained, always in view while a field is open. */
+function MissedCallout({ adding, count, onAdd }: { adding: boolean; count: number; onAdd: () => void }) {
+  return (
+    <div className="missed-callout small">
+      <b>Did the AI miss something?</b> {adding ? 'Click it on the picture.' : <>Press <span className="kbd">A</span> or
+        {' '}<button className="link-btn" onClick={onAdd}>Add a missed object</button>, then click it.</>}
+      {' '}Objects you add are how we find the AI’s blind spots — and they teach the next model.
+      {count > 0 && <span className="muted"> You added {count} in this field.</span>}
+    </div>
+  )
+}
+
+const ADDED_TEXT: Record<AddedState['state'], string> = {
+  measuring: 'Being measured so it can teach the AI…',
+  measured: 'Measured — it will help train the next model.',
+  could_not_be_measured: 'Could not be measured, so it cannot train the model; your label still counts as an object the AI missed.',
+  proposed: 'The AI had proposed this object too: your mark sits next to its centre, so it counts as that object.',
+}
+
+/** What became of an object the person added: the AI never proposed it, and whether it could be measured. */
+function AddedNote({ state, reason }: { state: AddedState['state']; reason: string }) {
+  return (
+    <p className={`small added-note${state === 'could_not_be_measured' ? ' warn' : ''}`}>
+      {state !== 'proposed' && <><b>The AI never proposed this object.</b> </>}{ADDED_TEXT[state]}
+      {state === 'could_not_be_measured' && reason && <span className="muted"> ({reason})</span>}
+    </p>
   )
 }
 

@@ -1,7 +1,7 @@
 /* Words and small pieces shared by the Labels, Models and annotation pages. */
 import { useState } from 'react'
 import type { ReactNode } from 'react'
-import type { AiView, Metrics } from './api'
+import type { AiView, Detection, Metrics } from './api'
 import { Modal } from './components'
 
 /** What each stain's model looks for, in the plural ("finds 90% of real neurons"). */
@@ -36,8 +36,10 @@ export function quality(m: Metrics | null | undefined): { word: string; tone: 'g
 }
 export const percent = (v: number | null | undefined) => (v == null || !Number.isFinite(v) ? '—' : `${Math.round(100 * v)}%`)
 
-/** "Finds 89% of real neurons · 84% of the objects it counts are real", the plain reading of recall and precision. */
-export function QualityLine({ m, stain }: { m: Metrics; stain: string }) {
+/** "Finds 89% of real neurons · 84% of the objects it counts are real", the plain reading of recall and precision. With `d` (a model
+ *  that learned from objects people added where the AI proposed nothing), the share it finds counts those as missed too. */
+export function QualityLine({ m, stain, d }: { m: Metrics; stain: string; d?: Detection }) {
+  if (d && d.never_proposed > 0) return <span><DetectionLine d={d} stain={stain} /> · <b>{percent(m.precision)}</b> of what it counts is right</span>
   return <span>finds <b>{percent(m.recall)}</b> of real {objectsOf(stain)} · <b>{percent(m.precision)}</b> of what it counts is right</span>
 }
 
@@ -91,4 +93,14 @@ export function CopyButton({ text, label = 'Copy link', primary = false }: { tex
   }
   return <button className={`btn small${primary ? ' primary' : ''}`} onClick={copy} title={text}>
     {result === 'copied' ? 'Copied ✓' : result === 'failed' ? 'Select and copy it by hand' : label}</button>
+}
+
+/* ---------- objects the AI never proposed (recall over every real object people labelled) ---------- */
+
+/** "finds 88% of real plaques (3% were never proposed, 9% proposed but rejected)": every real object people labelled counts,
+ *  also the ones they added where the AI proposed nothing. */
+export function DetectionLine({ d, stain }: { d: Detection; stain: string }) {
+  if (!d.real) return <span className="muted">no real {objectsOf(stain)} labelled yet</span>
+  return <span>finds <b>{percent(d.recall)}</b> of real {objectsOf(stain)}
+    <span className="secondary"> ({percent(d.never_proposed_share)} were never proposed, {percent(d.rejected_share)} proposed but rejected)</span></span>
 }

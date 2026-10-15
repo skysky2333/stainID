@@ -1,8 +1,10 @@
 """Train a stain model on the human labels in the label store and compare it with the current model on the same labels.
 
 Each labelled object's class is the majority of the people who labelled it; its features are those of the matching
-candidate in the pool (labels on positions no candidate covers, such as objects people added, cannot train the
-classifier and are skipped).
+candidate in the pool. An object people added where the detection step proposed nothing is measured at the clicked
+position first (`labels.added`) and trains the model like a candidate; the report counts these person-added objects and
+those that could not be measured (their labels stay, but cannot train). Labels on positions with no candidate on fields
+that are not prepared are skipped.
 """
 from __future__ import annotations
 
@@ -19,7 +21,7 @@ from sklearn.metrics import precision_score, recall_score, roc_auc_score
 from sklearn.model_selection import LeaveOneGroupOut, StratifiedGroupKFold
 from sklearn.pipeline import make_pipeline
 
-from stainid.labels import frames, pool, store
+from stainid.labels import added, frames, pool, store
 from stainid.labels import sessions as label_sessions
 from stainid.labels.tasks import MODEL_KEY
 from stainid.project import Project, save_project
@@ -38,20 +40,52 @@ def labelled(project: Project, stain: str, sessions: list[str] | None = None) ->
     """Consensus-labelled objects with their candidate features (one row per object), from the labels of these
     sessions (`labels.sessions.in_sessions`; all labels when None)."""
     labels = frames.in_field_frame(store.current(project.output("reviews")), known_tiles(project), project.context_px)
+    counts = added.measure(project, stain)
+    if any(counts.values()):
+        print(f"measured {counts['measured']} object(s) people added; {counts['could_not_be_measured']} could not be measured", flush=True)
     truth = store.consensus(label_sessions.in_sessions(labels, sessions), stain)
     truth = truth[truth.positive.notna()]
     names = pool.feature_names(project, stain)
-    rows = []
+    rows, unmeasured = [], 0
     for tile_id, group in truth.groupby("tile_id"):
         objects = pool.load_field(project, stain, tile_id)
+        extra = added.load_field(project, stain, tile_id)
         for r in group.itertuples():
             i = pool.nearest(objects, r.x, r.y)
+            hit = added.resolve(extra, r.x, r.y) if i is None else None
+            if hit is not None and pd.notna(hit.get("candidate_x")):  # the click was off the centre of a candidate
+                i, hit = pool.nearest(objects, float(hit.candidate_x), float(hit.candidate_y)), None
+            label = {"tile_id": tile_id, "label": r.value, "positive": bool(r.positive), "sources": r.sources}
             if i is not None:
-                rows.append({**objects.iloc[i].to_dict(), "tile_id": tile_id, "label": r.value, "positive": bool(r.positive), "sources": r.sources})
+                rows.append({**objects.iloc[i].to_dict(), **label, "added_by_person": False})
+            elif hit is not None and added.is_true(hit.measured):
+                rows.append({**hit.to_dict(), **label, "added_by_person": True})
+            elif hit is not None:
+                unmeasured += 1
     if not rows:
         raise ValueError(f"No labelled {stain} objects {'in the chosen sessions ' if sessions else ''}yet: label some on the Labels page first")
     data = pd.DataFrame(rows).drop_duplicates(["tile_id", "x", "y"]).reset_index(drop=True)
+    data["added_by_person"] = data.added_by_person.astype(bool)
+    data.attrs["unmeasured"] = unmeasured
     return data, names
+
+
+def person_added(data: pd.DataFrame, oof: np.ndarray, threshold: float) -> dict:
+    """The objects people added (never proposed by the detection step) among the training labels, and the end-to-end
+    reading of the new model: of the real objects, how many it finds, how many the detection step never proposes (no
+    classifier can find those until candidate proposal changes) and how many are proposed but rejected by the model."""
+    flag = data.added_by_person.to_numpy(bool)
+    y = data.positive.to_numpy(bool)
+    unmeasured = int(data.attrs.get("unmeasured", 0))
+    proposed = y & ~flag & np.isfinite(oof)
+    found = int((proposed & (oof >= threshold)).sum())
+    rejected = int(proposed.sum()) - found
+    never = int((y & flag).sum()) + unmeasured
+    real = found + rejected + never
+    share = (lambda k: k / real if real else None)  # noqa: E731
+    return {"objects": int(flag.sum()), "positive": int((y & flag).sum()), "could_not_be_measured": unmeasured,
+            "detection": {"real": real, "found": found, "never_proposed": never, "rejected": rejected, "recall": share(found),
+                          "never_proposed_share": share(never), "rejected_share": share(rejected)}}
 
 
 def out_of_fold(fit_predict, n: int, y: np.ndarray, groups: np.ndarray) -> tuple[np.ndarray, str]:
@@ -100,7 +134,9 @@ def train_model(project: Project, stain: str, sessions: list[str] | None = None)
     ids = (data.tile_id + ":" + data.x.round().astype(int).astype(str) + ":" + data.y.round().astype(int).astype(str)).tolist()
     current, old = _current(project, stain, x, names)
     sources = data.sources.str.split(", ").explode().value_counts()
-    print(f"[1/3] {len(y)} labelled objects ({int(y.sum())} positive) from {len(sources)} source(s)", flush=True)
+    extra = int(data.added_by_person.sum())
+    print(f"[1/3] {len(y)} labelled objects ({int(y.sum())} positive) from {len(sources)} source(s)"
+          f"{f', including {extra} person-added object(s)' if extra else ''}", flush=True)
 
     usable = np.any(np.isfinite(x), axis=0)
     threshold = float(old.get("probability_threshold", 0.4)) if stain == "AT8" else 0.5
@@ -138,7 +174,7 @@ def train_model(project: Project, stain: str, sessions: list[str] | None = None)
     report = {"stain": stain, "created": time.time(), "validation": scheme, "threshold": threshold, "sources": sources.to_dict(),
               "new_model": metrics(y, oof, threshold), "current_model": metrics(y, current, threshold) if current is not None else None,
               "current_model_path": project.relative(project.model(MODEL_KEY[stain])),
-              "sessions": trained_on(project, stain, sessions)}
+              "sessions": trained_on(project, stain, sessions), "person_added": person_added(data, oof, threshold)}
     (folder / "report.json").write_text(json.dumps(report, indent=1))
     new = report["new_model"]
     print(f"[3/3] new model: AUC {new['auc']:.2f}, precision {new['precision']:.2f}, recall {new['recall']:.2f} -> {project.relative(folder)}", flush=True)

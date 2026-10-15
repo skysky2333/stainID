@@ -116,7 +116,7 @@ def prepared(project: Project, stain: str) -> set[str]:
     for csv in folder(project, stain).glob("*.csv") if folder(project, stain).exists() else []:
         with csv.open() as handle:
             header = handle.readline().rstrip("\n").split(",")
-            first = handle.readline().split(",")
+            first = handle.readline().rstrip("\n").split(",")
         if "complete" in header and (len(first) < len(header) or first[header.index("complete")] == "True"):
             out.add(csv.stem)
     return out

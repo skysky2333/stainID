@@ -154,6 +154,7 @@ def prepared(client, synthetic_project, monkeypatch):
     from stainid.labels import pool
 
     monkeypatch.setattr(annotate, "prepare_job", lambda *args, **kwargs: None)
+    monkeypatch.setattr(annotate, "measure_added_soon", lambda *args, **kwargs: None)
     project = get_state().project
     rows = [{"x": 100.0 + 30 * i, "y": 200.0, "radius_px": 20.0, "ai_value": ["compact plaque", "diffuse plaque"][i % 2], "ai_probability": 0.9} for i in range(8)]
     rows += [{"x": 100.0 + 30 * i, "y": 400.0, "radius_px": 10.0, "ai_value": "not a plaque", "ai_probability": 0.2} for i in range(4)]
@@ -217,6 +218,10 @@ def test_field_review_prefills_ai_and_confirms_on_finish(prepared):
     plaques = next(s for s in overview["stains"] if s["stain"] == "6E10")
     assert plaques["fields_reviewed"] == 1 and plaques["objects_labelled"] == 13 and plaques["objects_added"] == 1
     assert plaques["objects_with_several_labels"] == 12 and plaques["agreement"] == 11 / 12
+    # Ann's added plaque at (500, 500) is one the AI never proposed: a miss; (100, 200) is split between the two of them
+    assert plaques["detection"] | {"recall": None} == {"real": 8, "found": 7, "never_proposed": 1, "rejected": 0, "recall": None,
+                                                       "never_proposed_share": 1 / 8, "rejected_share": 0.0, "not_checked": 0}
+    assert plaques["ai"]["recall"] == 1.0 and plaques["added"] == {"objects": 1, "measured": 0, "could_not_be_measured": 0, "waiting": 1}
     assert overview["sessions"][0]["fields_covered"] == 1 and overview["sessions"][0]["people"] == 2
     people = {p["person"]: p for p in client.get("/api/labels/sessions/plaques_together/people").json()}
     assert people["Ann"]["changed"] == 2 and people["Ben"]["confirmed"] == 12

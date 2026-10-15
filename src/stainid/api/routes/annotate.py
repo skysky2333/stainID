@@ -21,7 +21,7 @@ from stainid.api import label_crops, pyramid, render
 from stainid.api.routes.images import OVERLAYS
 from stainid.api.session import annotator, annotator_name, is_admin, require_admin
 from stainid.api.state import get_state
-from stainid.labels import frames, overview, pool, readiness, sessions, store
+from stainid.labels import added, frames, overview, pool, readiness, sessions, store
 from stainid.labels import objects as label_objects
 from stainid.labels.overview import UNTYPED
 from stainid.labels.tasks import CLASSES, CROP_UM, FIELD_TAGS, INSTRUCTIONS, NEGATIVE, SKIP, STAINS, positive
@@ -113,6 +113,56 @@ def session_progress(meta: dict, labels: pd.DataFrame) -> dict:
 
 def prepare_job(stain: str, fields: int = 0, session: str = "") -> None:
     get_state().jobs.submit("prepare_labels", {"stain": stain, "fields": fields, "session": session})
+
+
+_MEASURING: dict[tuple[str, str], bool] = {}  # (project, stain) being measured -> another round was asked for meanwhile
+_MEASURING_LOCK = threading.Lock()
+
+
+def measure_added_soon(project, stain: str) -> threading.Thread | None:
+    """Measure the objects people added where the AI proposed nothing (`labels.added`), in the background and one round
+    at a time per stain, so they can train the model. Returns the thread it started (None when a round is running: that
+    round goes again when it ends)."""
+    key = (str(project.root), stain)
+    with _MEASURING_LOCK:
+        if key in _MEASURING:
+            _MEASURING[key] = True
+            return None
+        _MEASURING[key] = False
+
+    def run() -> None:
+        while True:
+            try:
+                added.measure(project, stain)
+            except Exception as error:  # noqa: BLE001 - a failed round is retried with the next added object
+                print(f"measuring the {stain} objects people added failed: {error}", flush=True)
+            with _MEASURING_LOCK:
+                if not _MEASURING[key]:
+                    del _MEASURING[key]
+                    return
+                _MEASURING[key] = False
+
+    thread = threading.Thread(target=run, daemon=True, name=f"measure-added-{stain}")
+    thread.start()
+    return thread
+
+
+def added_states(project, stain: str, tile_id: str, labels: pd.DataFrame, objects: pd.DataFrame) -> list[dict]:
+    """For each object these labels name: `proposed` (the AI proposed it: a candidate is there, perhaps hidden from the
+    person), or, for an object added where the AI proposed nothing, `measured` (it can train the model),
+    `could_not_be_measured` (with the reason) or `measuring` (still to do)."""
+    extra = added.load_field(project, stain, tile_id)
+    out = []
+    for row in labels[(labels.task == "class") & labels.x.notna()].itertuples():
+        x, y = float(row.x), float(row.y)
+        hit = None if pool.nearest(objects, x, y) is not None else added.resolve(extra, x, y)
+        if pool.nearest(objects, x, y) is not None or (hit is not None and pd.notna(hit.get("candidate_x"))):
+            state = "proposed"
+        else:
+            state = "measuring" if hit is None else "measured" if added.is_true(hit.measured) else "could_not_be_measured"
+        reason = "" if hit is None or pd.isna(hit.get("reason")) else str(hit.reason)
+        out.append({"x": x, "y": y, "state": state, "reason": reason if state == "could_not_be_measured" else ""})
+    return out
 
 
 # ---------- admin ----------
@@ -645,7 +695,7 @@ def open_field(name: str, tile_id: str, request: Request, person: str = Depends(
     mine = labels[(labels.source == person) & (labels.tile_id == tile_id) & (labels.stain == meta["stain"])]
     box = {"x": int(tile["x_px"]) - x0, "y": int(tile["y_px"]) - y0, "width": int(tile["width_px"]), "height": int(tile["height_px"])}
     return {"tile_id": tile_id, "box": box, "objects": shown, "outlines": outlines, "layers": LAYERS[meta["stain"]] if meta["ai_view"] == "full" else [],
-            "mine": mine.replace({np.nan: None}).to_dict(orient="records")}
+            "mine": mine.replace({np.nan: None}).to_dict(orient="records"), "added": added_states(state.project, meta["stain"], tile_id, mine, objects)}
 
 
 def _clean(meta: dict, mark: Mark, person: str) -> dict:
@@ -669,6 +719,16 @@ def _clean(meta: dict, mark: Mark, person: str) -> dict:
             "value": mark.value, "points": mark.points, "session": meta["name"], "deleted": mark.deleted}
 
 
+@router.get("/annotate/{name}/fields/{tile_id}/added")
+def field_added(name: str, tile_id: str, request: Request, person: str = Depends(annotator)) -> list[dict]:
+    """Where this person's added objects stand (`added_states`), for the page to follow their measuring."""
+    meta = session_meta(name, request)
+    field_tile(meta, tile_id)
+    labels = store.current(root())
+    mine = labels[(labels.source == person) & (labels.tile_id == tile_id) & (labels.stain == meta["stain"])]
+    return added_states(get_state().project, meta["stain"], tile_id, mine, field_objects(meta, tile_id))
+
+
 @router.post("/annotate/{name}/labels")
 def save(name: str, body: Marks, request: Request, person: str = Depends(annotator)) -> list[dict]:
     meta = session_meta(name, request)
@@ -676,7 +736,12 @@ def save(name: str, body: Marks, request: Request, person: str = Depends(annotat
         if meta["kind"] == "fields":
             field_tile(meta, mark.tile_id)
             busy(name, mark.tile_id, person)
-    return store.append(root(), [_clean(meta, mark, person) for mark in body.records])
+    saved = store.append(root(), [_clean(meta, mark, person) for mark in body.records])
+    project = get_state().project
+    if any(r["task"] == "class" and not r["deleted"] and pool.nearest(pool.load_field(project, meta["stain"], r["tile_id"]), r["x"], r["y"]) is None
+           for r in saved):
+        measure_added_soon(project, meta["stain"])
+    return saved
 
 
 @router.post("/annotate/{name}/fields/{tile_id}/finish")
