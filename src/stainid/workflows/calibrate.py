@@ -14,38 +14,50 @@ from stainid.project import Project
 from stainid.tables import read_csv, write_records
 
 Image.MAX_IMAGE_PIXELS = None
+STRIDE = 64  # every 64th tissue pixel of every tile: about a million pixels per core, 60 million per slide
 
 
-def sample_dab(tiles: list[dict[str, str]], fields_per_core: int, stride: int) -> np.ndarray:
+def sample_dab(root: Path, tiles: list[dict[str, str]], stride: int = STRIDE) -> np.ndarray:
+    """Tissue DAB (optical density) of every tile of these cores, every `stride`-th tissue pixel of each tile."""
     values = []
-    by_core = defaultdict(list)
+    by_image = defaultdict(list)
     for tile in tiles:
-        by_core[tile["core_id"]].append(tile)
-    for core_tiles in by_core.values():
-        chosen = sorted(core_tiles, key=lambda t: int(t["selection_order"]))[:fields_per_core]
-        with Image.open(chosen[0]["image_path"]) as image:
-            for tile in chosen:
+        by_image[tile["image_path"]].append(tile)
+    for image_path, image_tiles in sorted(by_image.items()):
+        with Image.open(root / image_path) as image:
+            image.load()
+            for tile in image_tiles:
                 x, y = int(tile["x_px"]), int(tile["y_px"])
                 rgb = np.asarray(image.crop((x, y, x + int(tile["width_px"]), y + int(tile["height_px"]))).convert("RGB"))
-                dab = np.maximum(rgb_to_hed(rgb)[..., 2], 0)
-                values.append(dab[field_tissue_mask(rgb)][::stride])
-    return np.concatenate(values)
+                tissue = field_tissue_mask(rgb)
+                if tissue.any():
+                    values.append(np.maximum(rgb_to_hed(rgb)[..., 2], 0)[tissue][::stride].astype(np.float32))
+    return np.concatenate(values) if values else np.zeros(0, np.float32)
 
 
-def calibrate_slides(project: Project, stains: list[str] | None = None, fields_per_core: int = 1, stride: int = 7,
+def calibrate_slides(project: Project, stains: list[str] | None = None, redo: bool = False, stride: int = STRIDE,
                      output: Path | None = None) -> Path:
-    """Pool tissue DAB from every core of a slide and apply `calibrate_threshold` (Otsu / median + 6 MAD / 0.01 floor)."""
+    """Pool tissue DAB from every whole-core tile of a slide and apply `calibrate_threshold` (Otsu / median + 6 MAD /
+    0.01 floor). Slides that already have a threshold keep it unless `redo`."""
     output = output or project.input("calibration")
-    tiles = [t for t in read_csv(project.input("tile_manifest")) if stains is None or t["stain"] in stains]
+    wanted = lambda stain: stains is None or stain in stains  # noqa: E731
+    kept = [r for r in (read_csv(output) if output.exists() else []) if not (redo and wanted(r["stain"]))]
+    have = {(r["tma"], r["stain"]) for r in kept}
     groups = defaultdict(list)
-    for tile in tiles:
-        groups[(tile["tma"], tile["stain"])].append(tile)
+    for tile in read_csv(project.analysis_tiles()):
+        if wanted(tile["stain"]) and (tile["tma"], tile["stain"]) not in have:
+            groups[(tile["tma"], tile["stain"])].append(tile)
+    if not groups and not have:
+        raise ValueError("No tiles to calibrate on: run “Cut cores into tiles” first")
+    if have:
+        print(f"{len(have)} slides already have a threshold (kept)", flush=True)
     rows = []
     for number, ((tma, stain), group) in enumerate(sorted(groups.items()), start=1):
-        values = sample_dab(group, fields_per_core, stride)
+        values = sample_dab(project.root, group, stride)
         threshold, quantiles = calibrate_threshold(values)
         rows.append({"tma": tma, "stain": stain, "threshold_dab_od": threshold, "sampled_tissue_pixels": int(values.size),
                      **{f"dab_p{q}": v for q, v in zip(("50", "75", "90", "95", "99", "999"), quantiles)}})
         print(f"[{number}/{len(groups)}] TMA {tma} {stain}: threshold {threshold:.4f} OD", flush=True)
-    write_records(output, rows)
+    if rows:
+        write_records(output, kept + rows)
     return output

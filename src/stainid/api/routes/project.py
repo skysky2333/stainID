@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from stainid.api import registry
 from stainid.api.state import CURRENT, get_state, open_project, reload_project, use_project
 from stainid.api.util import records
-from stainid.project import DEFAULTS, Project, save_project
+from stainid.project import DEFAULTS, LEGACY_INPUTS, Project, save_project
 from stainid.slides.layout import REQUIRED_COLUMNS, read_layout
 from stainid.tables import read_csv
 
@@ -23,7 +23,7 @@ router = APIRouter(tags=["project"])
 HELP = {
     "name": "A name for this study, shown at the top of the app.",
     "pixel_size_um": "Micrometres per pixel of the scans; only used when a table has no pixel size.",
-    "field_context_px": "Extra margin (pixels) read around each analysis field so edge objects are measured whole.",
+    "field_context_px": "Extra margin (pixels) read around each tile so objects on its edge are measured whole.",
     "tma.prefix": "Text put in front of the TMA number in core names, e.g. LIP- gives LIP-3_B-2.",
     "tma.rows": "Number of core rows on each TMA slide.",
     "tma.columns": "Number of core columns on each TMA slide (columns are lettered A, B, C …).",
@@ -34,9 +34,8 @@ HELP = {
     "inputs.tma_layout": "TMA map: donor, region and group per core position.",
     "inputs.donor_metadata": "Optional: one row per donor with age, sex, APOE and other covariates.",
     "inputs.manual_exclusions": "Optional: hand-drawn regions to ignore (folds, bubbles).",
-    "inputs.core_images": "Core image table (made by Choose analysis fields).",
-    "inputs.field_manifest": "All candidate fields (made by Choose analysis fields).",
-    "inputs.tile_manifest": "The analysed fields (made by Choose analysis fields).",
+    "inputs.core_images": "Core image table (made by Cut cores into tiles).",
+    "inputs.whole_core_manifest": "Every tile of tissue in each core (made by Cut cores into tiles).",
     "inputs.calibration": "Stain thresholds (made by Calibrate).",
 }
 UPLOADS = {"tma_layout": "TMA map", "donor_metadata": "donor information", "slides_table": "slides table"}
@@ -58,7 +57,8 @@ class PathRequest(BaseModel):
 def _paths(project: Project) -> dict:
     return {section: {key: {"path": project.relative(project.resolve(section, key)), "exists": project.resolve(section, key).exists(),
                             "help": HELP.get(f"{section}.{key}", "")}
-                      for key in project.config[section]} for section in ("inputs", "models", "outputs")}
+                      for key in project.config[section] if not (section == "inputs" and key in LEGACY_INPUTS)}
+            for section in ("inputs", "models", "outputs")}
 
 
 @router.get("/project")
@@ -106,7 +106,7 @@ def _opened(path: Path) -> dict:
 @router.get("/summary")
 def summary() -> dict:
     state = get_state()
-    tiles = state.tiles
+    tiles = state.analysis_tiles
     donors = state.donors
     source = donors if not donors.empty else tiles.drop_duplicates("donor_id") if not tiles.empty else donors
     groups = source.disease_group.value_counts().to_dict() if "disease_group" in source else {}

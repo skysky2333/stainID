@@ -29,13 +29,13 @@ def _position(label: str) -> tuple[int, str]:
 
 def _cores(state: ProjectState) -> pd.DataFrame:
     """One row per core and stain that has an image (else per analysed core and stain)."""
-    source = state.core_images if not state.core_images.empty else state.tiles
+    source = state.core_images if not state.core_images.empty else state.analysis_tiles
     if source.empty:
         return source
     source = source.drop_duplicates(["core_id", "stain"])
     missing = [c for c in CORE_COLUMNS if c not in source]
-    if missing and not state.tiles.empty:  # an older core list: the rest of the core's details come from the tiles
-        details = state.tiles.drop_duplicates("core_id")[["core_id", *[c for c in missing if c in state.tiles]]]
+    if missing and not state.analysis_tiles.empty:  # an older core list: the rest of the core's details come from the tiles
+        details = state.analysis_tiles.drop_duplicates("core_id")[["core_id", *[c for c in missing if c in state.analysis_tiles]]]
         source = source.merge(details, on="core_id", how="left")
     return source
 
@@ -53,7 +53,7 @@ def cohort() -> dict:
 
 @router.get("/cores")
 def cores(tma: str | None = None) -> list[dict]:
-    tiles = get_state().tiles
+    tiles = get_state().analysis_tiles
     if tma:
         tiles = tiles[tiles.tma.astype(str) == tma]
     table = tiles.groupby(CORE_COLUMNS, dropna=False).stain.apply(lambda s: sorted(set(s))).reset_index(name="stains")
@@ -89,10 +89,6 @@ def _quick_detection(state: ProjectState, tiles: pd.DataFrame, stain: str) -> st
     return "done" if first and last else "partial" if first or last else "not_run"
 
 
-def _analysis_tiles(state: ProjectState) -> pd.DataFrame:
-    return state.analysis_tiles if not state.analysis_tiles.empty else state.tiles
-
-
 @router.get("/tmas/{tma}/grid")
 def grid(tma: str, stain: str, prepare: bool = True) -> dict:
     """Every position of one TMA for one stain: the core there, whether its picture is ready (missing ones are queued
@@ -104,7 +100,7 @@ def grid(tma: str, stain: str, prepare: bool = True) -> dict:
     layout = state.layout[state.layout.tma.astype(str) == tma] if not state.layout.empty else state.layout
     positions = {str(r["core_label"]): r for r in layout.to_dict("records")}
     labels = sorted(set(positions) | set(by_label), key=_position)
-    tiles = _analysis_tiles(state)
+    tiles = state.analysis_tiles
     tiles = tiles[(tiles.tma.astype(str) == tma) & (tiles.stain == stain)] if not tiles.empty else tiles
     tiles_by_core = dict(list(tiles.groupby("core_id"))) if not tiles.empty else {}
     cells, waiting = [], 0
@@ -144,7 +140,8 @@ def _neighbours(state: ProjectState, core_id: str, tma: str) -> dict:
 @router.get("/cores/{core_id}")
 def core(core_id: str) -> dict:
     state = get_state()
-    tiles = state.tiles[state.tiles.core_id == core_id] if not state.tiles.empty else state.tiles
+    tiles = state.analysis_tiles
+    tiles = tiles[tiles.core_id == core_id] if not tiles.empty else tiles
     images = state.core_images[state.core_images.core_id == core_id] if not state.core_images.empty else state.core_images
     if tiles.empty and images.empty:
         raise HTTPException(404, f"unknown core {core_id}")
@@ -153,7 +150,6 @@ def core(core_id: str) -> dict:
     return {
         **{k: _text(first.get(k)) for k in CORE_COLUMNS},
         "images": records(images[image_columns].sort_values("stain")) if not images.empty else [],
-        "fields": records(tiles[["tile_id", "stain", "selection_order", "x_px", "y_px", "width_px", "height_px", "nested_sample"]]) if not tiles.empty else [],
         "neighbours": _neighbours(state, core_id, str(first["tma"])),
     }
 
@@ -162,7 +158,7 @@ def core(core_id: str) -> dict:
 def core_objects(core_id: str, stain: str) -> dict:
     """Everything detection found in one core image, in core-image pixels (as rows of `columns`), and the tiles it ran on."""
     state = get_state()
-    tiles = _analysis_tiles(state)
+    tiles = state.analysis_tiles
     tiles = tiles[(tiles.core_id == core_id) & (tiles.stain == stain)] if not tiles.empty else tiles
     status, done, total = _detection(state, tiles, stain)
     rows = []

@@ -35,23 +35,21 @@ def field_rgb(state: ProjectState, tile_id: str) -> np.ndarray:
     """Field crop including the context halo, cached as JPEG (coordinates match all pipeline outputs)."""
     target = state.cache_dir("fields") / f"{tile_id}.jpg"
     if not target.exists():
-        image_path = state.tile(tile_id)["image_path"]
-        with _IMAGE_LOCKS.setdefault(image_path, threading.Lock()):
+        tile = state.tile(tile_id)
+        with _IMAGE_LOCKS.setdefault(tile["image_path"], threading.Lock()):
             if not target.exists():
-                _crop_all_fields(state, image_path)
+                _crop_field(state, tile, target)
     return np.asarray(Image.open(target).convert("RGB"))
 
 
-def _crop_all_fields(state: ProjectState, image_path: str) -> None:
-    """Decoding a core image is the slow part, so cut out every field of that image in one pass."""
+def _crop_field(state: ProjectState, tile: dict, target: Path) -> None:
+    """Cut one tile (with its context margin) out of its core image."""
     context = state.project.context_px
-    with pyramid.DECODE, Image.open(state.root / image_path) as image:
-        image.load()
-        for tile in state.tiles[state.tiles.image_path == image_path].to_dict("records"):
-            x0, y0 = crop_origin(tile, context)
-            x1 = min(int(tile["x_px"]) + int(tile["width_px"]) + context, image.width)
-            y1 = min(int(tile["y_px"]) + int(tile["height_px"]) + context, image.height)
-            image.crop((x0, y0, x1, y1)).convert("RGB").save(state.cache_dir("fields") / f"{tile['tile_id']}.jpg", quality=FIELD_JPEG_QUALITY)
+    with pyramid.DECODE, Image.open(state.root / tile["image_path"]) as image:
+        x0, y0 = crop_origin(tile, context)
+        x1 = min(int(tile["x_px"]) + int(tile["width_px"]) + context, image.width)
+        y1 = min(int(tile["y_px"]) + int(tile["height_px"]) + context, image.height)
+        image.crop((x0, y0, x1, y1)).convert("RGB").save(target, quality=FIELD_JPEG_QUALITY)
 
 
 def field_jpeg(state: ProjectState, tile_id: str) -> Path:

@@ -11,6 +11,9 @@ import yaml
 CONFIG_NAME = "stainid.yaml"
 SUPPORTED_STAINS = {"NeuN": "neun", "6E10": "amyloid", "AT8": "tau"}
 PRECISIONS = ("fp32", "tf32", "bf16")
+# Sampled-field tables of projects analysed before whole-core analysis. Nothing makes them any more; where they exist
+# they are read only because earlier labels, labelling sessions and training sets name their fields (…_S01).
+LEGACY_INPUTS = ("field_manifest", "tile_manifest")
 ENVIRONMENT_KEYS = ("HF_HOME", "CELLPOSE_LOCAL_MODELS_PATH", "STAINID_PLAQUE_CNN_DIR")  # set per project (`Project.environment`)
 
 DEFAULTS: dict = {
@@ -27,6 +30,8 @@ DEFAULTS: dict = {
     # naming: <plain_prefix or prefixed_prefix><donor_id>_<region name, or its code with region: code>. The default gives
     # 1673_frontal, as when the column is left empty; plain_prefix BRC_ with region code gives BRC_1673_FR and JOG_003_FR.
     "sample_region_ids": {"plain_prefix": "", "prefixed_prefix": "", "region": "name"},
+    # Detection always runs on whole cores. The key stays for scripts that check it (data/analysis/whole_core_run.sh); an
+    # older value in stainid.yaml ("sampled_fields") is read and ignored (see `load_project`).
     "analysis": {"tiles": "whole_core"},
     # Probability a NeuN candidate or tau-neuron candidate needs to be counted. null keeps the cut-off stored in the model.
     # Random audits of accepted objects found many non-neurons at the model defaults (NeuN 0.5, AT8 0.4):
@@ -131,8 +136,8 @@ class Project:
         return value
 
     def analysis_tiles(self) -> Path:
-        """The tiles detection runs on: every tissue tile of each core (whole_core) or only the sampled fields."""
-        return self.input("whole_core_manifest" if self.config["analysis"]["tiles"] == "whole_core" else "tile_manifest")
+        """The tiles detection runs on: every tissue tile of each core."""
+        return self.input("whole_core_manifest")
 
     def acceptance(self, model: str, bundle: dict) -> float:
         """The probability cut-off for counting an object: the project setting if given, else the model's own."""
@@ -180,7 +185,9 @@ def load_project(path: Path | str | None = None) -> Project:
     config_file = candidate / CONFIG_NAME if candidate.is_dir() else candidate
     root = config_file.parent.resolve()
     override = yaml.safe_load(config_file.read_text()) if config_file.exists() else {}
-    return Project(root=root, config=_merge(DEFAULTS, override or {}))
+    config = _merge(DEFAULTS, override or {})
+    config["analysis"] = dict(DEFAULTS["analysis"])
+    return Project(root=root, config=config)
 
 
 def save_project(project: Project, changes: dict) -> Project:

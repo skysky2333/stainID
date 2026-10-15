@@ -29,7 +29,8 @@ class CohortAggregationTest(unittest.TestCase):
                 }
             )
         aggregated = aggregate_level(rows, [], "core")
-        primary = next(row for row in aggregated if row["sampling_extent"] == "primary_four")
+        self.assertEqual([row["sampling_extent"] for row in aggregated], ["whole_core", "whole_core_interior"])
+        primary = next(row for row in aggregated if row["sampling_extent"] == "whole_core")
         self.assertEqual(primary["accepted_plaque_count"], 8)
         self.assertAlmostEqual(primary["plaque_density_mm2"], 8 / 3)
         self.assertAlmostEqual(primary["compact_plaque_fraction"], 0.5)
@@ -106,7 +107,7 @@ class CohortAggregationTest(unittest.TestCase):
                 "region": "frontal",
                 "disease_group": "AD",
                 "analysis_level": "donor_region",
-                "sampling_extent": "primary_four",
+                "sampling_extent": "whole_core",
                 "technical_replicate": "pooled",
                 "stain": stain,
                 "tissue_area_mm2": index,
@@ -123,14 +124,14 @@ if __name__ == "__main__":
     unittest.main()
 
 
-def test_sampling_extents_add_whole_core_and_its_interior_only_for_tiled_cores():
+def test_sampling_extents_are_the_whole_core_and_its_interior():
     from stainid.analysis.aggregation import sampling_extents
 
-    sampled = [{"selection_order": str(i), "preview_tissue_fraction": "1.0"} for i in range(1, 9)]
+    tiles = [{"selection_order": str(i), "preview_tissue_fraction": "1.0"} for i in (1, 2, 101, 102)]  # earlier field ids count like any tile
     rim, inner = {"selection_order": "305", "preview_tissue_fraction": "0.2"}, {"selection_order": "306", "preview_tissue_fraction": "0.9"}
-    assert [name for name, _ in sampling_extents(sampled)] == ["primary_four", "extended_eight"]
-    extents = dict(sampling_extents(sampled + [rim, inner]))
-    assert [sum(map(extents[name], sampled + [rim, inner])) for name in extents] == [4, 8, 10, 9]
+    extents = dict(sampling_extents(tiles + [rim, inner]))
+    assert list(extents) == ["whole_core", "whole_core_interior"]  # the sampling_extent column stays, for scripts that filter on it
+    assert [sum(map(extents[name], tiles + [rim, inner])) for name in extents] == [6, 5]
     assert not extents["whole_core_interior"](rim) and extents["whole_core_interior"](inner)
 
 

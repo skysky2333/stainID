@@ -158,8 +158,9 @@ def rows(name: str, offset: int = 0, limit: int = 100, sort: str = "", desc: boo
 @router.get("/tables/{name:path}/feature")
 def feature(name: str, column: str, group: str = "disease_group", facet: str | None = None) -> dict:
     frame = read_table(resolve(name))
-    if "sampling_extent" in frame:
-        frame = frame[frame.sampling_extent == frame.sampling_extent.iloc[0]]
+    if "sampling_extent" in frame and len(frame):  # tables with one row per tile subset: the whole cores
+        extents = set(frame.sampling_extent)
+        frame = frame[frame.sampling_extent == ("whole_core" if "whole_core" in extents else frame.sampling_extent.iloc[0])]
     if column not in frame or group not in frame:
         raise HTTPException(400, "unknown column")
     keep = [c for c in dict.fromkeys(["sample_region_id", "core_id", "donor_id", group, facet, column]) if c and c in frame]

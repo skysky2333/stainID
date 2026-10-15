@@ -142,14 +142,8 @@ def _manifest_status(column: str, unit: str = "core images", only: Callable[[dic
     return status
 
 
-def _select_status(project: Project) -> dict:
-    tiles = _rows(project.input("tile_manifest"), TILE_COLUMNS)
-    cores = {r["core_id"] for r in tiles}
-    return _state(len(tiles), len(tiles), "fields", f"{len(cores)} cores") if tiles else _state(0, 0, "fields")
-
-
 def _calibration_status(project: Project) -> dict:
-    wanted = {(t["tma"], t["stain"]) for t in _rows(project.input("tile_manifest"), TILE_COLUMNS)}
+    wanted = {(t["tma"], t["stain"]) for t in _rows(project.analysis_tiles(), TILE_COLUMNS)}
     have = {(r["tma"], r["stain"]) for r in _rows(project.input("calibration"))}
     return _state(len(wanted & have), len(wanted), "slides")
 
@@ -184,7 +178,7 @@ def _neun_status(project: Project) -> dict:
     names = _expected(project, {"NeuN"}, _neun_file)
     outdated = _made_with_other_model(project, "neun", lambda r: {"neun": str(Path(r["neun_model_bundle"]).resolve())},
                                       {"neun": str(project.model("neun").resolve())})
-    return _state(_count_files(project.output("neun") / "tiles", names), len(names), "fields", outdated=outdated)
+    return _state(_count_files(project.output("neun") / "tiles", names), len(names), "tiles", outdated=outdated)
 
 
 def _fields_status(project: Project) -> dict:
@@ -269,14 +263,12 @@ RESOURCES = {r.id: r for r in (
                     "Optional columns: cerad, braak, sample_region_id. The template lists every position already."),
     Resource("core_images", "Core images", "Every core cut out of the slide at full resolution (PNG).", lambda p: p.input("core_manifest").parent / "cores"),
     Resource("core_qc_images", "Core QC images", "Tissue and focus overlays for every core.", lambda p: p.input("core_manifest").parent / "qc" / "cores"),
-    Resource("tile_manifest", "Sampled fields", "A few ~560 µm fields per core: labelled to train and test the models.", lambda p: p.input("tile_manifest")),
-    Resource("whole_core_tiles", "Whole-core tiles", "Every ~560 µm tile of tissue in each core.", lambda p: p.input("whole_core_manifest")),
-    Resource("analysis_tiles", "Analysis tiles", "The tiles detection runs on: whole cores, or only the sampled fields (Settings → Analysis).",
-             lambda p: p.analysis_tiles()),
+    Resource("tiles", "Tiles", "Every ~560 µm tile of tissue in each core: detection runs on these, and labelling fields are drawn "
+             "from them.", lambda p: p.analysis_tiles()),
     Resource("calibration", "Stain thresholds", "One brown-stain (DAB) threshold per slide.", lambda p: p.input("calibration")),
-    Resource("nuclei", "Nuclei", "Every cell nucleus found by Cellpose, one file per field.", lambda p: p.output("nuclei")),
-    Resource("neun_results", "NeuN results", "Neuron detections and per-field counts.", lambda p: p.output("neun")),
-    Resource("field_results", "6E10 / AT8 results", "Plaque and tau detections and per-field measurements.", lambda p: p.output("fields")),
+    Resource("nuclei", "Nuclei", "Every cell nucleus found by Cellpose, one file per tile.", lambda p: p.output("nuclei")),
+    Resource("neun_results", "NeuN results", "Neuron detections and per-tile counts.", lambda p: p.output("neun")),
+    Resource("field_results", "6E10 / AT8 results", "Plaque and tau detections and per-tile measurements.", lambda p: p.output("fields")),
     Resource("mask_results", "Object outlines", "An outline and shape measurements for every detected object.", lambda p: p.output("masks")),
     Resource("results", "Results table", "One row per donor and brain region with every measurement (results_donor_region.csv).",
              lambda p: p.output("tables") / "results_donor_region.csv"),
@@ -333,34 +325,28 @@ STEPS = (
          heavy=True, view="/cohort", duration="about 1–2 minutes per slide",
          status=_manifest_status("export_status", only=lambda r: r.get("core_role") == "biological"), writes=("core_manifest",)),
     Step("qc", "1 · Set up", "Check core quality", "Measure tissue coverage, fragments and focus of every core.",
-         "Flags cores that are mostly empty, torn or out of focus so they can be reviewed. Field selection only uses tissue and focus, never the stain.",
+         "Flags cores that are mostly empty, torn or out of focus so they can be reviewed. Only tissue and focus are measured, never the stain.",
          ("core_images",), ("core_quality", "core_qc_images"), ("qc",),
          (Option("workers", "Parallel workers", "number", 2, advanced=True), Option("overwrite", "Measure again", "bool", False, advanced=True)),
          heavy=True, view="/cohort", duration="a few seconds per core",
          status=_manifest_status("tissue_status", only=lambda r: r.get("export_status") == "complete"), writes=("core_manifest",)),
-    Step("select", "1 · Set up", "Choose analysis fields", "Pick evenly spread ~560 µm fields inside every core.",
-         "Scores candidate windows for tissue and focus, then spreads the chosen fields across the core. The first few fields per core are "
-         "analysed; the rest are kept for stability checks.",
-         ("core_groups", "core_quality"), ("tile_manifest",), ("select",),
-         (Option("fields_per_core", "Fields per core", "number", 8, "How many fields to choose in each core."),
-          Option("primary", "Fields analysed", "number", 4, "How many of them are measured (the first N)."),
-          Option("field_size", "Field size (pixels)", "number", 2048, "Side of each square field; 2048 px is about 560 µm at 0.27 µm/px. "
-                 "Use a smaller size for small cores.", advanced=True)),
-         view="/cohort", duration="a few minutes", status=_select_status),
-    Step("tiles", "1 · Set up", "Cut whole cores into tiles", "Cover each core's tissue with ~560 µm tiles for whole-core analysis.",
-         "Uses the same grid as the sampled fields (they keep their names), keeps every square that holds tissue, including the narrower squares "
-         "at the image edges, so detection covers the whole core without overlap. Detection runs on these tiles when Settings → Analysis is "
-         "“whole cores”.", ("core_quality", "tile_manifest"), ("whole_core_tiles",), ("tiles",),
-         (Option("field_size", "Tile size (pixels)", "number", 2048, "Use the same size as the sampled fields.", advanced=True),),
+    Step("tiles", "1 · Set up", "Cut cores into tiles", "Cover each core's tissue with ~560 µm tiles; detection looks at every one.",
+         "Lays a grid of square tiles over each core image and keeps every square that holds tissue, including the narrower squares at the "
+         "image edges, so detection covers the whole core without overlap.", ("core_groups", "core_quality"), ("tiles",), ("tiles",),
+         (Option("tile_size", "Tile size (pixels)", "number", 2048, "Side of each square tile; 2048 px is about 560 µm at 0.27 µm/px.",
+                 advanced=True),),
          heavy=True, view="/cohort", duration="a few seconds per core", status=_whole_core_status),
     Step("calibrate", "1 · Set up", "Calibrate stain thresholds", "Find the brown-stain (DAB) cut-off for every slide.",
-         "Pools tissue pixels from all cores of a slide and sets one threshold per slide, blind to diagnosis. Everything downstream is measured "
-         "relative to it, so slides stained a little darker or lighter stay comparable.",
-         ("tile_manifest",), ("calibration",), ("calibrate",), view="/calibration", duration="a few minutes", status=_calibration_status),
+         "Pools tissue pixels from every tile of every core of a slide and sets one threshold per slide, blind to diagnosis. Everything "
+         "downstream is measured relative to it, so slides stained a little darker or lighter stay comparable. Slides that already have a "
+         "threshold keep it.", ("tiles",), ("calibration",), ("calibrate",),
+         (Option("redo", "Calibrate again", "bool", False, "Work out the thresholds again for slides that already have one. The detection "
+                 "steps must then run again with Start over.", advanced=True),),
+         heavy=True, view="/calibration", duration="about a minute per slide", status=_calibration_status),
     Step("nuclei", "2 · Detect", "Find nuclei", "Outline every cell with Cellpose-SAM, for all stains.",
          "The slow step (about 90 s per tile on an Apple GPU, about 4 s on an NVIDIA A100-class GPU), and the only one that needs a GPU. "
          "NeuN and AT8 detection read these outlines; 6E10 uses them for plaque-neighbourhood features.",
-         ("analysis_tiles", "model_cellpose"), ("nuclei",), ("nuclei",),
+         ("tiles", "model_cellpose"), ("nuclei",), ("nuclei",),
          (Option("stain", "Stains", "stains", ["NeuN", "AT8", "6E10"], choices=("NeuN", "AT8", "6E10")),
           DEVICE, Option("batch_size", "Batch size", "number", 8, advanced=True),
           Option("workers", "Tiles at once", "number", 2, "Two tiles in flight keep the GPU busy while the other one's CPU steps run.",
@@ -369,7 +355,7 @@ STEPS = (
     Step("neun", "2 · Detect", "Detect NeuN neurons", "Find and classify NeuN-stained neuronal profiles.",
          "Candidates come from brown-stain contours and the Cellpose cells of Find nuclei (computed here for tiles that have none yet); "
          "the NeuN model scores each one with its shape, stain and 55 µm neighbourhood.",
-         ("analysis_tiles", "calibration", "model_neun", "model_cellpose"), ("neun_results",), ("neun",),
+         ("tiles", "calibration", "model_neun", "model_cellpose"), ("neun_results",), ("neun",),
          (Option("device", "Processor", "select", "cpu", "Only matters for tiles without Find nuclei outlines. cpu reproduces published results exactly; mps / cuda (GPU) are faster but Cellpose "
                  "outlines can differ slightly.", ("cpu", "mps", "cuda")),
           Option("threads", "CPU threads", "number", 8, advanced=True), FRESH, *SHARD),
@@ -377,7 +363,7 @@ STEPS = (
     Step("fields", "2 · Detect", "Detect plaques and tau", "6E10 plaques (compact / diffuse) and AT8 tau+ neurons and threads.",
          "6E10: segments deposits, keeps real plaques with the 6E10 model and sorts them into compact and diffuse. AT8: finds tau+ neurons "
          "around nuclei and traces neuropil threads, so run Find nuclei for AT8 first (AT8 cores without nuclei are skipped).",
-         ("analysis_tiles", "calibration", "model_amyloid", "model_tau"), ("field_results",), ("fields",),
+         ("tiles", "calibration", "model_amyloid", "model_tau"), ("field_results",), ("fields",),
          (Option("stain", "Stains", "stains", ["6E10", "AT8"], choices=("6E10", "AT8")), FRESH, *SHARD),
          heavy=True, view="/cohort", duration="about 1 minute per core", status=_fields_status, uses=("nuclei", "model_phikon")),
     Step("masks", "2 · Detect", "Outline objects", "Draw an exact outline around every detected object with Segment Anything.",
@@ -387,7 +373,7 @@ STEPS = (
           DEVICE, FRESH, *SHARD),
          heavy=True, view="/cohort", duration="about 1 minute per core", status=_masks_status, uses=("neun_results", "field_results")),
     Step("summarize", "3 · Results", "Make results tables", "Combine everything into one row per donor and brain region.",
-         "Sums counts and areas over fields and replicate cores before dividing, so every density is area-weighted. Writes "
+         "Sums counts and areas over tiles and replicate cores before dividing, so every density is area-weighted. Writes "
          "results_donor_region.csv (and per-core tables) that open in Excel, R or Python.",
          (), ("results",), ("summarize",),
          (Option("level", "One row per", "select", "sample_region_id", "donor-region (recommended) or single core.", ("sample_region_id", "core_id")),),
@@ -400,8 +386,9 @@ STEPS = (
              sum(p.model(k).exists() for k in ("cellpose", "sam", "huggingface_home")), 3, "models")),
     Step("prepare_labels", "Models", "Prepare fields for labelling", "Find every candidate object in fields people will label.",
          "Finds the candidates exactly as the detection step does, stores their measurements and the AI's call, so labelling sessions open "
-         "instantly and every label can train a model. Labelling sessions run this for their own fields.",
-         ("tile_manifest", "calibration"), ("candidate_pool",), ("labels", "prepare"),
+         "instantly and every label can train a model. Fields are full ~560 µm tiles, mostly tissue, spread over TMAs and groups. Labelling "
+         "sessions run this for their own fields.",
+         ("tiles", "calibration"), ("candidate_pool",), ("labels", "prepare"),
          (Option("stain", "Stain", "select", "AT8", choices=tuple(STAINS)), Option("fields", "Fields", "number", 20, "How many more fields to prepare."),
           Option("session", "Session", "text", "", "Prepare every field of this labelling session instead.", advanced=True)),
          # light: a session's few fields must not wait for a long detection run to finish

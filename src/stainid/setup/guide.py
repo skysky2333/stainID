@@ -13,7 +13,7 @@ from stainid.slides.table import find_slides
 from stainid.workflows.steps import best_device
 
 # seconds per unit of work, roughly (the step cards give the same figures in words)
-SECONDS = {"dearray": 60, "export": 90, "qc": 3, "select": 2, "tiles": 3, "calibrate": 1, "neun": 5, "fields": 60, "summarize": 60}
+SECONDS = {"dearray": 60, "export": 90, "qc": 3, "tiles": 3, "calibrate": 60, "neun": 5, "fields": 60, "summarize": 60}
 NUCLEI_SECONDS = {"cuda": 4, "mps": 90, "cpu": 400}  # Cellpose-SAM per ~560 µm tile
 TILE_UM = 560
 
@@ -62,10 +62,9 @@ def estimate(project: Project, remaining: list[str]) -> dict:
     else:
         positions = slides * int(project.config["tma"]["rows"]) * int(project.config["tma"]["columns"])
         biological, diameter = int(positions * 0.9), 1500.0
-    whole = project.config["analysis"]["tiles"] == "whole_core"
-    tiles = len(_rows(project.analysis_tiles())) or int(biological * (max(1.0, 0.85 * (diameter / TILE_UM) ** 2) if whole else 4))
+    tiles = len(_rows(project.analysis_tiles())) or int(biological * max(1.0, 0.85 * (diameter / TILE_UM) ** 2))
     device = best_device()
-    units = {"dearray": slides, "export": slides, "qc": biological, "select": biological, "tiles": biological, "calibrate": tiles,
+    units = {"dearray": slides, "export": slides, "qc": biological, "tiles": biological, "calibrate": slides,
              "neun": tiles / 3, "fields": biological * 2 / 3, "summarize": 1}
     steps = []
     for step in remaining:
