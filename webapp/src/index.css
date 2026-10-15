@@ -1053,3 +1053,15 @@ tr.significant-row td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 .score-card p { margin: 0; }
 .score-summary { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
 .score-table td.num, .score-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+/* ---- dataset packages downloaded bit by bit, measured stain colours, drive space (importfix) ---- */
+.dataset-files { display: grid; gap: 8px; }
+.dataset-files p { margin: 0; }
+.dataset-files .link-btn { justify-self: start; }
+.dataset-missing code { word-break: break-all; }
+.measured-colours { display: grid; gap: 6px; margin-top: 10px; }
+.measured-colours p { margin: 0; }
+.measured-colours-stain { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; }
+.measured-colour { display: inline-flex; align-items: center; gap: 5px; }
+.measured-swatch { width: 14px; height: 14px; border-radius: 3px; border: 1px solid var(--border); flex: none; }
+.cache-space-drive { display: grid; gap: 4px; }
+.cache-space-drive p { margin: 0; }

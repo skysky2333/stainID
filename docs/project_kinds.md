@@ -10,7 +10,7 @@ colours, how a dataset package becomes a project, and how the models are scored 
 |---|---|---|---|
 | **TMA study** (`tma`, the default) | slide scans of TMAs and their TMA maps | Slides → Cores → Map → Donors → Checks → Run | the cores found on each slide |
 | **Image set** (`images`) | image tiles or regions (PNG, JPEG, TIFF), each from a known donor | Images → Donors → Checks → Run | each image |
-| **Whole slides** (`slides`) | whole-slide scans (.svs, .ndpi, .tif, .mrxs, .scn, .czi, OME-Zarr) | Slides → Donors → Checks → Run | each region of tissue on a slide |
+| **Whole slides** (`slides`) | whole-slide scans (.svs, .ndpi, .tif, .mrxs, .scn, .czi, OME-Zarr, plain Zarr arrays) | Slides → Donors → Checks → Run | each region of tissue on a slide |
 
 A new study's kind is chosen on the Projects page (*New study → What will you analyse?*), or comes from the dataset
 package it is made from. Image sets and whole slides have no TMA map and no core grid; the setup says so and skips
@@ -77,7 +77,20 @@ deconvolution and the thresholds follow the per-stain setting without any change
 slide, the stain listed (`AT8` in `AT8+pTDP-43`) is the one analysed; the Images screen shows each stain's picture as
 scanned and as stainID reads it. The DAB, hematoxylin, eosin, Fast Red, Fast Blue and AEC vectors are the published
 Ruifrok-Johnston values; NovaRed and the generic blue are approximations, so a lab can give its own, measured from an
-area of pure stain, as `vectors: {NovaRed: [r, g, b], hematoxylin: [r, g, b]}` under the stain.
+area of pure stain, as `vectors: {NovaRed: [r, g, b], hematoxylin: [r, g, b]}` under the stain (optical density, red,
+green, blue; any colour without one keeps the standard vector). A dataset package's measured vectors (`stains[].vectors`
+in dataset.yaml, e.g. SEA-AD's AT8 blue `[0.798, 0.552, 0.242]`) are carried into the project when it is made; the
+Images screen shows them under Advanced, with a swatch of each colour, and can set a stain back to the standard colours.
+A stain with its own vectors is always unmixed with them, also when it is plain DAB (it is drawn again in the standard
+H-DAB colours the models were trained on).
+
+```yaml
+    AT8+pTDP-43:
+      family: tau
+      chromogen: blue
+      others: [DAB]
+      vectors: {blue: [0.7982, 0.5518, 0.2415], DAB: [0.3683, 0.5634, 0.7396], hematoxylin: [0.6848, 0.628, 0.3696]}
+```
 
 **Scale.** Images within 3 % of `pixel_size_um` are read as they are; others are enlarged or reduced to it (whole
 slides from the pyramid level closest to it). The models, Cellpose's cell size and every µm figure assume this scale.
@@ -99,24 +112,37 @@ A dataset package is one folder describing a public (or another lab's) dataset; 
 ```
 package/
   dataset.yaml     id, title, source_urls, doi, licence, citation, sites, stains [{stain, antibody, chromogen,
-                   counterstain, also_on_slide, family}], pixel_size_um, image_kind (tiles | regions | wsi), class_map
-  images.csv       image_id, path (relative to package/ or absolute), width_px, height_px, pixel_size_um, stain,
-                   slide_id, donor_id, region, site, split
+                   counterstain, also_on_slide, family, vectors}], pixel_size_um, image_kind (tiles | regions | wsi), class_map
+  images.csv       image_id, path (relative to package/ or absolute; empty: not downloaded yet), width_px, height_px,
+                   pixel_size_um, stain, slide_id, donor_id, region, site, split
   annotations.csv  image_id, rater, kind (point | box | polygon | image_label), x, y, x2, y2, polygon (JSON), label,
                    stainid_class, confidence; positions in the image's own pixels
   donors.csv       optional: donor_id, diagnosis (or disease_group), braak, cerad, thal, adnc, apoe, age, sex, pmi, …
 ```
 
 *Projects → New study → From a dataset package* (or `stainid package <package> <new project folder>`) shows what the
-package holds (images, donors, raters, labels, licence and citation, whether the image files are found), lets you check
-which model family each stain is and which stainID class each label means, and makes the project:
+package holds (images, donors, raters, labels, licence and citation, how many of its images are downloaded), lets you
+check which model family each stain is and which stainID class each label means, and makes the project:
 
 - its kind (`tiles` and `regions` → image set, `wsi` → whole slides) and imaging settings from dataset.yaml (a pixel
-  size written as text, e.g. "per image", is left to images.csv);
-- the image list, pointing at the package's files (absolute paths; nothing is copied);
+  size written as text, e.g. "per image", is left to images.csv; measured colour vectors are kept);
+- the image list, pointing at the package's files (absolute paths; nothing is copied), with the images that are
+  present now;
+- a space of 20 GB for its pictures for viewing (`cache_limit_gb`, changed in Settings), so many dataset projects fit on
+  one drive (and whatever the limits, every drive keeps a floor of free space: see docs/development.md);
 - the donor table from donors.csv (the diagnosis is the group when there is no group column), donor ids kept as
   written (`donor_ids: {digits: 0}`);
 - `dataset:` in stainid.yaml: id, title, licence, citation, DOI, the package folder and the class map.
+
+**Datasets downloaded bit by bit.** A public dataset is often far larger than what is downloaded at first: images.csv
+lists every image, and one with an empty `path`, or whose file is not where the path says, is *not downloaded yet*
+(files are looked up with one listing per folder, so a package of 80,000 crops is checked in seconds). The import page
+says how many are downloaded ("1 of 47 slides"), per stain too; the project is made with those, even with none. The
+Images screen then shows *Downloaded so far: N of M* with **Look for new files**, which adds every image of the package
+that is present now and not yet in the study (by its id, or by its file; rows already in the list keep any changes),
+and Checks has a note on what is still to come and a warning with the same fix when newly downloaded images are not in
+the study yet (looked at again at most every 30 s). After adding, run the steps again: *Prepare images* places the
+labels of the new images too.
 
 The annotations are placed when the images are prepared, because they go on the project's tiles
 (`stainid.imageset.annotations`): every point, box, polygon (by its centre) and image label is moved to the core image
@@ -169,8 +195,18 @@ images they annotated; only images some rater annotated count.
 ## Dependencies
 
 Whole-slide reading needs the `slides` extra: `pip install "stainid[slides]"` (Bio-Formats via aicsimageio, OpenSlide
-via `openslide-python` and `openslide-bin`, Zarr). aicsimageio pins `zarr < 2.16`, which needs `numcodecs < 0.16`
-(later numcodecs releases removed `cbuffer_sizes`, which breaks `import zarr`); the extra pins both. Without it
+via `openslide-python` and `openslide-bin`, Zarr, imagecodecs). aicsimageio pins `zarr < 2.16`, which needs
+`numcodecs < 0.16` (later numcodecs releases removed `cbuffer_sizes`, which breaks `import zarr`); the extra pins both.
+
+**Plain Zarr arrays.** Some datasets store a slide as one Zarr v2 array (`.zarray`, no OME metadata) rather than
+OME-Zarr: the Tangle-Tracer slides are (y, x, 3) uint8 arrays in 5000 px chunks, each chunk a JPEG-XR picture
+(`imagecodecs_jpegxr`). stainID reads these chunk by chunk without the zarr package (`stainid.imaging.sources`, reader
+`zarr_array`): imagecodecs decodes the chunks (four at a time), chunks that are not stored and the black (fill value 0)
+unscanned parts of stored ones are glass, and reduced levels (1/2, 1/4, …) are made while reading by shrinking each
+chunk, so an overview never holds the whole slide in memory. Raw, numcodecs-compressed (zlib, blosc, …) and other
+imagecodecs chunks work the same way. A 115,000 px Tangle-Tracer slide takes about a minute to look over (the Images
+screen keeps its picture among the pictures for viewing); regions read in well under a second each. The pixel size
+comes from images.csv (0.111 µm). Without it
 stainID still reads plain pictures and tiled TIFFs (one pyramid level at a time with tifffile), says which reader is
 missing on the Images and Checks screens, and leaves out images it cannot read with the reason in the step's log.
 
@@ -193,4 +229,4 @@ missing on the Images and Checks screens, and leaves out images it cannot read w
 
 Steps carry the kinds they belong to (`Step.kinds`; `steps_for(project)`): a TMA study never shows Prepare images, an
 image set never shows Find cores. Synthetic packages for every kind are in `tests/package_files.py`
-(`tests/test_project_kinds.py`).
+(`tests/test_project_kinds.py`; packages downloaded in part, measured colours, plain Zarr slides and the drive's free space in `tests/test_dataset_imports.py`).

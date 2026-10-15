@@ -149,6 +149,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--cache-limit", default=None, metavar="SIZE",
                    help="space each project's pictures for viewing (data/cache) may take unless its settings say otherwise, e.g. 100G "
                         "(the default) or 500M; the least recently used are deleted beyond it and made again when needed")
+    p.add_argument("--cache-min-free", default=None, metavar="SIZE",
+                   help="free space every drive keeps: when a drive has less, the pictures for viewing of all projects on it are "
+                        "deleted, least recently used first, until it has; e.g. 50G, 10%% or '50G or 10%%' (the default: the smaller)")
     p.add_argument("--projects-dir", type=Path, default=None, metavar="DIR",
                    help="list every folder in DIR that holds a stainid.yaml on the Projects page (also settable there)")
     return parser
@@ -317,6 +320,14 @@ def serve(args: argparse.Namespace) -> None:
         except ValueError as error:
             raise SystemExit(f"--cache-limit: {error}")
         os.environ[LIMIT_ENV] = args.cache_limit
+    if args.cache_min_free:
+        from stainid.disk_cache import MIN_FREE_ENV, parse_min_free
+
+        try:
+            parse_min_free(args.cache_min_free)
+        except ValueError as error:
+            raise SystemExit(f"--cache-min-free: {error}")
+        os.environ[MIN_FREE_ENV] = args.cache_min_free
     if args.projects_dir:
         os.environ[PROJECTS_DIR_ENV] = str(args.projects_dir.expanduser().resolve())
     origins = allowed_origins(args.allow_origin)

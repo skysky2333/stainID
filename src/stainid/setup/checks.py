@@ -261,6 +261,11 @@ def _apply(project: Project, action: str, args: dict) -> str:
         new = [{"donor_id": d, "tma": on_map[d]["tma"], "disease_group": on_map[d].get("disease_group", "")} for d in sorted(chosen) if d in on_map]
         _write(donors_path, donors + new)
         return f"{len(new)} donors added to the donor table"
+    if action == "add_dataset_files":
+        from stainid.imageset.package import add_new_files
+
+        added = add_new_files(project)
+        return f"{added:,} newly downloaded images added to the image list" if added else "No new files yet: nothing more of the dataset is downloaded"
     if action == "add_image_donors":
         from stainid.imageset.checks import add_image_donors
 

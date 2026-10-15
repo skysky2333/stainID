@@ -10,7 +10,8 @@ counterstain is read as it is.
 
 The vectors are optical-density colours (red, green, blue). DAB, hematoxylin, eosin, Fast Red, Fast Blue and AEC are the
 published Ruifrok-Johnston (2001) values; NovaRed and the generic blue are approximations. A lab can measure its own
-from an area of pure stain and give them as `vector` in the project's imaging settings.
+from an area of pure stain and give them as `vectors` under the stain in the project's imaging settings (a dataset
+package's measured vectors are carried there when a project is made from it); any colour without one keeps these.
 """
 from __future__ import annotations
 
@@ -52,6 +53,26 @@ def canonical(name: str | None) -> str:
     if name in VECTORS:
         return name
     return ALIASES.get(str(name).strip().lower(), "")
+
+
+def clean_vectors(raw) -> dict[str, list[float]]:
+    """Measured stain vectors as a lab or dataset gives them ({chromogen: [r, g, b]} in optical density), keyed by the
+    chromogen names used here ("Fast Red" -> FastRed); raises ValueError, in plain words, for anything else."""
+    if not isinstance(raw, dict):
+        raise ValueError("the colour vectors must name each colour and give its three values, e.g. {blue: [0.80, 0.55, 0.24]}")
+    out = {}
+    for name, value in raw.items():
+        key = canonical(str(name))
+        if not key:
+            raise ValueError(f"unknown colour {name!r} in the colour vectors (known: {', '.join(VECTORS)})")
+        try:
+            numbers = [float(v) for v in value]
+        except (TypeError, ValueError):
+            numbers = []
+        if len(numbers) != 3 or min(numbers) < 0 or max(numbers) <= 0:
+            raise ValueError(f"the colour vector of {key} must be three numbers of at least 0 (red, green, blue optical density), not {value!r}")
+        out[key] = [round(v, 4) for v in numbers]
+    return out
 
 
 @dataclass(frozen=True)

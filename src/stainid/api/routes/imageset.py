@@ -2,6 +2,7 @@
 the imported labels of a dataset package, and scoring the models on them. Thin routes over `stainid.imageset`."""
 from __future__ import annotations
 
+import hashlib
 import json
 from collections import Counter
 from pathlib import Path
@@ -11,6 +12,7 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
+from stainid import cache, disk_cache
 from stainid.api.state import get_state, reload_project
 from stainid.imageset import annotations, package, scoring, table
 from stainid.imaging import chromogens, settings, sources
@@ -61,6 +63,7 @@ def _stains(project, rows: list[dict]) -> list[dict]:
     for stain in sorted(set(used) | set(settings.stain_settings(project))):
         own = settings.setting(project, stain)
         out.append({"stain": stain, "images": used.get(stain, 0), "family": own["family"], "chromogen": own["chromogen"], "others": own["others"],
+                    "counterstain": own["counterstain"], "vectors": own["vectors"] or {}, "antibody": own.get("antibody", ""),
                     "analysed_as": settings.analysis_stain(project, stain), "set": stain in settings.stain_settings(project),
                     "guess": settings.family_of(stain)})
     return out
@@ -77,7 +80,21 @@ def overview() -> dict:
             "imaging": {"native_pixel_size_um": imaging.get("native_pixel_size_um"), "rescale": settings.rescale_mode(project),
                         "analysis_pixel_size_um": project.pixel_size_um},
             "pixel_sizes": dict(Counter(r.get("pixel_size_um") or "" for r in rows)), "readers": sources.available(),
-            "path": project.relative(project.input("image_list")), "dataset": project.config.get("dataset") or {}}
+            "path": project.relative(project.input("image_list")), "dataset": project.config.get("dataset") or {},
+            "dataset_files": package.dataset_files(project)}
+
+
+@router.post("/setup/images/look-for-new")
+def look_for_new() -> dict:
+    """Look for new files: add the images of the study's dataset package downloaded since the image list was made."""
+    project = _project()
+    try:
+        added = package.add_new_files(project)
+    except ValueError as error:
+        raise HTTPException(400, str(error))
+    if added:
+        reload_project(project.root)
+    return {"added": added, "overview": overview()}
 
 
 @router.post("/setup/images/scan")
@@ -138,12 +155,15 @@ def save_imaging(request: Imaging) -> dict:
             raise HTTPException(400, f"{stain}: unknown kind of stain {family}")
         chromogen = chromogens.canonical(own.get("chromogen")) or "DAB"
         others = [c for c in (chromogens.canonical(o) for o in own.get("others") or []) if c and c != chromogen]
+        counterstain = chromogens.canonical(own.get("counterstain")) or chromogens.COUNTERSTAIN
         try:
-            chromogens.recipe(chromogen, others)
+            vectors = chromogens.clean_vectors(own["vectors"]) if own.get("vectors") else {}
+            chromogens.recipe(chromogen, others, counterstain, vectors)
         except ValueError as error:
             raise HTTPException(400, f"{stain}: {error}")
         stains[stain] = {k: v for k, v in {"family": family, "chromogen": chromogen, "others": others, "antibody": own.get("antibody"),
-                                           "vectors": own.get("vectors")}.items() if v}
+                                           "counterstain": counterstain if counterstain != chromogens.COUNTERSTAIN else "",
+                                           "vectors": vectors}.items() if v}
     imaging = {"native_pixel_size_um": request.native_pixel_size_um, "rescale": request.rescale, "stains": stains}
     config = {**project.config, "imaging": {}}  # replace the section as a whole, so a stain taken out is gone
     from stainid.project import Project
@@ -159,14 +179,35 @@ def _image(project, image_id: str) -> dict:
     return row
 
 
+def _overview(project, path: Path):
+    """A small picture of an image as scanned (RGB). A whole slide's is kept among the pictures for viewing (kind
+    `slide_pictures`), since making it reads the whole slide (a minute or two for a big Zarr slide)."""
+    if project.kind != "slides":
+        return sources.open_source(path).thumbnail(PICTURE_PX)[0]
+    stamp = cache.signature(path)
+    if stamp is None:
+        raise FileNotFoundError(path)
+    digest = hashlib.sha1(f"{path}|{stamp}|{PICTURE_PX}".encode()).hexdigest()[:16]
+    kept = disk_cache.path(project.root, "slide_pictures", f"image-{digest}.png")
+    if kept.exists():
+        disk_cache.used(kept)
+        picture_ = cv2.imread(str(kept), cv2.IMREAD_COLOR)
+        if picture_ is not None:
+            return cv2.cvtColor(picture_, cv2.COLOR_BGR2RGB)
+    rgb, _ = sources.open_source(path).thumbnail(PICTURE_PX)
+    ok, encoded = cv2.imencode(".png", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+    if ok:
+        disk_cache.write(kept, encoded.tobytes())
+    return rgb
+
+
 @router.get("/setup/images/{image_id}/picture.jpg")
 def picture(image_id: str, analysis: bool = False) -> Response:
     """A small picture of an image (or whole slide) as it is, or as stainID reads it (its stain of interest as brown)."""
     project = _project()
     row = _image(project, image_id)
     try:
-        source = sources.open_source(table.resolve(project, row))
-        rgb, _ = source.thumbnail(PICTURE_PX)
+        rgb = _overview(project, table.resolve(project, row))
     except (sources.MissingReader, FileNotFoundError, OSError, ValueError) as error:
         raise HTTPException(404, str(error))
     if analysis:

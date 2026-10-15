@@ -346,22 +346,33 @@ export const classExample = (stain: string, file: string) => apiUrl(`/api/annota
 export type ProjectKind = 'tma' | 'images' | 'slides'
 export type StainFamily = 'amyloid' | 'tau' | 'neun' | 'ignore' | ''
 export interface ImageRow { image_id: string; path: string; stain: string; donor_id: string; region: string; [column: string]: string }
+/** Measured stain colours: chromogen -> optical density (red, green, blue). */
+export type StainVectors = Record<string, number[]>
 export interface StainSetting {
   stain: string; images: number; family: StainFamily; chromogen: string; others: string[]; analysed_as: string; set: boolean; guess: string
+  counterstain: string; vectors: StainVectors; antibody: string
 }
+/** How much of a dataset package is downloaded (`stainid.imageset.package.file_counts`). */
+export interface PackageFiles { listed: number; present: number; not_downloaded: number; missing: number }
+export interface DatasetFiles extends PackageFiles { in_study: number; new: number; kind: ProjectKind; title: string }
 export interface ImagesOverview {
   kind: ProjectKind; kind_label: string; total: number; rows: ImageRow[]; donors: number; stains: StainSetting[]; problems: string[]
   families: Record<string, string>; chromogens: { id: string; label: string }[]
   imaging: { native_pixel_size_um: number | null; rescale: 'on_import' | 'on_the_fly'; analysis_pixel_size_um: number }
   pixel_sizes: Record<string, number>; readers: Record<string, boolean>; path: string
   dataset: { id?: string; title?: string; licence?: string; citation?: string; package?: string }
+  dataset_files: DatasetFiles | null
 }
-export interface PackageStain { stain: string; antibody: string; chromogen: string; chromogen_written: string; counterstain: string; others: string[]; family: StainFamily; images: number }
+export interface PackageStain {
+  stain: string; antibody: string; chromogen: string; chromogen_written: string; counterstain: string; others: string[]; family: StainFamily; images: number
+  present: number; vectors: StainVectors
+}
 export interface PackagePreview {
   folder: string; id: string; title: string; kind: ProjectKind; licence: string; citation: string; source: string | string[]; doi: string
   sites: string | string[]; notes: string; images: number; donors: number; donor_rows: number; pixel_size_um: number | null; stains: PackageStain[]
   annotations: number; raters: Record<string, number>; annotation_kinds: Record<string, number>; labels: Record<string, number>
-  class_map: Record<string, string>; classes: Record<string, string[]>; families: Record<string, string>; files_found: number; files_checked: number
+  class_map: Record<string, string>; classes: Record<string, string[]>; families: Record<string, string>
+  files: PackageFiles & { missing_examples: string[] }; cache_limit_gb: number
   splits: Record<string, number>
 }
 export interface ScoreRow {

@@ -242,7 +242,7 @@ def test_package_import_setup_and_scoring_through_the_app(client, tmp_path):
     folder, truth = tiles_with_points(tmp_path / "dataset")
     preview = client.post("/api/projects/package-preview", json={"package": str(folder.parent)}).json()  # the dataset folder works too
     assert preview["kind"] == "images" and preview["images"] == 3 and preview["raters"] == {"expert1": 12, "expert2": 15}
-    assert preview["stains"][0]["family"] == "amyloid" and preview["class_map"]["diffuse"] == "diffuse plaque" and preview["files_found"] == 3
+    assert preview["stains"][0]["family"] == "amyloid" and preview["class_map"]["diffuse"] == "diffuse plaque" and preview["files"]["present"] == preview["files"]["listed"] == 3
     made = client.post("/api/projects/from-package", json={"package": str(folder), "path": str(tmp_path / "study"), "name": "Points",
                                                                "class_map": {"diffuse": "ignore"}}).json()
     assert made["kind"] == "images" and made["kind_label"] == "Image set"
