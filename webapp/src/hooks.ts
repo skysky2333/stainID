@@ -43,3 +43,19 @@ export function useStored<T>(key: string, initial: T): [T, (value: T) => void] {
   }
   return [value, update]
 }
+
+/* ---- app shell (results agent) ---- */
+export type Theme = 'system' | 'light' | 'dark'
+export const THEME_KEY = 'stainid.theme'
+
+/** Light, dark or the computer's setting, for this browser; changing it applies at once. */
+export function useTheme(): [Theme, (theme: Theme) => void] {
+  const [theme, setTheme] = useStored<Theme>(THEME_KEY, 'system')
+  applyTheme(theme)
+  return [theme, (next) => { setTheme(next); applyTheme(next) }]
+}
+
+function applyTheme(theme: Theme) {
+  if (theme === 'system') document.documentElement.removeAttribute('data-theme')
+  else document.documentElement.setAttribute('data-theme', theme)
+}

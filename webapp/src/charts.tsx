@@ -1,12 +1,12 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { fmt } from './components'
 import { useProject } from './project'
 
 export interface Point { group: string; value: number; facet?: string; id?: string }
 
-interface Tip { x: number; y: number; text: string }
+interface Tip { x: number; y: number; lines: string[] }
 
-function quantile(sorted: number[], q: number) {
+export function quantile(sorted: number[], q: number) {
   if (!sorted.length) return NaN
   const pos = (sorted.length - 1) * q
   const lo = Math.floor(pos)
@@ -20,70 +20,143 @@ function niceTicks(min: number, max: number, count = 5) {
   const err = (count * step) / span
   const nice = step * (err <= 0.15 ? 10 : err <= 0.35 ? 5 : err <= 0.75 ? 2 : 1)
   const ticks = []
-  for (let t = Math.ceil(min / nice) * nice; t <= max + 1e-9; t += nice) ticks.push(+t.toPrecision(12))
+  for (let t = Math.floor(min / nice) * nice; t < max + nice - 1e-9; t += nice) ticks.push(+t.toPrecision(12))
   return ticks
 }
 
-/** Strip + box plot of one feature by group (optionally split by facet, e.g. region). */
-export function GroupStrip({ points, label, log = false, height = 300 }: { points: Point[]; label: string; log?: boolean; height?: number }) {
+/** Ticks for a log axis drawn as log10(value + 1): 0, 1, 3, 10, 30, 100 … until the largest value is covered. */
+function logTicks(max: number) {
+  const ticks = [0]
+  for (let decade = 1; ; decade *= 10) {
+    for (const v of [decade, 3 * decade]) {
+      ticks.push(Math.log10(v + 1))
+      if (ticks[ticks.length - 1] >= max) return ticks
+    }
+  }
+}
+
+/** The width of an element, following window and layout changes. */
+function useWidth<T extends HTMLElement>() {
+  const ref = useRef<T>(null)
+  const [width, setWidth] = useState(0)
+  useEffect(() => {
+    if (!ref.current) return
+    const observer = new ResizeObserver(([entry]) => setWidth(Math.floor(entry.contentRect.width)))
+    observer.observe(ref.current)
+    return () => observer.disconnect()
+  }, [])
+  return [ref, width] as const
+}
+
+/** The groups present in the points, in the project's order (groups not in the settings last). */
+export function useGroupOrder(points: { group: string }[]) {
+  const { groups: order } = useProject()
+  return useMemo(() => {
+    const present = new Set(points.map((p) => p.group))
+    return [...order.filter((g) => present.has(g)), ...[...present].filter((g) => !order.includes(g)).sort()]
+  }, [points, order])
+}
+
+/** Dot + box plot of one measure by diagnosis group, optionally side by side for each facet (e.g. brain region).
+ *  Each dot is one value; the box is the middle half, the thick line the median, whiskers reach 1.5 box-lengths. */
+export function GroupStrip({ points, yLabel, facetLabel, log = false, format = (v) => fmt(v, 3), height = 320 }: {
+  points: Point[]; yLabel: string; facetLabel?: string; log?: boolean; format?: (v: number) => string; height?: number
+}) {
   const [tip, setTip] = useState<Tip | null>(null)
-  const { groups: order, groupColor, groupLabel } = useProject()
+  const [wrap, available] = useWidth<HTMLDivElement>()
+  const { groupColor, groupLabel } = useProject()
+  const groups = useGroupOrder(points)
   const facets = useMemo(() => Array.from(new Set(points.map((p) => p.facet ?? ''))).sort(), [points])
-  const groups = [...order, ...Array.from(new Set(points.map((p) => p.group))).filter((g) => !order.includes(g)).sort()].filter((g) => points.some((p) => p.group === g))
-  const tx = (v: number) => (log ? Math.log10(v + 1) : v)
+  const tx = (v: number) => (log ? Math.log10(Math.max(v, 0) + 1) : v)
   const values = points.map((p) => tx(p.value))
-  const lo = Math.min(...values, 0)
-  const hi = Math.max(...values, lo + 1)
-  const ticks = niceTicks(lo, hi)
-  const width = Math.max(360, facets.length * groups.length * 90 + 70)
-  const m = { l: 56, r: 12, t: 12, b: facets.length > 1 ? 44 : 30 }
-  const y = (v: number) => m.t + (height - m.t - m.b) * (1 - (v - lo) / (ticks[ticks.length - 1] - lo || 1))
-  const slot = (width - m.l - m.r) / (facets.length * groups.length)
+  const ticks = log ? logTicks(Math.max(...values, 1)) : niceTicks(Math.min(...values, 0), Math.max(...values, 1e-9))
+  const lo = ticks[0]
+  const hi = ticks[ticks.length - 1]
+  const faceted = facets.length > 1 || facets[0] !== ''
+  const slots = facets.length * groups.length
+  const m = { l: 64, r: 12, t: 14, b: faceted ? 62 : 44 }
+  const width = Math.max(available, m.l + m.r + slots * 64)
+  const slot = (width - m.l - m.r) / Math.max(slots, 1)
+  const box = Math.min(40, slot * 0.5)
+  const y = (v: number) => m.t + (height - m.t - m.b) * (1 - (v - lo) / (hi - lo || 1))
+  const tickText = (t: number) => (log ? format(Math.round(10 ** t - 1)) : format(t))
+  const show = (e: React.MouseEvent, p: Point) => setTip({
+    x: e.clientX > window.innerWidth - 220 ? e.clientX - 200 : e.clientX + 14, y: e.clientY + 14,
+    lines: [p.id ?? '', [groupLabel(p.group), p.facet].filter(Boolean).join(' · '), format(p.value)],
+  })
 
   return (
-    <div style={{ position: 'relative', overflowX: 'auto' }}>
-      <svg width={width} height={height} role="img" aria-label={`${label} by group`}>
-        {ticks.map((t) => (
-          <g key={t}>
-            <line x1={m.l} x2={width - m.r} y1={y(t)} y2={y(t)} stroke="var(--border)" strokeWidth={1} />
-            <text x={m.l - 8} y={y(t) + 4} textAnchor="end" fontSize={11} fill="var(--text-muted)">{log ? fmt(10 ** t - 1, 2) : fmt(t, 3)}</text>
-          </g>
-        ))}
-        <text x={14} y={height / 2} transform={`rotate(-90 14 ${height / 2})`} textAnchor="middle" fontSize={11.5} fill="var(--text-secondary)">
-          {label}{log ? ' (log scale)' : ''}
-        </text>
-        {facets.map((facet, fi) =>
-          groups.map((group, gi) => {
-            const cx = m.l + slot * (fi * groups.length + gi) + slot / 2
-            const vals = points.filter((p) => p.group === group && (p.facet ?? '') === facet)
-            const sorted = vals.map((p) => tx(p.value)).sort((a, b) => a - b)
-            const [q1, q2, q3] = [0.25, 0.5, 0.75].map((q) => quantile(sorted, q))
+    <div ref={wrap} className="chart-wrap">
+      {available > 0 && (
+        <svg width={width} height={height} role="img" aria-label={`${yLabel} by diagnosis group${faceted ? ` and ${facetLabel ?? 'facet'}` : ''}`}>
+          {ticks.map((t) => (
+            <g key={t}>
+              <line x1={m.l} x2={width - m.r} y1={y(t)} y2={y(t)} className="chart-grid" />
+              <text x={m.l - 8} y={y(t) + 4} textAnchor="end" className="chart-tick">{tickText(t)}</text>
+            </g>
+          ))}
+          <text x={14} y={(height - m.b + m.t) / 2} transform={`rotate(-90 14 ${(height - m.b + m.t) / 2})`} textAnchor="middle" className="chart-axis-title">
+            {yLabel}{log ? ', log scale' : ''}
+          </text>
+          {facets.map((facet, fi) => {
+            const x0 = m.l + slot * fi * groups.length
             return (
-              <g key={`${facet}-${group}`}>
-                {sorted.length > 2 && (
-                  <>
-                    <rect x={cx - 18} y={y(q3)} width={36} height={Math.max(1, y(q1) - y(q3))} fill="none" stroke="var(--text-muted)" strokeWidth={1.5} rx={4} />
-                    <line x1={cx - 18} x2={cx + 18} y1={y(q2)} y2={y(q2)} stroke="var(--text-primary)" strokeWidth={2} />
-                  </>
-                )}
-                {vals.map((p, i) => {
-                  const jitter = ((i * 9301 + 49297) % 233280) / 233280 - 0.5
+              <g key={facet}>
+                {fi > 0 && <line x1={x0} x2={x0} y1={m.t} y2={height - m.b + 30} className="chart-divider" />}
+                {faceted && <text x={x0 + (slot * groups.length) / 2} y={height - 10} textAnchor="middle" className="chart-facet">{facet || '—'}</text>}
+                {groups.map((group, gi) => {
+                  const cx = x0 + slot * gi + slot / 2
+                  const vals = points.filter((p) => p.group === group && (p.facet ?? '') === facet)
+                  const sorted = vals.map((p) => tx(p.value)).sort((a, b) => a - b)
+                  const [q1, q2, q3] = [0.25, 0.5, 0.75].map((q) => quantile(sorted, q))
+                  const reach = 1.5 * (q3 - q1)
+                  const low = sorted.find((v) => v >= q1 - reach) ?? q1
+                  const high = [...sorted].reverse().find((v) => v <= q3 + reach) ?? q3
+                  const spread = Math.min(slot * 0.75, Math.max(box * 1.3, Math.sqrt(vals.length) * 8))  // more dots, wider cloud
                   return (
-                    <circle key={i} cx={cx + jitter * 30} cy={y(tx(p.value))} r={4} fill={groupColor(group)} stroke="var(--surface-2)" strokeWidth={1.5}
-                      onMouseMove={(e) => setTip({ x: e.clientX + 12, y: e.clientY + 12, text: `${p.id ?? ''} · ${groupLabel(group)} · ${fmt(p.value, 4)}` })}
-                      onMouseLeave={() => setTip(null)} />
+                    <g key={group}>
+                      {sorted.length > 2 && (
+                        <g className="chart-box">
+                          <line x1={cx} x2={cx} y1={y(high)} y2={y(q3)} />
+                          <line x1={cx} x2={cx} y1={y(q1)} y2={y(low)} />
+                          <rect x={cx - box / 2} y={y(q3)} width={box} height={Math.max(1, y(q1) - y(q3))} rx={4} />
+                          <line x1={cx - box / 2} x2={cx + box / 2} y1={y(q2)} y2={y(q2)} className="chart-median" />
+                        </g>
+                      )}
+                      {vals.map((p, i) => {
+                        const jitter = (((i * 9301 + 49297) % 233280) / 233280 - 0.5) * spread
+                        return (
+                          <g key={i} onMouseMove={(e) => show(e, p)} onMouseLeave={() => setTip(null)}>
+                            <circle cx={cx + jitter} cy={y(tx(p.value))} r={4.5} fill={groupColor(group)} className="chart-dot" />
+                            <circle cx={cx + jitter} cy={y(tx(p.value))} r={9} fill="transparent" />
+                          </g>
+                        )
+                      })}
+                      <text x={cx} y={height - m.b + 18} textAnchor="middle" className="chart-group">{groupLabel(group)}</text>
+                      <text x={cx} y={height - m.b + 32} textAnchor="middle" className="chart-tick">n = {vals.length}</text>
+                    </g>
                   )
                 })}
-                <text x={cx} y={height - m.b + 16} textAnchor="middle" fontSize={11.5} fill="var(--text-secondary)">{groupLabel(group)} ({vals.length})</text>
-                {gi === 0 && facet && (
-                  <text x={m.l + slot * fi * groups.length + (slot * groups.length) / 2} y={height - 8} textAnchor="middle" fontSize={11.5} fontWeight={600} fill="var(--text-primary)">{facet}</text>
-                )}
               </g>
             )
-          }),
-        )}
-      </svg>
-      {tip && <div className="chart-tooltip" style={{ left: tip.x, top: tip.y }}>{tip.text}</div>}
+          })}
+        </svg>
+      )}
+      {tip && (
+        <div className="chart-tooltip" style={{ left: tip.x, top: tip.y }}>
+          {tip.lines.filter(Boolean).map((line, i) => <div key={i} className={i === 2 ? 'chart-tip-value' : 'muted'}>{line}</div>)}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** The colour key for diagnosis groups, in the project's order. */
+export function GroupLegend({ groups }: { groups: string[] }) {
+  const { groupColor, groupLabel } = useProject()
+  return (
+    <div className="chart-legend" aria-label="Diagnosis groups">
+      {groups.map((g) => <span key={g}><span className="swatch round" style={{ background: groupColor(g) }} />{groupLabel(g)}</span>)}
     </div>
   )
 }
