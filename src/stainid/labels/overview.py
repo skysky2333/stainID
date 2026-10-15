@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from stainid.labels import pool, store
+from stainid.labels import frames, pool, store
 from stainid.labels.tasks import positive
 from stainid.project import Project
 
@@ -62,5 +62,5 @@ def cached_stain_overview(project: Project, stain: str, root: Path, tiles: pd.Da
     key = (str(project.root), stain)
     stamp = (store.signature(root), pool.signature(project, stain), len(tiles))
     if key not in _CACHE or _CACHE[key][0] != stamp:
-        _CACHE[key] = (stamp, stain_overview(project, stain, store.current(root), tiles))
+        _CACHE[key] = (stamp, stain_overview(project, stain, frames.in_field_frame(store.current(root), tiles, project.context_px), tiles))
     return _CACHE[key][1]

@@ -111,9 +111,10 @@ def test_every_label_belongs_to_a_session_and_each_can_be_examined(client):
     assert [(s["name"], s["title"], s["classes"]) for s in sets] == [("round_1", "Round 1", {"diffuse plaque": 1}),
                                                                        ("reference", "AI reference labels", {"compact plaque": 1})]
     assert client.get("/api/labels/overview").json()["reference"]["sets"] == ["import: reference_6e10"]
-    seen = client.get("/api/labels/sessions/reference/labels").json()
+    seen = client.get("/api/labels/sessions/reference/objects").json()
     assert seen["reference"] and seen["stain"] == "6E10" and seen["classes"] == {"compact plaque": 1}
-    field = seen["fields"][0]
-    assert field["tile_id"] == READY and field["picture"] and field["offset"] == [128, 128] and field["objects"][0]["value"] == "compact plaque"
-    assert client.get("/api/labels/sessions/round_1/labels", params={"value": "compact plaque"}).json()["fields"] == []
+    found = seen["objects"][0]
+    assert found["tile_id"] == READY and found["frame"] == "field" and found["value"] == "compact plaque" and found["ai_value"] == "compact plaque"
+    assert client.get("/api/labels/sessions/round_1/objects", params={"values": "compact plaque"}).json()["objects"] == []
+    assert client.get("/api/labels/sessions/round_1/objects").json()["objects"][0]["labels"][0]["source"] == "Ann"
     assert client.post("/api/labels/sessions", json={"name": "reference", "stain": "6E10", "n_fields": 1}).status_code == 400

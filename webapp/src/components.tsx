@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { FsListing, Job, StepOption } from './api'
 import { downloadUrl, onActivity, reveal } from './api'
@@ -118,12 +118,18 @@ export function Empty({ children }: { children: ReactNode }) {
   return <div className="empty-state">{children}</div>
 }
 
+const openModals: object[] = []  // dialogs on screen, the newest last: Escape closes only that one
+
 export function Modal({ title, onClose, children, wide = false }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
+  const close = useRef(onClose)
+  close.current = onClose
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
+    const me = {}
+    openModals.push(me)
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && openModals[openModals.length - 1] === me && close.current()
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+    return () => { window.removeEventListener('keydown', onKey); openModals.splice(openModals.indexOf(me), 1) }
+  }, [])
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className={`modal${wide ? ' wide' : ''}`} role="dialog" aria-label={title} onClick={(e) => e.stopPropagation()}>

@@ -178,11 +178,23 @@ export type FieldState = 'preparing' | 'not_started' | 'in_progress' | 'done'
 export interface SessionFieldState extends FieldPlace { tile_id: string; state: FieldState; done_by: string[]; working: string[]; open_by: string[] }
 export interface LabelSet { name: string; title: string; reference: boolean; labels: number; objects: number; fields: number; classes: Record<string, number>; people: string[] }
 export interface ReferenceLabels { name: string; title: string; labels: number; stains: Record<string, number>; sets: string[]; fields: number }
-export interface LabelledObject { x: number; y: number; value: string; source: string }
-export interface LabelledField extends FieldPlace { tile_id: string; picture: boolean; offset: [number, number] | null; objects: LabelledObject[] }
-export interface SessionLabels {
-  name: string; title: string; reference: boolean; stain: string; stains: string[]; classes: Record<string, number>; people: Record<string, number>
-  fields: LabelledField[]; total_fields: number; objects: number
+/* the labelled objects of a session, each as the crop the model sees (labels view) */
+export type LabelFrame = 'field' | 'pilot' | 'core'
+export type AiVerdict = 'agrees' | 'type' | 'disagrees'
+export interface ObjectLabel { value: string; source: string; time: number | null }
+export interface CropState { state: 'ready' | 'waiting' | 'preparing' | 'failed' | 'missing'; ahead?: number; error?: string }
+export interface LabelledObject {
+  tile_id: string; x: number; y: number; frame: LabelFrame | null; value: string; labels: ObjectLabel[]; time: number | null
+  ai_value: string | null; ai_probability: number | null; ai: AiVerdict | null; radius_px: number | null
+  outline: number[][] | null; outline_by: 'person' | 'AI' | null; crop: CropState
+  core_id?: string | null; core_label?: string | null; tma?: string | null; region?: string | null; disease_group?: string | null
+  core_x: number | null; core_y: number | null
+}
+export interface SessionObjects {
+  name: string; title: string; reference: boolean; stain: string; stains: string[]; vocabulary: string[]
+  classes: Record<string, number>; people: Record<string, number>; ai: Partial<Record<AiVerdict | 'unknown', number>>
+  objects: LabelledObject[]; total: number; all: number
+  crop: { size_px: number; um: number; pixel_um: number } | null; preparing: { objects: number; cores: number; ahead: number } | null
 }
 
 /* Which stainID server this page talks to. Normally the one that served it (same origin: sign-in travels in cookies).

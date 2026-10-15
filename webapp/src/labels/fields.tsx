@@ -19,19 +19,12 @@ export function FieldStateBadge({ state }: { state: FieldState }) {
   return <span className={`badge ${STATE_CLASS[state]}`}>{STATE_TEXT[state]}</span>
 }
 
-/** The small picture of a field (cut from its core's thumbnail), with optional marks in field-picture pixels. */
-export function FieldThumb({ src, alt, marks, box }: {
-  src: string; alt: string; marks?: { x: number; y: number; color: string }[]; box?: { x: number; y: number; width: number; height: number }
-}) {
+/** The small picture of a field (cut from its core's thumbnail). */
+export function FieldThumb({ src, alt }: { src: string; alt: string }) {
   const [failed, setFailed] = useState(false)
   return (
     <div className="field-thumb">
       {failed ? <span className="muted small">no picture</span> : <img src={src} alt={alt} loading="lazy" onError={() => setFailed(true)} />}
-      {!failed && marks && box && (
-        <svg viewBox={`${box.x} ${box.y} ${box.width} ${box.height}`} preserveAspectRatio="none" aria-hidden="true">
-          {marks.map((m, i) => <circle key={i} cx={m.x} cy={m.y} r={box.width / 45} fill="none" stroke={m.color} strokeWidth={box.width / 160} />)}
-        </svg>
-      )}
     </div>
   )
 }
