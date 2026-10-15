@@ -14,7 +14,7 @@ export const SCREENS = ['slides', 'cores', 'map', 'donors', 'checks', 'run'] as 
 export type ScreenId = (typeof SCREENS)[number]
 
 const INTRO: Record<ScreenId, string> = {
-  slides: 'Which scan is which TMA and stain. stainID reads it from the file names; check the table and correct anything it got wrong.',
+  slides: 'Which scan is which TMA and stain. Choose them for each slide; the picture shows its label. Where a file name says them clearly they are filled in already.',
   cores: 'stainID finds every core on each slide and works out the grid size by itself. Look at each picture: every circle should sit on a core.',
   map: 'Who is on each core. Add the TMA maps as Excel, Word or CSV files, paste them from a spreadsheet, or type them into the grid.',
   donors: 'Optional: age, sex, APOE and other information per donor, from your case spreadsheet. The columns are matched for you.',
