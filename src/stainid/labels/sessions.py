@@ -80,6 +80,57 @@ def pick_fields(tiles: pd.DataFrame, reviewed: set[str], n: int, seed: int) -> l
     return list(np.random.default_rng(seed).permutation(picked))
 
 
+def taken(root: Path) -> dict[str, list[str]]:
+    """The sessions each field belongs to."""
+    out: dict[str, list[str]] = {}
+    for name in names(root):
+        for tile in meta(root, name).get("fields", []):
+            out.setdefault(tile, []).append(name)
+    return out
+
+
+def add_fields(root: Path, name: str, tile_ids: list[str]) -> dict:
+    """Add these fields to a session (ones it has already are left as they are)."""
+    current = meta(root, name)
+    have = set(current["fields"])
+    return update(root, name, fields=current["fields"] + [t for t in dict.fromkeys(tile_ids) if t not in have])
+
+
+def remove_fields(root: Path, name: str, tile_ids: list[str]) -> dict:
+    """Take these fields out of a session. Labels already made on them stay in the label store."""
+    current = meta(root, name)
+    drop = set(tile_ids)
+    return update(root, name, fields=[t for t in current["fields"] if t not in drop])
+
+
+def labelled_by(labels: pd.DataFrame, stain: str) -> dict[str, set[str]]:
+    """Who has saved any label of this stain on each field."""
+    mine = labels[labels.stain == stain]
+    return {tile: set(group.source) for tile, group in mine.groupby("tile_id")}
+
+
+def field_states(session: dict, reviewed: dict[str, set[str]], labelled: dict[str, set[str]], prepared: set[str],
+                 busy: dict[str, set[str]]) -> list[dict]:
+    """Where each field of a whole-field session stands: `preparing` (its objects are still being found), `not_started`,
+    `in_progress` (someone has labels on it or has it open, but fewer than `per_field` people finished it) or `done`;
+    with who finished it, who is working on it, and who has it open now."""
+    out = []
+    for tile in session["fields"]:
+        done_by = sorted(reviewed.get(tile, set()))
+        working = sorted(labelled.get(tile, set()) - set(done_by))
+        open_by = sorted(busy.get(tile, set()))
+        if tile not in prepared:
+            state = "preparing"
+        elif len(done_by) >= session.get("per_field", 1):
+            state = "done"
+        elif done_by or working or open_by:
+            state = "in_progress"
+        else:
+            state = "not_started"
+        out.append({"tile_id": tile, "state": state, "done_by": done_by, "working": working, "open_by": open_by})
+    return out
+
+
 def next_field(session: dict, reviewed: dict[str, set[str]], annotator: str, busy: dict[str, set[str]]) -> str | None:
     """Fields that still need annotators first, then fields nobody else has open."""
     todo = [t for t in session["fields"] if annotator not in reviewed.get(t, set())]

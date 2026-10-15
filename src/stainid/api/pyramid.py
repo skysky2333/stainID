@@ -326,3 +326,18 @@ def thumbnail(state: ProjectState, core_id: str, stain: str, size: int) -> Path:
         base = cv2.imread(str(_make_base(state, core_id, stain)), cv2.IMREAD_COLOR)
         _write_atomic(target, _jpeg(_shrink(base, size), 85))
     return target
+
+
+def field_thumbnail(state: ProjectState, tile: dict, size: int = 192) -> Path:
+    """A small JPEG of one tile (a labelling field), cut from its core's thumbnail: cheap, so pickers can show many."""
+    core = state.core_image(str(tile["core_id"]), str(tile["stain"]))
+    source = _source(state, str(tile["core_id"]), str(tile["stain"]))
+    target = state.cache_dir("thumbs") / f"{tile['tile_id']}_field_{size}.jpg"
+    if not _fresh(target, source):
+        base = cv2.imread(str(_make_base(state, str(tile["core_id"]), str(tile["stain"]))), cv2.IMREAD_COLOR)
+        scale = base.shape[1] / float(core["native_width_px"])
+        x, y = int(int(tile["x_px"]) * scale), int(int(tile["y_px"]) * scale)
+        w, h = max(1, round(int(tile["width_px"]) * scale)), max(1, round(int(tile["height_px"]) * scale))
+        part = base[y:y + h, x:x + w]
+        _write_atomic(target, _jpeg(cv2.resize(part, (size, max(1, round(size * part.shape[0] / part.shape[1]))), interpolation=cv2.INTER_AREA), 85))
+    return target

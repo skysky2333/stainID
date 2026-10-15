@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
-from stainid.api import render
+from stainid.api import pyramid, render
 from stainid.api.routes.images import OVERLAYS
 from stainid.api.session import annotator, annotator_name, is_admin, require_admin
 from stainid.api.state import get_state
@@ -28,6 +28,8 @@ LAYERS = {"NeuN": ["dab", "exclusions"], "6E10": ["dab", "exclusions"], "AT8": [
 _BUSY: dict[tuple[str, str], dict[str, float]] = {}
 _BUSY_LOCK = threading.Lock()
 admin = [Depends(require_admin)]
+FIELD_FACTS = ("core_id", "core_label", "tma", "region", "disease_group")
+BOX = ("x_px", "y_px", "width_px", "height_px")
 
 
 def root() -> Path:
@@ -131,6 +133,11 @@ class Opening(BaseModel):
 
 class MoreFields(BaseModel):
     n: int = 10
+    tile_ids: list[str] | None = None
+
+
+class FieldList(BaseModel):
+    tile_ids: list[str]
 
 
 class Prepare(BaseModel):
@@ -191,25 +198,32 @@ def free_name(title: str, stain: str, kind: str) -> str:
     return next(name for name in (base if i == 1 else f"{base}_{i}" for i in range(1, 10_000)) if name not in taken)
 
 
+def _known_fields(stain: str, tile_ids: list[str]) -> list[str]:
+    """These fields, checked to be tiles of this stain (400 otherwise)."""
+    tiles = get_state().tiles
+    known = set(tiles.tile_id[tiles.stain == stain]) if not tiles.empty else set()
+    unknown = [t for t in dict.fromkeys(tile_ids) if t not in known]
+    if unknown:
+        raise HTTPException(400, f"unknown {stain} fields: {', '.join(unknown[:5])}")
+    return list(dict.fromkeys(tile_ids))
+
+
+def _pick(stain: str, n: int, seed: int) -> list[str]:
+    """n fields nobody has checked and no session has, spread over TMAs and groups."""
+    tiles = get_state().labelling_tiles
+    reviewed = set(store.reviewed_fields(store.current(root()), stain))
+    return sessions.pick_fields(tiles[tiles.stain == stain] if not tiles.empty else tiles, reviewed | set(sessions.taken(root())), n, seed)
+
+
 @router.post("/labels/sessions", dependencies=admin)
 def create_session(body: NewSession) -> dict:
     if not body.name:
         body.name = free_name(body.title, body.stain, body.kind)
     if not re.fullmatch(r"[A-Za-z0-9_\-]+", body.name):
         raise HTTPException(400, "name may contain letters, digits, - and _ only")
-    state = get_state()
-    tiles = state.tiles[state.tiles.stain == body.stain]
     fields: list[str] = []
     if body.kind == "fields":
-        if body.tile_ids:
-            unknown = set(body.tile_ids) - set(tiles.tile_id)
-            if unknown:
-                raise HTTPException(400, f"unknown {body.stain} fields: {', '.join(sorted(unknown)[:5])}")
-            fields = list(body.tile_ids)
-        else:
-            reviewed = set(store.reviewed_fields(store.current(root()), body.stain))
-            taken = {t for n in sessions.names(root()) for t in sessions.meta(root(), n).get("fields", [])}
-            fields = sessions.pick_fields(tiles, reviewed | taken, body.n_fields, len(sessions.names(root())))
+        fields = _known_fields(body.stain, body.tile_ids) if body.tile_ids else _pick(body.stain, body.n_fields, len(sessions.names(root())))
         if not fields:
             raise HTTPException(400, f"no {body.stain} fields left to review")
     try:
@@ -231,17 +245,97 @@ def set_open(name: str, body: Opening, request: Request) -> dict:
 
 @router.post("/labels/sessions/{name}/fields", dependencies=admin)
 def add_fields(name: str, body: MoreFields, request: Request) -> dict:
+    """More fields for a session: these exact ones (`tile_ids`), or `n` that stainID picks."""
     meta = session_meta(name, request)
-    state = get_state()
     if meta["kind"] != "fields":
         prepare_job(meta["stain"], body.n)
         return meta
-    reviewed = set(store.reviewed_fields(store.current(root()), meta["stain"]))
-    taken = {t for n in sessions.names(root()) for t in sessions.meta(root(), n).get("fields", [])}
-    more = sessions.pick_fields(state.tiles[state.tiles.stain == meta["stain"]], reviewed | taken, body.n, len(meta["fields"]))
-    updated = sessions.update(root(), name, fields=meta["fields"] + more)
+    more = _known_fields(meta["stain"], body.tile_ids) if body.tile_ids else _pick(meta["stain"], body.n, len(meta["fields"]))
+    if not more:
+        raise HTTPException(400, f"no {meta['stain']} fields left that nobody has checked")
+    updated = sessions.add_fields(root(), name, more)
     prepare_job(meta["stain"], 0, name)
     return updated
+
+
+@router.post("/labels/sessions/{name}/fields/remove", dependencies=admin)
+def remove_fields(name: str, body: FieldList, request: Request) -> dict:
+    """Take fields out of a session; labels already made on them are kept."""
+    session_meta(name, request)
+    return sessions.remove_fields(root(), name, body.tile_ids)
+
+
+def _field_facts(tile_ids: list[str]) -> dict[str, dict]:
+    """Where each field is (core, TMA, region, group) and its square in the core image."""
+    tiles = get_state().tiles
+    rows = tiles[tiles.tile_id.isin(set(tile_ids))] if not tiles.empty else tiles
+    return {r["tile_id"]: {k: _text(r.get(k)) for k in FIELD_FACTS} | {k: int(r[k]) for k in BOX} for r in rows.to_dict("records")}
+
+
+def _text(value) -> str | None:
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return None
+    return str(int(value)) if isinstance(value, float) and value.is_integer() else str(value)
+
+
+@router.get("/labels/sessions/{name}/fields", dependencies=admin)
+def session_fields(name: str, request: Request) -> list[dict]:
+    """Every field of a session with where it stands (see `sessions.field_states`) and where it is."""
+    meta = session_meta(name, request)
+    labels = store.current(root())
+    states = sessions.field_states(meta, store.reviewed_fields(labels, meta["stain"]), sessions.labelled_by(labels[labels.session == name], meta["stain"]),
+                                   pool.prepared(get_state().project, meta["stain"]), busy(name))
+    facts = _field_facts(meta["fields"])
+    return [{**facts.get(s["tile_id"], {}), **s} for s in states]
+
+
+@router.get("/labels/picker", dependencies=admin)
+def picker(stain: str, tma: str = "", region: str = "", group: str = "", core: str = "", free: bool = False, offset: int = 0,
+           limit: int = 12) -> dict:
+    """The fields people can be asked to label, core by core (for choosing them by hand): each field's square in its
+    core image and whether it already has labels or belongs to a session. `free` keeps only fields with neither."""
+    state = get_state()
+    tiles = state.labelling_tiles
+    tiles = tiles[tiles.stain == stain] if not tiles.empty else tiles
+    facets = {key: sorted({str(v) for v in tiles[column].dropna()}, key=lambda v: (len(v), v)) if column in tiles else []
+              for key, column in (("tmas", "tma"), ("regions", "region"), ("groups", "disease_group"))}
+    labelled = sessions.labelled_by(store.current(root()), stain)
+    taken = sessions.taken(root())
+    for column, value in (("tma", tma), ("region", region), ("disease_group", group)):
+        if value and column in tiles:
+            tiles = tiles[tiles[column].astype(str) == value]
+    if core:
+        tiles = tiles[tiles.core_id.str.contains(core, case=False, regex=False)]
+    if free:
+        tiles = tiles[~tiles.tile_id.isin(set(labelled) | set(taken))]
+    order = sorted(set(tiles.core_id), key=lambda c: (len(str(c).split("_")[0]), c))
+    page = order[max(0, offset): max(0, offset) + max(1, min(limit, 48))]
+    images = state.core_images
+    cores = []
+    for core_id, group_tiles in tiles[tiles.core_id.isin(set(page))].groupby("core_id"):
+        first = group_tiles.iloc[0]
+        image = images[(images.core_id == core_id) & (images.stain == stain)] if not images.empty else images
+        fields = [{"tile_id": t["tile_id"], **{k: int(t[k]) for k in BOX}, "labelled_by": sorted(labelled.get(t["tile_id"], set())),
+                   "sessions": taken.get(t["tile_id"], [])} for t in group_tiles.sort_values("selection_order").to_dict("records")]
+        cores.append({"core_id": core_id, **{k: _text(first.get(k)) for k in ("tma", "core_label", "region", "disease_group", "donor_id")},
+                      "width": int(image.native_width_px.iloc[0]) if len(image) else None,
+                      "height": int(image.native_height_px.iloc[0]) if len(image) else None, "fields": fields})
+    cores.sort(key=lambda c: order.index(c["core_id"]))
+    return {"cores": cores, "total_cores": len(order), "total_fields": int(len(tiles)), "facets": facets}
+
+
+@router.get("/labels/fields/{tile_id}/thumb.jpg", dependencies=admin)
+def field_thumb(tile_id: str) -> FileResponse:
+    return _thumb(tile_id)
+
+
+def _thumb(tile_id: str) -> FileResponse:
+    state = get_state()
+    try:
+        return FileResponse(pyramid.field_thumbnail(state, state.tile(tile_id)), headers={"Cache-Control": "private, max-age=86400"})
+    except (KeyError, FileNotFoundError) as error:
+        raise HTTPException(404, str(error).strip("'"))
+
 
 
 @router.delete("/labels/sessions/{name}", dependencies=admin)
