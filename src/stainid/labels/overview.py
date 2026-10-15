@@ -12,11 +12,12 @@ from pathlib import Path
 import pandas as pd
 
 from stainid.labels import added, frames, pool, store
+from stainid.labels import vocabulary as vocab
 from stainid.labels.tasks import positive
 from stainid.project import Project
 
-UNTYPED = {"plaque": "plaque (type not recorded)", "tau+ neuron": "tau+ neuron (type not recorded)"}
 _CACHE: dict[tuple, tuple[tuple, dict]] = {}
+SPLIT = "people disagree"  # an object people labelled differently, as many for one class as for another
 
 
 def match(consensus: pd.DataFrame, objects: pd.DataFrame, stain: str, prepared: set[str] | None = None,
@@ -60,11 +61,32 @@ def detection(matched: pd.DataFrame) -> dict:
             "never_proposed_share": share(never), "rejected_share": share(rejected), "not_checked": int(len(real) - n)}
 
 
+def class_counts(consensus: pd.DataFrame, vocabulary: vocab.Vocabulary) -> list[dict]:
+    """Labelled objects per identity (in the vocabulary's order, then classes it no longer has), with how many of
+    them carry each subtype and how many no type; objects people are split on are left out."""
+    by_identity = {i: g for i, g in consensus.groupby("value") if i} if len(consensus) else {}
+    known = [c.id for c in vocabulary.classes]
+    out = []
+    for identity in [*known, *sorted(set(by_identity) - set(known))]:
+        found, group = vocabulary.identity(identity), by_identity.get(identity)
+        if group is None and (found is None or found.hidden):
+            continue
+        n = 0 if group is None else len(group)
+        subtypes = pd.Series(dtype=int) if group is None else group.subtype[group.subtype != ""].value_counts()
+        names = [(s.id, s.name) for s in found.subtypes if not s.hidden or s.id in subtypes] if found else []
+        names += [(s, s) for s in subtypes.keys() if s not in {i for i, _ in names}]
+        out.append({"id": identity, "name": found.name if found else identity, "role": vocabulary.role(identity), "objects": n,
+                    "subtypes": [{"id": i, "name": name, "objects": int(subtypes.get(i, 0))} for i, name in names],
+                    "untyped": n - int(subtypes.sum())})
+    return out
+
+
 def stain_overview(project: Project, stain: str, labels: pd.DataFrame, tiles: pd.DataFrame) -> dict:
     fields = set(tiles.tile_id[tiles.stain == stain])
     mine = labels[labels.stain == stain]
     reviewed = store.reviewed_fields(labels, stain)
-    consensus = store.consensus(labels, stain)
+    vocabulary = vocab.of(project, stain)
+    consensus = store.consensus(labels, stain, vocabulary)
     objects = pool.all_objects(project, stain)
     prepared = pool.prepared(project, stain)
     matched = match(consensus, objects, stain, prepared, added.all_added(project, stain)) if len(consensus) \
@@ -81,7 +103,9 @@ def stain_overview(project: Project, stain: str, labels: pd.DataFrame, tiles: pd
         "fields_with_labels": len(set(consensus.tile_id) & fields),
         "objects_labelled": int(len(consensus)),
         "objects_added": int(matched.ai_value.isna().sum()),
-        "values": {UNTYPED.get(k, k): int(v) for k, v in consensus.value.replace("", "people disagree").value_counts().items()},
+        "values": {k: int(v) for k, v in pd.Series([vocabulary.display(i, s) if i else SPLIT for i, s in zip(consensus.value, consensus.subtype)],
+                                                     dtype=object).value_counts().items()},
+        "classes": class_counts(consensus, vocabulary),
         "outlines": int(outlines.drop_duplicates("id").shape[0]),
         "outlines_edited": int((~outlines.confirmed.astype(bool)).sum()),
         "people": sorted(set(mine.source)),
@@ -99,7 +123,7 @@ def stain_overview(project: Project, stain: str, labels: pd.DataFrame, tiles: pd
 def cached_stain_overview(project: Project, stain: str, root: Path, tiles: pd.DataFrame) -> dict:
     """`stain_overview`, worked out again only when a label is saved or a pool field is (re)built."""
     key = (str(project.root), stain)
-    stamp = (store.signature(root), pool.signature(project, stain), added.signature(project, stain), len(tiles))
+    stamp = (store.signature(root), pool.signature(project, stain), added.signature(project, stain), len(tiles), vocab.of(project, stain))
     if key not in _CACHE or _CACHE[key][0] != stamp:
         _CACHE[key] = (stamp, stain_overview(project, stain, frames.in_field_frame(store.current(root), tiles, project.context_px), tiles))
     return _CACHE[key][1]

@@ -26,7 +26,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from stainid.labels.tasks import positive
+from stainid.labels import store
+from stainid.labels import vocabulary as vocab
+from stainid.labels.vocabulary import Vocabulary
 from stainid.tables import write_text_atomic
 
 FOLDER = "sessions"
@@ -52,17 +54,20 @@ def in_sessions(labels: pd.DataFrame, chosen: list[str] | None) -> pd.DataFrame:
     return labels[session_of(labels).isin(set(chosen))] if chosen else labels
 
 
-def label_sets(labels: pd.DataFrame, stain: str, titles: dict[str, str]) -> list[dict]:
-    """Every session with object labels of this stain: how many objects of each class, from how many fields and people.
-    `titles` names the real sessions; the reference labels come last."""
-    mine = labels[(labels.stain == stain) & (labels.task == "class")]
+def label_sets(labels: pd.DataFrame, stain: str, titles: dict[str, str], vocabulary: Vocabulary | None = None) -> list[dict]:
+    """Every session with object labels of this stain: how many labels of each class (identity and subtype, as
+    `Vocabulary.display` names them), from how many objects, fields and people. `titles` names the real sessions; the
+    reference labels come last."""
+    vocabulary = vocabulary or vocab.defaults(stain)
+    mine = store.classes(labels, stain, vocabulary)
     groups = session_of(mine)
     out = []
     for name, group in mine.groupby(groups):
         objects = group.drop_duplicates(["tile_id", "x", "y"])
+        shown = pd.Series([vocabulary.display(i, s) for i, s in zip(group.identity, group.subtype)], dtype=object)
         out.append({"name": name, "title": REFERENCE_TITLE if name == REFERENCE else titles.get(name, name), "reference": name == REFERENCE,
                     "labels": int(len(group)), "objects": int(len(objects)), "fields": int(group.tile_id.nunique()),
-                    "classes": {str(k): int(v) for k, v in group.value.value_counts().items()}, "people": sorted(set(group.source))})
+                    "classes": {str(k): int(v) for k, v in shown.value_counts().items()}, "people": sorted(set(group.source))})
     return sorted(out, key=lambda s: (s["reference"], s["title"].lower()))
 
 
@@ -221,17 +226,17 @@ class Reservations:
                 objects.get(key, {}).pop(person, None)
 
 
-def _rule_filter(session: dict, candidates: pd.DataFrame, count: pd.Series, values: pd.Series) -> pd.DataFrame:
+def _rule_filter(session: dict, candidates: pd.DataFrame, count: pd.Series, values: pd.Series, vocabulary: Vocabulary) -> pd.DataFrame:
     """The candidates the session's rule asks about (`count`: labels so far, `values`: what people said, by key)."""
-    stain, rule = session["stain"], session["rule"]
+    rule = session["rule"]
     if rule == "uncertain":
         return candidates[candidates.ai_probability.between(0.3, 0.7)]
     if rule == "second":
         return candidates[count.loc[candidates.index] == 1]
     if rule == "disagree" and len(candidates):
-        def disputed(row) -> bool:
-            votes = [positive(stain, v) for v in values.get(row.key, []) if v != "unsure"]
-            return bool(votes) and (len(set(votes)) > 1 or votes[0] != positive(stain, row.ai_value))
+        def disputed(row) -> bool:  # people disagree on the identity's role, or with the AI (types do not count)
+            votes = [vocabulary.positive(v) for v in values.get(row.key, []) if not vocabulary.skipped(v)]
+            return bool(votes) and (len(set(votes)) > 1 or votes[0] != vocabulary.positive(row.ai_value))
         return candidates[candidates.apply(disputed, axis=1)]
     return candidates
 
@@ -257,7 +262,8 @@ def may_serve(session: dict, objects: pd.DataFrame, labels: pd.DataFrame) -> pd.
 
 
 def next_objects(session: dict, objects: pd.DataFrame, labels: pd.DataFrame, annotator: str, count: int = 1,
-                 ready: pd.Series | None = None, held: dict[str, set[str]] | None = None) -> tuple[list[dict], int]:
+                 ready: pd.Series | None = None, held: dict[str, set[str]] | None = None,
+                 vocabulary: Vocabulary | None = None) -> tuple[list[dict], int]:
     """The next `count` objects for this person under the session's rule, and how many the rule leaves them in all.
 
     Order: objects already handed to this person (still on their screen), then objects whose picture is `ready`
@@ -270,7 +276,7 @@ def next_objects(session: dict, objects: pd.DataFrame, labels: pd.DataFrame, ann
     mine = {k for k, s in sources.items() if annotator in s}
     candidates = objects[~objects.key.isin(mine)]
     count_so_far = candidates.key.map(lambda k: len(sources.get(k, ())))
-    candidates = _rule_filter(session, candidates, count_so_far, values)
+    candidates = _rule_filter(session, candidates, count_so_far, values, vocabulary or vocab.defaults(session["stain"]))
     if candidates.empty:
         return [], 0
     seed = int(hashlib.sha256(annotator.encode()).hexdigest()[:8], 16)

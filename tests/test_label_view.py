@@ -89,16 +89,20 @@ def test_every_label_source_gets_a_crop_centred_on_its_object(client):
     assert page["all"] == 4 and page["total"] == 4  # the two labels of the dot's field object are one object
     by = {(o["tile_id"], round(o["x"]), round(o["y"])): o for o in page["objects"]}
     field = by[(TILE, 328, 348)]
-    assert field["frame"] == "field" and field["value"] == "people disagree" and {lab["value"] for lab in field["labels"]} == {
-        "compact plaque", "plaque (type not recorded)"}
+    # both say plaque; the label without a type does not count against the one that gives it
+    assert field["frame"] == "field" and field["value"] == "plaque · compact (dense-core)" and {lab["value"] for lab in field["labels"]} == {
+        "plaque · compact (dense-core)", "plaque (type not recorded)"}
+    assert (field["identity"], field["subtype"]) == ("plaque", "compact")
     assert (field["core_x"], field["core_y"]) == DOT and field["core_label"] == "B-2" and field["tma"] == "1"
     core = by[("LIP-1_B-2", *DOT)]
     assert core["frame"] == "core" and core["core_label"] == "B-2" and (core["core_x"], core["core_y"]) == DOT
     assert by[(PILOT, *PILOT_DOT)]["frame"] == "pilot"
     missed = by[(TILE, 100, 200)]
-    assert missed["ai_value"] == "compact plaque" and missed["ai"] == "disagrees" and missed["radius_px"] > 10
-    assert page["classes"]["people disagree"] == 1 and page["ai"]["disagrees"] == 1
-    assert page["vocabulary"][:4] == ["compact plaque", "diffuse plaque", "small plaque", "plaque (type not recorded)"]
+    assert missed["ai_value"] == "plaque · compact (dense-core)" and missed["ai"] == "disagrees" and missed["radius_px"] > 10
+    assert page["classes"] == {"plaque · compact (dense-core)": 1, "plaque · diffuse": 1, "not a plaque": 2} and page["ai"]["disagrees"] == 2  # the AI found no plaque at the field object
+    assert page["vocabulary"][:5] == ["plaque (type not recorded)", "plaque · compact (dense-core)", "plaque · diffuse", "plaque · cored-neuritic",
+                                      "plaque · small, too small to type"]
+    assert [g["name"] for g in page["groups"]][:2] == ["plaque", "CAA / vascular amyloid"] and page["groups"][-1]["name"] == "people disagree"
 
     size = page["crop"]["size_px"]
     for o in (field, core, by[(PILOT, *PILOT_DOT)]):

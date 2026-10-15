@@ -23,8 +23,9 @@ from stainid.api.session import annotator, annotator_name, is_admin, require_adm
 from stainid.api.state import get_state
 from stainid.labels import added, frames, overview, pool, readiness, sessions, store
 from stainid.labels import objects as label_objects
-from stainid.labels.overview import UNTYPED
-from stainid.labels.tasks import CLASSES, CROP_UM, FIELD_TAGS, INSTRUCTIONS, NEGATIVE, SKIP, STAINS, positive
+from stainid.labels import vocabulary as vocab
+from stainid.labels.overview import SPLIT
+from stainid.labels.tasks import CROP_UM, FIELD_TAGS, NEGATIVE, STAINS
 
 router = APIRouter(tags=["labels"])
 BUSY_SECONDS = 15 * 60
@@ -35,11 +36,15 @@ _HELD = sessions.Reservations()  # objects of queue sessions on someone's screen
 admin = [Depends(require_admin)]
 FIELD_FACTS = ("core_id", "core_label", "tma", "region", "disease_group")
 BOX = ("x_px", "y_px", "width_px", "height_px")
-SPLIT = "people disagree"  # an object people labelled differently, as many for one class as for another
 
 
 def root() -> Path:
     return get_state().project.output("reviews")
+
+
+def vocabulary(stain: str) -> vocab.Vocabulary:
+    """The project's label classes of this stain."""
+    return vocab.of(get_state().project, stain)
 
 
 def busy(name: str, tile_id: str | None = None, person: str | None = None) -> dict[str, set[str]]:
@@ -183,6 +188,7 @@ class NewSession(BaseModel):
     tile_ids: list[str] | None = None
     instructions: str = ""
     open: bool = False
+    subtypes: bool = True  # people are asked for the type (subtype) of the objects, where a class has types
 
 
 class Opening(BaseModel):
@@ -205,8 +211,9 @@ class Prepare(BaseModel):
 
 @router.get("/labels/defaults", dependencies=admin)
 def defaults() -> dict:
-    return {"classes": CLASSES, "tags": FIELD_TAGS, "tools": list(sessions.FIELD_TOOLS), "ai_views": list(sessions.AI_VIEWS),
-            "rules": sessions.RULES, "instructions": INSTRUCTIONS}
+    stains = get_state().project.stains
+    return {"classes": {s: [c.name for c in vocabulary(s).visible] for s in stains}, "vocabularies": {s: vocabulary(s).to_api() for s in stains},
+            "tags": FIELD_TAGS, "tools": list(sessions.FIELD_TOOLS), "ai_views": list(sessions.AI_VIEWS), "rules": sessions.RULES}
 
 
 @router.get("/labels/overview", dependencies=admin)
@@ -233,7 +240,7 @@ def _titles() -> dict[str, str]:
 @router.get("/labels/sets", dependencies=admin)
 def label_sets(stain: str) -> list[dict]:
     """The sessions (and the reference labels) with object labels of this stain, to choose what a model learns from."""
-    return sessions.label_sets(store.current(root()), stain, _titles())
+    return sessions.label_sets(store.current(root()), stain, _titles(), vocabulary(stain))
 
 
 OBJECTS_PAGE = 60
@@ -243,31 +250,40 @@ def _session_objects(name: str, labels: pd.DataFrame, stain: str) -> pd.DataFram
     """The labelled objects of one session and stain (`labels.objects.labelled`), kept until a label or pool changes."""
     state = get_state()
     mine = labels[sessions.session_of(labels) == name]
-    return cache.memo(("session objects", str(state.root), name, stain), [store.log_path(root()), pool.folder(state.project, stain)],
+    return cache.memo(("session objects", str(state.root), name, stain, vocabulary(stain)), [store.log_path(root()), pool.folder(state.project, stain)],
                       lambda: label_objects.labelled(state.project, state.tiles, mine, stain), folders=True)
 
 
-def vocabulary_of(stain: str) -> list[str]:
-    """Every class a label of this stain can show, in a fixed order (the class's colour in the labels view): the
-    stain's positive classes, the untyped positive of earlier label sets, the others, and objects people split on."""
-    classes = CLASSES[stain]
-    untyped = [UNTYPED[k] for k in UNTYPED if positive(stain, k) and k not in classes]
-    return [*(c for c in classes if positive(stain, c)), *untyped, *(c for c in classes if not positive(stain, c)), SPLIT]
+def class_groups(vocabulary: vocab.Vocabulary, shown: set[str]) -> list[dict]:
+    """The classes the labels view shows, grouped by identity in the vocabulary's order (positive ones first): each
+    identity's name, its colour (its place, so a class keeps its colour whatever is shown) and the classes under it
+    (`Vocabulary.display` names: the identity itself, typed or not, and each of its subtypes). Classes the vocabulary
+    no longer has, and objects people split on, come last."""
+    groups, known = [], set()
+    for colour, c in enumerate(sorted(vocabulary.classes, key=lambda c: c.role != vocab.POSITIVE)):
+        keys = [vocabulary.display(c.id), *(vocabulary.display(c.id, s.id) for s in c.subtypes if not s.hidden or vocabulary.display(c.id, s.id) in shown)]
+        keys += [vocabulary.disputed(c.id)] if c.subtypes and vocabulary.disputed(c.id) in shown else []
+        known |= set(keys)
+        if not c.hidden or shown & set(keys):
+            groups.append({"id": c.id, "name": c.name, "role": c.role, "colour": colour, "keys": keys})
+    rest = sorted(shown - known - {SPLIT})
+    for key in rest:
+        groups.append({"id": key, "name": key, "role": vocab.NEGATIVE, "colour": len(groups), "keys": [key]})
+    return groups + [{"id": SPLIT, "name": SPLIT, "role": vocab.SKIP, "colour": None, "keys": [SPLIT]}]
 
 
-def _display(value: str) -> str:
-    """A class as the labels view names it: split objects and the untyped positives of earlier label sets in words."""
-    return SPLIT if value == "" else UNTYPED.get(value, value)
-
-
-def ai_verdict(stain: str, value: str, ai: str | None) -> str | None:
-    """How the AI's call compares with the label: "agrees", "type" (both positive, another type), "disagrees", or None
-    (no AI call there, or the label is "unsure" or split)."""
-    if ai is None or value in SKIP:
+def ai_verdict(vocabulary: vocab.Vocabulary, identity: str, subtype: str, ai: str | None) -> str | None:
+    """How the AI's call compares with the label (its identity and subtype): "agrees", "type" (both positive, of
+    another identity or type), "disagrees", or None (no AI call there, or the label is "unsure" or split)."""
+    if ai is None or not identity or vocabulary.role(identity) == vocab.SKIP:
         return None
-    if positive(stain, value) != positive(stain, ai):
+    ai_identity, ai_subtype = vocabulary.resolve(ai)
+    mine = vocabulary.role(identity) == vocab.POSITIVE
+    if mine != (vocabulary.role(ai_identity) == vocab.POSITIVE):
         return "disagrees"
-    return "agrees" if value == ai or not positive(stain, value) or value in UNTYPED or ai in UNTYPED else "type"
+    if not mine:
+        return "agrees"
+    return "type" if identity != ai_identity or (subtype and ai_subtype and subtype != ai_subtype) else "agrees"
 
 
 def _place(state, tile_id: str, kind: str | None, facts: dict[str, dict]) -> dict:
@@ -308,12 +324,14 @@ def session_objects(name: str, request: Request, stain: str = "", values: str = 
     stain = stain or meta.get("stain") or (stains[0] if stains else "")
     if stain not in STAINS:
         return {"name": name, "title": meta.get("title", name), "reference": reference, "stain": stain, "stains": stains, "vocabulary": [],
-                "classes": {}, "people": {}, "ai": {}, "objects": [], "total": 0, "all": 0, "crop": None, "preparing": None}
+                "groups": [], "classes": {}, "people": {}, "ai": {}, "objects": [], "total": 0, "all": 0, "crop": None, "preparing": None}
+    words = vocabulary(stain)
     found = _session_objects(name, labels, stain)
-    verdicts = [ai_verdict(stain, v, a) for v, a in zip(found.value, found.ai_value)] if len(found) else []
-    found = found.assign(verdict=verdicts, shown=found.value.map(_display)) if len(found) else found.assign(verdict=[], shown=[])
+    verdicts = [ai_verdict(words, i, s, a) for i, s, a in zip(found.identity, found.subtype, found.ai_value)] if len(found) else []
+    found = found.assign(verdict=verdicts, shown=found.value.replace("", SPLIT)) if len(found) else found.assign(verdict=[], shown=[])
     classes = {str(k): int(v) for k, v in found.shown.value_counts().items()}
-    vocabulary = [*vocabulary_of(stain), *sorted(set(classes) - set(vocabulary_of(stain)))]
+    groups = class_groups(words, set(classes))
+    order = [key for g in groups for key in g["keys"]]
     people = {str(k): int(v) for k, v in pd.Series([s for ss in found.sources for s in ss]).value_counts().items()} if len(found) else {}
     ai_counts = {k: int(v) for k, v in found.verdict.fillna("unknown").value_counts().items()}
     chosen = found
@@ -339,16 +357,16 @@ def session_objects(name: str, request: Request, stain: str = "", values: str = 
             waiting.append((label_crops.core_of(state, spot) or ("",))[0])
         points, drawn_by = _outline(state, spot, outlines, size) if kind else (None, None)
         on_core = label_crops.core_of(state, spot) if kind else None
-        items.append({"tile_id": r.tile_id, "x": float(r.x), "y": float(r.y), "frame": kind, "value": r.shown,
-                      "labels": [{**label, "value": _display(label["value"])} for label in r.labels],
-                      "time": r.time, "ai_value": r.ai_value, "ai_probability": r.ai_probability, "ai": r.verdict,
+        items.append({"tile_id": r.tile_id, "x": float(r.x), "y": float(r.y), "frame": kind, "value": r.shown, "identity": r.identity,
+                      "subtype": r.subtype, "labels": r.labels, "time": r.time, "ai_value": words.describe(r.ai_value) if r.ai_value else r.ai_value,
+                      "ai_probability": r.ai_probability, "ai": r.verdict,
                       "radius_px": None if r.radius_px is None or pd.isna(r.radius_px) else round(float(r.radius_px), 1),
                       "outline": points, "outline_by": drawn_by, "crop": crop, **_place(state, r.tile_id, kind, facts),
                       "core_x": round(on_core[1]) if on_core else None, "core_y": round(on_core[2]) if on_core else None})
     preparing = {"objects": len(waiting), "cores": len(set(waiting)),
                  "ahead": max([i["crop"].get("ahead", 0) for i in items if i["crop"]["state"] == "waiting"], default=0)} if waiting else None
-    return {"name": name, "title": meta.get("title", name), "reference": reference, "stain": stain, "stains": stains, "vocabulary": vocabulary,
-            "classes": classes, "people": people, "ai": ai_counts, "objects": items, "total": int(len(chosen)), "all": int(len(found)),
+    return {"name": name, "title": meta.get("title", name), "reference": reference, "stain": stain, "stains": stains, "vocabulary": order,
+            "groups": groups, "classes": classes, "people": people, "ai": ai_counts, "objects": items, "total": int(len(chosen)), "all": int(len(found)),
             "crop": {"size_px": size, "um": CROP_UM[stain], "pixel_um": state.project.pixel_size_um}, "preparing": preparing}
 
 
@@ -462,7 +480,8 @@ def create_session(body: NewSession) -> dict:
             raise HTTPException(400, f"no {body.stain} fields left to review")
     try:
         meta = sessions.create(root(), body.name, title=body.title or body.name, stain=body.stain, kind=body.kind, tools=body.tools,
-                               ai_view=body.ai_view, per_field=max(1, body.per_field), rule=body.rule, fields=fields, instructions=body.instructions)
+                               ai_view=body.ai_view, per_field=max(1, body.per_field), rule=body.rule, fields=fields, instructions=body.instructions,
+                               subtypes=body.subtypes)
     except FileExistsError:
         raise HTTPException(409, "a session with this name exists")
     except ValueError as error:
@@ -606,13 +625,28 @@ def session_people(name: str, request: Request) -> list[dict]:
     return labellers(session_meta(name, request), store.current(root()))
 
 
+def with_classes(labels: pd.DataFrame) -> pd.DataFrame:
+    """The labels with, for class labels, the class read in the project's vocabulary: `identity` and `subtype` (ids;
+    labels made before subtypes existed mapped onto them), the class `role` (what the stain's model learns from it) and
+    `class` as the page shows it. `value` stays as the label log has it."""
+    out = labels.assign(identity="", subtype=labels.get("subtype"), role="", **{"class": ""})
+    for stain in set(labels.stain[labels.task == "class"].dropna()):
+        words = vocabulary(stain)
+        resolved = store.classes(labels, stain, words)
+        out.loc[resolved.index, "identity"] = resolved.identity
+        out.loc[resolved.index, "subtype"] = resolved.subtype
+        out.loc[resolved.index, "role"] = resolved.role
+        out.loc[resolved.index, "class"] = [words.display(i, s) for i, s in zip(resolved.identity, resolved.subtype)]
+    return out
+
+
 @router.get("/labels/export.csv", dependencies=admin)
 def export(session: str = "") -> Response:
     labels = store.current(root())
     if session:
         labels = labels[labels.session == session]
     tiles = get_state().tiles[["tile_id", "core_id", "tma", "disease_group", "region"]].drop_duplicates("tile_id")
-    table = labels.drop(columns=["deleted"]).merge(tiles, on="tile_id", how="left")
+    table = with_classes(labels.drop(columns=["deleted"])).merge(tiles, on="tile_id", how="left")
     table["time"] = pd.to_datetime(table.time, unit="s").dt.strftime("%Y-%m-%dT%H:%M:%S")
     return Response(table.to_csv(index=False), media_type="text/csv",
                     headers={"Content-Disposition": f'attachment; filename="labels{"_" + session if session else ""}.csv"'})
@@ -626,6 +660,7 @@ class Mark(BaseModel):
     x: float | None = None
     y: float | None = None
     value: str = ""
+    subtype: str = ""  # class labels: the subtype's id, under the identity `value`
     points: list[list[float]] | None = None
     deleted: bool = False
 
@@ -659,8 +694,14 @@ def session_detail(name: str, request: Request, person: str | None = Depends(vie
     open_now = busy(name)
     fields = [{"tile_id": t, "done_by_me": bool(person) and person in reviewed.get(t, set()), "annotators_done": len(reviewed.get(t, set())),
                "open_by_others": len(open_now.get(t, set()) - {person}), "prepared": t in prepared} for t in meta["fields"]]
-    return {"meta": {**meta, "classes": CLASSES[meta["stain"]], "tags": FIELD_TAGS, "class_instructions": INSTRUCTIONS[meta["stain"]]},
+    words = vocabulary(meta["stain"])
+    return {"meta": {**meta, "subtypes": asks_subtypes(meta), "vocabulary": words.to_api(), "keys": words.keymap(asks_subtypes(meta)), "tags": FIELD_TAGS},
             "fields": fields, "annotator": person}
+
+
+def asks_subtypes(meta: dict) -> bool:
+    """Whether people are asked for the type of an object (sessions made before this choice existed did ask)."""
+    return bool(meta.get("subtypes", True))
 
 
 @router.get("/annotate/{name}/next")
@@ -679,7 +720,7 @@ def next_item(name: str, request: Request, person: str = Depends(annotator), cou
     objects = pool.all_objects(state.project, meta["stain"])
     held = (state.id, name)
     items, remaining = sessions.next_objects(meta, objects, labels, person, min(20, max(1, count)),
-                                             queue_pictures.ready(state, meta["stain"], objects), _HELD.held(held))
+                                             queue_pictures.ready(state, meta["stain"], objects), _HELD.held(held), vocabulary(meta["stain"]))
     _HELD.hold(held, person, [i["key"] for i in items])
     pictures = queue_pictures.prepare(state, meta, objects, labels, first=pd.DataFrame(items, columns=["tile_id", "x", "y"]))
     return {"object": items[0] if items else None, "objects": items, "remaining": remaining, "pictures": pictures}
@@ -718,9 +759,10 @@ def _clean(meta: dict, mark: Mark, person: str) -> dict:
                "note": True, "done": meta["kind"] == "fields"}
     if not allowed.get(mark.task):
         raise HTTPException(400, f"{mark.task} labels are not part of this session")
+    subtype = None
     if not mark.deleted:
-        if mark.task == "class" and mark.value not in CLASSES[stain]:
-            raise HTTPException(400, f"unknown class {mark.value!r}")
+        if mark.task == "class":
+            mark.value, subtype = class_of(vocabulary(stain), mark.value, mark.subtype)
         if mark.task == "tag" and mark.value not in FIELD_TAGS:
             raise HTTPException(400, f"unknown tag {mark.value!r}")
         if mark.task == "outline" and (not mark.points or len(mark.points) < 3 or any(len(p) != 2 for p in mark.points)):
@@ -730,7 +772,18 @@ def _clean(meta: dict, mark: Mark, person: str) -> dict:
     ids = {"class": lambda: store.object_id("class", mark.tile_id, mark.x, mark.y), "outline": lambda: store.object_id("outline", mark.tile_id, mark.x, mark.y),
            "tag": lambda: f"tag:{mark.tile_id}:{mark.value}", "note": lambda: f"note:{mark.tile_id}", "done": lambda: f"done:{mark.tile_id}"}
     return {"id": ids[mark.task](), "source": person, "stain": stain, "task": mark.task, "tile_id": mark.tile_id, "x": mark.x, "y": mark.y,
-            "value": mark.value, "points": mark.points, "session": meta["name"], "deleted": mark.deleted}
+            "value": mark.value, "subtype": subtype, "points": mark.points, "session": meta["name"], "deleted": mark.deleted}
+
+
+def class_of(words: vocab.Vocabulary, value: str, subtype: str = "") -> tuple[str, str | None]:
+    """The identity and subtype ids of a class label sent by a page (ids, names or an old value; 400 if unknown)."""
+    identity, sub = words.resolve(value, subtype)
+    found = words.identity(identity) if identity else None
+    if found is None:
+        raise HTTPException(400, f"unknown class {value!r}")
+    if sub and found.subtype(sub) is None:
+        raise HTTPException(400, f"{found.name} has no type {sub!r}")
+    return found.id, sub or None
 
 
 @router.get("/annotate/{name}/fields/{tile_id}/added")
@@ -770,20 +823,23 @@ def finish(name: str, tile_id: str, request: Request, person: str = Depends(anno
     labels = store.current(root())
     mine = labels[(labels.source == person) & (labels.tile_id == tile_id) & (labels.stain == meta["stain"])]
     records = []
+    words = vocabulary(meta["stain"])
     if meta["ai_view"] == "full":
-        labelled = set(mine.id[mine.task == "class"])
-        final = dict(zip(mine.id[mine.task == "class"], mine.value[mine.task == "class"]))
+        classes = mine[mine.task == "class"]
+        labelled = set(classes.id)
+        final = {k: words.positive(v, s) for k, v, s in zip(classes.id, classes.value, classes.get("subtype", pd.Series(None, index=classes.index)))}
         for o in objects.itertuples():
             key = store.object_id("class", tile_id, o.x, o.y)
-            if key not in labelled:
+            if key not in labelled:  # the AI's call, confirmed: its identity, and its type where the session asks for types
+                call = words.record(o.ai_value) | ({} if asks_subtypes(meta) else {"subtype": None})
                 records.append({"id": key, "source": person, "stain": meta["stain"], "task": "class", "tile_id": tile_id, "x": float(o.x), "y": float(o.y),
-                                "value": o.ai_value, "session": name, "confirmed": True})
-            final.setdefault(key, o.ai_value)
+                                **call, "session": name, "confirmed": True})
+            final.setdefault(key, words.positive(o.ai_value))
         if "outline" in meta["tools"]:
             edited = set(mine.id[mine.task == "outline"])
             for outline in open_field(name, tile_id, request, person)["outlines"]:
                 key = store.object_id("outline", tile_id, outline["x"], outline["y"])
-                if key not in edited and positive(meta["stain"], final.get(store.object_id("class", tile_id, outline["x"], outline["y"]), NEGATIVE[meta["stain"]])):
+                if key not in edited and final.get(store.object_id("class", tile_id, outline["x"], outline["y"]), words.positive(NEGATIVE[meta["stain"]])):
                     records.append({"id": key, "source": person, "stain": meta["stain"], "task": "outline", "tile_id": tile_id, "x": outline["x"],
                                     "y": outline["y"], "points": outline["points"], "session": name, "confirmed": True})
     records.append({"id": f"done:{tile_id}", "source": person, "stain": meta["stain"], "task": "done", "tile_id": tile_id, "session": name})

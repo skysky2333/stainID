@@ -21,7 +21,7 @@ from sklearn.metrics import precision_score, recall_score, roc_auc_score
 from sklearn.model_selection import LeaveOneGroupOut, StratifiedGroupKFold
 from sklearn.pipeline import make_pipeline
 
-from stainid.labels import added, frames, pool, store
+from stainid.labels import added, frames, pool, store, vocabulary
 from stainid.labels import sessions as label_sessions
 from stainid.labels.tasks import MODEL_KEY
 from stainid.project import Project, save_project
@@ -43,7 +43,7 @@ def labelled(project: Project, stain: str, sessions: list[str] | None = None) ->
     counts = added.measure(project, stain)
     if any(counts.values()):
         print(f"measured {counts['measured']} object(s) people added; {counts['could_not_be_measured']} could not be measured", flush=True)
-    truth = store.consensus(label_sessions.in_sessions(labels, sessions), stain)
+    truth = store.consensus(label_sessions.in_sessions(labels, sessions), stain, vocabulary.of(project, stain))
     truth = truth[truth.positive.notna()]
     names = pool.feature_names(project, stain)
     rows, unmeasured = [], 0
@@ -55,7 +55,7 @@ def labelled(project: Project, stain: str, sessions: list[str] | None = None) ->
             hit = added.resolve(extra, r.x, r.y) if i is None else None
             if hit is not None and pd.notna(hit.get("candidate_x")):  # the click was off the centre of a candidate
                 i, hit = pool.nearest(objects, float(hit.candidate_x), float(hit.candidate_y)), None
-            label = {"tile_id": tile_id, "label": r.value, "positive": bool(r.positive), "sources": r.sources}
+            label = {"tile_id": tile_id, "label": r.value, "subtype": r.subtype, "positive": bool(r.positive), "sources": r.sources}
             if i is not None:
                 rows.append({**objects.iloc[i].to_dict(), **label, "added_by_person": False})
             elif hit is not None and added.is_true(hit.measured):
@@ -148,8 +148,8 @@ def train_model(project: Project, stain: str, sessions: list[str] | None = None)
         bundle = {"classifier": forest().fit(x[:, usable], y), "feature_names": names, "usable_features": usable, "decision_mode": "context_rf",
                   "context_threshold": threshold, "addition_threshold": 0.6, "training_candidate_ids": ids}
     elif stain == "AT8":
-        positives = y & data.label.str.startswith("tau+ neuron:").to_numpy()
-        mature = data.label.eq("tau+ neuron: tangle").to_numpy()
+        positives = y & data.subtype.isin(["pretangle", "mature tangle"]).to_numpy()  # typed as mature or not
+        mature = data.subtype.eq("mature tangle").to_numpy()
         p90 = data.soma_dab_p90.to_numpy(float)
         enough = (positives & mature).sum() >= 3 and (positives & ~mature).sum() >= 3
         maturity = float(max(np.unique(p90[positives]), key=lambda v: (p90[positives & mature] >= v).mean() + (p90[positives & ~mature] < v).mean())) \
@@ -158,8 +158,8 @@ def train_model(project: Project, stain: str, sessions: list[str] | None = None)
                   "mature_p90_threshold": maturity, "context_um": 55.0, "training_n": int(len(y)), "training_positive_n": int(y.sum())}
     else:
         plaques = y & (data.equivalent_diameter_um.to_numpy(float) >= MORPHOTYPE_MINIMUM_DIAMETER_UM)
-        typed = data.label.isin(["compact plaque", "diffuse plaque"]).to_numpy()
-        compact = data.label.eq("compact plaque").to_numpy()
+        typed = data.subtype.isin(["compact", "diffuse"]).to_numpy()
+        compact = data.subtype.eq("compact").to_numpy()
         enough = (plaques & typed & compact).sum() >= 5 and (plaques & typed & ~compact).sum() >= 5
         morph = morphotype_threshold(data.normalized_inner_dab.to_numpy(float)[plaques & typed], compact[plaques & typed]) if enough \
             else float(old.get("morphotype_threshold", 1.5))
