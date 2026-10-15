@@ -120,3 +120,12 @@ def test_core_view_has_no_sampled_fields_and_old_fields_still_open(client, synth
     assert client.get("/api/images/fields/LIP-1_B-2_6E10_S02.jpg").status_code == 200
     paths = client.get("/api/project").json()["paths"]["inputs"]
     assert "whole_core_manifest" in paths and "tile_manifest" not in paths and "field_manifest" not in paths
+
+
+def test_a_stain_named_like_a_number_stays_text(tmp_path):
+    """A tile table whose only stain is 6E10 must not turn it into the number 6e10."""
+    from stainid.sampling.tiles import TEXT_COLUMNS
+    import pandas as pd
+    path = tmp_path / "tiles.csv"
+    path.write_text("tile_id,stain,tma,x_px\nLIP-1_A-1_6E10_W0001,6E10,1,0\n")
+    assert pd.read_csv(path, dtype=TEXT_COLUMNS).stain.tolist() == ["6E10"]

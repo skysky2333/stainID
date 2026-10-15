@@ -17,13 +17,16 @@ from stainid.project import LEGACY_INPUTS, Project
 
 LABEL_TISSUE = 0.5  # a labelling field is a full-size whole-core tile that is at least half tissue
 
+# identifiers stay text: a stain column holding only "6E10" would otherwise be read as the number 6e10
+TEXT_COLUMNS = {c: str for c in ("tile_id", "core_id", "tma", "core_label", "donor_id", "sample_region_id", "region", "disease_group", "stain", "image_path")}
+
 
 def _paths(project: Project) -> list[Path]:
     return [project.analysis_tiles(), *(project.input(key) for key in LEGACY_INPUTS)]
 
 
 def _read(path: Path) -> pd.DataFrame:
-    return pd.read_csv(path, dtype={"tma": str, "donor_id": str}) if path.exists() else pd.DataFrame()
+    return pd.read_csv(path, dtype=TEXT_COLUMNS) if path.exists() else pd.DataFrame()
 
 
 def table(path: Path) -> pd.DataFrame:
