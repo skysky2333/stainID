@@ -197,6 +197,15 @@ def slide_picture(tma: str, stain: str, rng: np.random.Generator) -> np.ndarray:
     return image
 
 
+def written_label(image: np.ndarray, tma: str, stain: str) -> np.ndarray:
+    """The slide with its TMA and stain written on the label, as the picture in the scan file shows it (the Slides screen
+    shows that picture). Find cores gets the plain picture: on these small synthetic slides the writing would look like tissue."""
+    image = image.copy()
+    for line, text in enumerate((f"{PREFIX}{tma}", stain)):
+        cv2.putText(image, text, (image.shape[1] - 240, 110 + 70 * line), cv2.FONT_HERSHEY_SIMPLEX, 1.4, (50, 45, 60), 3, cv2.LINE_AA)
+    return image
+
+
 def build(out: Path, stage: str, seed: int) -> None:
     if out.exists() and any(out.iterdir()):
         raise SystemExit(f"{out} is not empty; choose a new folder")
@@ -211,7 +220,7 @@ def build(out: Path, stage: str, seed: int) -> None:
         for stain in STAINS:
             name = f"TMA {PREFIX}{tma} {stain}.tif"
             pictures[name] = slide_picture(tma, stain, rng)
-            cv2.imwrite(str(slides / name), cv2.cvtColor(cv2.resize(pictures[name], None, fx=0.5, fy=0.5), cv2.COLOR_RGB2BGR))
+            cv2.imwrite(str(slides / name), cv2.cvtColor(cv2.resize(written_label(pictures[name], tma, stain), None, fx=0.5, fy=0.5), cv2.COLOR_RGB2BGR))
     incoming = root / "incoming"
     incoming.mkdir()
     (incoming / f"{PREFIX}1 map.docx").write_bytes(word_map("1"))

@@ -9,10 +9,12 @@ settings changes:
 
     HOME=/tmp/stainid-demo-home stainid --project /tmp/demo_project serve --no-browser --host 127.0.0.1 --port 18555
 
-The script signs in as admin, registers an annotator name for the annotation page, opens each page in the light
-theme and writes workflow.png, home.png, models.png, viewer.jpg, labels.png, annotate.jpg, results.png and
-settings.png. The core shown in the viewer is the AD core with the highest tau+ neuron density (the spot with the most
-detections near its centre), and the annotation page opens the field the annotator has started but not finished.
+(add `--projects-dir` with a folder holding the demo project and a project made by make_setup_demo.py for a Projects
+page with more than one study). The script signs in as admin, registers an annotator name for the annotation page,
+opens each page of the project the server was started with (at /p/<project>/...) in the light theme and writes
+projects.png, workflow.png, home.png, models.png, viewer.jpg, labels.png, annotate.jpg, results.png and settings.png.
+The core shown in the viewer is the AD core with the highest tau+ neuron density (the spot with the most detections
+near its centre), and the annotation page opens the field the annotator has started but not finished.
 """
 from __future__ import annotations
 
@@ -23,7 +25,8 @@ from pathlib import Path
 
 from playwright.sync_api import Page, sync_playwright
 
-SHOTS = {  # name: (path or None when chosen from the data, viewport width, height)
+SHOTS = {  # name: (path in the project, or None when chosen from the data, viewport width, height)
+    "projects.png": ("", 1400, 640),  # the Projects page (the server's, not a project's)
     "workflow.png": ("/workflow", 1500, 1011),
     "home.png": ("/", 1500, 911),
     "models.png": ("/models", 1500, 911),
@@ -51,25 +54,25 @@ def settle(page: Page, extra: float = 1.0) -> None:
     time.sleep(extra)
 
 
-def viewer_target(page: Page, base: str, stain: str) -> str:
-    rows = page.request.get(f"{base}/api/tables/results_core.csv/rows").json()["rows"]
+def viewer_target(page: Page, api: str, stain: str) -> str:
+    rows = page.request.get(f"{api}/tables/results_core.csv/rows").json()["rows"]
     column = {"AT8": "tau_neuron_density_mm2", "6E10": "v2_plaque_density_mm2", "NeuN": "neun_profile_density_mm2"}[stain]
     best = max((r for r in rows if r.get(column) is not None), key=lambda r: (r.get("disease_group") == "AD", r[column]))
     core_id = best["core_id"]
-    image = next(i for i in page.request.get(f"{base}/api/cores/{core_id}").json()["images"] if i["stain"] == stain)
+    image = next(i for i in page.request.get(f"{api}/cores/{core_id}").json()["images"] if i["stain"] == stain)
     w, h = image["native_width_px"], image["native_height_px"]
     spots = [(int(w * fx), int(h * fy)) for fx in (0.4, 0.5, 0.6) for fy in (0.4, 0.5, 0.6)]
-    count = {s: len(page.request.get(f"{base}/api/cores/{core_id}/{stain}/region?x={s[0]}&y={s[1]}&size=1600").json()["objects"]) for s in spots}
+    count = {s: len(page.request.get(f"{api}/cores/{core_id}/{stain}/region?x={s[0]}&y={s[1]}&size=1600").json()["objects"]) for s in spots}
     x, y = max(spots, key=lambda s: count[s])
     return f"/cores/{core_id}?stain={stain}&x={x}&y={y}"
 
 
-def annotate_target(page: Page, base: str, session: str) -> str:
-    fields = page.request.get(f"{base}/api/annotate/{session}").json()["fields"]
+def annotate_target(page: Page, api: str, session: str) -> str:
+    fields = page.request.get(f"{api}/annotate/{session}").json()["fields"]
     open_ = [f["tile_id"] for f in fields if f["prepared"] and not f["done_by_me"]]
     if not open_:
         raise SystemExit(f"the annotator has no unfinished field in {session}")
-    mine = {t: len(page.request.get(f"{base}/api/annotate/{session}/fields/{t}").json()["mine"]) for t in open_}
+    mine = {t: len(page.request.get(f"{api}/annotate/{session}/fields/{t}").json()["mine"]) for t in open_}
     return f"/annotate/{session}/{max(open_, key=lambda t: mine[t])}"
 
 
@@ -124,20 +127,22 @@ def main() -> None:
         if args.replace_default_password and request.get(f"{base}/api/session").json()["default_password"]:
             request.put(f"{base}/api/session/admin/password", data={"current": args.password, "new": secrets.token_urlsafe(12)})
         request.post(f"{base}/api/session/annotator", data={"name": args.annotator})
-        root = request.get(f"{base}/api/project").json()["root"]
+        project = request.get(f"{base}/api/project").json()  # the project the server was started with (opened last)
+        root, api, pages = project["root"], f"{base}/api/projects/{project['id']}", f"{base}/p/{project['id']}"
         page = context.new_page()
         for name in wanted:
             path, width, height = SHOTS[name]
             if name == "viewer.jpg":
-                path = viewer_target(page, base, args.stain)
+                path = viewer_target(page, api, args.stain)
             if name == "annotate.jpg":
-                path = annotate_target(page, base, args.session)
+                path = annotate_target(page, api, args.session)
             page.set_viewport_size({"width": width, "height": height})
-            page.goto(base + path)
+            page.goto(f"{base}/" if name == "projects.png" else pages + path)
             settle(page, 1.5)
             if name == "annotate.jpg":
                 select_outline(page)
             page.evaluate(REPLACE_TEXT, [root, args.root_label])
+            page.evaluate(REPLACE_TEXT, [str(Path(root).parent), str(Path(args.root_label).parent)])  # the other studies beside it
             target = args.out_dir / name
             if target.suffix == ".jpg":
                 page.screenshot(path=str(target), type="jpeg", quality=88)
