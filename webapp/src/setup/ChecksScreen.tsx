@@ -15,7 +15,8 @@ export default function ChecksScreen(props: ScreenProps) {
   return <ScreenData state={issues} label="Comparing what was set up…">{(list) => <Checks {...props} list={list} reload={issues.reload} />}</ScreenData>
 }
 
-function Checks({ next, back, nextLabel, go, onChanged, list, reload }: ScreenProps & { list: Issue[]; reload: () => void }) {
+function Checks({ next, back, nextLabel, go, onChanged, overview, list, reload }: ScreenProps & { list: Issue[]; reload: () => void }) {
+  const tma = (overview?.kind ?? 'tma') === 'tma'
   const [message, setMessage] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState('')
@@ -39,7 +40,7 @@ function Checks({ next, back, nextLabel, go, onChanged, list, reload }: ScreenPr
 
   return (
     <div className="screen">
-      {shown.length === 0 ? <Found>Everything fits together: every core position is on a map, and the maps and the donor table agree.</Found>
+      {shown.length === 0 ? <Found>{tma ? 'Everything fits together: every core position is on a map, and the maps and the donor table agree.' : 'Everything fits together: every image has a donor, and the images and the donor table agree.'}</Found>
         : <Found tone="warn"><b>{problems.length ? `${plural(problems.length, 'thing needs', 'things need')} fixing before the analysis can run` : 'Nothing stops the analysis'}</b>
           {shown.length > problems.length ? `, ${plural(shown.length - problems.length, 'thing')} to look at` : ''}. Each comes with a fix where the answer is clear.</Found>}
       {message && <p className="small status-finished" role="status">{message}</p>}
