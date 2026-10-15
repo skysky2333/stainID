@@ -1,6 +1,7 @@
 """Server-side image products for the viewer: field crops, raster overlays and object outlines (core pictures: `pyramid`)."""
 from __future__ import annotations
 
+import io
 import json
 import threading
 from pathlib import Path
@@ -9,13 +10,13 @@ import cv2
 import numpy as np
 from PIL import Image
 
+from stainid import disk_cache
 from stainid.api import pyramid
 from stainid.api.state import ProjectState
 from stainid.imaging.color import rgb_to_hed
 from stainid.imaging.core_images import open_image
 from stainid.imaging.tissue import field_tissue_mask, fold_mask, linear_artifact_mask
 from stainid.qc.exclusions import rasterize_core_exclusions, read_manual_exclusions
-from stainid.stains.neun.audit import crop_with_padding
 from stainid.tables import read_csv
 
 Image.MAX_IMAGE_PIXELS = None
@@ -35,12 +36,21 @@ def core_thumbnail(state: ProjectState, core_id: str, stain: str, size: int = 51
 def field_rgb(state: ProjectState, tile_id: str) -> np.ndarray:
     """Field crop including the context halo, cached as JPEG (coordinates match all pipeline outputs)."""
     target = state.cache_dir("fields") / f"{tile_id}.jpg"
-    if not target.exists():
-        tile = state.tile(tile_id)
-        with _IMAGE_LOCKS.setdefault(tile["image_path"], threading.Lock()):
-            if not target.exists():
-                _crop_field(state, tile, target)
-    return np.asarray(Image.open(target).convert("RGB"))
+    for attempt in (1, 2):  # a second time when it was cleaned up between the look and the read
+        if not target.exists():
+            tile = state.tile(tile_id)
+            with _IMAGE_LOCKS.setdefault(tile["image_path"], threading.Lock()):
+                if not target.exists():
+                    _crop_field(state, tile, target)
+        try:
+            with Image.open(target) as image:
+                rgb = np.asarray(image.convert("RGB"))
+        except FileNotFoundError:
+            if attempt == 2:
+                raise
+            continue
+        disk_cache.used(target)
+        return rgb
 
 
 def _crop_field(state: ProjectState, tile: dict, target: Path) -> None:
@@ -50,7 +60,10 @@ def _crop_field(state: ProjectState, tile: dict, target: Path) -> None:
         x0, y0 = crop_origin(tile, context)
         x1 = min(int(tile["x_px"]) + int(tile["width_px"]) + context, image.width)
         y1 = min(int(tile["y_px"]) + int(tile["height_px"]) + context, image.height)
-        image.crop((x0, y0, x1, y1)).convert("RGB").save(target, quality=FIELD_JPEG_QUALITY)
+        part = image.crop((x0, y0, x1, y1)).convert("RGB")
+    out = io.BytesIO()
+    part.save(out, format="JPEG", quality=FIELD_JPEG_QUALITY)
+    disk_cache.write(target, out.getvalue())
 
 
 def field_jpeg(state: ProjectState, tile_id: str) -> Path:
@@ -61,7 +74,9 @@ def field_jpeg(state: ProjectState, tile_id: str) -> Path:
 def _rgba_png(mask: np.ndarray, color: tuple[int, int, int], alpha: int, target: Path) -> Path:
     rgba = np.zeros((*mask.shape, 4), np.uint8)
     rgba[mask] = (*color, alpha)
-    Image.fromarray(rgba).save(target)
+    out = io.BytesIO()
+    Image.fromarray(rgba).save(out, format="PNG")
+    disk_cache.write(target, out.getvalue())
     return target
 
 
@@ -77,6 +92,7 @@ def exclusion_overlay(state: ProjectState, tile_id: str) -> Path:
         origin = [max(0, int(tile[k]) - state.project.context_px) for k in ("x_px", "y_px")]
         mask |= rasterize_core_exclusions(manual, origin[0], origin[1], mask.shape)
         _rgba_png(mask, (90, 110, 255), 110, target)
+    disk_cache.used(target)
     return target
 
 
@@ -89,6 +105,7 @@ def dab_overlay(state: ProjectState, tile_id: str) -> Path:
         threshold = float(cal[(cal.tma == str(tile["tma"])) & (cal.stain == tile["stain"])].threshold_dab_od.iloc[0])
         rgb = field_rgb(state, tile_id)
         _rgba_png(np.maximum(rgb_to_hed(rgb)[..., 2], 0) >= threshold, (255, 40, 40), 120, target)
+    disk_cache.used(target)
     return target
 
 
@@ -107,6 +124,7 @@ def thread_overlay(state: ProjectState, tile_id: str) -> Path:
         valid = field_tissue_mask(rgb) & ~linear_artifact_mask(rgb) & ~fold_mask(rgb, state.project.pixel_size_um)
         skeleton = thread_network(rgb, valid, threshold, state.project.pixel_size_um, nuclei=nuclei)["skeleton"]
         _rgba_png(cv2.dilate(skeleton.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool), (40, 110, 255), 235, target)
+    disk_cache.used(target)
     return target
 
 
@@ -114,8 +132,12 @@ def mask_outlines(state: ProjectState, tile_id: str) -> list[dict]:
     """SAM object outlines as simplified polygons in field-crop coordinates."""
     tile = state.tile(tile_id)
     target = state.cache_dir("outlines") / f"{tile_id}.json"
-    if target.exists():
-        return json.loads(target.read_text())
+    try:
+        out = json.loads(target.read_text())
+        disk_cache.used(target)
+        return out
+    except FileNotFoundError:
+        pass
     labels_path = state.project.output("masks") / tile["stain"] / "labels" / f"{tile_id}.npz"
     if not labels_path.exists():
         return []
@@ -129,23 +151,5 @@ def mask_outlines(state: ProjectState, tile_id: str) -> list[dict]:
         row = meta.get(int(label), {})
         out.append({"label": int(label), "points": contour.tolist(), "area_um2": float(row.get("area_um2") or "nan"),
                     "circularity": float(row.get("circularity") or "nan"), "seed_source": row.get("seed_source", "")})
-    target.write_text(json.dumps(out))
+    disk_cache.write(target, json.dumps(out).encode())
     return out
-
-
-def object_crop(state: ProjectState, stain: str, tile_id: str, x: float, y: float, half: int) -> np.ndarray:
-    """A square crop around a labelled object, wherever its image lives: an analysed field, an earlier study's pilot
-    field (annotations/fields/<id>.png) or a whole core image (labels made on core coordinates). Cached on disk."""
-    target = state.cache_dir("object_crops") / f"{tile_id}_{round(x)}_{round(y)}_{half}.jpg"
-    if target.exists():
-        return np.asarray(Image.open(target).convert("RGB"))
-    pilot = state.project.output("reviews") / "fields" / f"{tile_id}.png"
-    if (state.tiles.tile_id == tile_id).any():
-        crop = crop_with_padding(field_rgb(state, tile_id), x, y, 2 * half)
-    elif pilot.exists():
-        crop = crop_with_padding(np.asarray(Image.open(pilot).convert("RGB")), x, y, 2 * half)
-    else:
-        with pyramid.DECODE, open_image(state.root / state.core_image(tile_id, stain)["image_path"]) as image:
-            crop = np.asarray(image.crop((int(x) - half, int(y) - half, int(x) + half, int(y) + half)).convert("RGB"))
-    Image.fromarray(crop).save(target, quality=92)
-    return crop

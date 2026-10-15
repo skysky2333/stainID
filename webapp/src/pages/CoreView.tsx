@@ -105,7 +105,7 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
   const image = core.images.find((i) => i.stain === stain)
   const ready = picture.data?.ready ? picture.data : null
   const settled = !!ready || (picture.data && !picture.data.ready && picture.data.state === 'failed')
-  useEffect(() => { if (settled) setPoll(false) }, [settled])
+  useEffect(() => { if (settled) setPoll(false) }, [settled, picture.data])  // also after a tile went missing (onTileError)
 
   const objects = useMemo<Found[]>(() => {
     const data = found.data
@@ -148,7 +148,7 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
           <DeepZoom pyramid={ready} tileUrl={tileUrl} layers={layers.dab ? ['dab'] : []} marks={marks} lines={lines} lineColor={THREAD_COLOR}
             boxes={boxes} pixelUm={image?.pixel_width_um}
             selected={pick ? drawn.indexOf(pick) : null} describe={describe} target={target}
-            onPick={(i) => setSelected(i === null ? null : drawn[i].index)}
+            onPick={(i) => setSelected(i === null ? null : drawn[i].index)} onTileError={() => setPoll(true)}
             toolbar={<span className="small muted">Scroll to zoom · drag to move · click an object for details</span>} />
         ) : (
           <Preparing core={core} stain={stain} state={picture.data} error={picture.error} />

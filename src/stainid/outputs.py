@@ -5,8 +5,6 @@ plus stain-specific measurements.
 """
 from __future__ import annotations
 
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
 
@@ -73,7 +71,3 @@ def field_objects(project: Project, tiles: pd.DataFrame, stain: str) -> pd.DataF
 def objects(project: Project, tiles: pd.DataFrame, stain: str) -> pd.DataFrame:
     tiles = tiles[tiles.stain == stain]
     return neun_objects(project, tiles) if stain == "NeuN" else field_objects(project, tiles, stain)
-
-
-def field_path(project: Project, tile_id: str) -> Path:
-    return project.root / "data" / "cache" / "fields" / f"{tile_id}.jpg"

@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
+from stainid import disk_cache
 from stainid.api.state import get_state, reload_project
 from stainid.slides.dearray import slide_slug
 from stainid.slides.overview import slide_picture
@@ -83,9 +84,8 @@ def picture(path: str, size: int = 320) -> Response:
         if image is None:
             raise HTTPException(404, "this scan has no picture that can be read quickly")
         ok, encoded = cv2.imencode(".jpg", cv2.cvtColor(image, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 85])
-        temporary = cached.with_suffix(".tmp")
-        temporary.write_bytes(encoded.tobytes())
-        temporary.replace(cached)
+        disk_cache.write(cached, encoded.tobytes())
+    disk_cache.used(cached)
     return FileResponse(cached, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
 
 

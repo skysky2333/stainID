@@ -140,6 +140,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--allow-origin", action="append", default=[], metavar="URL",
                    help="let the web app served from this address (e.g. http://lab-pc:8080) use this server; repeat for several "
                         "(also $STAINID_ALLOW_ORIGINS, comma-separated)")
+    p.add_argument("--cache-limit", default=None, metavar="SIZE",
+                   help="space each project's pictures for viewing (data/cache) may take unless its settings say otherwise, e.g. 100G "
+                        "(the default) or 500M; the least recently used are deleted beyond it and made again when needed")
     p.add_argument("--projects-dir", type=Path, default=None, metavar="DIR",
                    help="list every folder in DIR that holds a stainid.yaml on the Projects page (also settable there)")
     return parser
@@ -296,6 +299,14 @@ def serve(args: argparse.Namespace) -> None:
             return
     os.environ["STAINID_PROJECT"] = str(start)
     os.environ["STAINID_HOST"] = args.host
+    if args.cache_limit:
+        from stainid.disk_cache import LIMIT_ENV, parse_size
+
+        try:
+            parse_size(args.cache_limit)
+        except ValueError as error:
+            raise SystemExit(f"--cache-limit: {error}")
+        os.environ[LIMIT_ENV] = args.cache_limit
     if args.projects_dir:
         os.environ[PROJECTS_DIR_ENV] = str(args.projects_dir.expanduser().resolve())
     origins = allowed_origins(args.allow_origin)

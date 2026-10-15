@@ -54,6 +54,9 @@ DEFAULTS: dict = {
     "imaging": {"native_pixel_size_um": None, "rescale": "on_import", "stains": {}},
     # The dataset package a project was made from (id, title, licence, citation, package folder); {} for your own data.
     "dataset": {},
+    # Space the pictures the app makes for viewing (data/cache/) may take, in GB; the least recently used are deleted
+    # beyond it and made again when needed (`stainid.disk_cache`). null: the server's --cache-limit, else 100 GB.
+    "cache_limit_gb": None,
     "inputs": {
         "image_list": "data/images.csv",
         "slides_dir": "data/slides",

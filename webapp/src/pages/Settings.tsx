@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { Group, ProjectConfig, ProjectInfo } from '../api'
 import { api } from '../api'
+import { CacheSpace } from '../cacheSpace'
 import { ErrorNote, FilePicker, HelpBox, Loading, PageHead, PathLine, withError } from '../components'
 import type { Theme } from '../hooks'
 import { useTheme } from '../hooks'
@@ -51,6 +52,9 @@ export default function Settings() {
       </div>
       <Advanced title="Server and other computers" hint="which stainID server this page uses">
         <ServerSettings />
+      </Advanced>
+      <Advanced title="Space for pictures the app makes" hint="how much disk space they may take; clear them">
+        <CacheSpace />
       </Advanced>
     </>
   )

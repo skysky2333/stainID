@@ -7,13 +7,12 @@ on that picture are taken out again (they are drawn in exact colours, without sm
 """
 from __future__ import annotations
 
-import os
-import threading
 from pathlib import Path
 
 import cv2
 import numpy as np
 
+from stainid import disk_cache
 from stainid.qc.core_qc import OUTLINE_COLOURS
 
 THUMB_BASE = 2048
@@ -21,18 +20,14 @@ THUMB_BASE = 2048
 
 def cache_folder(project_root: Path) -> Path:
     """Where the thumbnails of a project are kept (the API's `ProjectState.cache_dir("thumbs")`)."""
-    return Path(project_root) / "data" / "cache" / "thumbs"
+    return disk_cache.folder(project_root, "thumbs")
 
 
 def base_path(folder: Path, core_id: str, stain: str) -> Path:
     return Path(folder) / f"{core_id}_{stain}_base.jpg"
 
 
-def write_atomic(path: Path, data: bytes) -> None:
-    """Write a file so that readers see the old or the new version, never half of one (also from parallel writers)."""
-    temporary = path.with_name(f"{path.name}.{os.getpid()}-{threading.get_ident()}.tmp")
-    temporary.write_bytes(data)
-    os.replace(temporary, path)
+write_atomic = disk_cache.write  # a cache file, written whole and recorded
 
 
 def jpeg(bgr: np.ndarray, quality: int = 85) -> bytes:
@@ -54,7 +49,7 @@ def shrink(image: np.ndarray, size: int) -> np.ndarray:
 def write_base(path: Path, bgr: np.ndarray) -> Path:
     """Save the thumbnail base of a core image from the image (or any reduced copy of it), BGR."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    write_atomic(path, jpeg(shrink(bgr, THUMB_BASE), 90))
+    disk_cache.write(path, jpeg(shrink(bgr, THUMB_BASE), 90))
     return path
 
 

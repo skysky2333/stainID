@@ -5,15 +5,14 @@ An image that is already at the analysis scale and in DAB is used where it lies 
 image table). Any other becomes a small *link* file, `data/images/links/<id>.json`, saying how to make the picture: the
 source file, the box on it (level-0 pixels), the enlargement to the analysis scale and the colour recipe
 (`stainid.imaging.chromogens`). Every step opens core images with `open_image` / `read_bgr`, which make the picture from
-a link; with `imaging.rescale: on_import` the picture is kept in the project's cache (`data/cache/images/<id>.png`,
-written only by `_cached_picture`) and remade whenever it is missing or older than its link, with `on_the_fly` it is
-made every time it is read and nothing is stored. Source files are never changed or copied.
+a link. With `imaging.rescale: on_import` the picture is kept as a cache file (kind `images`, through
+`stainid.disk_cache`, written only by `_kept_picture`): made again whenever it is missing (the cache may delete it to
+stay within its size limit) or older than its link. With `on_the_fly` it is made every time it is read and nothing is
+stored. The link files are study data, not cache; source files are never changed or copied.
 """
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 import threading
 from pathlib import Path
 
@@ -21,11 +20,12 @@ import cv2
 import numpy as np
 from PIL import Image
 
+from stainid import disk_cache
 from stainid.imaging.chromogens import Recipe, to_analysis_rgb
 
 Image.MAX_IMAGE_PIXELS = None
 LINKS = Path("data") / "images" / "links"
-CACHE_KIND = "images"
+KIND = "images"  # in disk_cache.KINDS
 _LOCKS: dict[str, threading.Lock] = {}
 _GUARD = threading.Lock()
 
@@ -39,17 +39,18 @@ def link_path(root: Path, image_id: str) -> Path:
 
 
 def safe_name(text: str) -> str:
-    return "".join(c if c.isalnum() or c in "-_." else "_" for c in str(text))
+    return "".join(c if c.isalnum() or c in "-_" else "_" for c in str(text))
 
 
-def write_link(path: Path, source: Path | str, box: tuple[int, int, int, int], scale: float, recipe: Recipe, cache: bool,
+def write_link(path: Path, source: Path | str, box: tuple[int, int, int, int], scale: float, recipe: Recipe, keep: bool,
                size: tuple[int, int]) -> Path:
-    """Say how a core image is made; `size` is the picture's (width, height) at the analysis scale."""
+    """Say how a core image is made; `size` is the picture's (width, height) at the analysis scale; `keep`: keep the
+    picture once made (on_import) instead of making it at every read (on_the_fly)."""
     data = {"stainid_core_image": 1, "source": str(source), "box": [int(v) for v in box], "scale": float(scale), "recipe": recipe.as_dict(),
-            "cache": bool(cache), "width_px": int(size[0]), "height_px": int(size[1])}
+            "keep_picture": bool(keep), "width_px": int(size[0]), "height_px": int(size[1])}
     path.parent.mkdir(parents=True, exist_ok=True)
     text = json.dumps(data, indent=1)
-    if not path.exists() or path.read_text() != text:  # unchanged links keep their time, so their cached pictures stay fresh
+    if not path.exists() or path.read_text() != text:  # unchanged links keep their time, so their kept pictures stay fresh
         path.write_text(text)
     return path
 
@@ -61,9 +62,9 @@ def read_link(path: Path) -> dict:
     return data
 
 
-def cache_folder(link: Path) -> Path:
-    """`data/cache/images` of the project the link belongs to (links live in `data/images/links`)."""
-    return Path(link).resolve().parents[2] / "cache" / CACHE_KIND
+def project_root(link: Path) -> Path:
+    """The project a link belongs to (links live in `<project>/data/images/links`)."""
+    return Path(link).resolve().parents[3]
 
 
 def render(link: Path) -> np.ndarray:
@@ -79,24 +80,22 @@ def render(link: Path) -> np.ndarray:
     return to_analysis_rgb(rgb, Recipe.from_dict(data["recipe"]))
 
 
-def _cached_picture(link: Path) -> Path | None:
-    """The cached picture of a link (made now if it is missing or older than the link); None for on-the-fly links. The
-    only place that writes the image cache."""
-    data = read_link(link)
-    if not data.get("cache"):
+def _kept_picture(link: Path) -> Path | None:
+    """The kept picture of an on-import link, made now if it is missing or older than the link; None for on-the-fly
+    links. The only place that writes this cache."""
+    if not read_link(link).get("keep_picture"):
         return None
-    target = cache_folder(link) / f"{Path(link).stem}.png"
+    target = disk_cache.path(project_root(link), KIND, f"{Path(link).stem}.png")
     with _GUARD:
         lock = _LOCKS.setdefault(str(target), threading.Lock())
     with lock:
         if not _fresh(target, link):
-            target.parent.mkdir(parents=True, exist_ok=True)
-            rgb = render(link)
-            with tempfile.NamedTemporaryFile(dir=target.parent, prefix=f".{target.name}.", suffix=".png", delete=False) as handle:
-                name = handle.name
-            if not cv2.imwrite(name, cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_PNG_COMPRESSION, 1]):
-                raise OSError(f"could not write {target}")
-            os.replace(name, target)
+            ok, encoded = cv2.imencode(".png", cv2.cvtColor(render(link), cv2.COLOR_RGB2BGR), [cv2.IMWRITE_PNG_COMPRESSION, 1])
+            if not ok:
+                raise OSError(f"could not encode {target.name}")
+            disk_cache.write(target, encoded.tobytes())
+        else:
+            disk_cache.used(target)
     return target
 
 
@@ -108,8 +107,22 @@ def _fresh(picture: Path, link: Path) -> bool:
 
 
 def prepare(link: Path) -> None:
-    """Make (or refresh) the cached picture of an on-import link now, so later steps open it at once."""
-    _cached_picture(link)
+    """Make (or refresh) the kept picture of an on-import link now, so later steps open it at once."""
+    _kept_picture(link)
+
+
+def _from_kept(link: Path, read):
+    """`read(path)` of the kept picture; made again if the cache removed it in between (None for on-the-fly links)."""
+    for attempt in (1, 2):
+        kept = _kept_picture(link)
+        if kept is None:
+            return None
+        try:
+            return read(kept)
+        except FileNotFoundError:
+            if attempt == 2:
+                raise
+    return None
 
 
 def open_image(path: Path | str) -> Image.Image:
@@ -117,8 +130,17 @@ def open_image(path: Path | str) -> Image.Image:
     path = Path(path)
     if not is_link(path):
         return Image.open(path)
-    cached = _cached_picture(path)
-    return Image.open(cached) if cached else Image.fromarray(render(path))
+    image = _from_kept(path, Image.open)
+    return image if image is not None else Image.fromarray(render(path))
+
+
+def _imread(flag: int):
+    def read(path: Path) -> np.ndarray:
+        bgr = cv2.imread(str(path), flag)
+        if bgr is None and not path.exists():
+            raise FileNotFoundError(path)
+        return bgr
+    return read
 
 
 def read_bgr(path: Path | str, flag: int = cv2.IMREAD_COLOR) -> np.ndarray | None:
@@ -126,9 +148,9 @@ def read_bgr(path: Path | str, flag: int = cv2.IMREAD_COLOR) -> np.ndarray | Non
     path = Path(path)
     if not is_link(path):
         return cv2.imread(str(path), flag)
-    cached = _cached_picture(path)
-    if cached:
-        return cv2.imread(str(cached), flag)
+    bgr = _from_kept(path, _imread(flag))
+    if bgr is not None:
+        return bgr
     bgr = cv2.cvtColor(render(path), cv2.COLOR_RGB2BGR)
     reduce = {cv2.IMREAD_REDUCED_COLOR_2: 2, cv2.IMREAD_REDUCED_COLOR_4: 4, cv2.IMREAD_REDUCED_COLOR_8: 8}.get(flag, 1)
     return cv2.resize(bgr, (max(1, bgr.shape[1] // reduce), max(1, bgr.shape[0] // reduce)), interpolation=cv2.INTER_AREA) if reduce > 1 else bgr

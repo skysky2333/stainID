@@ -74,6 +74,36 @@ take its screenshots, `tools/demo/make_setup_demo.py OUT_DIR` makes a synthetic 
    pipeline map and the Workflow page pick the step up without further changes. A new input file gets a `Resource`
    with its `download`, `template`, `setting` or `format`, which gives the missing-file buttons on the step card.
 
+## Adding a cache
+
+Pictures and other files the app makes from a project's data only to show it quickly are caches: they live in
+`data/cache/<kind>/`, take at most the project's space limit together, and may be deleted at any time (least recently
+used first) to stay under it. Everything that reads one must therefore make it again when it is missing, and show its
+usual "preparing" state meanwhile, never an error. All of it goes through `stainid/disk_cache.py`:
+
+1. Add the kind to `disk_cache.KINDS` with what it is called in Settings ("Labelling pictures").
+2. Name files with `state.cache_dir(kind)` (in the API) or `disk_cache.folder(root, kind)` / `disk_cache.path(root,
+   kind, name)`; never build `data/cache` paths by hand. Files that belong together (a pack and its index) share the
+   part of their name before the first dot: they are deleted together.
+3. Write with `disk_cache.write(path, data)` (atomic, recorded); code that must write some other way calls
+   `disk_cache.wrote(path)` once the file is complete.
+4. Call `disk_cache.used(path)` whenever a cached file is read or served, so what is in use is kept. Both calls only
+   note the path in memory; a background thread writes the notes into the index every few seconds.
+5. Test that the reader makes the file again after `disk_cache.evict(root, 0, keep_seconds=0)` (see
+   `tests/test_disk_cache.py`, whose `test_every_cache_goes_through_disk_cache` fails on code that names cache folders
+   itself or uses a kind not in `KINDS`).
+
+What is **not** a cache, and is never deleted: anything outside `data/cache/`, i.e. the slides and core images, the
+project tables, detections, masks and results (`data/analysis`), labels, label logs, the label pool and labelling
+sessions (`data/annotations`), models, job records and the QC pictures of the steps (`data/qc`). A file that cannot be
+made again from those does not belong in `data/cache/`.
+
+The limit is per project (`cache_limit_gb` in `stainid.yaml`, set in Settings → Advanced → *Space for pictures the app
+makes*), else the server's `stainid serve --cache-limit SIZE` (which steps started by that server inherit through
+`$STAINID_CACHE_LIMIT`), else 100 GB. It is per project rather than per server because each project's caches sit next
+to its data, often on different drives, and every process that writes them (servers and steps) can enforce it from
+the project alone. Files used or written in the last 10 minutes are never deleted.
+
 ## Architecture
 
 ```
