@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 import pandas as pd
 import pytest
 
@@ -215,12 +217,46 @@ def test_blind_queue_hides_ai_and_serves_crops(prepared):
     assert client.get("/api/labels/share").json()["links"][0].endswith("/annotate")
 
 
-def test_core_region_preview_and_detections(client):
-    region = client.get("/api/cores/LIP-1_B-2/6E10/region?x=0&y=0&size=4000").json()
-    assert region["x0"] == 0 and region["y0"] == 0 and len(region["objects"]) == 8
-    image = client.get("/api/images/cores/LIP-1_B-2/6E10/region.jpg?x=0&y=0&size=256")
-    assert image.status_code == 200 and image.headers["content-type"] == "image/jpeg"
-    assert client.get("/api/images/cores/LIP-1_B-2/6E10/region_dab.png?x=0&y=0&size=256").status_code == 200
+def _ready_picture(client, url, seconds=30):
+    """Ask for a core picture until its pyramid is prepared (it is built on a background thread)."""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        picture = client.get(url).json()
+        if picture["ready"]:
+            return picture
+        assert picture["state"] in ("waiting", "preparing"), picture
+        time.sleep(0.1)
+    raise AssertionError("the core picture was never prepared")
+
+
+def test_core_picture_tiles_and_detections(client, synthetic_project):
+    picture = _ready_picture(client, "/api/cores/LIP-1_B-2/6E10/picture")
+    assert (picture["width"], picture["height"]) == (1200, 1200)
+    assert [(lv["cols"], lv["rows"]) for lv in picture["levels"]] == [(3, 3), (2, 2), (1, 1)]  # 1200, 600, 300 px
+    tile = client.get(f"/api/images/cores/LIP-1_B-2/6E10/tiles/0/2_2.jpg?v={picture['version']}")
+    assert tile.status_code == 200 and tile.headers["content-type"] == "image/jpeg" and "immutable" in tile.headers["cache-control"]
+    assert client.get("/api/images/cores/LIP-1_B-2/6E10/tiles/0/3_0.jpg").status_code == 404
+    assert client.get("/api/images/cores/LIP-1_B-2/6E10/tiles/1/0_0_dab.png").headers["content-type"] == "image/png"
+    assert (synthetic_project / "data" / "cache" / "thumbs" / "LIP-1_B-2_6E10_base.jpg").exists()  # made on the way
+    found = client.get("/api/cores/LIP-1_B-2/6E10/objects").json()
+    assert found["status"] == "done" and len(found["rows"]) == 8 and found["columns"][:2] == ["x", "y"]
+    assert found["tiles"] == [[300, 300, 512, 512]]
+    assert client.get("/api/cores/LIP-1_B-2/NeuN/objects").json() == {"status": "not_run", "tiles_done": 0, "tiles_total": 1, "columns": found["columns"], "rows": [], "tiles": [[300, 300, 512, 512]]}
+
+
+def test_cohort_lists_tmas_and_grid_without_pipeline_outputs(client):
+    assert client.get("/api/cohort").json() == {"tmas": [{"tma": "1", "cores": 1, "stains": ["6E10", "AT8", "NeuN"]}], "stains": ["6E10", "AT8", "NeuN"]}
+    grid = client.get("/api/tmas/1/grid?stain=6E10").json()
+    assert grid["columns"] == ["B"] and grid["rows"] == [2] and grid["detection"] == {"done": 1, "total": 1}
+    cell = grid["cells"][0]
+    assert cell["core_id"] == "LIP-1_B-2" and cell["detection"] == "done" and cell["disease_group"] == "AD"
+    deadline = time.monotonic() + 30
+    while not client.get("/api/tmas/1/grid?stain=6E10").json()["cells"][0]["thumb"]:  # queued, then made in the background
+        assert time.monotonic() < deadline
+        time.sleep(0.1)
+    assert client.get("/api/images/cores/LIP-1_B-2/6E10.jpg?size=256").status_code == 200
+    detail = client.get("/api/cores/LIP-1_B-2").json()
+    assert detail["neighbours"] == {"previous": None, "next": None} and detail["images"][0]["stain"] == "6E10"
 
 
 def test_tokens_for_a_web_app_served_elsewhere(client):

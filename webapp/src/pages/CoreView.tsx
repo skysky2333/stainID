@@ -1,124 +1,252 @@
-import { useState } from 'react'
-import { Link, useParams, useSearchParams } from 'react-router-dom'
-import type { CoreDetail, FieldObject } from '../api'
+import { useEffect, useMemo, useState } from 'react'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import type { CoreDetail } from '../api'
 import { apiUrl, coreThumb, enc } from '../api'
-import { ErrorNote, GroupBadge, PageHead, fmt } from '../components'
+import { ErrorNote, GroupBadge, Loaded, Loading, PageHead, Progress, fmt } from '../components'
+import type { Mark, Pyramid, ViewTarget } from '../deepzoom'
+import { DeepZoom } from '../deepzoom'
 import { useFetch, useStored } from '../hooks'
-import { CLASS_STYLE, RASTER_LAYERS, ZoomViewer } from '../viewer'
+import { useProject } from '../project'
+import { Advanced } from '../setup/parts'
+import { CLASS_STYLE, RASTER_LAYERS } from '../viewer'
 
-const SIZES: [number, string][] = [[800, 'small (220 µm)'], [1600, 'medium (440 µm)'], [2400, 'large (660 µm)']]
-interface Region { x0: number; y0: number; size: number; objects: FieldObject[] }
+interface CoreInfo extends CoreDetail {
+  images: (CoreDetail['images'][number] & { pixel_width_um?: number })[]
+  neighbours: { previous: string | null; next: string | null }
+}
+type PictureState = ({ ready: true } & Pyramid) | { ready: false; state: 'waiting' | 'preparing' | 'failed'; ahead?: number; error?: string; thumb_size: number | null }
+interface CoreObjects { status: 'done' | 'partial' | 'not_run'; tiles_done: number; tiles_total: number; columns: string[]; rows: (string | number | null)[][]; tiles: number[][] }
+interface Found { index: number; x: number; y: number; r: number; cls: string; p: number | null; area: number | null }
+
+const LAYER_DEFAULTS = { objects: true, rejected: false, dab: false, tiles: false, fields: true }
+type Layers = typeof LAYER_DEFAULTS
+const FIELD_COLOR = '#ffd21f'
+const TILE_COLOR = 'rgb(30 30 30 / 55%)'
 
 export default function CoreView() {
   const { coreId = '' } = useParams()
   const [params, setParams] = useSearchParams()
-  const core = useFetch<CoreDetail>(`/api/cores/${coreId}`)
-  const stains = (core.data?.images ?? []).map((i) => i.stain).sort()
-  const stain = params.get('stain') && stains.includes(params.get('stain')!) ? params.get('stain')! : stains[0]
-  const image = core.data?.images.find((i) => i.stain === stain)
-  const [size, setSize] = useStored('stainid.core.region', 1600)
-  const point = params.get('x') && params.get('y') ? { x: Number(params.get('x')), y: Number(params.get('y')) } : null
-  const go = (x: number, y: number) => setParams({ stain: stain ?? '', x: String(Math.round(x)), y: String(Math.round(y)) })
+  const navigate = useNavigate()
+  const { tmaName } = useProject()
+  const core = useFetch<CoreInfo>(`/api/cores/${enc(coreId)}`)
+  const info = core.data?.core_id === coreId ? core.data : null
+  const stains = (info?.images ?? []).map((i) => i.stain)
+  const asked = params.get('stain')
+  const stain = asked && stains.includes(asked) ? asked : stains[0]
+  const back = info ? `/cohort?tma=${enc(info.tma)}${stain ? `&stain=${enc(stain)}` : ''}` : '/cohort'
+  const open = (id: string | null) => id && navigate(`/cores/${enc(id)}${stain ? `?stain=${enc(stain)}` : ''}`)
 
   return (
     <>
-      <PageHead title={coreId} subtitle={core.data ? <span className="row"><GroupBadge group={core.data.disease_group} />
-        donor {core.data.donor_id ?? '—'} · {core.data.region ?? '—'} · replicate {core.data.technical_replicate ?? '—'} · <Link to="/cohort">back to cohort</Link></span> : null}>
-        <div className="tabs" style={{ marginBottom: 0 }}>
-          {stains.map((s) => <button key={s} className={`tab${s === stain ? ' active' : ''}`}
-            onClick={() => setParams({ stain: s, ...(point ? { x: String(point.x), y: String(point.y) } : {}) })}>{s}</button>)}
-        </div>
+      <Link to={back} className="back-link">← All cores{info ? ` of ${tmaName(info.tma)}` : ''}</Link>
+      <PageHead title={info ? `${tmaName(info.tma)} · ${info.core_label}` : coreId}
+        subtitle={info ? <span className="row core-facts"><GroupBadge group={info.disease_group} />
+          {info.donor_id ? <span>donor {info.donor_id}</span> : <span>control tissue</span>}
+          {info.region && <span>{info.region}</span>}{info.technical_replicate && <span>replicate {info.technical_replicate}</span>}</span> : 'Loading the core…'}>
+        {info && <span className="row">
+          <button className="btn" disabled={!info.neighbours.previous} onClick={() => open(info.neighbours.previous)} title="The core before this one on the TMA">← Previous core</button>
+          <button className="btn" disabled={!info.neighbours.next} onClick={() => open(info.neighbours.next)} title="The core after this one on the TMA">Next core →</button>
+        </span>}
       </PageHead>
-      <ErrorNote error={core.error} />
-      {core.data && stain && image && (
-        <div className="grid" style={{ gridTemplateColumns: 'minmax(280px, 380px) 1fr', alignItems: 'start' }}>
-          <div className="card">
-            <h3>Whole core · {stain}</h3>
-            <div style={{ position: 'relative', cursor: 'crosshair' }} onClick={(e) => {
-              const rect = e.currentTarget.getBoundingClientRect()
-              go(((e.clientX - rect.left) / rect.width) * image.native_width_px, ((e.clientY - rect.top) / rect.height) * image.native_height_px)
-            }}>
-              <img src={coreThumb(coreId, stain, 1200)} style={{ width: '100%', display: 'block', borderRadius: 8 }} alt="core" draggable={false} />
-              {point && (
-                <svg viewBox={`0 0 ${image.native_width_px} ${image.native_height_px}`} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
-                  <rect x={point.x - size / 2} y={point.y - size / 2} width={size} height={size} fill="rgb(255 210 30 / 18%)" stroke="#ffd21f" strokeWidth={70} />
-                </svg>
-              )}
+      <Loaded state={core} label="Loading the core…">
+        {() => !info ? <Loading label="Loading the core…" /> : !stain ? (
+          <div className="empty-state">There is no picture of this core yet. Pictures of the cores are made by the <b>Cut out cores</b> step; see <Link to="/workflow">Run</Link>.</div>
+        ) : (
+          <>
+            <div className="tabs" role="tablist" aria-label="Stain">
+              {stains.map((s) => <button key={s} role="tab" aria-selected={s === stain} className={`tab${s === stain ? ' active' : ''}`}
+                onClick={() => setParams({ stain: s }, { replace: true })}>{s}</button>)}
             </div>
-            <p className="muted small">Click anywhere on the core to see that spot at full resolution.</p>
-            <label className="field">Preview size<select value={size} onChange={(e) => setSize(Number(e.target.value))}>
-              {SIZES.map(([v, t]) => <option key={v} value={v}>{t}</option>)}</select></label>
-          </div>
-          {point ? <RegionViewer key={`${stain}-${point.x}-${point.y}-${size}`} coreId={coreId} stain={stain} x={point.x} y={point.y} size={size} onMove={go} />
-            : <div className="card"><p className="muted">Click a spot on the core on the left to open it here.</p></div>}
-        </div>
-      )}
+            <CoreImage key={`${coreId}-${stain}`} core={info} stain={stain} start={params.get('x') && params.get('y') ? { x: Number(params.get('x')), y: Number(params.get('y')) } : null} />
+          </>
+        )}
+      </Loaded>
     </>
   )
 }
 
-function RegionViewer({ coreId, stain, x, y, size, onMove }: { coreId: string; stain: string; x: number; y: number; size: number; onMove: (x: number, y: number) => void }) {
-  const query = `x=${x}&y=${y}&size=${size}`
-  const region = useFetch<Region>(`/api/cores/${enc(coreId)}/${enc(stain)}/region?${query}`)
-  const [layers, setLayers] = useStored<Record<string, boolean>>('stainid.core.layers', { objects: true, rejected: false, dab: false })
+/** One stain of one core: the zoomable picture with the detections on top, and what is shown beside it. */
+function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; start: { x: number; y: number } | null }) {
+  const base = `/api/cores/${enc(core.core_id)}/${enc(stain)}`
+  const [poll, setPoll] = useState(true)
+  const picture = useFetch<PictureState>(`${base}/picture`, poll ? 1500 : undefined)
+  const found = useFetch<CoreObjects>(`${base}/objects`)
+  const [layers, setLayers] = useStored<Layers>('stainid.core.layers.v2', LAYER_DEFAULTS)
   const [selected, setSelected] = useState<number | null>(null)
-  const [focus, setFocus] = useState<{ x: number; y: number; key: number } | null>(null)
-  const found = (region.data?.objects ?? []).map((o, i) => ({ ...o, index: i }))
-  const visible = found.filter((o) => layers.rejected || o.model_class !== 'rejected')
-  const classes = Array.from(new Set(found.map((o) => o.model_class)))
-  const toggle = (key: string) => setLayers({ ...layers, [key]: !layers[key] })
-  const step = (dx: number, dy: number) => region.data && onMove(region.data.x0 + region.data.size / 2 + dx * region.data.size / 2, region.data.y0 + region.data.size / 2 + dy * region.data.size / 2)
+  const [target, setTarget] = useState<ViewTarget | null>(start ? { ...start, scale: 0.5, key: 0 } : null)
+  const image = core.images.find((i) => i.stain === stain)
+  const ready = picture.data?.ready ? picture.data : null
+  const settled = !!ready || (picture.data && !picture.data.ready && picture.data.state === 'failed')
+  useEffect(() => { if (settled) setPoll(false) }, [settled])
+
+  const objects = useMemo<Found[]>(() => {
+    const data = found.data
+    if (!data) return []
+    const col = Object.fromEntries(data.columns.map((c, i) => [c, i]))
+    return data.rows.map((r, index) => ({ index, x: Number(r[col.x]), y: Number(r[col.y]), r: Number(r[col.radius_px] ?? 6), cls: String(r[col.model_class]),
+      p: r[col.probability] === null ? null : Number(r[col.probability]), area: r[col.area_um2] === null ? null : Number(r[col.area_um2]) }))
+  }, [found.data])
+  const counts = useMemo(() => objects.reduce<Record<string, number>>((acc, o) => ({ ...acc, [o.cls]: (acc[o.cls] ?? 0) + 1 }), {}), [objects])
+  const classes = Object.keys(counts).filter((c) => c !== 'rejected').sort()
+  const drawn = useMemo(() => (layers.objects ? objects.filter((o) => layers.rejected || o.cls !== 'rejected') : []), [objects, layers.objects, layers.rejected])
+  const marks = useMemo<Mark[]>(() => drawn.map((o) => ({ x: o.x, y: o.y, r: o.r, color: CLASS_STYLE[o.cls]?.color ?? '#fff' })), [drawn])
+  const fields = core.fields.filter((f) => f.stain === stain).sort((a, b) => a.selection_order - b.selection_order)
+  const boxes = useMemo<Mark[]>(() => [
+    ...(layers.tiles ? (found.data?.tiles ?? []).map(([x, y, w, h]) => ({ x, y, w, h, color: TILE_COLOR, dashed: true })) : []),
+    ...(layers.fields ? fields.map((f) => ({ x: f.x_px, y: f.y_px, w: f.width_px, h: f.height_px, color: FIELD_COLOR })) : []),
+  ], [layers.tiles, layers.fields, found.data, fields])
+  const toggle = (key: keyof Layers) => setLayers({ ...layers, [key]: !layers[key] })
+  const pick = drawn.find((o) => o.index === selected) ?? null
+  const describe = (i: number) => {
+    const o = drawn[i]
+    return `${CLASS_STYLE[o.cls]?.label ?? o.cls} · ${o.p === null ? '' : `${Math.round(o.p * 100)}% sure · `}${o.area === null ? '' : `${fmt(o.area, 3)} µm²`}`
+  }
+  const go = (x: number, y: number, scale?: number) => setTarget((t) => ({ x, y, scale, key: (t?.key ?? 0) + 1 }))
+  const tileUrl = ready ? (level: number, col: number, row: number, layer?: string) =>
+    apiUrl(`/api/images/cores/${enc(core.core_id)}/${enc(stain)}/tiles/${level}/${col}_${row}${layer ? `_${layer}.png` : '.jpg'}?v=${ready.version}`) : null
 
   return (
-    <div className="grid" style={{ gridTemplateColumns: 'minmax(0, 1fr) 280px', alignItems: 'start' }}>
-      <div>
-        <ZoomViewer src={apiUrl(`/api/images/cores/${enc(coreId)}/${enc(stain)}/region.jpg?${query}`)} focus={focus}
-          layers={layers.dab ? [apiUrl(`/api/images/cores/${enc(coreId)}/${enc(stain)}/region_dab.png?${query}`)] : []}
-          title={<span className="row"><button className="btn small" onClick={() => step(-1, 0)}>←</button><button className="btn small" onClick={() => step(0, -1)}>↑</button>
-            <button className="btn small" onClick={() => step(0, 1)}>↓</button><button className="btn small" onClick={() => step(1, 0)}>→</button>
-            <span className="muted small">{region.data ? `x ${region.data.x0}–${region.data.x0 + region.data.size}, y ${region.data.y0}–${region.data.y0 + region.data.size} px` : 'loading…'}</span></span>}>
-          {(zoom) => layers.objects && visible.map((o) => (
-            <circle key={o.index} cx={o.x} cy={o.y} r={Math.max(8, o.radius_px) + 4} fill="none" stroke={CLASS_STYLE[o.model_class]?.color ?? '#fff'}
-              strokeWidth={(o.index === selected ? 6 : 3) / Math.sqrt(zoom)} style={{ cursor: 'pointer' }} onClick={() => setSelected(o.index)}>
-              <title>{`${CLASS_STYLE[o.model_class]?.label ?? o.model_class} · p=${fmt(o.probability, 2)} · ${fmt(o.area_um2, 3)} µm²`}</title>
-            </circle>
-          ))}
-        </ZoomViewer>
-        <p className="muted small">Scroll to zoom, drag to pan; the arrows move to the neighbouring spot. The first preview of a core takes a few seconds while it is prepared.</p>
-        <ErrorNote error={region.error} />
+    <div className="core-layout">
+      <div className="card core-picture">
+        {ready && tileUrl ? (
+          <DeepZoom pyramid={ready} tileUrl={tileUrl} layers={layers.dab ? ['dab'] : []} marks={marks} boxes={boxes} pixelUm={image?.pixel_width_um}
+            selected={pick ? drawn.indexOf(pick) : null} describe={describe} target={target}
+            onPick={(i) => setSelected(i === null ? null : drawn[i].index)}
+            toolbar={<span className="small muted">Scroll to zoom · drag to move · click an object for details</span>} />
+        ) : (
+          <Preparing core={core} stain={stain} state={picture.data} error={picture.error} />
+        )}
       </div>
-      <div className="grid">
+      <div className="core-side">
         <div className="card">
-          <h3>Show</h3>
-          <label className="layer-toggle"><input type="checkbox" checked={!!layers.objects} onChange={() => toggle('objects')} />AI detections ({visible.length})</label>
-          {classes.map((c) => (
-            <div key={c} className="layer-toggle" style={{ paddingLeft: 22 }}>
-              <span className="swatch" style={{ background: CLASS_STYLE[c]?.color ?? '#999' }} />{CLASS_STYLE[c]?.label ?? c}<span className="spacer" /><span className="muted">{found.filter((o) => o.model_class === c).length}</span>
-            </div>
-          ))}
-          {classes.includes('rejected') && <label className="layer-toggle" style={{ paddingLeft: 22 }}><input type="checkbox" checked={!!layers.rejected} onChange={() => toggle('rejected')} />show rejected</label>}
-          <label className="layer-toggle"><input type="checkbox" checked={!!layers.dab} onChange={() => toggle('dab')} /><span className="swatch" style={{ background: RASTER_LAYERS.dab.color }} />{RASTER_LAYERS.dab.label}</label>
-          {region.data && !found.length && <p className="muted small">No detections here yet: detection has only run on the analysed fields so far.</p>}
+          <h3>On the picture</h3>
+          <Detections status={found.data} error={found.error} stain={stain} tma={core.tma} />
+          {found.data && found.data.status !== 'not_run' && (
+            <>
+              <label className="layer-toggle"><input type="checkbox" checked={layers.objects} onChange={() => toggle('objects')} />
+                <b>What the AI found</b><span className="spacer" /><span className="muted">{(objects.length - (counts.rejected ?? 0)).toLocaleString()}</span></label>
+              {classes.map((c) => (
+                <div key={c} className="layer-toggle indent">
+                  <span className="swatch" style={{ background: CLASS_STYLE[c]?.color ?? '#999' }} />{CLASS_STYLE[c]?.label ?? c}<span className="spacer" /><span className="muted">{counts[c].toLocaleString()}</span>
+                </div>
+              ))}
+              {!!counts.rejected && (
+                <label className="layer-toggle indent" title="Candidates the AI looked at and decided were not real objects">
+                  <input type="checkbox" checked={layers.rejected} disabled={!layers.objects} onChange={() => toggle('rejected')} />
+                  <span className="swatch" style={{ background: CLASS_STYLE.rejected.color }} />also show rejected candidates<span className="spacer" /><span className="muted">{counts.rejected.toLocaleString()}</span>
+                </label>
+              )}
+            </>
+          )}
+          <label className="layer-toggle"><input type="checkbox" checked={layers.dab} onChange={() => toggle('dab')} />
+            <span className="swatch" style={{ background: RASTER_LAYERS.dab.color }} />Stained area (brown above this slide’s threshold)</label>
+          {fields.length > 0 && <label className="layer-toggle"><input type="checkbox" checked={layers.fields} onChange={() => toggle('fields')} />
+            <span className="swatch outline" style={{ borderColor: FIELD_COLOR }} />Sampled fields ({fields.length})</label>}
+          {(found.data?.tiles.length ?? 0) > 0 && <label className="layer-toggle"><input type="checkbox" checked={layers.tiles} onChange={() => toggle('tiles')} />
+            <span className="swatch outline dashed" />Analysed tiles ({found.data!.tiles.length})</label>}
         </div>
-        {visible.length > 0 && (
+        {pick && (
           <div className="card">
-            <h3>Objects ({visible.length})</h3>
-            <div className="table-wrap" style={{ maxHeight: 360 }}>
-              <table>
-                <thead><tr><th>class</th><th className="num">p</th><th className="num">µm²</th></tr></thead>
-                <tbody>
-                  {[...visible].sort((a, b) => (b.probability ?? 0) - (a.probability ?? 0)).map((o) => (
-                    <tr key={o.index} className={`clickable${o.index === selected ? ' selected' : ''}`} onClick={() => { setSelected(o.index); setFocus((f) => ({ x: o.x, y: o.y, key: (f?.key ?? 0) + 1 })) }}>
-                      <td><span className="swatch" style={{ background: CLASS_STYLE[o.model_class]?.color }} /> {CLASS_STYLE[o.model_class]?.short ?? o.model_class}</td>
-                      <td className="num">{fmt(o.probability, 2)}</td><td className="num">{fmt(o.area_um2, 3)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <h3>Selected object</h3>
+            <p className="row" style={{ margin: '0 0 6px' }}><span className="swatch" style={{ background: CLASS_STYLE[pick.cls]?.color }} /><b>{CLASS_STYLE[pick.cls]?.label ?? pick.cls}</b></p>
+            <dl className="facts">
+              {pick.p !== null && <><dt>AI confidence</dt><dd>{Math.round(pick.p * 100)}%</dd></>}
+              {pick.area !== null && <><dt>Area</dt><dd>{fmt(pick.area, 3)} µm²</dd></>}
+              <dt>Position</dt><dd>{Math.round(pick.x).toLocaleString()}, {Math.round(pick.y).toLocaleString()} px</dd>
+            </dl>
+            <div className="row"><button className="btn small" onClick={() => go(pick.x, pick.y, 1)}>Zoom to it</button>
+              <button className="btn small" onClick={() => setSelected(null)}>Clear</button></div>
+          </div>
+        )}
+        {fields.length > 0 && (
+          <div className="card">
+            <h3>Sampled fields</h3>
+            <p className="muted small" style={{ marginTop: 0 }}>The fixed spots chosen in every core for the field-based measures. Click one to go there.</p>
+            <div className="field-list">
+              {fields.map((f, i) => (
+                <button key={f.tile_id} className="btn small" disabled={!ready} title={f.tile_id}
+                  onClick={() => go(f.x_px + f.width_px / 2, f.y_px + f.height_px / 2, 0.45)}>Field {i + 1}</button>
+              ))}
             </div>
           </div>
         )}
+        <Advanced title="Details">
+          <dl className="facts">
+            <dt>Core</dt><dd><code>{core.core_id}</code></dd>
+            {image && <><dt>Image size</dt><dd>{image.native_width_px.toLocaleString()} × {image.native_height_px.toLocaleString()} px</dd></>}
+            {image?.pixel_width_um && <><dt>Pixel size</dt><dd>{fmt(image.pixel_width_um, 3)} µm</dd></>}
+            {image?.tissue_fraction !== undefined && <><dt>Tissue</dt><dd>{Math.round(image.tissue_fraction * 100)}% of the core{image.tissue_status ? ` (${image.tissue_status})` : ''}</dd></>}
+            {core.sample_region_id && <><dt>Sample</dt><dd><code>{core.sample_region_id}</code></dd></>}
+            {found.data && <><dt>Detection</dt><dd>{found.data.tiles_done} of {found.data.tiles_total} tiles</dd></>}
+          </dl>
+          {drawn.length > 0 && <ObjectList objects={drawn} selected={selected} onPick={(o) => { setSelected(o.index); go(o.x, o.y, 1) }} />}
+        </Advanced>
       </div>
     </div>
+  )
+}
+
+/** While the server prepares the zoomable picture (first view of a core only): the small picture, dimmed, and why. */
+function Preparing({ core, stain, state, error }: { core: CoreInfo; stain: string; state: PictureState | null; error: string | null }) {
+  const failed = error ?? (state && !state.ready && state.state === 'failed' ? state.error ?? 'unknown error' : null)
+  const ahead = state && !state.ready ? state.ahead ?? 0 : 0
+  return (
+    <div className="dz-preparing" style={{ height: 'min(72vh, 760px)' }}>
+      {state && !state.ready && state.thumb_size && <img src={coreThumb(core.core_id, stain, state.thumb_size)} alt="" />}
+      <div className="dz-preparing-note">
+        {failed ? <><b>This picture could not be prepared.</b><ErrorNote error={failed} /></>
+          : !state ? <Loading label="Loading the picture…" />
+          : <Loading label={<span><b>Preparing this core for viewing…</b><br />
+              <span className="small">{ahead ? `${ahead} other picture${ahead === 1 ? '' : 's'} first, then this one. ` : ''}The full scan is read once (about 10 s); after that it opens instantly.</span></span>} />}
+      </div>
+    </div>
+  )
+}
+
+function Detections({ status, error, stain, tma }: { status: CoreObjects | null; error: string | null; stain: string; tma: string }) {
+  const { tmaName } = useProject()
+  if (error) return <ErrorNote error={error} />
+  if (!status) return <Loading inline label="Loading the detections…" />
+  if (status.status === 'done') return null
+  if (status.status === 'partial') {
+    return (
+      <div className="note-box">
+        <b>Detection is part-way through this core.</b> Showing what it has found so far ({status.tiles_done} of {status.tiles_total} tiles).
+        <Progress done={status.tiles_done} total={status.tiles_total} />
+      </div>
+    )
+  }
+  return (
+    <div className="note-box">
+      <b>Not detected yet.</b> The AI has not looked at the {stain} slide of {tmaName(tma)} yet{status.tiles_total ? '' : ' (no tiles were chosen for it)'}, so only the picture is shown.
+      {' '}<Link to="/workflow">See progress on the Run page.</Link>
+    </div>
+  )
+}
+
+function ObjectList({ objects, selected, onPick }: { objects: Found[]; selected: number | null; onPick: (o: Found) => void }) {
+  const [page, setPage] = useState(0)
+  const size = 100
+  const sorted = useMemo(() => [...objects].sort((a, b) => (b.p ?? 0) - (a.p ?? 0)), [objects])
+  const pages = Math.ceil(sorted.length / size)
+  return (
+    <>
+      <div className="row small" style={{ margin: '10px 0 6px' }}><b>All objects ({objects.length.toLocaleString()})</b><span className="spacer" />
+        {pages > 1 && <><button className="btn small" disabled={page === 0} onClick={() => setPage(page - 1)}>‹</button>
+          <span className="muted">{page + 1} / {pages}</span><button className="btn small" disabled={page >= pages - 1} onClick={() => setPage(page + 1)}>›</button></>}</div>
+      <div className="table-wrap" style={{ maxHeight: 320 }}>
+        <table className="compact">
+          <thead><tr><th>Class</th><th className="num">Sure</th><th className="num">µm²</th></tr></thead>
+          <tbody>
+            {sorted.slice(page * size, (page + 1) * size).map((o) => (
+              <tr key={o.index} className={`clickable${o.index === selected ? ' selected' : ''}`} onClick={() => onPick(o)}>
+                <td><span className="swatch" style={{ background: CLASS_STYLE[o.cls]?.color }} /> {CLASS_STYLE[o.cls]?.short ?? o.cls}</td>
+                <td className="num">{o.p === null ? '—' : `${Math.round(o.p * 100)}%`}</td><td className="num">{fmt(o.area, 3)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
   )
 }

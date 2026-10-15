@@ -1,4 +1,4 @@
-"""Server-side image products for the viewer: core thumbnails, field crops, raster overlays and object outlines."""
+"""Server-side image products for the viewer: field crops, raster overlays and object outlines (core pictures: `pyramid`)."""
 from __future__ import annotations
 
 import json
@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
+from stainid.api import pyramid
 from stainid.api.state import ProjectState
 from stainid.imaging.color import rgb_to_hed
 from stainid.imaging.tissue import field_tissue_mask, fold_mask, linear_artifact_mask
@@ -26,15 +27,8 @@ def crop_origin(tile: dict, context_px: int) -> tuple[int, int]:
 
 
 def core_thumbnail(state: ProjectState, core_id: str, stain: str, size: int = 512) -> Path:
-    target = state.cache_dir("thumbs") / f"{core_id}_{stain}_{size}.jpg"
-    if not target.exists():
-        image_path = state.root / state.core_image(core_id, stain)["image_path"]
-        bgr = cv2.imread(str(image_path), cv2.IMREAD_REDUCED_COLOR_8)
-        if bgr is None:
-            raise FileNotFoundError(image_path)
-        scale = size / max(bgr.shape[:2])
-        cv2.imwrite(str(target), cv2.resize(bgr, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA), [cv2.IMWRITE_JPEG_QUALITY, 85])
-    return target
+    """A JPEG of the whole core, at most `size` px across (see `stainid.api.pyramid`)."""
+    return pyramid.thumbnail(state, core_id, stain, size)
 
 
 def field_rgb(state: ProjectState, tile_id: str) -> np.ndarray:
@@ -51,7 +45,7 @@ def field_rgb(state: ProjectState, tile_id: str) -> np.ndarray:
 def _crop_all_fields(state: ProjectState, image_path: str) -> None:
     """Decoding a core image is the slow part, so cut out every field of that image in one pass."""
     context = state.project.context_px
-    with Image.open(state.root / image_path) as image:
+    with pyramid.DECODE, Image.open(state.root / image_path) as image:
         image.load()
         for tile in state.tiles[state.tiles.image_path == image_path].to_dict("records"):
             x0, y0 = crop_origin(tile, context)
@@ -152,60 +146,7 @@ def object_crop(state: ProjectState, stain: str, tile_id: str, x: float, y: floa
     elif pilot.exists():
         crop = crop_with_padding(np.asarray(Image.open(pilot).convert("RGB")), x, y, 2 * half)
     else:
-        with Image.open(state.root / state.core_image(tile_id, stain)["image_path"]) as image:
+        with pyramid.DECODE, Image.open(state.root / state.core_image(tile_id, stain)["image_path"]) as image:
             crop = np.asarray(image.crop((int(x) - half, int(y) - half, int(x) + half, int(y) + half)).convert("RGB"))
     Image.fromarray(crop).save(target, quality=92)
     return crop
-
-
-CORE_TILE = 1024
-
-
-def _core_tiles(state: ProjectState, core_id: str, stain: str) -> Path:
-    """The core image cut once into 1024 px JPEG tiles, so any region can be served without decoding the whole scan."""
-    folder = state.cache_dir("core_tiles") / f"{core_id}_{stain}"
-    if (folder / "size.json").exists():
-        return folder
-    image_path = state.core_image(core_id, stain)["image_path"]
-    with _IMAGE_LOCKS.setdefault(image_path, threading.Lock()):
-        if not (folder / "size.json").exists():
-            folder.mkdir(parents=True, exist_ok=True)
-            with Image.open(state.root / image_path) as image:
-                image = image.convert("RGB")
-                for ty in range(0, image.height, CORE_TILE):
-                    for tx in range(0, image.width, CORE_TILE):
-                        image.crop((tx, ty, min(tx + CORE_TILE, image.width), min(ty + CORE_TILE, image.height))).save(
-                            folder / f"{ty // CORE_TILE}_{tx // CORE_TILE}.jpg", quality=FIELD_JPEG_QUALITY)
-                (folder / "size.json").write_text(json.dumps({"width": image.width, "height": image.height}))
-    return folder
-
-
-def region_box(state: ProjectState, core_id: str, stain: str, x: int, y: int, size: int) -> tuple[int, int, int]:
-    """A size × size box centred near (x, y) in core-image pixels, kept inside the image: (x0, y0, size)."""
-    full = json.loads((_core_tiles(state, core_id, stain) / "size.json").read_text())
-    size = min(size, full["width"], full["height"])
-    return int(min(max(0, x - size // 2), full["width"] - size)), int(min(max(0, y - size // 2), full["height"] - size)), size
-
-
-def core_region(state: ProjectState, core_id: str, stain: str, x0: int, y0: int, size: int) -> np.ndarray:
-    """The full-resolution region at (x0, y0) of a core image, assembled from its tiles."""
-    folder = _core_tiles(state, core_id, stain)
-    out = np.full((size, size, 3), 255, np.uint8)
-    for ty in range(y0 // CORE_TILE, (y0 + size - 1) // CORE_TILE + 1):
-        for tx in range(x0 // CORE_TILE, (x0 + size - 1) // CORE_TILE + 1):
-            tile = np.asarray(Image.open(folder / f"{ty}_{tx}.jpg").convert("RGB"))
-            ox, oy = tx * CORE_TILE, ty * CORE_TILE
-            sx0, sy0 = max(x0, ox), max(y0, oy)
-            sx1, sy1 = min(x0 + size, ox + tile.shape[1]), min(y0 + size, oy + tile.shape[0])
-            out[sy0 - y0: sy1 - y0, sx0 - x0: sx1 - x0] = tile[sy0 - oy: sy1 - oy, sx0 - ox: sx1 - ox]
-    return out
-
-
-def region_dab(state: ProjectState, core_id: str, stain: str, rgb: np.ndarray) -> np.ndarray:
-    """RGBA overlay of the pixels above the slide's calibrated DAB threshold."""
-    tma = str(state.core_image(core_id, stain)["tma"])
-    cal = state.calibration()
-    threshold = float(cal[(cal.tma == tma) & (cal.stain == stain)].threshold_dab_od.iloc[0])
-    rgba = np.zeros((*rgb.shape[:2], 4), np.uint8)
-    rgba[np.maximum(rgb_to_hed(rgb)[..., 2], 0) >= threshold] = (255, 40, 40, 120)
-    return rgba

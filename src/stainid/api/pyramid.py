@@ -1,0 +1,328 @@
+"""Core pictures for the viewer, without ever sending (or re-decoding) a whole core image.
+
+A core image is a ~16 000 px PNG (about 750 MB once decoded) that may sit on a slow drive. The first time someone opens
+a core, its image is decoded once and cut into a deep-zoom pyramid: 512 px JPEG tiles at full resolution, half, quarter …
+down to a single tile, packed into one file per core image (`data/cache/core_pyramids/<core>_<stain>.tiles`, with a
+`.json` index). From then on the browser asks only for the few tiles it shows, at the resolution of the screen. The core
+grid uses small thumbnails made from a reduced decode (`data/cache/thumbs`). Both are rebuilt when the image file
+changes (its modification time and size are stored with them); the source images are only ever read.
+
+Decoding is the memory-hungry part, so it runs on one background thread, one image at a time (`DECODE` also guards
+the few decodes made while a request waits). Pages ask for a picture, get "waiting"/"preparing", and ask again; work
+that nobody has asked about for a while (the page was closed) is dropped from the queue.
+"""
+from __future__ import annotations
+
+import json
+import math
+import os
+import threading
+import time
+from collections import OrderedDict
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+from stainid.api.state import ProjectState
+from stainid.imaging.color import rgb_to_hed
+
+TILE = 512
+JPEG_QUALITY = 85
+THUMB_BASE = 2048  # the stored thumbnail every smaller size is made from
+STALE_SECONDS = 45  # queued work nobody asked about for this long is dropped
+DECODE = threading.Semaphore(1)  # whole core images decoded at once, across all projects (one is ~750 MB)
+
+
+# ---------------------------------------------------------------- the background queue
+
+@dataclass
+class _Task:
+    key: str
+    priority: int  # 0 = someone is looking at this core, 1 = a thumbnail for the grid
+    run: Callable[[], None]
+    asked: float = field(default_factory=time.monotonic)
+    queued: float = field(default_factory=time.monotonic)
+    running: bool = False
+
+
+_TASKS: dict[str, _Task] = {}
+_FAILED: dict[str, tuple[str, float]] = {}  # key -> (message, when): reported, and retried after a minute
+_COND = threading.Condition()
+_WORKER: threading.Thread | None = None
+
+
+def _next_task() -> _Task:
+    with _COND:
+        while True:
+            now = time.monotonic()
+            for key in [k for k, t in _TASKS.items() if not t.running and now - t.asked > STALE_SECONDS]:
+                del _TASKS[key]
+            waiting = [t for t in _TASKS.values() if not t.running]
+            if waiting:
+                task = min(waiting, key=lambda t: (t.priority, t.queued))
+                task.running = True
+                return task
+            _COND.wait(timeout=10)
+
+
+def _work() -> None:
+    while True:
+        task = _next_task()
+        try:
+            task.run()
+            _FAILED.pop(task.key, None)
+        except Exception as error:  # noqa: BLE001 - reported to the page that asked
+            _FAILED[task.key] = (f"{type(error).__name__}: {error}", time.monotonic())
+        finally:
+            with _COND:
+                _TASKS.pop(task.key, None)
+
+
+def _ask(key: str, priority: int, run: Callable[[], None]) -> dict:
+    """Queue `run` under `key` (or note that someone still wants it). Returns where it stands."""
+    global _WORKER
+    with _COND:
+        failed = _FAILED.get(key)
+        if failed and time.monotonic() - failed[1] < 60:
+            return {"state": "failed", "error": failed[0]}
+        task = _TASKS.get(key)
+        if task is None:
+            task = _TASKS[key] = _Task(key, priority, run)
+        task.asked = time.monotonic()
+        task.priority = min(task.priority, priority)
+        if _WORKER is None or not _WORKER.is_alive():
+            _WORKER = threading.Thread(target=_work, name="stainid-pictures", daemon=True)
+            _WORKER.start()
+        _COND.notify_all()
+        if task.running:
+            return {"state": "preparing", "ahead": 0}
+        ahead = sum(1 for t in _TASKS.values() if t is not task and (t.running or (t.priority, t.queued) < (task.priority, task.queued)))
+        return {"state": "waiting" if ahead else "preparing", "ahead": ahead}
+
+
+# ---------------------------------------------------------------- files
+
+def _source(state: ProjectState, core_id: str, stain: str) -> Path:
+    return state.root / state.core_image(core_id, stain)["image_path"]
+
+
+def _stamp(path: Path) -> dict:
+    stat = path.stat()
+    return {"source_mtime_ns": stat.st_mtime_ns, "source_size": stat.st_size}
+
+
+def _fresh(path: Path, source: Path) -> bool:
+    """A cached picture made from the current version of its source image."""
+    try:
+        return path.stat().st_mtime >= source.stat().st_mtime
+    except FileNotFoundError:
+        return False
+
+
+def _write_atomic(path: Path, data: bytes) -> None:
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_bytes(data)
+    os.replace(temporary, path)
+
+
+def _jpeg(bgr: np.ndarray, quality: int = JPEG_QUALITY) -> bytes:
+    ok, encoded = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, quality])
+    if not ok:
+        raise ValueError("could not encode a JPEG")
+    return encoded.tobytes()
+
+
+def _shrink(bgr: np.ndarray, size: int) -> np.ndarray:
+    scale = size / max(bgr.shape[:2])
+    return bgr if scale >= 1 else cv2.resize(bgr, (max(1, round(bgr.shape[1] * scale)), max(1, round(bgr.shape[0] * scale))), interpolation=cv2.INTER_AREA)
+
+
+def _read(source: Path, flag: int = cv2.IMREAD_COLOR) -> np.ndarray:
+    with DECODE:
+        bgr = cv2.imread(str(source), flag)
+    if bgr is None:
+        raise FileNotFoundError(f"could not read {source}")
+    return bgr
+
+
+# ---------------------------------------------------------------- the pyramid
+
+def _pyramid_paths(state: ProjectState, core_id: str, stain: str) -> tuple[Path, Path]:
+    folder = state.cache_dir("core_pyramids")
+    return folder / f"{core_id}_{stain}.tiles", folder / f"{core_id}_{stain}.json"
+
+
+_INDEXES: OrderedDict[str, tuple[int, dict]] = OrderedDict()  # index path -> (its mtime, contents); a few dozen kept
+
+
+def _load_index(path: Path) -> dict | None:
+    try:
+        mtime = path.stat().st_mtime_ns
+    except FileNotFoundError:
+        return None
+    cached = _INDEXES.get(str(path))
+    if cached and cached[0] == mtime:
+        _INDEXES.move_to_end(str(path))
+        return cached[1]
+    index = json.loads(path.read_text())
+    _INDEXES[str(path)] = (mtime, index)
+    while len(_INDEXES) > 48:
+        _INDEXES.popitem(last=False)
+    return index
+
+
+def _index(state: ProjectState, core_id: str, stain: str, check_source: bool = True) -> dict | None:
+    """The pyramid of this core image if it is ready and made from the current image file, else None."""
+    _, index_path = _pyramid_paths(state, core_id, stain)
+    index = _load_index(index_path)
+    if index is None:
+        return None
+    if check_source and {k: index.get(k) for k in ("source_mtime_ns", "source_size")} != _stamp(_source(state, core_id, stain)):
+        return None
+    return index
+
+
+def build_pyramid(source: Path, pack: Path, index_path: Path, thumb: Path | None = None) -> dict:
+    """Decode `source` once and write every level of its tile pyramid into `pack` (+ `index_path`), and the grid
+    thumbnail base to `thumb` on the way."""
+    stamp = _stamp(source)
+    level = _read(source)
+    levels = []
+    temporary = pack.with_name(pack.name + ".tmp")
+    with temporary.open("wb") as out:
+        while True:
+            height, width = level.shape[:2]
+            cols, rows = math.ceil(width / TILE), math.ceil(height / TILE)
+            tiles = []
+            for row in range(rows):
+                for col in range(cols):
+                    data = _jpeg(level[row * TILE:(row + 1) * TILE, col * TILE:(col + 1) * TILE])
+                    tiles.append([out.tell(), len(data)])
+                    out.write(data)
+            levels.append({"width": width, "height": height, "cols": cols, "rows": rows, "tiles": tiles})
+            if thumb is not None and max(width, height) <= THUMB_BASE and not _fresh(thumb, source):
+                _write_atomic(thumb, _jpeg(level, 90))
+            if max(width, height) <= TILE:
+                break
+            level = cv2.resize(level, ((width + 1) // 2, (height + 1) // 2), interpolation=cv2.INTER_AREA)
+    os.replace(temporary, pack)
+    index = {"width": levels[0]["width"], "height": levels[0]["height"], "tile": TILE, "levels": levels, **stamp}
+    _write_atomic(index_path, json.dumps(index).encode())
+    return index
+
+
+def picture(state: ProjectState, core_id: str, stain: str, prepare: bool = True) -> dict:
+    """What the viewer needs to show a core image: its pyramid (levels from full resolution down), or how far its
+    preparation has got (and it is queued unless `prepare` is False)."""
+    index = _index(state, core_id, stain)
+    if index is not None:
+        return {"ready": True, "width": index["width"], "height": index["height"], "tile": index["tile"],
+                "version": str(index["source_mtime_ns"]),
+                "levels": [{k: level[k] for k in ("width", "height", "cols", "rows")} for level in index["levels"]]}
+    source = _source(state, core_id, stain)
+    if not source.exists():
+        raise FileNotFoundError(f"the image of {core_id} {stain} is missing: {state.project.relative(source)}")
+    pack, index_path = _pyramid_paths(state, core_id, stain)
+    thumb = _thumb_base(state, core_id, stain)
+    status = _ask(str(pack), 0, lambda: build_pyramid(source, pack, index_path, thumb)) if prepare else {"state": "not_started"}
+    # a picture to show meanwhile, of a size that is already made (asking for another would decode the image again)
+    thumb_size = 1024 if _fresh(thumb, source) else next((n for n in (512, 256) if _fresh(_thumb_sized(state, core_id, stain, n), source)), None)
+    return {"ready": False, **status, "thumb_size": thumb_size}
+
+
+def tile(state: ProjectState, core_id: str, stain: str, level: int, col: int, row: int) -> bytes:
+    """One JPEG tile of the pyramid (KeyError when there is no such tile or the pyramid is not ready)."""
+    index = _index(state, core_id, stain, check_source=False)
+    if index is None or not 0 <= level < len(index["levels"]):
+        raise KeyError(f"no level {level} for {core_id} {stain}")
+    info = index["levels"][level]
+    if not (0 <= col < info["cols"] and 0 <= row < info["rows"]):
+        raise KeyError(f"no tile {col},{row} on level {level}")
+    offset, length = info["tiles"][row * info["cols"] + col]
+    pack, _ = _pyramid_paths(state, core_id, stain)
+    with pack.open("rb") as handle:
+        handle.seek(offset)
+        return handle.read(length)
+
+
+_DAB_TILES: OrderedDict[tuple, bytes] = OrderedDict()
+_DAB_BYTES = 24 * 2**20  # memory kept for rendered DAB tiles
+
+
+def dab_tile(state: ProjectState, core_id: str, stain: str, level: int, col: int, row: int) -> bytes:
+    """A transparent PNG over one tile: the pixels darker in DAB than the slide's calibrated threshold."""
+    index = _index(state, core_id, stain, check_source=False) or {}
+    key = (str(state.root), core_id, stain, index.get("source_mtime_ns"), level, col, row)
+    if key in _DAB_TILES:
+        _DAB_TILES.move_to_end(key)
+        return _DAB_TILES[key]
+    tma = str(state.core_image(core_id, stain)["tma"])
+    cal = state.calibration()
+    match = cal[(cal.tma == tma) & (cal.stain == stain)] if not cal.empty else cal
+    if match.empty:
+        raise KeyError(f"no stain threshold for {tma} {stain} yet")
+    threshold = float(match.threshold_dab_od.iloc[0])
+    bgr = cv2.imdecode(np.frombuffer(tile(state, core_id, stain, level, col, row), np.uint8), cv2.IMREAD_COLOR)
+    mask = np.maximum(rgb_to_hed(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))[..., 2], 0) >= threshold
+    bgra = np.zeros((*mask.shape, 4), np.uint8)
+    bgra[mask] = (40, 40, 255, 130)
+    ok, encoded = cv2.imencode(".png", bgra)
+    data = encoded.tobytes()
+    _DAB_TILES[key] = data
+    while sum(map(len, _DAB_TILES.values())) > _DAB_BYTES:
+        _DAB_TILES.popitem(last=False)
+    return data
+
+
+# ---------------------------------------------------------------- thumbnails
+
+def _thumb_base(state: ProjectState, core_id: str, stain: str) -> Path:
+    return state.cache_dir("thumbs") / f"{core_id}_{stain}_base.jpg"
+
+
+def _thumb_sized(state: ProjectState, core_id: str, stain: str, size: int) -> Path:
+    return state.cache_dir("thumbs") / f"{core_id}_{stain}_{size}.jpg"
+
+
+def _make_base(state: ProjectState, core_id: str, stain: str) -> Path:
+    """The thumbnail base, from the pyramid when there is one, else from a reduced decode of the image."""
+    source, base = _source(state, core_id, stain), _thumb_base(state, core_id, stain)
+    if _fresh(base, source):
+        return base
+    index = _index(state, core_id, stain)
+    small = next((i for i, level in enumerate(index["levels"]) if max(level["width"], level["height"]) <= THUMB_BASE), None) if index else None
+    if small is not None:
+        info = index["levels"][small]
+        canvas = np.zeros((info["height"], info["width"], 3), np.uint8)
+        for row in range(info["rows"]):
+            for col in range(info["cols"]):
+                part = cv2.imdecode(np.frombuffer(tile(state, core_id, stain, small, col, row), np.uint8), cv2.IMREAD_COLOR)
+                canvas[row * TILE:row * TILE + part.shape[0], col * TILE:col * TILE + part.shape[1]] = part
+        bgr = canvas
+    else:
+        bgr = _shrink(_read(source, cv2.IMREAD_REDUCED_COLOR_4), THUMB_BASE)
+    _write_atomic(base, _jpeg(bgr, 90))
+    return base
+
+
+def thumbnail_ready(state: ProjectState, core_id: str, stain: str, size: int) -> bool:
+    source = _source(state, core_id, stain)
+    return _fresh(_thumb_sized(state, core_id, stain, size), source) or _fresh(_thumb_base(state, core_id, stain), source)
+
+
+def prepare_thumbnail(state: ProjectState, core_id: str, stain: str) -> dict:
+    """Queue the grid thumbnail of a core image (a background decode)."""
+    return _ask(str(_thumb_base(state, core_id, stain)), 1, lambda: _make_base(state, core_id, stain))
+
+
+def thumbnail(state: ProjectState, core_id: str, stain: str, size: int) -> Path:
+    """A JPEG of the whole core at most `size` px across (made now if need be: this can take a few seconds)."""
+    source = _source(state, core_id, stain)
+    target = _thumb_sized(state, core_id, stain, size)
+    if not _fresh(target, source):
+        base = cv2.imread(str(_make_base(state, core_id, stain)), cv2.IMREAD_COLOR)
+        _write_atomic(target, _jpeg(_shrink(base, size), 85))
+    return target

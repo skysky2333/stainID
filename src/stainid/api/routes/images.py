@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import cv2
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, Response
 
-from stainid.api import render
+from stainid.api import pyramid, render
 from stainid.api.state import get_state
-from stainid.api.util import records
-from stainid.outputs import objects
 
 router = APIRouter(tags=["images"])
 CACHE = {"Cache-Control": "public, max-age=86400"}
@@ -17,7 +14,7 @@ OVERLAYS = {"exclusions": render.exclusion_overlay, "dab": render.dab_overlay, "
 @router.get("/images/cores/{core_id}/{stain}.jpg")
 def core_thumbnail(core_id: str, stain: str, size: int = 512) -> FileResponse:
     try:
-        return FileResponse(render.core_thumbnail(get_state(), core_id, stain, min(size, 2048)), headers=CACHE)
+        return FileResponse(render.core_thumbnail(get_state(), core_id, stain, max(32, min(size, pyramid.THUMB_BASE))), headers=CACHE)
     except (KeyError, FileNotFoundError) as error:
         raise HTTPException(404, str(error))
 
@@ -42,42 +39,32 @@ def outlines(tile_id: str) -> list[dict]:
     return render.mask_outlines(get_state(), tile_id)
 
 
-def _box(core_id: str, stain: str, x: int, y: int, size: int) -> tuple[int, int, int]:
+IMMUTABLE = {"Cache-Control": "public, max-age=31536000, immutable"}  # tile addresses carry the image version (?v=)
+
+
+@router.get("/cores/{core_id}/{stain}/picture")
+def core_picture(core_id: str, stain: str) -> dict:
+    """The deep-zoom levels of a core image once it is prepared; until then where its preparation stands (asking
+    again keeps it queued)."""
     try:
-        return render.region_box(get_state(), core_id, stain, x, y, min(size, 3000))
+        return pyramid.picture(get_state(), core_id, stain)
+    except (KeyError, FileNotFoundError) as error:
+        raise HTTPException(404, str(error).strip("'"))
+
+
+@router.get("/images/cores/{core_id}/{stain}/tiles/{level}/{col}_{row}.jpg")
+def core_tile(core_id: str, stain: str, level: int, col: int, row: int, v: str = "") -> Response:
+    try:
+        data = pyramid.tile(get_state(), core_id, stain, level, col, row)
     except KeyError as error:
-        raise HTTPException(404, str(error))
+        raise HTTPException(404, str(error).strip("'"))
+    return Response(data, media_type="image/jpeg", headers=IMMUTABLE if v else CACHE)
 
 
-@router.get("/images/cores/{core_id}/{stain}/region.jpg")
-def core_region(core_id: str, stain: str, x: int, y: int, size: int = 1600) -> Response:
-    x0, y0, size = _box(core_id, stain, x, y, size)
-    rgb = render.core_region(get_state(), core_id, stain, x0, y0, size)
-    ok, encoded = cv2.imencode(".jpg", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 88])
-    return Response(encoded.tobytes(), media_type="image/jpeg", headers=CACHE)
-
-
-@router.get("/images/cores/{core_id}/{stain}/region_dab.png")
-def core_region_dab(core_id: str, stain: str, x: int, y: int, size: int = 1600) -> Response:
-    x0, y0, size = _box(core_id, stain, x, y, size)
-    state = get_state()
-    rgba = render.region_dab(state, core_id, stain, render.core_region(state, core_id, stain, x0, y0, size))
-    ok, encoded = cv2.imencode(".png", cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGRA))
-    return Response(encoded.tobytes(), media_type="image/png", headers=CACHE)
-
-
-@router.get("/cores/{core_id}/{stain}/region")
-def core_region_objects(core_id: str, stain: str, x: int, y: int, size: int = 1600) -> dict:
-    """Where the region lies in the core image, and the detections inside it (region pixel coordinates)."""
-    x0, y0, size = _box(core_id, stain, x, y, size)
-    state = get_state()
-    source = state.analysis_tiles if not state.analysis_tiles.empty else state.tiles
-    tiles = source[(source.core_id == core_id) & (source.stain == stain)]
-    found = objects(state.project, tiles, stain)
-    out = []
-    if not found.empty:
-        origin = {t["tile_id"]: render.crop_origin(t, state.project.context_px) for t in tiles.to_dict("records")}
-        found = found.assign(x=found.x + found.tile_id.map(lambda t: origin[t][0]) - x0, y=found.y + found.tile_id.map(lambda t: origin[t][1]) - y0)
-        found = found[found.x.between(0, size) & found.y.between(0, size)].drop_duplicates(["x", "y"])
-        out = records(found[["x", "y", "radius_px", "model_class", "probability", "area_um2"]])
-    return {"x0": x0, "y0": y0, "size": size, "objects": out}
+@router.get("/images/cores/{core_id}/{stain}/tiles/{level}/{col}_{row}_dab.png")
+def core_tile_dab(core_id: str, stain: str, level: int, col: int, row: int, v: str = "") -> Response:
+    try:
+        data = pyramid.dab_tile(get_state(), core_id, stain, level, col, row)
+    except KeyError as error:
+        raise HTTPException(404, str(error).strip("'"))
+    return Response(data, media_type="image/png", headers=IMMUTABLE if v else CACHE)
