@@ -37,6 +37,15 @@ FAMILY_STAIN = {"amyloid": "6E10", "tau": "AT8", "neun": "NeuN"}
 DONOR_GROUP_COLUMNS = ("disease_group", "diagnosis", "adnc", "group", "cognition")
 
 
+def _number(value) -> float | None:
+    """A positive number, or None for anything else (an empty cell, or a note such as "per image")."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
 def class_choices() -> dict[str, list[str]]:
     """Every class a label can be mapped to, per model family."""
     return {family: [c for c in CLASSES[FAMILY_STAIN[family]] if c != "unsure"] + EXTRA_CLASSES[family] for family in FAMILY_STAIN}
@@ -131,7 +140,7 @@ def stain_entries(package: Package) -> list[dict]:
         others = [chromogens.canonical(o.get("chromogen") if isinstance(o, dict) else o) for o in entry.get("also_on_slide") or []]
         family = entry.get("family") or family_of(entry.get("antibody") or "") or next((family_of(p) for p in parts if family_of(p)), "")
         out.append({"stain": stain, "antibody": entry.get("antibody") or "", "chromogen": chromogens.canonical(entry.get("chromogen")) or "DAB",
-                    "chromogen_written": entry.get("chromogen") or "", "counterstain": entry.get("counterstain") or "hematoxylin",
+                    "chromogen_written": entry.get("chromogen") or "", "counterstain": chromogens.canonical(str(entry.get("counterstain") or "").split("(")[0]) or "hematoxylin",
                     "others": [o for o in others if o], "family": family or "", "images": int(used.get(stain, 0))})
     return out
 
@@ -154,13 +163,13 @@ def preview(path: Path | str) -> dict:
     kinds = Counter(r.get("kind") or "point" for r in annotations)
     labels = Counter(r.get("label") or r.get("stainid_class") or "" for r in annotations)
     files = [image_path(package, r) for r in package.images[:50]]
-    pixel = package.meta.get("pixel_size_um") or next((r.get("pixel_size_um") for r in package.images if r.get("pixel_size_um")), None)
+    pixel = _number(package.meta.get("pixel_size_um")) or next((_number(r.get("pixel_size_um")) for r in package.images if _number(r.get("pixel_size_um"))), None)
     return {"folder": str(package.folder), "id": package.id, "title": package.title, "kind": package.kind,
             "licence": package.meta.get("licence") or package.meta.get("license") or "", "citation": package.meta.get("citation") or "",
             "source": package.meta.get("source") or package.meta.get("source_urls") or "", "doi": package.meta.get("doi") or "",
             "sites": package.meta.get("sites") or package.meta.get("lab") or "", "notes": package.meta.get("notes") or "",
             "images": len(package.images), "donors": len({r.get("donor_id") for r in package.images if r.get("donor_id")}),
-            "donor_rows": len(package.donors), "pixel_size_um": float(pixel) if pixel else None, "stains": stain_entries(package),
+            "donor_rows": len(package.donors), "pixel_size_um": pixel, "stains": stain_entries(package),
             "annotations": len(annotations), "raters": dict(raters), "annotation_kinds": dict(kinds), "labels": dict(labels.most_common()),
             "class_map": default_class_map(package), "classes": class_choices(), "families": FAMILIES,
             "files_found": sum(f.exists() for f in files), "files_checked": len(files),
@@ -177,8 +186,8 @@ def imaging_settings(package: Package, chosen: dict[str, dict] | None = None) ->
                                   **({"others": own.get("others", entry["others"])} if own.get("others", entry["others"]) else {}),
                                   **({"antibody": entry["antibody"]} if entry["antibody"] else {}),
                                   **({"counterstain": entry["counterstain"]} if entry["counterstain"] != "hematoxylin" else {})}
-    pixel = package.meta.get("pixel_size_um")
-    return {"native_pixel_size_um": float(pixel) if pixel else None, "rescale": "on_the_fly" if package.kind == "slides" else "on_import",
+    pixel = _number(package.meta.get("pixel_size_um"))  # a text such as "per image (…)" leaves it to each image
+    return {"native_pixel_size_um": pixel, "rescale": "on_the_fly" if package.kind == "slides" else "on_import",
             "stains": stains}
 
 

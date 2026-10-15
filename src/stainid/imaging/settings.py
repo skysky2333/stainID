@@ -30,10 +30,16 @@ KNOWN_FAMILY = {
 TOLERANCE = 0.03  # images within 3% of the analysis scale are read as they are
 
 
+PREFIXES = (("abeta", "amyloid"), ("aβ", "amyloid"), ("a-beta", "amyloid"), ("amyloid", "amyloid"), ("anti-abeta", "amyloid"),
+            ("ptau", "tau"), ("p-tau", "tau"), ("phospho-tau", "tau"), ("anti-tau", "tau"))
+
+
 def family_of(stain: str) -> str:
-    """The model family stainID guesses for a stain name ("" when it does not know)."""
+    """The model family stainID guesses for a stain name ("" when it does not know): Aβ40, Abeta42 and anti-Abeta 1-16
+    are amyloid, pTau-S202 is tau."""
     key = str(stain).strip().lower()
-    return SUPPORTED_STAINS.get(stain, "") or KNOWN_FAMILY.get(key, "") or KNOWN_FAMILY.get(key.replace(" ", ""), "")
+    known = SUPPORTED_STAINS.get(stain, "") or KNOWN_FAMILY.get(key, "") or KNOWN_FAMILY.get(key.replace(" ", ""), "")
+    return known or next((family for prefix, family in PREFIXES if key.startswith(prefix)), "")
 
 
 def stain_settings(project: Project) -> dict[str, dict]:

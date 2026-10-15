@@ -78,6 +78,8 @@ def regions_with_boxes(root: Path) -> Path:
         images.append({"image_id": f"r{i}", "path": str(raw / f"region{i}.png"), "pixel_size_um": 0.2738, "stain": "NAB228", "donor_id": f"P{i}"})
         annotations += [{"image_id": f"r{i}", "rater": "consensus", "kind": "box", "x": x - 25, "y": y - 25, "x2": x + 25, "y2": y + 25,
                          "label": "plaque"} for x, y, _, _ in spots]
+        annotations += [{"image_id": f"r{i}", "rater": "expert1", "kind": "polygon", "label": "plaque",
+                         "polygon": json_points([(x - 20, y), (x, y - 20), (x + 20, y), (x, y + 20)])} for x, y, _, _ in spots[:2]]
     meta = {"id": "synthetic_boxes", "title": "Synthetic boxes", "image_kind": "regions", "stains": [{"stain": "NAB228", "chromogen": "NovaRed"}],
             "class_map": {"plaque": "plaque"}}
     return _write(root / "package", meta, images, annotations)

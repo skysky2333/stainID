@@ -115,6 +115,14 @@ def image_tiles(project: Project, core: dict, field: int, kind: str) -> list[dic
     return out
 
 
+def _unique(name: str, used: set[str]) -> str:
+    out, n = name, 2
+    while out in used:
+        out, n = f"{name}_{n}", n + 1
+    used.add(out)
+    return out
+
+
 def _groups(project: Project) -> dict[str, str]:
     path = project.input("donor_metadata")
     return {r["donor_id"]: r.get("disease_group", "") for r in read_csv(path)} if path.exists() else {}
@@ -126,6 +134,7 @@ def core_rows(project: Project, log=print) -> tuple[list[dict], list[str]]:
     groups, rows, notes = _groups(project), [], []
     mode = settings.rescale_mode(project)
     replicate: dict[tuple[str, str], int] = defaultdict(int)
+    used: set[str] = set()  # core ids made so far (two image ids may differ only in characters a file name cannot hold)
     images = read_images(project)
     for number, row in enumerate(images, start=1):
         stain = settings.analysis_stain(project, row.get("stain", ""))
@@ -151,7 +160,7 @@ def core_rows(project: Project, log=print) -> tuple[list[dict], list[str]]:
         if not boxes:
             notes.append(f"{name}: no tissue found")
         for index, box in enumerate(boxes, start=1):
-            core_id = core_images.safe_name(name if kind == "images" else f"{name}_R{index:02d}")
+            core_id = _unique(core_images.safe_name(name if kind == "images" else f"{name}_R{index:02d}"), used)
             size = (max(1, round(box[2] * scale)), max(1, round(box[3] * scale)))
             if kind == "images" and _direct(source, scale, recipe):
                 image_path = project.relative(source.path)

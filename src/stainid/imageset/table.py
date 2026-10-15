@@ -38,9 +38,8 @@ def resolve(project: Project, row: dict) -> Path:
 
 
 def image_id(row: dict, taken: set[str]) -> str:
-    """The row's id, or one made from its file name (unique within `taken`)."""
-    base = row.get("image_id") or Path(row["path"]).stem or "image"
-    base = re.sub(r"[^A-Za-z0-9_.-]+", "_", base).strip("_") or "image"
+    """The row's id as written (annotations name images by it), or one made from its file name; unique within `taken`."""
+    base = row.get("image_id") or re.sub(r"[^A-Za-z0-9_.-]+", "_", Path(row["path"]).stem).strip("_") or "image"
     name, n = base, 2
     while name in taken:
         name, n = f"{base}_{n}", n + 1

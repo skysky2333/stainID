@@ -94,7 +94,11 @@ def test_regions_with_boxes_are_read_where_they_lie_and_recoloured(tmp_path):
     dab = rgb_to_hed(rgb)[..., 2]
     assert dab[300, 200] > 5 * dab[600, 600]  # the red deposit reads as brown stain, the tissue around it does not
     placed = annotations.imported(project)
-    assert set(placed.kind) == {"box"} and set(placed.rater) == {"consensus"}  # the package's own consensus is used as it is
+    assert set(placed.rater) == {"consensus", "expert1"} and (placed.rater == "consensus").sum() == 6  # the package's own consensus, as it is
+    assert set(placed.kind[placed.rater == "consensus"]) == {"box"} and set(placed.kind[placed.rater == "expert1"]) == {"polygon"}
+    outlines = store.current(project.output("reviews"))
+    outlines = outlines[(outlines.task == "outline") & (outlines.source == "import: synthetic_boxes expert1")]
+    assert len(outlines) == 4 and all(len(points) == 4 for points in outlines.points)  # the polygons, on the tiles as outlines
     tiles = table(project.analysis_tiles())
     fake_plaques(project.root, tiles, {"r0": [(200.0, 300.0), (500.0, 300.0)], "r1": [(200.0, 450.0), (700.0, 700.0)]}, classes="diffuse")
     rows = {r["rater"]: r for r in scoring.score(project)["rows"]}
@@ -197,6 +201,9 @@ def test_image_list_from_a_folder_and_checks(tmp_path):
     for donor, name in (("case1", "case1_4G8_frontal.png"), ("case1", "case1_AT8.png"), ("case2", "c2 PHF-1.tif")):
         (folder / donor).mkdir(parents=True, exist_ok=True)
         (folder / donor / name).write_bytes(b"")
+    # an image keeps its id as the dataset writes it (its annotations name it so); ids are made only from file names
+    kept = image_table.clean_rows([{"path": "a.png", "image_id": "2s-1-4G8_(AB17-24)_r1"}, {"path": "x/a b.png"}, {"path": "y/a b.png"}])
+    assert [r["image_id"] for r in kept] == ["2s-1-4G8_(AB17-24)_r1", "a_b", "a_b_2"]
     rows = image_table.scan_folder(folder, ["4G8"], slides=False)
     assert [(r["donor_id"], r["stain"]) for r in rows] == [("case1", "4G8"), ("case1", "AT8"), ("case2", "PHF-1")]
     project = save_project(Project(root=tmp_path / "p", config=load_project(tmp_path / "p").config), {"kind": "images"})
@@ -286,3 +293,25 @@ def test_new_study_of_each_kind(client, tmp_path):
     assert client.post("/api/projects/create", json={"path": str(tmp_path / "x"), "kind": "puzzle"}).status_code == 400
     tma = client.post("/api/projects/create", json={"path": str(tmp_path / "tma"), "name": "tma"}).json()
     assert tma["kind"] == "tma" and "dearray" in [s["id"] for s in client.get(f"/api/projects/{tma['id']}/steps").json()]
+
+
+def test_ome_zarr_is_read_level_by_level(tmp_path):
+    from stainid.imaging.sources import available
+
+    if not available()["zarr"]:
+        pytest.skip('zarr does not work in this installation (pip install "stainid[slides]")')
+    import zarr
+
+    rgb = paint(400, 600, [(300.0, 200.0, 30.0, "DAB")])
+    group = zarr.open_group(str(tmp_path / "slide.zarr"), mode="w")
+    group.create_dataset("0", data=np.moveaxis(rgb, -1, 0), chunks=(3, 128, 128))
+    group.create_dataset("1", data=np.moveaxis(rgb[::2, ::2], -1, 0), chunks=(3, 128, 128))
+    axes = [{"name": "c", "type": "channel"}, {"name": "y", "type": "space", "unit": "micrometer"}, {"name": "x", "type": "space", "unit": "micrometer"}]
+    group.attrs["multiscales"] = [{"version": "0.4", "axes": axes, "datasets": [
+        {"path": "0", "coordinateTransformations": [{"type": "scale", "scale": [1, 0.11, 0.11]}]},
+        {"path": "1", "coordinateTransformations": [{"type": "scale", "scale": [1, 0.22, 0.22]}]}]}]
+    source = open_source(tmp_path / "slide.zarr")
+    assert (source.width, source.height, len(source.levels)) == (600, 400, 2) and source.pixel_size_um == pytest.approx(0.11)
+    assert np.array_equal(source.read(250, 150, 100, 100), rgb[150:250, 250:350])
+    reduced = source.region((0, 0, 600, 400), 0.11 / 0.2738)  # to the analysis scale: read from the coarser level
+    assert reduced.shape[:2] == (round(400 * 0.11 / 0.2738), round(600 * 0.11 / 0.2738))
