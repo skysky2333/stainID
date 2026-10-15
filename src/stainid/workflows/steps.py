@@ -5,6 +5,7 @@ The CLI, the background job runner and the web app all read this registry, so a 
 from __future__ import annotations
 
 import json
+import os
 import platform
 import shutil
 import sys
@@ -12,9 +13,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable
 
+from stainid import cache
 from stainid.project import Project
-from stainid.slides.table import read_slides
-from stainid.tables import read_csv
 
 STAINS = ["NeuN", "6E10", "AT8"]
 
@@ -75,8 +75,12 @@ class Step:
         return set(self.needs) | set(self.uses)
 
 
-def _rows(path: Path) -> list[dict[str, str]]:
-    return read_csv(path) if path.exists() else []
+def _rows(path: Path, columns: tuple[str, ...] | None = None) -> list[dict[str, str]]:
+    """A table's rows (shared, read-only: see `stainid.cache`); only `columns` of them for the big tile tables."""
+    return cache.rows(path, columns)
+
+
+TILE_COLUMNS = ("tile_id", "core_id", "tma", "stain")
 
 
 def _state(done: int, total: int, unit: str, note: str = "", outdated: bool = False) -> dict:
@@ -90,11 +94,19 @@ def _made_with_other_model(project: Project, output: str, recorded: Callable[[di
 
 
 def _tiles(project: Project, stains: set[str]) -> list[dict[str, str]]:
-    return [t for t in _rows(project.analysis_tiles()) if t["stain"] in stains]
+    return [t for t in _rows(project.analysis_tiles(), TILE_COLUMNS) if t["stain"] in stains]
+
+
+def _expected(project: Project, stains: set[str], name: Callable[[dict], str]) -> frozenset[str]:
+    """The output file names a step makes for the analysis tiles of these stains (`name` of each tile), kept until the
+    tile table changes. `name` must be a module-level function, so the same names share one entry."""
+    path = project.analysis_tiles()
+    return cache.memo(("expected", str(path), tuple(sorted(stains)), name.__qualname__), [path],
+                      lambda: frozenset(name(t) for t in _tiles(project, stains)))
 
 
 def _whole_core_status(project: Project) -> dict:
-    tiles = _rows(project.input("whole_core_manifest"))
+    tiles = _rows(project.input("whole_core_manifest"), TILE_COLUMNS)
     cores = {(r["core_id"], r["stain"]) for r in tiles}
     return _state(len(tiles), len(tiles), "tiles", f"{len(cores)} core images") if tiles else _state(0, 0, "tiles")
 
@@ -107,13 +119,13 @@ def _column_filled(column: str) -> Callable[[Project], bool]:
 
 
 def _slides_status(project: Project) -> dict:
-    rows = read_slides(project.input("slides_table"))
+    rows = _rows(project.input("slides_table"))
     ready = sum(bool(r["tma"]) and r["stain"] in STAINS for r in rows)
     return _state(ready, len(rows), "slides", "" if rows else "No slides registered yet")
 
 
 def _dearray_status(project: Project) -> dict:
-    slides = {str(Path(s["slide_path"]).resolve()) for s in read_slides(project.input("slides_table"))}
+    slides = {str(Path(s["slide_path"]).resolve()) for s in _rows(project.input("slides_table"))}
     found = {r["slide_path"] for r in _rows(project.input("core_manifest"))}
     return _state(len(slides & found), len(slides), "slides")
 
@@ -126,45 +138,60 @@ def _manifest_status(column: str, unit: str = "core images", only: Callable[[dic
 
 
 def _select_status(project: Project) -> dict:
-    tiles = _rows(project.input("tile_manifest"))
+    tiles = _rows(project.input("tile_manifest"), TILE_COLUMNS)
     cores = {r["core_id"] for r in tiles}
     return _state(len(tiles), len(tiles), "fields", f"{len(cores)} cores") if tiles else _state(0, 0, "fields")
 
 
 def _calibration_status(project: Project) -> dict:
-    wanted = {(t["tma"], t["stain"]) for t in _rows(project.input("tile_manifest"))}
+    wanted = {(t["tma"], t["stain"]) for t in _rows(project.input("tile_manifest"), TILE_COLUMNS)}
     have = {(r["tma"], r["stain"]) for r in _rows(project.input("calibration"))}
     return _state(len(wanted & have), len(wanted), "slides")
 
 
-def _count_files(folder: Path, names: list[str]) -> int:
-    existing = {p.name for p in folder.iterdir()} if folder.exists() else set()
-    return sum(n in existing for n in names)
+def _count_files(folder: Path, names: frozenset[str]) -> int:
+    return len(cache.names(folder) & names)
+
+
+def _nuclei_file(tile: dict) -> str:
+    return f"{tile['tile_id']}.npz"
+
+
+def _neun_file(tile: dict) -> str:
+    return f"{tile['tile_id']}_features.csv"
+
+
+def _field_file(tile: dict) -> str:
+    return f"{tile['core_id']}_{tile['stain']}_features.csv"
+
+
+def _mask_file(tile: dict) -> str:
+    return f"{tile['core_id']}_{tile['stain']}_objects.csv"
 
 
 def _nuclei_status(project: Project) -> dict:
-    tiles = _tiles(project, set(STAINS))
-    return _state(_count_files(project.output("nuclei"), [f"{t['tile_id']}.npz" for t in tiles]), len(tiles), "tiles",
+    names = _expected(project, set(STAINS), _nuclei_file)
+    return _state(_count_files(project.output("nuclei"), names), len(names), "tiles",
                   "NeuN and AT8 detection need these outlines; 6E10 uses them for plaque-niche features")
 
 
 def _neun_status(project: Project) -> dict:
-    tiles = _tiles(project, {"NeuN"})
+    names = _expected(project, {"NeuN"}, _neun_file)
     outdated = _made_with_other_model(project, "neun", lambda r: {"neun": str(Path(r["neun_model_bundle"]).resolve())},
                                       {"neun": str(project.model("neun").resolve())})
-    return _state(_count_files(project.output("neun") / "tiles", [f"{t['tile_id']}_features.csv" for t in tiles]), len(tiles), "fields", outdated=outdated)
+    return _state(_count_files(project.output("neun") / "tiles", names), len(names), "fields", outdated=outdated)
 
 
 def _fields_status(project: Project) -> dict:
-    keys = sorted({f"{t['core_id']}_{t['stain']}_features.csv" for t in _tiles(project, {"6E10", "AT8"})})
+    names = _expected(project, {"6E10", "AT8"}, _field_file)
     outdated = _made_with_other_model(project, "fields", lambda r: r, {k: project.relative(project.model(k)) for k in ("amyloid", "tau")})
-    return _state(_count_files(project.output("fields") / "parts", keys), len(keys), "core images", outdated=outdated)
+    return _state(_count_files(project.output("fields") / "parts", names), len(names), "core images", outdated=outdated)
 
 
 def _masks_status(project: Project) -> dict:
-    keys = {(t["core_id"], t["stain"]) for t in _tiles(project, set(STAINS))}
-    done = sum(_count_files(project.output("masks") / s / "parts", [f"{c}_{s}_objects.csv" for c, st in keys if st == s]) for s in STAINS)
-    return _state(done, len(keys), "core images")
+    per_stain = {s: _expected(project, {s}, _mask_file) for s in STAINS}
+    done = sum(_count_files(project.output("masks") / s / "parts", names) for s, names in per_stain.items())
+    return _state(done, sum(map(len, per_stain.values())), "core images")
 
 
 def _summary_status(project: Project) -> dict:
@@ -177,7 +204,8 @@ def _summary_status(project: Project) -> dict:
 def _labels_status(project: Project) -> dict:
     from stainid.labels import pool
 
-    prepared = {stain: len(pool.prepared(project, stain)) for stain in STAINS}
+    prepared = {stain: len(cache.memo(("prepared", str(pool.folder(project, stain))), [pool.folder(project, stain)],
+                                      lambda stain=stain: pool.prepared(project, stain), folders=True)) for stain in STAINS}
     total = sum(prepared.values())
     return _state(total, total, "fields prepared", " · ".join(f"{s}: {n}" for s, n in prepared.items() if n))
 
@@ -187,10 +215,31 @@ def _trained_status(project: Project) -> dict:
 
     root = project.output("trained_models")
     count = len(list(root.glob("*/bundle.joblib"))) if root.exists() else 0
-    labels = store.current(project.output("reviews"))
-    counts = {stain: store.consensus(labels, stain).positive.value_counts() for stain in STAINS}
-    note = " · ".join(f"{s}: {int(c.get(True, 0))} positive / {int(c.get(False, 0))} negative labels" for s, c in counts.items() if len(c))
+    note = cache.memo(("label counts", str(project.output("reviews"))), [store.log_path(project.output("reviews"))],
+                      lambda: _label_counts(project.output("reviews")))
     return _state(count, count, "trained models", note or "No labels yet. Training needs at least 10 positive and 10 negative labels per stain")
+
+
+def _label_counts(reviews: Path) -> str:
+    from stainid.labels import store
+
+    labels = store.current(reviews)
+    counts = {stain: store.consensus(labels, stain).positive.value_counts() for stain in STAINS}
+    return " · ".join(f"{s}: {int(c.get(True, 0))} positive / {int(c.get(False, 0))} negative labels" for s, c in counts.items() if len(c))
+
+
+def _has_content(path: Path) -> bool:
+    """A file, or a folder with something in it (kept until the folder changes: output folders hold thousands)."""
+    def look() -> bool:
+        if path.is_file():
+            return True
+        try:
+            with os.scandir(path) as entries:
+                return next(entries, None) is not None
+        except OSError:
+            return False
+
+    return cache.memo(("has content", str(path)), [path], look, folders=True)
 
 
 RESOURCES = {r.id: r for r in (
@@ -400,7 +449,7 @@ def depends_on(step: Step) -> list[str]:
 def resource_info(project: Project, resource_id: str) -> dict:
     resource = RESOURCES[resource_id]
     path = resource.path(project)
-    exists = resource.ready(project) if resource.ready else path.exists() and (path.is_file() or any(path.iterdir()))
+    exists = resource.ready(project) if resource.ready else _has_content(path)
     maker = next((s for s in STEPS if resource_id in s.produces), None) if not resource.download else None
     return {"id": resource.id, "label": resource.label, "description": resource.description, "path": project.relative(path), "exists": exists,
             "made_by": {"id": maker.id, "title": maker.title} if maker else None, "download": resource.download,

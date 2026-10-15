@@ -6,6 +6,7 @@ each other. Records are replaced atomically, so a reader never sees a half-writt
 """
 from __future__ import annotations
 
+import functools
 import json
 import os
 import re
@@ -137,11 +138,16 @@ def alive(pid: int | None, since: float | None = None) -> bool:
     return started is None or started <= since + 60
 
 
+@functools.cache
+def _boot_time() -> int:
+    """When the computer started (Linux), read once: /proc/stat is slow to read on machines with many processors."""
+    return next(int(line.split()[1]) for line in Path("/proc/stat").read_text().splitlines() if line.startswith("btime"))
+
+
 def _process_start(pid: int) -> float | None:
     try:
         ticks = int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19])
-        boot = next(int(line.split()[1]) for line in Path("/proc/stat").read_text().splitlines() if line.startswith("btime"))
-        return boot + ticks / os.sysconf("SC_CLK_TCK")
+        return _boot_time() + ticks / os.sysconf("SC_CLK_TCK")
     except (OSError, ValueError, IndexError, StopIteration):
         return None
 

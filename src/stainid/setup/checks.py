@@ -14,6 +14,7 @@ import re
 from collections import Counter, defaultdict
 from pathlib import Path
 
+from stainid import cache
 from stainid.project import Project, save_project
 from stainid.setup.naming import braak, cerad
 from stainid.tables import read_csv, write_csv
@@ -190,13 +191,12 @@ def find_issues(layout: list[dict], donors: list[dict], positions: set[tuple[str
 
 
 def project_issues(project: Project) -> list[dict]:
-    from stainid.slides.table import read_slides
-
-    layout = _rows(project.input("tma_layout"))
-    donors = _rows(project.input("donor_metadata"))
-    manifest = _rows(project.input("core_manifest"))
+    """Everything that does not fit together yet (read from shared, read-only rows: the setup overview polls this)."""
+    layout = cache.rows(project.input("tma_layout"))
+    donors = cache.rows(project.input("donor_metadata"))
+    manifest = cache.rows(project.input("core_manifest"), ("tma", "core_label"))
     positions = {(r["tma"], r["core_label"]) for r in manifest}
-    slide_tmas = {s["tma"] for s in read_slides(project.input("slides_table")) if s.get("tma")}
+    slide_tmas = {s["tma"] for s in cache.rows(project.input("slides_table")) if s.get("tma")}
     return find_issues(layout, donors, positions, slide_tmas, [g["code"] for g in project.config.get("groups") or []])
 
 
