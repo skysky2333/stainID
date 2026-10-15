@@ -15,10 +15,13 @@ interface CoreInfo extends CoreDetail {
   neighbours: { previous: string | null; next: string | null }
 }
 type PictureState = ({ ready: true } & Pyramid) | { ready: false; state: 'waiting' | 'preparing' | 'failed'; ahead?: number; error?: string; thumb_size: number | null }
-interface CoreObjects { status: 'done' | 'partial' | 'not_run'; tiles_done: number; tiles_total: number; columns: string[]; rows: (string | number | null)[][]; tiles: number[][] }
-interface Found { index: number; x: number; y: number; r: number; cls: string; p: number | null; area: number | null }
+interface CoreObjects { status: 'done' | 'partial' | 'not_run'; tiles_done: number; tiles_total: number; columns: string[]; rows: (string | number | null)[][]; tiles: number[][]; outlines: boolean }
+/** Segment Anything outlines: per detection (its exact x, y) the outlined area and polygons, in core-image pixels. */
+interface CoreOutlines { status: 'done' | 'not_made'; columns: string[]; rows: [number, number, number | null, number[][]][] }
+interface Outline { area: number | null; rings: number[][] }
+interface Found { index: number; x: number; y: number; r: number; cls: string; p: number | null; area: number | null; outline?: Outline }
 
-const LAYER_DEFAULTS = { objects: true, rejected: false, dab: false, tiles: false }
+const LAYER_DEFAULTS = { objects: true, rejected: false, outlines: false, dab: false, tiles: false }
 type Layers = typeof LAYER_DEFAULTS
 const TILE_COLOR = 'rgb(30 30 30 / 55%)'
 
@@ -70,7 +73,12 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
   const [poll, setPoll] = useState(true)
   const picture = useFetch<PictureState>(`${base}/picture`, poll ? 1500 : undefined)
   const found = useFetch<CoreObjects>(`${base}/objects`)
-  const [layers, setLayers] = useStored<Layers>('stainid.core.layers.v2', LAYER_DEFAULTS)
+  const [stored, setLayers] = useStored<Layers>('stainid.core.layers.v2', LAYER_DEFAULTS)
+  const layers = { ...LAYER_DEFAULTS, ...stored }
+  const outlinesMade = !!found.data?.outlines
+  const [wantOutlines, setWantOutlines] = useState(false)  // fetched once asked for, kept when the layer is turned off
+  useEffect(() => { if (layers.outlines) setWantOutlines(true) }, [layers.outlines])
+  const shapes = useFetch<CoreOutlines>(wantOutlines && outlinesMade ? `${base}/outlines` : null)
   const [selected, setSelected] = useState<number | null>(null)
   const [target, setTarget] = useState<ViewTarget | null>(start ? { ...start, scale: 0.5, key: 0 } : null)
   const image = core.images.find((i) => i.stain === stain)
@@ -82,20 +90,29 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
     const data = found.data
     if (!data) return []
     const col = Object.fromEntries(data.columns.map((c, i) => [c, i]))
+    const outlines = new Map((shapes.data?.rows ?? []).map(([x, y, area, rings]) => [`${x},${y}`, { area, rings }]))
     return data.rows.map((r, index) => ({ index, x: Number(r[col.x]), y: Number(r[col.y]), r: Number(r[col.radius_px] ?? 6), cls: String(r[col.model_class]),
-      p: r[col.probability] === null ? null : Number(r[col.probability]), area: r[col.area_um2] === null ? null : Number(r[col.area_um2]) }))
-  }, [found.data])
+      p: r[col.probability] === null ? null : Number(r[col.probability]), area: r[col.area_um2] === null ? null : Number(r[col.area_um2]),
+      outline: outlines.get(`${r[col.x]},${r[col.y]}`) }))
+  }, [found.data, shapes.data])
   const counts = useMemo(() => objects.reduce<Record<string, number>>((acc, o) => ({ ...acc, [o.cls]: (acc[o.cls] ?? 0) + 1 }), {}), [objects])
   const classes = Object.keys(counts).filter((c) => c !== 'rejected').sort()
-  const drawn = useMemo(() => (layers.objects ? objects.filter((o) => layers.rejected || o.cls !== 'rejected') : []), [objects, layers.objects, layers.rejected])
-  const marks = useMemo<Mark[]>(() => drawn.map((o) => ({ x: o.x, y: o.y, r: o.r, color: CLASS_STYLE[o.cls]?.color ?? '#fff' })), [drawn])
+  const showOutlines = layers.outlines && outlinesMade && !!shapes.data
+  const drawn = useMemo(() => objects.filter((o) => (layers.rejected || o.cls !== 'rejected') && (layers.objects || (showOutlines && o.outline))),
+    [objects, layers.objects, layers.rejected, showOutlines])
+  // an object with an exact outline shown is drawn by its outline instead of the circle
+  const marks = useMemo<Mark[]>(() => drawn.map((o) => {
+    const outlined = showOutlines && !!o.outline
+    return { x: o.x, y: o.y, r: o.r, color: CLASS_STYLE[o.cls]?.color ?? '#fff', rings: outlined ? o.outline!.rings : undefined, circle: !outlined }
+  }), [drawn, showOutlines])
   const boxes = useMemo<Mark[]>(() => (layers.tiles ? (found.data?.tiles ?? []).map(([x, y, w, h]) => ({ x, y, w, h, color: TILE_COLOR, dashed: true })) : []),
     [layers.tiles, found.data])
   const toggle = (key: keyof Layers) => setLayers({ ...layers, [key]: !layers[key] })
   const pick = drawn.find((o) => o.index === selected) ?? null
   const describe = (i: number) => {
     const o = drawn[i]
-    return `${CLASS_STYLE[o.cls]?.label ?? o.cls} · ${o.p === null ? '' : `${Math.round(o.p * 100)}% sure · `}${o.area === null ? '' : `${fmt(o.area, 3)} µm²`}`
+    return [CLASS_STYLE[o.cls]?.label ?? o.cls, o.p === null ? null : `${Math.round(o.p * 100)}% sure`, o.area === null ? null : `${area(o.area)} µm²`,
+      showOutlines && o.outline?.area != null ? `outlined ${area(o.outline.area)} µm²` : null].filter(Boolean).join(' · ')
   }
   const go = (x: number, y: number, scale?: number) => setTarget((t) => ({ x, y, scale, key: (t?.key ?? 0) + 1 }))
   const tileUrl = ready ? (level: number, col: number, row: number, layer?: string) =>
@@ -132,6 +149,8 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
                   <span className="swatch" style={{ background: CLASS_STYLE.rejected.color }} />also show rejected candidates<span className="spacer" /><span className="muted">{counts.rejected.toLocaleString()}</span>
                 </label>
               )}
+              <OutlinesToggle made={outlinesMade} on={layers.outlines} onToggle={() => toggle('outlines')} state={shapes}
+                count={objects.filter((o) => o.outline).length} />
             </>
           )}
           <label className="layer-toggle"><input type="checkbox" checked={layers.dab} onChange={() => toggle('dab')} />
@@ -145,7 +164,8 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
             <p className="row" style={{ margin: '0 0 6px' }}><span className="swatch" style={{ background: CLASS_STYLE[pick.cls]?.color }} /><b>{CLASS_STYLE[pick.cls]?.label ?? pick.cls}</b></p>
             <dl className="facts">
               {pick.p !== null && <><dt>AI confidence</dt><dd>{Math.round(pick.p * 100)}%</dd></>}
-              {pick.area !== null && <><dt>Area</dt><dd>{fmt(pick.area, 3)} µm²</dd></>}
+              {pick.area !== null && <><dt>Area</dt><dd>{area(pick.area)} µm²</dd></>}
+              {showOutlines && pick.outline?.area != null && <><dt title="The area inside the Segment Anything outline">Outlined area</dt><dd>{area(pick.outline.area)} µm²</dd></>}
               <dt>Position</dt><dd>{Math.round(pick.x).toLocaleString()}, {Math.round(pick.y).toLocaleString()} px</dd>
             </dl>
             <div className="row"><button className="btn small" onClick={() => go(pick.x, pick.y, 1)}>Zoom to it</button>
@@ -183,6 +203,31 @@ function Preparing({ core, stain, state, error }: { core: CoreInfo; stain: strin
       </div>
     </div>
   )
+}
+
+/** The "Exact outlines" layer: off until asked for; while the Outline objects step has not reached this core, why not. */
+function OutlinesToggle({ made, on, onToggle, state, count }: {
+  made: boolean; on: boolean; onToggle: () => void; state: { data: CoreOutlines | null; error: string | null; reload: () => void }; count: number
+}) {
+  const ready = made && state.data?.status !== 'not_made'
+  return (
+    <>
+      <label className="layer-toggle" title="The exact shape of each object, drawn by Segment Anything (the optional Outline objects step)">
+        <input type="checkbox" checked={on && ready} disabled={!ready} onChange={onToggle} />
+        <span className="swatch outline" />Exact outlines (Segment Anything)<span className="spacer" />
+        {on && ready && state.data && <span className="muted">{count.toLocaleString()}</span>}
+      </label>
+      {!ready && <p className="layer-note small">Outlines not made for this core yet. See the <Link to="/workflow#masks">Outline objects</Link> step on the Run page.</p>}
+      {on && ready && !state.data && !state.error && <div className="layer-toggle indent"><Loading inline label="Loading the outlines…" /></div>}
+      {on && ready && state.error && <div className="layer-toggle indent wrap"><ErrorNote error={state.error} />
+        <button className="btn small" onClick={state.reload}>Try again</button></div>}
+    </>
+  )
+}
+
+/** An area in µm², with thousands separators. */
+function area(um2: number) {
+  return um2 >= 100 ? Math.round(um2).toLocaleString() : fmt(um2, 3)
 }
 
 function Detections({ status, error, stain, tma }: { status: CoreObjects | null; error: string | null; stain: string; tma: string }) {
@@ -223,7 +268,7 @@ function ObjectList({ objects, selected, onPick }: { objects: Found[]; selected:
             {sorted.slice(page * size, (page + 1) * size).map((o) => (
               <tr key={o.index} className={`clickable${o.index === selected ? ' selected' : ''}`} onClick={() => onPick(o)}>
                 <td><span className="swatch" style={{ background: CLASS_STYLE[o.cls]?.color }} /> {CLASS_STYLE[o.cls]?.short ?? o.cls}</td>
-                <td className="num">{o.p === null ? '—' : `${Math.round(o.p * 100)}%`}</td><td className="num">{fmt(o.area, 3)}</td>
+                <td className="num">{o.p === null ? '—' : `${Math.round(o.p * 100)}%`}</td><td className="num">{o.area === null ? '—' : area(o.area)}</td>
               </tr>
             ))}
           </tbody>

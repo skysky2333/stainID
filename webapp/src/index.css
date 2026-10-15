@@ -893,3 +893,6 @@ th.num .col-head { justify-items: end; }
 .test-mark { display: inline-block; padding: 0 7px; margin-right: 2px; border-radius: 6px; font-size: 11.5px; font-weight: 650; color: var(--text-secondary); background: var(--surface-0); border: 1px solid var(--border); }
 .test-mark.significant { color: var(--accent); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
 tr.significant-row td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+/* Core viewer: exact outlines layer */
+.layer-toggle.wrap { flex-wrap: wrap; }
+.layer-note { margin: 0 0 4px; padding-left: 22px; color: var(--text-secondary); }

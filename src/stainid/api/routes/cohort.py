@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import gzip
+import json
 import re
 
 import numpy as np
 import pandas as pd
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request, Response
+from scipy.spatial import cKDTree
 
-from stainid.api import placeholders, pyramid, render
+from stainid.api import outlines, placeholders, pyramid, render
 from stainid.api.state import ProjectState, get_state
 from stainid.api.util import records
 from stainid.outputs import objects
@@ -15,6 +18,9 @@ router = APIRouter(tags=["cohort"])
 CORE_COLUMNS = ["core_id", "tma", "core_label", "donor_id", "sample_region_id", "region", "disease_group", "technical_replicate"]
 GRID_THUMB = 256
 OBJECT_COLUMNS = ["x", "y", "radius_px", "model_class", "probability", "area_um2"]
+OUTLINE_COLUMNS = ["x", "y", "area_um2", "rings"]
+MATCH_PX = 2.0  # an outline's prompt point lies on its detection (up to rounding)
+GZIP_MIN_BYTES = 1024
 
 
 def _tma_order(tma: str) -> tuple:
@@ -158,23 +164,60 @@ def core(core_id: str) -> dict:
     }
 
 
+def _core_tiles(state: ProjectState, core_id: str, stain: str) -> pd.DataFrame:
+    tiles = state.analysis_tiles
+    return tiles[(tiles.core_id == core_id) & (tiles.stain == stain)] if not tiles.empty else tiles
+
+
+def _found(state: ProjectState, tiles: pd.DataFrame, stain: str) -> pd.DataFrame:
+    """What detection found in these tiles of one core image, in core-image pixels (rounded as served)."""
+    found = objects(state.project, tiles, stain) if not tiles.empty else pd.DataFrame()
+    if found.empty:
+        return found
+    origin = {t["tile_id"]: render.crop_origin(t, state.project.context_px) for t in tiles.to_dict("records")}
+    found = found.assign(x=(found.x + found.tile_id.map(lambda t: origin[t][0])).round(1),
+                         y=(found.y + found.tile_id.map(lambda t: origin[t][1])).round(1)).drop_duplicates(["x", "y"])
+    return found.assign(radius_px=found.radius_px.round(1), probability=found.probability.round(3), area_um2=found.area_um2.round(1))
+
+
 @router.get("/cores/{core_id}/{stain}/objects")
 def core_objects(core_id: str, stain: str) -> dict:
-    """Everything detection found in one core image, in core-image pixels (as rows of `columns`), and the tiles it ran on."""
+    """Everything detection found in one core image, in core-image pixels (as rows of `columns`), the tiles it ran on,
+    and whether the "Outline objects" step has outlined this core image (`outlines`, see `core_outlines`)."""
     state = get_state()
-    tiles = state.analysis_tiles
-    tiles = tiles[(tiles.core_id == core_id) & (tiles.stain == stain)] if not tiles.empty else tiles
+    tiles = _core_tiles(state, core_id, stain)
     status, done, total = _detection(state, tiles, stain)
-    rows = []
-    found = objects(state.project, tiles, stain) if done else pd.DataFrame()
-    if not found.empty:
-        origin = {t["tile_id"]: render.crop_origin(t, state.project.context_px) for t in tiles.to_dict("records")}
-        found = found.assign(x=(found.x + found.tile_id.map(lambda t: origin[t][0])).round(1),
-                             y=(found.y + found.tile_id.map(lambda t: origin[t][1])).round(1)).drop_duplicates(["x", "y"])
-        found = found.assign(radius_px=found.radius_px.round(1), probability=found.probability.round(3), area_um2=found.area_um2.round(1))
-        rows = [list(r.values()) for r in records(found[OBJECT_COLUMNS])]
+    found = _found(state, tiles, stain) if done else pd.DataFrame()
+    rows = [list(r.values()) for r in records(found[OBJECT_COLUMNS])] if not found.empty else []
     boxes = tiles[["x_px", "y_px", "width_px", "height_px"]].astype(int).values.tolist() if not tiles.empty else []
-    return {"status": status, "tiles_done": done, "tiles_total": total, "columns": OBJECT_COLUMNS, "rows": rows, "tiles": boxes}
+    return {"status": status, "tiles_done": done, "tiles_total": total, "columns": OBJECT_COLUMNS, "rows": rows, "tiles": boxes,
+            "outlines": bool(done) and outlines.parts_path(state, core_id, stain).exists()}
+
+
+@router.get("/cores/{core_id}/{stain}/outlines")
+def core_outlines(core_id: str, stain: str, request: Request) -> Response:
+    """The Segment Anything outline of each detection of `objects` that has one: rows of `columns`, where `x`, `y` are
+    exactly that detection's position (to match them up), `area_um2` the outlined area and `rings` its polygons
+    (flat [x0, y0, x1, y1, …] in core-image pixel indices). `status` is "not_made" until the step has outlined the core.
+    Sent gzip-compressed when the browser accepts it (a busy core is ~1.5 MB of JSON, ~0.6 MB compressed)."""
+    state = get_state()
+    tiles = _core_tiles(state, core_id, stain)
+    made = outlines.core_outlines(state, core_id, stain, tiles) if not tiles.empty else None
+    rows = []
+    if made:
+        found = _found(state, tiles, stain)
+        if not found.empty:
+            points = found[["x", "y"]].to_numpy(float)
+            distance, nearest = cKDTree(points).query(np.array([[o["x"], o["y"]] for o in made]), distance_upper_bound=MATCH_PX)
+            taken = set()
+            for outline, d, i in zip(made, distance, nearest):
+                if np.isfinite(d) and i not in taken:
+                    taken.add(i)
+                    rows.append([float(points[i, 0]), float(points[i, 1]), outline["area_um2"], outline["rings"]])
+    body = json.dumps({"status": "not_made" if made is None else "done", "columns": OUTLINE_COLUMNS, "rows": rows}, separators=(",", ":")).encode()
+    if len(body) > GZIP_MIN_BYTES and "gzip" in request.headers.get("accept-encoding", ""):
+        return Response(gzip.compress(body, 5), media_type="application/json", headers={"Content-Encoding": "gzip", "Vary": "Accept-Encoding"})
+    return Response(body, media_type="application/json")
 
 
 @router.get("/fields/{tile_id}/objects")
