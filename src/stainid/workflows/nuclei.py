@@ -49,6 +49,8 @@ def run_nuclei(project: Project, stains: list[str], device: str = "mps", batch_s
     images, finished = CoreImages(), itertools.count(1)
 
     def segment(row: dict) -> None:
+        if (output / f"{row['tile_id']}.npz").exists():  # another process (an overlapping shard) got there first
+            return
         image = images.get(project.root / row["image_path"])
         rgb, _ = context_crop(image, int(row["x_px"]), int(row["y_px"]), int(row["width_px"]), int(row["height_px"]), project.context_px)
         started = time.time()
