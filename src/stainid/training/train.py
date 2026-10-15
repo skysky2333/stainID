@@ -20,6 +20,7 @@ from sklearn.model_selection import LeaveOneGroupOut, StratifiedGroupKFold
 from sklearn.pipeline import make_pipeline
 
 from stainid.labels import pool, store
+from stainid.labels import sessions as label_sessions
 from stainid.labels.tasks import MODEL_KEY
 from stainid.project import Project, save_project
 from stainid.stains.amyloid.model import MORPHOTYPE_MINIMUM_DIAMETER_UM, morphotype_threshold
@@ -32,9 +33,10 @@ def forest():
                          RandomForestClassifier(n_estimators=500, min_samples_leaf=2, class_weight="balanced", random_state=0, n_jobs=-1))
 
 
-def labelled(project: Project, stain: str) -> tuple[pd.DataFrame, list[str]]:
-    """Consensus-labelled objects with their candidate features (one row per object)."""
-    truth = store.consensus(store.current(project.output("reviews")), stain)
+def labelled(project: Project, stain: str, sessions: list[str] | None = None) -> tuple[pd.DataFrame, list[str]]:
+    """Consensus-labelled objects with their candidate features (one row per object), from the labels of these
+    sessions (`labels.sessions.in_sessions`; all labels when None)."""
+    truth = store.consensus(label_sessions.in_sessions(store.current(project.output("reviews")), sessions), stain)
     truth = truth[truth.positive.notna()]
     names = pool.feature_names(project, stain)
     rows = []
@@ -45,7 +47,7 @@ def labelled(project: Project, stain: str) -> tuple[pd.DataFrame, list[str]]:
             if i is not None:
                 rows.append({**objects.iloc[i].to_dict(), "tile_id": tile_id, "label": r.value, "positive": bool(r.positive), "sources": r.sources})
     if not rows:
-        raise ValueError(f"No labelled {stain} objects yet: label some on the Labels page first")
+        raise ValueError(f"No labelled {stain} objects {'in the chosen sessions ' if sessions else ''}yet: label some on the Labels page first")
     data = pd.DataFrame(rows).drop_duplicates(["tile_id", "x", "y"]).reset_index(drop=True)
     return data, names
 
@@ -84,8 +86,9 @@ def _current(project: Project, stain: str, x: np.ndarray, names: list[str]) -> t
     return probability, load(path)
 
 
-def train_model(project: Project, stain: str) -> Path:
-    data, names = labelled(project, stain)
+def train_model(project: Project, stain: str, sessions: list[str] | None = None) -> Path:
+    """A new model from the labels of these sessions (all when None), checked by leaving one TMA out at a time."""
+    data, names = labelled(project, stain, sessions)
     y = data.positive.to_numpy(bool)
     if y.sum() < MINIMUM_PER_CLASS or (~y).sum() < MINIMUM_PER_CLASS:
         raise ValueError(f"Need at least {MINIMUM_PER_CLASS} positive and {MINIMUM_PER_CLASS} negative labels; have {int(y.sum())} and {int((~y).sum())}. "
@@ -132,11 +135,21 @@ def train_model(project: Project, stain: str) -> Path:
     dump(bundle, folder / "bundle.joblib")
     report = {"stain": stain, "created": time.time(), "validation": scheme, "threshold": threshold, "sources": sources.to_dict(),
               "new_model": metrics(y, oof, threshold), "current_model": metrics(y, current, threshold) if current is not None else None,
-              "current_model_path": project.relative(project.model(MODEL_KEY[stain]))}
+              "current_model_path": project.relative(project.model(MODEL_KEY[stain])),
+              "sessions": trained_on(project, stain, sessions)}
     (folder / "report.json").write_text(json.dumps(report, indent=1))
     new = report["new_model"]
     print(f"[3/3] new model: AUC {new['auc']:.2f}, precision {new['precision']:.2f}, recall {new['recall']:.2f} -> {project.relative(folder)}", flush=True)
     return folder
+
+
+def trained_on(project: Project, stain: str, sessions: list[str] | None) -> list[dict]:
+    """The sessions whose labels a training used (every session with labels of this stain when None): name, title and
+    how many objects each labelled, for the model's report."""
+    root = project.output("reviews")
+    titles = {name: label_sessions.meta(root, name).get("title", name) for name in label_sessions.names(root)}
+    used = label_sessions.label_sets(label_sessions.in_sessions(store.current(root), sessions), stain, titles)
+    return [{"name": s["name"], "title": s["title"], "objects": s["objects"]} for s in used]
 
 
 def trained_models(project: Project) -> list[dict]:

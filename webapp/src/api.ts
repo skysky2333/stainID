@@ -14,7 +14,7 @@ export interface Group { code: string; label: string; color?: number }
 export interface PathInfo { path: string; exists: boolean; help: string }
 export interface ProjectConfig {
   name: string; pixel_size_um: number; field_context_px: number; stains: Record<string, string>
-  tma: { prefix: string; rows: number; columns: number }; groups: Group[]; analysis: { tiles: string }
+  tma: { prefix: string; rows: number; columns: number }; groups: Group[]
   inputs: Record<string, string>; models: Record<string, string>; outputs: Record<string, string>
 }
 export interface ProjectInfo {
@@ -108,16 +108,14 @@ export interface FsListing { path: string; parent: string | null; dirs: string[]
 export interface Metrics { n: number; positives: number; auc: number; precision: number; recall: number }
 export interface TrainedModel {
   stain: string; created: number; validation: string; threshold: number; sets?: string[]; sources?: Record<string, number>; new_model: Metrics; current_model: Metrics | null
-  current_model_path: string; path: string; active: boolean
+  current_model_path: string; path: string; active: boolean; sessions?: { name: string; title: string; objects: number }[]
 }
 export interface CoreRow {
   core_id: string; tma: string; core_label: string; donor_id: string | null; sample_region_id: string | null
   region: string | null; disease_group: string | null; technical_replicate: string | null; stains: string[]
 }
-export interface FieldRow { tile_id: string; stain: string; selection_order: number; x_px: number; y_px: number; width_px: number; height_px: number }
 export interface CoreDetail extends Omit<CoreRow, 'stains'> {
   images: { stain: string; native_width_px: number; native_height_px: number; tissue_fraction: number; tissue_status: string }[]
-  fields: FieldRow[]
 }
 export interface FieldObject { x: number; y: number; radius_px: number; model_class: string; probability: number | null; area_um2: number | null; [k: string]: unknown }
 export interface Outline { label: number; points: [number, number][]; area_um2: number | null; circularity: number | null; seed_source: string }
@@ -149,7 +147,7 @@ export interface SessionInfo {
   fields?: number; fields_covered?: number; fields_prepared?: number; labellers: Labeller[]; labelling_now: number
 }
 export interface Labeller { person: string; fields_done: number; labels: number; changed: number; confirmed: number; outlines: number; tags: number; last_active: number }
-export interface LabelsOverview { stains: StainOverview[]; sessions: SessionInfo[] }
+export interface LabelsOverview { stains: StainOverview[]; sessions: SessionInfo[]; reference: ReferenceLabels | null }
 export interface OpenSession { name: string; title: string; stain: string; kind: 'fields' | 'queue'; open: boolean; instructions: string; fields: number; done_by_me: number; my_labels: number }
 export interface SessionField { tile_id: string; done_by_me: boolean; annotators_done: number; open_by_others: number; prepared: boolean }
 export interface SessionDetail {
@@ -166,6 +164,26 @@ export interface FieldWork {
   outlines: { x: number; y: number; points: number[][] }[]; layers: string[]; mine: Label[]
 }
 export interface QueueItem { tile_id: string; x: number; y: number; radius_px: number; ai_value: string; ai_probability: number; labels_so_far: number; remaining: number }
+
+/* labelling fields (whole-core area): choosing fields, their state in a session, the labels of a session */
+export interface Blocker { reason: string; step: string; step_title: string; link: string }
+export interface FieldPlace { core_id?: string; core_label?: string; tma?: string; region?: string | null; disease_group?: string | null; x_px?: number; y_px?: number; width_px?: number; height_px?: number }
+export interface PickerField { tile_id: string; x_px: number; y_px: number; width_px: number; height_px: number; labelled_by: string[]; sessions: string[]; blocked: Blocker | null }
+export interface PickerCore {
+  core_id: string; tma: string; core_label: string; region: string | null; disease_group: string | null; donor_id: string | null
+  width: number | null; height: number | null; fields: PickerField[]; blocked: Blocker | null
+}
+export interface PickerPage { cores: PickerCore[]; total_cores: number; total_fields: number; ready_fields: number; facets: { tmas: string[]; regions: string[]; groups: string[] } }
+export type FieldState = 'preparing' | 'not_started' | 'in_progress' | 'done'
+export interface SessionFieldState extends FieldPlace { tile_id: string; state: FieldState; done_by: string[]; working: string[]; open_by: string[] }
+export interface LabelSet { name: string; title: string; reference: boolean; labels: number; objects: number; fields: number; classes: Record<string, number>; people: string[] }
+export interface ReferenceLabels { name: string; title: string; labels: number; stains: Record<string, number>; sets: string[]; fields: number }
+export interface LabelledObject { x: number; y: number; value: string; source: string }
+export interface LabelledField extends FieldPlace { tile_id: string; picture: boolean; offset: [number, number] | null; objects: LabelledObject[] }
+export interface SessionLabels {
+  name: string; title: string; reference: boolean; stain: string; stains: string[]; classes: Record<string, number>; people: Record<string, number>
+  fields: LabelledField[]; total_fields: number; objects: number
+}
 
 /* Which stainID server this page talks to. Normally the one that served it (same origin: sign-in travels in cookies).
    It can also be another one: an address chosen on the sign-in screen (kept in this browser), else `window.STAINID_SERVER`

@@ -5,7 +5,7 @@
 The project "Demo cohort (synthetic)" has three TMAs (DEMO-1 to DEMO-3) of 2 x 5 cores, 15 invented donors in three
 groups (Control, ASYMAD, AD) with a frontal and a temporal core each, and NeuN, 6E10 and AT8 core images drawn
 procedurally (synthetic_tissue.py). Every table the app reads is written as if the workflow had run: slides table, core
-table, TMA map, analysis fields and whole-core tiles, nuclei and outline label images, NeuN / 6E10 / AT8 detections
+table, TMA map, whole-core tiles, nuclei and outline label images, NeuN / 6E10 / AT8 detections
 (placed exactly on the drawn objects, with simulated model errors), candidate pools, a label store with labelling
 sessions by three invented annotators, trained stain models with their validation reports, and the results tables.
 The cheap stainid steps run for real on the demo: stain calibration, model training and the results tables.
@@ -36,6 +36,7 @@ import pandas as pd
 from stainid.labels import pool, sessions, store
 from stainid.labels.tasks import CLASSES, FIELD_TAGS, NEGATIVE, ai_value, positive
 from stainid.project import DEFAULTS, Project, load_project, save_project
+from stainid.sampling.tiles import labelling_tiles
 from stainid.training.train import train_model
 from stainid.workflows.aggregate import summarize_results
 from stainid.workflows.calibrate import calibrate_slides
@@ -148,13 +149,9 @@ def make_core(job: dict) -> dict:
             tiles.append({"x_px": x, "y_px": y, "width_px": w, "height_px": h, "row": r, "column": c, "tissue_fraction": round(fraction, 4),
                           "tissue_area_mm2": float(core.tissue[y:y + h, x:x + w].sum() * PIXEL_UM**2 / 1e6),
                           "dab_positive_mm2": float(core.dab_positive[y:y + h, x:x + w].sum() * PIXEL_UM**2 / 1e6)})
-    full = [t for t in tiles if t["width_px"] == t["height_px"] == FIELD_PX and t["tissue_fraction"] >= 0.3]
-    for order, k in enumerate(rng.permutation(len(full)), start=1):
-        full[k]["tile_id"], full[k]["selection_order"], full[k]["sampled"] = f"{job['core_id']}_{stain}_S{order:02d}", order, True
     for t in tiles:
-        if "tile_id" not in t:
-            t["tile_id"] = f"{job['core_id']}_{stain}_W{t['row']:02d}{t['column']:02d}"
-            t["selection_order"], t["sampled"] = 100 + 100 * t["row"] + t["column"], False
+        t["tile_id"] = f"{job['core_id']}_{stain}_W{t['row']:02d}{t['column']:02d}"
+        t["selection_order"] = 100 + 100 * t["row"] + t["column"]
 
     def tile_of(x: float, y: float) -> dict | None:
         return next((t for t in tiles if t["x_px"] <= x < t["x_px"] + t["width_px"] and t["y_px"] <= y < t["y_px"] + t["height_px"]), None)
@@ -611,11 +608,11 @@ def build(out: Path, seed: int, workers: int) -> None:
                   f"({time.time() - started:.0f} s)", flush=True)
     image_of = {(j["core_id"], j["stain"]): j["image_path"] for j in jobs}
 
-    # set-up tables: slides, core table, TMA map, donors, core images, fields and tiles
+    # set-up tables: slides, core table, TMA map, donors, core images and tiles
     slides = [{"slide_path": str(root / "data" / "slides" / f"{PREFIX}{t} {stain}.tif"), "tma": str(t), "stain": stain}
               for t in range(1, TMAS + 1) for stain in STAINS]
     write_csv(project.input("slides_table"), slides)
-    manifest, images, sampled, whole = [], [], [], []
+    manifest, images, whole = [], [], []
     for core in cores:
         column, row = ord(core["core_label"][0]) - 65, int(core["core_label"][2:]) - 1
         identity = {k: core[k] for k in ("donor_id", "sample_region_id", "region", "disease_group", "technical_replicate")}
@@ -640,21 +637,16 @@ def build(out: Path, seed: int, workers: int) -> None:
             for t in result["tiles"]:
                 t["tma"] = core["tma"]
                 box = {"x_px": t["x_px"], "y_px": t["y_px"], "width_px": t["width_px"], "height_px": t["height_px"]}
-                if t["sampled"]:
-                    sampled.append({"tile_id": t["tile_id"], **base, "selection_role": "systematic", "selection_order": t["selection_order"],
-                                    "nested_sample": "primary_four", **box, "tissue_fraction": t["tissue_fraction"]})
                 whole.append({"tile_id": t["tile_id"], **base, "selection_role": "whole_core_grid", "selection_order": t["selection_order"],
-                              "nested_sample": "primary_four" if t["sampled"] else "whole_core", **box, "preview_tissue_fraction": t["tissue_fraction"]})
+                              "nested_sample": "whole_core", **box, "preview_tissue_fraction": t["tissue_fraction"]})
     write_csv(project.input("core_manifest"), manifest)
     write_csv(project.input("tma_layout"), [{"tma": c["tma"], "core_label": c["core_label"], "donor_id": c["donor_id"], "region": c["region"],
                                              "disease_group": c["disease_group"], "tissue_control": "", "cerad": c["cerad"], "braak": c["braak"]} for c in cores])
     write_csv(project.input("donor_metadata"), [{k: d[k] for k in ("donor_id", "tma", "disease_group", "age", "sex", "apoe_e4_count", "pmd_hours")}
                                                 for d in donors])
     write_csv(project.input("core_images"), images)
-    write_csv(project.input("tile_manifest"), sampled)
-    write_csv(project.input("field_manifest"), sampled)
     write_csv(project.input("whole_core_manifest"), whole)
-    tiles = pd.DataFrame(sampled).astype({"tma": str})
+    tiles = labelling_tiles(project)  # the fields labelling sessions are drawn from
 
     print("detections, outlines and pictures", flush=True)
     detection_outputs(root, cores, drawn, rng)

@@ -63,12 +63,12 @@ def test_failed_step_skips_what_waits_for_it_and_missing_inputs_are_reported(tmp
     monkeypatch.setattr(jobs.JobManager, "_start", lambda self, job: setattr(job, "status", "running"))
     monkeypatch.setattr(jobs.JobManager, "_loop", lambda self: None)
     manager = jobs.JobManager(tmp_path, tmp_path / "jobs")
-    export, qc, select, summarize = (manager.submit(step, {}) for step in ("export", "qc", "select", "summarize"))
-    for job, when in zip((export, qc, select, summarize), range(4)):
+    export, qc, tiles, summarize = (manager.submit(step, {}) for step in ("export", "qc", "tiles", "summarize"))
+    for job, when in zip((export, qc, tiles, summarize), range(4)):
         job.created = when
     manager._schedule()
     assert export.status == "skipped" and "Core table" in export.outcome["error"] and "Find cores" in export.outcome["error"]
-    assert qc.status == select.status == "skipped" and "Export cores" in qc.outcome["error"]
+    assert qc.status == tiles.status == "skipped" and "Export cores" in qc.outcome["error"]
     assert summarize.status == "running"
 
     calibrate, neun, nuclei = manager.submit("calibrate", {}), manager.submit("neun", {}), manager.submit("nuclei", {})

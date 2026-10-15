@@ -64,16 +64,15 @@ The Help page in the app has the same guide, answers to common questions and a g
 | | Attach TMA map | donor, brain region and diagnostic group for each core | `stainid layout` |
 | | Export cores | native-resolution core images | `stainid export` |
 | | Check core quality | tissue coverage, fragments, focus | `stainid qc` |
-| **Fields** | Choose analysis fields | evenly spread ~560 µm fields per core, used to label, train and test | `stainid select` |
-| | Cut whole cores into tiles | every ~560 µm tile of tissue, for whole-core analysis | `stainid tiles` |
-| | Calibrate stain thresholds | one DAB threshold per slide, blind to diagnosis | `stainid calibrate` |
+| **Tiles** | Cut cores into tiles | every ~560 µm tile of tissue in each core; detection looks at every one | `stainid tiles` |
+| | Calibrate stain thresholds | one DAB threshold per slide from every tile of its cores, blind to diagnosis | `stainid calibrate` |
 | **Detection** | Find nuclei | Cellpose-SAM cells for every stain; the slow step, the one to run on a GPU | `stainid nuclei --stain NeuN --stain AT8 --stain 6E10` |
 | | Detect NeuN neurons | candidates + NeuN model | `stainid neun` |
 | | Detect plaques and tau | 6E10 plaques and morphotypes; AT8 tau+ neurons and threads | `stainid fields` |
 | | Outline objects | Segment Anything outlines and shape features (optional) | `stainid masks` |
 | **Results** | Make results tables | one row per donor and region, every stain | `stainid summarize` |
 | **Models** | Download public models | Cellpose-SAM, Segment Anything, Phikon | `stainid download-models` |
-| | Prepare fields for labelling, Train a model | candidates for labelling; train and compare a stain model from all labels | `stainid labels prepare`, `stainid train` |
+| | Prepare fields for labelling, Train a model | candidates for labelling (a field is one tile); train and compare a stain model from the labelling sessions you choose | `stainid labels prepare`, `stainid train` |
 
 Steps run in the background, in dependency order, at most two heavy ones at a time; all of them can be stopped and
 resumed. [docs/webapp.md](docs/webapp.md) explains how the queue works, and [docs/pipelines.md](docs/pipelines.md)

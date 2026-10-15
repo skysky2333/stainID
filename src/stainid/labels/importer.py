@@ -11,7 +11,7 @@ import pandas as pd
 from stainid.labels import pool, store
 from stainid.labels.tasks import NEGATIVE
 from stainid.project import Project
-from stainid.tables import read_csv
+from stainid.sampling.tiles import known_tile_rows
 
 WHITE_MATTER_TAGS = {"white_matter": "white matter", "mixed": "mixed grey and white matter", "unusable": "unusable"}
 
@@ -23,7 +23,7 @@ def _done(root, source: str) -> bool:
 
 def training_sets(project: Project) -> int:
     root = project.output("reviews")
-    tiles = {t["tile_id"]: t for t in read_csv(project.input("tile_manifest"))}
+    tiles = known_tile_rows(project)
     total = 0
     for meta_file in sorted((root / "training").glob("*/meta.json")):
         folder = meta_file.parent

@@ -1,10 +1,12 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import type { AiView, LabelsOverview, Labeller, SessionInfo, StainOverview } from '../api'
+import type { AiView, LabelsOverview, Labeller, ReferenceLabels, SessionInfo, StainOverview } from '../api'
 import { api, apiUrl, appPath } from '../api'
 import { Empty, ErrorNote, HelpBox, Loaded, Modal, PageHead, Progress, fmt, timeAgo, withError } from '../components'
 import { useFetch } from '../hooks'
 import { AI_VIEW_TEXT, ConfirmDialog, CopyButton, KIND_TEXT, TOOL_TEXT, objectsOf, percent } from '../labelling'
+import { SessionLabelsView } from '../labels/examine'
+import { FIELD_TEXT, FieldChoice, SessionFields } from '../labels/fields'
 import { Advanced } from '../setup/parts'
 
 interface Defaults { classes: Record<string, string[]>; tags: string[]; tools: string[]; ai_views: AiView[]; rules: Record<string, string> }
@@ -27,16 +29,18 @@ export default function Labels() {
         <button className="btn primary" onClick={() => setCreating(true)}>New labelling session</button>
       </PageHead>
       <HelpBox id="labels">
+        <p style={{ marginTop: 0 }}>{FIELD_TEXT}</p>
         <ol className="plain-steps">
-          <li><b>Start a session</b>: pick a stain and how many fields. stainID chooses fields nobody has checked yet, spread over TMAs and groups.</li>
+          <li><b>Start a session</b>: pick a stain and the fields: stainID can choose them (spread over TMAs and groups, nobody has labelled them yet),
+            or you click them on the cores yourself.</li>
           <li><b>Send the link</b>. People type their name and label in their browser — no account needed. Everything is saved as they go.</li>
-          <li><b>Watch progress</b> here, then <Link to="/models">train a new model</Link> from all labels and compare it with the one in use.</li>
+          <li><b>Watch progress</b> here, field by field, then <Link to="/models">train a new model</Link> from the sessions you choose and compare it with the one in use.</li>
         </ol>
       </HelpBox>
       {notice && <div className="found found-good labels-notice">{notice}<button className="link-btn" onClick={() => setNotice(null)}>Dismiss</button></div>}
       <Loaded state={overview} label="Loading labelling sessions…">
         {(data) => <>
-          <Sessions sessions={data.sessions} linkFor={linkFor} onChanged={overview.reload} onNew={() => setCreating(true)} />
+          <Sessions sessions={data.sessions} reference={data.reference} linkFor={linkFor} onChanged={overview.reload} onNew={() => setCreating(true)} />
           <ShareCard share={share.data} error={share.error} link={linkFor()} anyOpen={data.sessions.some((s) => s.open)} />
           <LabelledSoFar stains={data.stains} onChanged={overview.reload} />
           {creating && <NewSession stains={data.stains.map((s) => s.stain)} onClose={() => setCreating(false)}
@@ -51,17 +55,40 @@ export default function Labels() {
 
 /* ---------- sessions ---------- */
 
-function Sessions({ sessions, linkFor, onChanged, onNew }: { sessions: SessionInfo[]; linkFor: (name: string) => string; onChanged: () => void; onNew: () => void }) {
+function Sessions({ sessions, reference, linkFor, onChanged, onNew }: {
+  sessions: SessionInfo[]; reference: ReferenceLabels | null; linkFor: (name: string) => string; onChanged: () => void; onNew: () => void
+}) {
   const ordered = [...sessions].sort((a, b) => b.created - a.created)  // newest first; stays put when one is opened or closed
   return (
     <section className="card labels-section">
       <h2>Labelling sessions</h2>
-      {ordered.length ? <div className="session-list">{ordered.map((s) => <SessionRow key={s.name} s={s} link={linkFor(s.name)} onChanged={onChanged} />)}</div>
+      {ordered.length || reference ? <div className="session-list">
+        {ordered.map((s) => <SessionRow key={s.name} s={s} link={linkFor(s.name)} onChanged={onChanged} />)}
+        {reference && <ReferenceRow r={reference} />}
+      </div>
         : <Empty>
           <p style={{ marginTop: 0 }}>No labelling sessions yet. A session asks people to check a set of fields (or objects) for one stain.</p>
           <button className="btn" onClick={onNew}>Start the first session</button>
         </Empty>}
+      {!ordered.length && reference && <div className="row" style={{ marginTop: 10 }}><button className="btn" onClick={onNew}>Start the first session</button></div>}
     </section>
+  )
+}
+
+/** The labels made before labelling sessions existed, shown as one read-only session. */
+function ReferenceRow({ r }: { r: ReferenceLabels }) {
+  const [examining, setExamining] = useState(false)
+  return (
+    <div className="session-row reference-row">
+      <div className="session-main">
+        <div className="session-title"><b>{r.title}</b> <span className="badge">read only</span></div>
+        <div className="muted small">Brought in from earlier label sets ({r.sets.map((s) => s.replace(/^import: /, '')).join(', ')})</div>
+        <div className="small secondary">{r.labels.toLocaleString()} objects labelled on {r.fields.toLocaleString()} fields ·{' '}
+          {Object.entries(r.stains).map(([s, n]) => `${s} ${n.toLocaleString()}`).join(' · ')}</div>
+      </div>
+      <div className="session-actions"><button className="btn small" onClick={() => setExamining(true)}>Look at the labels</button></div>
+      {examining && <SessionLabelsView name={r.name} title={r.title} onClose={() => setExamining(false)} />}
+    </div>
   )
 }
 
@@ -135,7 +162,8 @@ function SessionMore({ s, onChanged, onError }: { s: SessionInfo; onChanged: () 
   const defaults = useFetch<Defaults>(s.kind === 'queue' ? '/api/labels/defaults' : null)
   const [confirm, setConfirm] = useState<'delete' | null>(null)
   const [adding, setAdding] = useState(false)
-  const addFields = async () => {
+  const [examining, setExamining] = useState(false)
+  const prepareMore = async () => {  // a queue draws objects from prepared fields: prepare 10 more
     setAdding(true)
     await withError(() => api.post(`/api/labels/sessions/${s.name}/fields`, { n: 10 }), onError)
     setAdding(false)
@@ -145,14 +173,17 @@ function SessionMore({ s, onChanged, onError }: { s: SessionInfo; onChanged: () 
     <div className="session-more">
       <div className="row">
         <a className="btn small" href={appPath(`/annotate/${s.name}`)} target="_blank" rel="noreferrer">Open the labelling page</a>
+        <button className="btn small" onClick={() => setExamining(true)} disabled={!s.labels}
+          title={s.labels ? 'Every labelled object, field by field' : 'Nobody has labelled anything in this session yet'}>Look at the labels</button>
         <a className="btn small" href={apiUrl(`/api/labels/export.csv?session=${s.name}`)}>Download this session’s labels</a>
-        <button className="btn small" disabled={adding} onClick={addFields}
-          title={s.kind === 'fields' ? 'Adds 10 fields nobody has checked yet' : 'Prepares 10 more fields the queue can draw objects from'}>
-          {adding ? 'Adding…' : '+ 10 more fields'}</button>
+        {s.kind === 'queue' && <button className="btn small" disabled={adding} onClick={prepareMore} title="Prepares 10 more fields the queue can draw objects from">
+          {adding ? 'Preparing…' : 'Prepare 10 more fields'}</button>}
         <span className="spacer" />
         <button className="btn small danger-outline" onClick={() => setConfirm('delete')}>Delete session</button>
       </div>
       {s.instructions && <p className="small secondary"><b>Note for labellers:</b> {s.instructions}</p>}
+      {s.kind === 'fields' && <SessionFields s={s} onChanged={onChanged} />}
+      {examining && <SessionLabelsView name={s.name} title={s.title} onClose={() => setExamining(false)} />}
       <Advanced hint="settings and per-person counts">
         <table className="compact"><tbody>
           <tr><td className="secondary">Session ID</td><td><code>{s.name}</code></td></tr>
@@ -278,11 +309,14 @@ function NewSession({ stains, onClose, onCreated }: { stains: string[]; onClose:
   const defaults = useFetch<Defaults>('/api/labels/defaults')
   const [form, setForm] = useState({ stain: stains[0] ?? 'NeuN', kind: 'fields' as Kind, n_fields: 20, title: '', instructions: '', open: true,
     name: '', per_field: 1, tools: ['class', 'point', 'outline', 'tag'], ai_view: 'full' as AiView, rule: 'uncertain', tile_ids: '' })
+  const [mode, setMode] = useState<'auto' | 'pick'>('auto')
+  const [chosen, setChosen] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => setForm((f) => ({ ...f, [key]: value }))
   const placeholder = `${form.stain} ${form.kind === 'fields' ? 'review' : 'quick check'} – ${new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`
-  const ids = form.tile_ids.split(/[\s,]+/).filter(Boolean)
+  const pasted = form.tile_ids.split(/[\s,]+/).filter(Boolean)
+  const ids = mode === 'pick' ? chosen : pasted
   const create = async () => {
     setBusy(true)
     const body = { ...form, title: form.title.trim() || placeholder, tile_ids: form.kind === 'fields' && ids.length ? ids : null,
@@ -297,12 +331,14 @@ function NewSession({ stains, onClose, onCreated }: { stains: string[]; onClose:
       <span><b>{title}</b><span className="small secondary">{text}</span></span>
     </label>
   )
+  const nothingChosen = form.kind === 'fields' && mode === 'pick' && !chosen.length
   return (
     <Modal title="New labelling session" onClose={onClose} wide>
       <div className="new-session">
         <fieldset className="field"><legend>Stain</legend>
           <div className="segmented">{stains.map((s) => (
-            <button key={s} type="button" className={`btn${form.stain === s ? ' chosen' : ''}`} aria-pressed={form.stain === s} onClick={() => set('stain', s)}>{s}</button>
+            <button key={s} type="button" className={`btn${form.stain === s ? ' chosen' : ''}`} aria-pressed={form.stain === s}
+              onClick={() => { set('stain', s); setChosen([]) }}>{s}</button>
           ))}</div>
         </fieldset>
         <fieldset className="field"><legend>What should people do?</legend>
@@ -311,15 +347,13 @@ function NewSession({ stains, onClose, onCreated }: { stains: string[]; onClose:
             {choice('queue', 'Quick check, one object at a time', 'People see one object and pick what it is with a key press. Fast; aims at the objects the AI is unsure about.')}
           </div>
         </fieldset>
-        <div className="row" style={{ alignItems: 'flex-end' }}>
-          {form.kind === 'fields' && !ids.length && <label className="field">How many fields<input type="number" min={1} max={500} value={form.n_fields} style={{ width: 90 }}
-            onChange={(e) => set('n_fields', Math.max(1, Number(e.target.value)))} /></label>}
-          <label className="field" style={{ flex: 1, minWidth: 220 }}>Title people see<input type="text" value={form.title} placeholder={placeholder} onChange={(e) => set('title', e.target.value)} /></label>
-        </div>
+        {form.kind === 'fields' && <FieldChoice stain={form.stain} mode={mode} n={form.n_fields} chosen={chosen} onMode={setMode}
+          onN={(n) => set('n_fields', n)} onChosen={setChosen} />}
+        <label className="field">Title people see<input type="text" value={form.title} placeholder={placeholder} onChange={(e) => set('title', e.target.value)} /></label>
         <label className="field">Note for labellers (optional)<textarea rows={2} value={form.instructions} placeholder="e.g. Count only neurons with a visible nucleus." onChange={(e) => set('instructions', e.target.value)} /></label>
         {defaults.data && <p className="muted small" style={{ margin: 0 }}>People choose between: {defaults.data.classes[form.stain]?.join(' · ')}.</p>}
         <label className="layer-toggle"><input type="checkbox" checked={form.open} onChange={(e) => set('open', e.target.checked)} />Open to labellers right away</label>
-        <Advanced hint="session ID, people per field, what people see of the AI, tasks, exact fields">
+        <Advanced hint="session ID, people per field, what people see of the AI, tasks, field IDs">
           <div className="row" style={{ alignItems: 'flex-end' }}>
             <label className="field">Session ID (in links and files)<input type="text" value={form.name} placeholder="made from the title"
               onChange={(e) => set('name', e.target.value.replace(/[^A-Za-z0-9_-]/g, '_'))} /></label>
@@ -335,17 +369,19 @@ function NewSession({ stains, onClose, onCreated }: { stains: string[]; onClose:
               <label key={t} className="layer-toggle"><input type="checkbox" checked={form.tools.includes(t)}
                 onChange={() => set('tools', form.tools.includes(t) ? form.tools.filter((x) => x !== t) : [...form.tools, t])} />{TOOL_TEXT[t]}</label>
             ))}</div>
-            <label className="field">Or exactly these fields (field IDs; replaces “How many fields”)
-              <textarea rows={2} value={form.tile_ids} placeholder="e.g. LIP-1_B-2_NeuN_S01, LIP-3_C-4_NeuN_S02" onChange={(e) => set('tile_ids', e.target.value)} /></label>
+            {mode === 'auto' && <label className="field">Or paste field IDs (replaces “How many fields”)
+              <textarea rows={2} value={form.tile_ids} placeholder="e.g. LIP-1_B-2_NeuN_W0102, LIP-3_C-4_NeuN_W0201" onChange={(e) => set('tile_ids', e.target.value)} /></label>}
             {defaults.data && <p className="muted small" style={{ margin: 0 }}>Field tags people can set: {defaults.data.tags.join(' · ')}.</p>}
           </>}
-          <p className="muted small" style={{ margin: 0 }}>Fields are picked among those nobody has checked, spread over TMAs and groups, in shuffled order. They are prepared
-            in the background (10–30 s each) and appear to people as they become ready.</p>
+          <p className="muted small" style={{ margin: 0 }}>Fields are prepared in the background (10–30 s each) and appear to people as they become ready; they are shown in
+            shuffled order. Only fields of cores that are exported, calibrated and detected can be chosen.</p>
         </Advanced>
         <ErrorNote error={error ?? defaults.error} />
         <div className="row"><span className="spacer" />
+          {nothingChosen && <span className="small muted">Click squares on the cores above to choose fields.</span>}
           <button className="btn" onClick={onClose}>Cancel</button>
-          <button className="btn primary" disabled={busy || (form.kind === 'fields' && !form.tools.length)} onClick={create}>{busy ? 'Creating…' : 'Create session'}</button>
+          <button className="btn primary" disabled={busy || nothingChosen || (form.kind === 'fields' && !form.tools.length)} onClick={create}>
+            {busy ? 'Creating…' : form.kind === 'fields' && mode === 'pick' && chosen.length ? `Create session with ${chosen.length} field${chosen.length === 1 ? '' : 's'}` : 'Create session'}</button>
         </div>
       </div>
     </Modal>

@@ -22,6 +22,7 @@ from stainid import cache
 from stainid.api import registry
 from stainid.jobs import Job, JobStore, alive
 from stainid.project import Project, load_project
+from stainid.sampling.tiles import known_tiles, labelling_tiles, table
 
 CURRENT: ContextVar[str | None] = ContextVar("stainid_project", default=None)
 
@@ -36,7 +37,7 @@ def _read(path: Path, **kwargs) -> pd.DataFrame:
 
 def _table(path: Path) -> pd.DataFrame:
     """A project table, read again only when the file changes (shared between requests: never change it in place)."""
-    return cache.memo(("frame", str(path)), [path], lambda: _read(path, dtype={"tma": str, "donor_id": str}))
+    return table(path)
 
 
 def _count(folder: Path, names) -> int:
@@ -71,12 +72,18 @@ class ProjectState:
 
     @property
     def tiles(self) -> pd.DataFrame:
-        return _table(self.project.input("tile_manifest"))
+        """Every tile a label, session or viewer may name (see `stainid.sampling.tiles.known_tiles`)."""
+        return known_tiles(self.project)
 
     @property
     def analysis_tiles(self) -> pd.DataFrame:
-        """The tiles detection runs on (whole-core tiles or the sampled fields, per Settings → Analysis)."""
+        """The tiles detection runs on: every tissue tile of each core."""
         return _table(self.project.analysis_tiles())
+
+    @property
+    def labelling_tiles(self) -> pd.DataFrame:
+        """The tiles new labelling fields are drawn from."""
+        return labelling_tiles(self.project)
 
     @property
     def core_images(self) -> pd.DataFrame:
@@ -93,7 +100,8 @@ class ProjectState:
     def groups(self) -> list[dict[str, str]]:
         """Diagnostic groups in plot order: from the project settings, else as found in the data."""
         configured = self.project.config.get("groups") or []
-        found = sorted(set(self.tiles.disease_group.dropna()) if "disease_group" in self.tiles else set())
+        tiles = self.analysis_tiles
+        found = sorted(set(tiles.disease_group.dropna()) if "disease_group" in tiles else set())
         codes = [g["code"] for g in configured]
         return list(configured) + [{"code": c, "label": c} for c in found if c not in codes]
 
@@ -113,8 +121,8 @@ class ProjectState:
         return rows.iloc[0].to_dict()
 
     def output_status(self) -> dict[str, dict[str, int]]:
-        """How many cores / fields each pipeline stage has finished."""
-        tiles = self.tiles
+        """How many cores / tiles each pipeline stage has finished."""
+        tiles = self.analysis_tiles
         fields_parts = self.project.output("fields") / "parts"
         masks = self.project.output("masks")
         status = {}
@@ -123,13 +131,13 @@ class ProjectState:
             cores = set(stain_tiles.core_id)
             if stain == "NeuN":
                 done = _count(self.project.output("neun") / "tiles", (f"{t}_features.csv" for t in stain_tiles.tile_id))
-                detection = {"done": done, "total": len(stain_tiles), "unit": "fields"}
+                detection = {"done": done, "total": len(stain_tiles), "unit": "tiles"}
             else:
                 done = _count(fields_parts, (f"{c}_{stain}_features.csv" for c in cores))
                 detection = {"done": done, "total": len(cores), "unit": "cores"}
             nuclei = _count(self.project.output("nuclei"), (f"{t}.npz" for t in stain_tiles.tile_id))
             mask_done = _count(masks / stain / "parts", (f"{c}_{stain}_objects.csv" for c in cores))
-            status[stain] = {"detection": detection, "nuclei": {"done": nuclei, "total": len(stain_tiles), "unit": "fields"},
+            status[stain] = {"detection": detection, "nuclei": {"done": nuclei, "total": len(stain_tiles), "unit": "tiles"},
                              "masks": {"done": mask_done, "total": len(cores), "unit": "cores"}}
         return status
 

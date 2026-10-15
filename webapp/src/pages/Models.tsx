@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import type { Job, LabelsOverview, Metrics, ModelInfo, TrainedModel } from '../api'
+import type { Job, LabelSet, LabelsOverview, Metrics, ModelInfo, TrainedModel } from '../api'
 import { api, runStep } from '../api'
-import { ErrorNote, HelpBox, Loaded, PageHead, PathLine, Progress, Term, fmt, timeAgo, withError } from '../components'
+import { Empty, ErrorNote, HelpBox, Loaded, Modal, PageHead, PathLine, Progress, Term, fmt, timeAgo, withError } from '../components'
 import { useFetch } from '../hooks'
 import { ConfirmDialog, QualityBadge, QualityLine, objectsOf, quality } from '../labelling'
 import { useProject } from '../project'
@@ -95,7 +95,7 @@ function StainModel({ info, versions, versionsLoading, job, otherTraining, label
   const training = activeJob(job)
   const failed = job?.status === 'failed' && (!newest || (job.ended ?? 0) > newest.created) ? job : null
 
-  const train = () => withError(async () => { await runStep('train', { stain }); onChanged() }, setError)
+  const train = (sessions: string[] | null) => withError(async () => { await runStep('train', { stain, session: sessions ?? '' }); onChanged() }, setError)
   const use = (v: TrainedModel) => withError(async () => { await api.post('/api/models/activate', { path: v.path }); onChanged(); reloadProject() }, setError)
 
   return (
@@ -108,7 +108,7 @@ function StainModel({ info, versions, versionsLoading, job, otherTraining, label
         {!info.exists ? <p>There is no {stain} model yet. Label some {objectsOf(stain)} on <Link to="/labels">Labels</Link>, then train one.</p>
           : versionsLoading ? <p className="muted small">Loading its test results…</p>
           : inUse ? <>
-            <div className="small muted">In use · trained {day(inUse.created)} from {inUse.new_model.n.toLocaleString()} labelled objects</div>
+            <div className="small muted">In use · trained {day(inUse.created)} from {inUse.new_model.n.toLocaleString()} labelled objects{trainedOn(inUse)}</div>
             <div className="quality-line"><QualityLine m={inUse.new_model} stain={stain} /></div>
           </> : <p className="small secondary">The model in use was not trained in this project, so it has no test score here. Train one to compare.</p>}
       </div>
@@ -116,6 +116,7 @@ function StainModel({ info, versions, versionsLoading, job, otherTraining, label
       {fresh && !training && (
         <div className={`fresh-model ${freshBetter ? 'better' : ''}`}>
           <div className="row"><b>New model, trained {day(fresh.created)}</b><QualityBadge m={fresh.new_model} /></div>
+          {fresh.sessions && <div className="small muted">Learned from {fresh.new_model.n.toLocaleString()} objects{trainedOn(fresh)}</div>}
           <div className="small"><QualityLine m={fresh.new_model} stain={stain} /></div>
           <div className="small secondary">{inUse ? (freshBetter ? 'Scores better than the model in use.' : 'Does not score better than the model in use — keeping the current one is fine.') : 'Not in use yet.'}</div>
           <button className={`btn small${freshBetter ? ' primary' : ''}`} onClick={() => setAsking(fresh)}>Use the new model</button>
@@ -134,7 +135,7 @@ function StainModel({ info, versions, versionsLoading, job, otherTraining, label
 
       <div className="row stain-model-actions">
         <button className={`btn small${info.exists ? '' : ' primary'}`} disabled={training || otherTraining} onClick={() => setAsking('train')}
-          title={otherTraining ? 'Another model is training; wait for it to finish' : 'Learns from every label people have made for this stain'}>Train a new model</button>
+          title={otherTraining ? 'Another model is training; wait for it to finish' : 'Learns from the labelling sessions you choose'}>Train a new model…</button>
         {labelled != null && <span className="muted small">{labelled.toLocaleString()} {stain} objects labelled so far</span>}
       </div>
 
@@ -144,7 +145,7 @@ function StainModel({ info, versions, versionsLoading, job, otherTraining, label
           <table className="compact versions-table"><tbody>
             {(all ? others : others.slice(0, 5)).map((v) => (
               <tr key={v.path}>
-                <td className="small">{day(v.created)}<div className="muted">{v.new_model.n.toLocaleString()} labels</div></td>
+                <td className="small">{day(v.created)}<div className="muted">{v.new_model.n.toLocaleString()} labels{trainedOn(v)}</div></td>
                 <td><QualityBadge m={v.new_model} /></td>
                 <td className="small wrap-cell"><QualityLine m={v.new_model} stain={stain} /></td>
                 <td className="num"><button className="btn small" onClick={() => setAsking(v)}>Use</button></td>
@@ -167,13 +168,7 @@ function StainModel({ info, versions, versionsLoading, job, otherTraining, label
         {versions.length > 0 && <VersionTable versions={versions} />}
       </Advanced>
 
-      {asking === 'train' && (
-        <ConfirmDialog title={`Train a new ${stain} model?`} confirm="Start training" onClose={() => setAsking(null)} onConfirm={train}>
-          <p>It learns from {labelled != null ? <b>{labelled.toLocaleString()} {stain} objects</b> : <>every {stain} object</>} people have labelled, and is tested on
-            whole TMAs it did not see. It usually takes under a minute and uses this computer’s processors.</p>
-          <p>The model in use does not change: you choose afterwards whether to switch.</p>
-        </ConfirmDialog>
-      )}
+      {asking === 'train' && <TrainDialog stain={stain} onClose={() => setAsking(null)} onStart={train} />}
       {asking && asking !== 'train' && (
         <ConfirmDialog title={`Use the ${stain} model trained ${day(asking.created)}?`} confirm="Switch model" onClose={() => setAsking(null)} onConfirm={() => use(asking)}>
           {quality(asking.new_model) && <p>Its test score: <b>{quality(asking.new_model)!.word}</b> — <QualityLine m={asking.new_model} stain={stain} />.
@@ -183,6 +178,54 @@ function StainModel({ info, versions, versionsLoading, job, otherTraining, label
         </ConfirmDialog>
       )}
     </section>
+  )
+}
+
+/** " · from Round 1 and AI reference labels": the sessions a model learned from (models trained before sessions were recorded say nothing). */
+function trainedOn(model: TrainedModel): string {
+  const titles = (model.sessions ?? []).map((s) => s.title)
+  return titles.length ? ` · from ${titles.length > 1 ? `${titles.slice(0, -1).join(', ')} and ${titles[titles.length - 1]}` : titles[0]}` : ''
+}
+
+/** Which sessions a new model learns from: every session with labels of this stain is listed with its label counts per class;
+ *  all are chosen at first. */
+function TrainDialog({ stain, onClose, onStart }: { stain: string; onClose: () => void; onStart: (sessions: string[] | null) => Promise<unknown> }) {
+  const sets = useFetch<LabelSet[]>(`/api/labels/sets?stain=${encodeURIComponent(stain)}`)
+  const [left, setLeft] = useState<string[]>([])  // sessions left out
+  const [busy, setBusy] = useState(false)
+  const all = sets.data ?? []
+  const chosen = all.filter((s) => !left.includes(s.name))
+  const objects = chosen.reduce((n, s) => n + s.objects, 0)
+  const start = async () => {
+    setBusy(true)
+    try { await onStart(left.length ? chosen.map((s) => s.name) : null) } finally { setBusy(false) }
+    onClose()
+  }
+  return (
+    <Modal title={`Train a new ${stain} model`} onClose={onClose} wide>
+      <div className="train-dialog">
+        <p style={{ margin: 0 }}>Choose the labels it learns from. It is tested on whole TMAs it did not see, usually takes under a minute and uses this computer’s
+          processors. The model in use does not change: you choose afterwards whether to switch.</p>
+        <Loaded state={sets} label="Loading the sessions…">
+          {(list) => list.length ? (
+            <div className="train-sets">{list.map((s) => (
+              <label key={s.name} className={`choice-card${left.includes(s.name) ? '' : ' chosen'}`}>
+                <input type="checkbox" checked={!left.includes(s.name)}
+                  onChange={() => setLeft(left.includes(s.name) ? left.filter((n) => n !== s.name) : [...left, s.name])} />
+                <span><span className="row" style={{ gap: 6 }}><b>{s.title}</b>{s.reference && <span className="badge">read only</span>}</span>
+                  <span className="small secondary">{s.objects.toLocaleString()} objects on {s.fields.toLocaleString()} fields · labelled by {s.people.map((p) => p.replace(/^import: /, '')).join(', ')}</span>
+                  <span className="small muted">{Object.entries(s.classes).map(([c, n]) => `${c} ${n.toLocaleString()}`).join(' · ')}</span></span>
+              </label>
+            ))}</div>
+          ) : <Empty>No {stain} objects are labelled yet. Start a labelling session on <Link to="/labels">Labels</Link> first.</Empty>}
+        </Loaded>
+        <div className="row"><span className="spacer" />
+          <span className="small secondary">{chosen.length} of {all.length} session{all.length === 1 ? '' : 's'} · {objects.toLocaleString()} objects</span>
+          <button className="btn" onClick={onClose}>Cancel</button>
+          <button className="btn primary" disabled={busy || !chosen.length} onClick={start}>{busy ? 'Starting…' : 'Start training'}</button>
+        </div>
+      </div>
+    </Modal>
   )
 }
 
@@ -200,7 +243,7 @@ function VersionTable({ versions }: { versions: TrainedModel[] }) {
           <tbody>{versions.map((t) => (
             <tr key={t.path}>
               <td className="small">{day(t.created)}<div className="muted ellipsis" title={Object.keys(t.sources ?? {}).join(', ')}>
-                {t.sources ? `${Object.keys(t.sources).length} label sources` : (t.sets ?? []).join(', ')}</div></td>
+                {t.sessions ? t.sessions.map((s) => s.title).join(', ') : t.sources ? `${Object.keys(t.sources).length} label sources` : (t.sets ?? []).join(', ')}</div></td>
               <td className="num">{t.new_model.n.toLocaleString()}<div className="muted small">{t.new_model.positives.toLocaleString()} positive</div></td>
               <td className="small">{t.validation}</td>
               <td><MetricLine m={t.new_model} /></td>

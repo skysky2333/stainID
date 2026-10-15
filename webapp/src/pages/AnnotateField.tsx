@@ -5,6 +5,7 @@ import { api, apiUrl, enc } from '../api'
 import { Empty, ErrorNote, Loaded, Loading, PageHead, Progress, fmt } from '../components'
 import { useFetch, useStored } from '../hooks'
 import { AI_VIEW_FOR_LABELLERS } from '../labelling'
+import { FieldThumb } from '../labels/fields'
 import { Register, useSession } from '../session'
 import type { ImagePoint } from '../viewer'
 import { RASTER_LAYERS, ZoomViewer } from '../viewer'
@@ -39,7 +40,7 @@ export default function AnnotatePage() {
   if (detail.error) return <SessionProblem error={detail.error} retry={detail.reload} />
   if (!detail.data) return <Loading label="Opening the session…" />
   if (detail.data.meta.kind === 'queue') return <Queue detail={detail.data} />
-  return tile ? <Workspace key={tile} detail={detail.data} reload={detail.reload} tile={tile} /> : <NextField name={name} title={detail.data.meta.title} />
+  return tile ? <Workspace key={tile} detail={detail.data} reload={detail.reload} tile={tile} /> : <SessionOverview detail={detail.data} reload={detail.reload} />
 }
 
 function SessionProblem({ error, retry }: { error: string; retry: () => void }) {
@@ -55,28 +56,60 @@ function SessionProblem({ error, retry }: { error: string; retry: () => void }) 
   )
 }
 
-function NextField({ name, title }: { name: string; title: string }) {
+type MyFieldState = 'done' | 'todo' | 'preparing' | 'taken'
+const MY_STATE: Record<MyFieldState, { text: string; className: string }> = {
+  done: { text: 'Finished by you', className: 'status-done' }, todo: { text: 'To do', className: 'status-todo' },
+  preparing: { text: 'Being prepared', className: 'status-queued' }, taken: { text: 'Someone else has it open', className: 'status-running' },
+}
+const myState = (f: SessionDetail['fields'][number]): MyFieldState => (f.done_by_me ? 'done' : !f.prepared ? 'preparing' : f.open_by_others ? 'taken' : 'todo')
+
+/** A session's start page for the person labelling: how far they are, the next field to do, and every field with what is
+ *  done and what is left (they can open any prepared field). */
+function SessionOverview({ detail, reload }: { detail: SessionDetail; reload: () => void }) {
   const navigate = useNavigate()
-  const next = useFetch<{ tile_id: string | null; waiting: number }>(`/api/annotate/${name}/next`)
-  const waiting = !!next.data && !next.data.tile_id && next.data.waiting > 0
-  const { reload } = next
-  useEffect(() => {
-    if (next.data?.tile_id) navigate(`/annotate/${name}/${enc(next.data.tile_id)}`, { replace: true })
-  }, [next.data, name, navigate])
+  const { meta, fields } = detail
+  const name = meta.name
+  const [finding, setFinding] = useState(false)
+  const [nothing, setNothing] = useState(false)
+  const done = fields.filter((f) => f.done_by_me).length
+  const preparing = fields.filter((f) => !f.prepared).length
+  const left = fields.length - done
   useEffect(() => {  // fields still being prepared: look again by itself
-    if (!waiting) return
+    if (!preparing) return
     const timer = setInterval(reload, 10000)
     return () => clearInterval(timer)
-  }, [waiting, reload])
+  }, [preparing, reload])
+  const next = async () => {
+    setFinding(true)
+    const found = await api.get<{ tile_id: string | null }>(`/api/annotate/${name}/next`).catch(() => ({ tile_id: null }))
+    setFinding(false)
+    if (found.tile_id) navigate(`/annotate/${name}/${enc(found.tile_id)}`)
+    else setNothing(true)
+  }
   return (
-    <>
-      <PageHead title={title} subtitle={<Link to="/annotate">← All sessions</Link>} />
-      <Loaded state={next} label="Finding your next field…">
-        {(n) => n.tile_id ? <Loading label="Opening the field…" /> : n.waiting
-          ? <Empty><Loading inline label={`${n.waiting} more field${n.waiting === 1 ? ' is' : 's are'} still being prepared — this page checks again by itself.`} /></Empty>
-          : <Empty><p style={{ marginTop: 0 }}><b>You have finished every field in this session. Thank you!</b></p><Link className="btn" to="/annotate">Back to all sessions</Link></Empty>}
-      </Loaded>
-    </>
+    <div className="annotate-overview">
+      <PageHead title={meta.title} subtitle={<Link to="/annotate">← All sessions</Link>}>
+        {left > 0 && <button className="btn primary big" disabled={finding || left === preparing} onClick={next}>{done ? 'Continue with the next field →' : 'Start with the first field →'}</button>}
+      </PageHead>
+      {meta.instructions && <div className="instructions">{meta.instructions}</div>}
+      <div className="card annotate-progress-card">
+        <div className="row"><b>{done} of {fields.length} fields finished by you</b><span className="spacer" />
+          <span className="small secondary">{left ? `${left} left` : 'All done — thank you!'}{preparing ? ` · ${preparing} still being prepared (this page checks again by itself)` : ''}</span></div>
+        <Progress done={done} total={fields.length} />
+        <p className="small muted" style={{ margin: 0 }}>A field is one square of tissue (about 560 µm across). {meta.stain} · {AI_VIEW_FOR_LABELLERS[meta.ai_view]}.</p>
+        {nothing && <p className="small secondary" style={{ margin: 0 }}>Every field still to do is open by someone else right now or is still being prepared; try again in a minute.</p>}
+      </div>
+      <div className="field-grid annotate-fields">{fields.map((f, i) => {
+        const state = myState(f)
+        const body = <>
+          <FieldThumb src={apiUrl(`/api/annotate/${name}/fields/${enc(f.tile_id)}/thumb.jpg`)} alt={`Field ${i + 1}`} />
+          <span className="row small"><b>Field {i + 1}</b><span className="spacer" /><span className={`badge ${MY_STATE[state].className}`}>{MY_STATE[state].text}</span></span>
+        </>
+        return f.prepared
+          ? <Link key={f.tile_id} className="field-card clickable" to={`/annotate/${name}/${enc(f.tile_id)}`} title={state === 'done' ? 'Open again to check or change' : 'Open this field'}>{body}</Link>
+          : <div key={f.tile_id} className="field-card is-waiting">{body}</div>
+      })}</div>
+    </div>
   )
 }
 
@@ -225,7 +258,8 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
     try {
       await api.post(`/api/annotate/${name}/fields/${enc(tile)}/finish`, {})
       reload()
-      navigate(`/annotate/${name}`)
+      const next = await api.get<{ tile_id: string | null }>(`/api/annotate/${name}/next`).catch(() => ({ tile_id: null }))
+      navigate(next.tile_id ? `/annotate/${name}/${enc(next.tile_id)}` : `/annotate/${name}`)
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -269,7 +303,7 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
     <div className="annotate-page">
       <div className="annotate-top">
         <div className="annotate-heading">
-          <Link to="/annotate" className="small">← All sessions</Link>
+          <span className="row small"><Link to="/annotate">← All sessions</Link><Link to={`/annotate/${name}`}>All fields of this session</Link></span>
           <h1>{meta.title}</h1>
           <div className="muted small">{meta.stain} · {AI_VIEW_FOR_LABELLERS[meta.ai_view]}</div>
         </div>

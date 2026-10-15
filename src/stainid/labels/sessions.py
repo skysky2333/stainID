@@ -6,6 +6,12 @@ A session is `sessions/<name>/meta.json`; its labels go into the shared label st
 - `queue`: one object at a time, chosen by a rule (where the AI is unsure, where people or the AI disagree, objects
   with one label so far, or at random) from the fields whose candidate pool is prepared. The rule is applied anew for
   every item, so the queue follows new data and new labels.
+
+A field is one square tile of a core (about 560 µm, 2048 pixels), shown to people as one picture.
+
+Every label belongs to a session. Labels with no session (the label sets imported from before labelling sessions
+existed, `source` "import: <set>") form one read-only pseudo-session, `REFERENCE`. Models can be trained on any
+combination of sessions (`in_sessions`).
 """
 from __future__ import annotations
 
@@ -27,6 +33,35 @@ FIELD_TOOLS = ("class", "point", "outline", "tag")
 AI_VIEWS = ("full", "positions", "none")
 RULES = {"uncertain": "where the AI is unsure (probability 0.3–0.7)", "disagree": "where people disagree with each other or with the AI",
          "second": "objects one other person has labelled", "random": "any candidate"}
+
+
+REFERENCE = "reference"
+REFERENCE_TITLE = "AI reference labels"
+
+
+def session_of(labels: pd.DataFrame) -> pd.Series:
+    """The session of each label: its own, or `REFERENCE` for labels made outside sessions."""
+    named = labels.session.fillna("").astype(str) if "session" in labels else pd.Series("", index=labels.index)
+    return named.where(named != "", REFERENCE)
+
+
+def in_sessions(labels: pd.DataFrame, chosen: list[str] | None) -> pd.DataFrame:
+    """Only the labels of these sessions (all labels when `chosen` is empty or None)."""
+    return labels[session_of(labels).isin(set(chosen))] if chosen else labels
+
+
+def label_sets(labels: pd.DataFrame, stain: str, titles: dict[str, str]) -> list[dict]:
+    """Every session with object labels of this stain: how many objects of each class, from how many fields and people.
+    `titles` names the real sessions; the reference labels come last."""
+    mine = labels[(labels.stain == stain) & (labels.task == "class")]
+    groups = session_of(mine)
+    out = []
+    for name, group in mine.groupby(groups):
+        objects = group.drop_duplicates(["tile_id", "x", "y"])
+        out.append({"name": name, "title": REFERENCE_TITLE if name == REFERENCE else titles.get(name, name), "reference": name == REFERENCE,
+                    "labels": int(len(group)), "objects": int(len(objects)), "fields": int(group.tile_id.nunique()),
+                    "classes": {str(k): int(v) for k, v in group.value.value_counts().items()}, "people": sorted(set(group.source))})
+    return sorted(out, key=lambda s: (s["reference"], s["title"].lower()))
 
 
 def folder(root: Path, name: str) -> Path:
@@ -78,6 +113,57 @@ def pick_fields(tiles: pd.DataFrame, reviewed: set[str], n: int, seed: int) -> l
             if bucket and len(picked) < n:
                 picked.append(bucket.pop())
     return list(np.random.default_rng(seed).permutation(picked))
+
+
+def taken(root: Path) -> dict[str, list[str]]:
+    """The sessions each field belongs to."""
+    out: dict[str, list[str]] = {}
+    for name in names(root):
+        for tile in meta(root, name).get("fields", []):
+            out.setdefault(tile, []).append(name)
+    return out
+
+
+def add_fields(root: Path, name: str, tile_ids: list[str]) -> dict:
+    """Add these fields to a session (ones it has already are left as they are)."""
+    current = meta(root, name)
+    have = set(current["fields"])
+    return update(root, name, fields=current["fields"] + [t for t in dict.fromkeys(tile_ids) if t not in have])
+
+
+def remove_fields(root: Path, name: str, tile_ids: list[str]) -> dict:
+    """Take these fields out of a session. Labels already made on them stay in the label store."""
+    current = meta(root, name)
+    drop = set(tile_ids)
+    return update(root, name, fields=[t for t in current["fields"] if t not in drop])
+
+
+def labelled_by(labels: pd.DataFrame, stain: str) -> dict[str, set[str]]:
+    """Who has saved any label of this stain on each field."""
+    mine = labels[labels.stain == stain]
+    return {tile: set(group.source) for tile, group in mine.groupby("tile_id")}
+
+
+def field_states(session: dict, reviewed: dict[str, set[str]], labelled: dict[str, set[str]], prepared: set[str],
+                 busy: dict[str, set[str]]) -> list[dict]:
+    """Where each field of a whole-field session stands: `preparing` (its objects are still being found), `not_started`,
+    `in_progress` (someone has labels on it or has it open, but fewer than `per_field` people finished it) or `done`;
+    with who finished it, who is working on it, and who has it open now."""
+    out = []
+    for tile in session["fields"]:
+        done_by = sorted(reviewed.get(tile, set()))
+        working = sorted(labelled.get(tile, set()) - set(done_by))
+        open_by = sorted(busy.get(tile, set()))
+        if tile not in prepared:
+            state = "preparing"
+        elif len(done_by) >= session.get("per_field", 1):
+            state = "done"
+        elif done_by or working or open_by:
+            state = "in_progress"
+        else:
+            state = "not_started"
+        out.append({"tile_id": tile, "state": state, "done_by": done_by, "working": working, "open_by": open_by})
+    return out
 
 
 def next_field(session: dict, reviewed: dict[str, set[str]], annotator: str, busy: dict[str, set[str]]) -> str | None:

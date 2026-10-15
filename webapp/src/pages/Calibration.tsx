@@ -93,11 +93,11 @@ function Thresholds({ rows }: { rows: Row[] }) {
       <Advanced title="How the threshold is set, and all numbers">
         <p className="secondary" style={{ marginTop: 0 }}>
           For each slide, stainID samples tissue pixels from its cores and takes the highest of (a) the Otsu split of their DAB values,
-          (b) the median + 6 × MAD and (c) 0.01 OD. The percentiles show how the DAB values of the sampled tissue are spread.
+          (b) the median + 6 × MAD and (c) 0.01 OD. The percentiles show how the DAB values of the tissue are spread (every tile of every core of the slide).
         </p>
         <div className="table-wrap">
           <table>
-            <thead><tr><th>TMA</th><th>Stain</th><th className="num">Threshold (OD)</th><th className="num">Sampled pixels</th>
+            <thead><tr><th>TMA</th><th>Stain</th><th className="num">Threshold (OD)</th><th className="num">Tissue pixels used</th>
               {['p50', 'p75', 'p90', 'p95', 'p99', 'p999'].map((p) => <th key={p} className="num">{p === 'p999' ? 'p99.9' : p}</th>)}</tr></thead>
             <tbody>
               {rows.map((r) => (

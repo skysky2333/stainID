@@ -3,7 +3,7 @@
 Candidates and features come from exactly the code the detection pipeline runs (training/candidates.py), so a label on
 a pool object can train the stain model directly. The AI's call is the published result for that field (the
 pipeline output at the same position); a candidate the pipeline did not keep is a negative. One CSV per field:
-`pool/<stain>/<tile_id>.csv`. Objects imported from earlier label sets on images outside the field manifest live in
+`pool/<stain>/<tile_id>.csv`. Objects imported from earlier label sets on images outside the project's tiles live in
 the same place, marked incomplete.
 """
 from __future__ import annotations
@@ -18,7 +18,8 @@ from joblib import load
 from stainid.labels.tasks import MODEL_KEY, NEGATIVE, ai_value
 from stainid.outputs import objects as pipeline_objects
 from stainid.project import Project
-from stainid.tables import read_csv, write_text_atomic
+from stainid.sampling.tiles import known_tile_rows
+from stainid.tables import write_text_atomic
 from stainid.training import candidates
 
 MATCH_PX = 4.0
@@ -123,7 +124,7 @@ def prepared(project: Project, stain: str) -> set[str]:
 
 def prepare(project: Project, stain: str, tile_ids: list[str], redo: bool = False) -> None:
     """Build the pool for these fields (skipping finished ones unless redo)."""
-    tiles = {t["tile_id"]: t for t in read_csv(project.input("tile_manifest")) if t["stain"] == stain}
+    tiles = known_tile_rows(project)
     done = set() if redo else prepared(project, stain)
     todo = [t for t in tile_ids if t not in done]
     loader = candidates.FieldLoader(project)

@@ -18,9 +18,8 @@ type PictureState = ({ ready: true } & Pyramid) | { ready: false; state: 'waitin
 interface CoreObjects { status: 'done' | 'partial' | 'not_run'; tiles_done: number; tiles_total: number; columns: string[]; rows: (string | number | null)[][]; tiles: number[][] }
 interface Found { index: number; x: number; y: number; r: number; cls: string; p: number | null; area: number | null }
 
-const LAYER_DEFAULTS = { objects: true, rejected: false, dab: false, tiles: false, fields: true }
+const LAYER_DEFAULTS = { objects: true, rejected: false, dab: false, tiles: false }
 type Layers = typeof LAYER_DEFAULTS
-const FIELD_COLOR = '#ffd21f'
 const TILE_COLOR = 'rgb(30 30 30 / 55%)'
 
 export default function CoreView() {
@@ -90,11 +89,8 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
   const classes = Object.keys(counts).filter((c) => c !== 'rejected').sort()
   const drawn = useMemo(() => (layers.objects ? objects.filter((o) => layers.rejected || o.cls !== 'rejected') : []), [objects, layers.objects, layers.rejected])
   const marks = useMemo<Mark[]>(() => drawn.map((o) => ({ x: o.x, y: o.y, r: o.r, color: CLASS_STYLE[o.cls]?.color ?? '#fff' })), [drawn])
-  const fields = core.fields.filter((f) => f.stain === stain).sort((a, b) => a.selection_order - b.selection_order)
-  const boxes = useMemo<Mark[]>(() => [
-    ...(layers.tiles ? (found.data?.tiles ?? []).map(([x, y, w, h]) => ({ x, y, w, h, color: TILE_COLOR, dashed: true })) : []),
-    ...(layers.fields ? fields.map((f) => ({ x: f.x_px, y: f.y_px, w: f.width_px, h: f.height_px, color: FIELD_COLOR })) : []),
-  ], [layers.tiles, layers.fields, found.data, fields])
+  const boxes = useMemo<Mark[]>(() => (layers.tiles ? (found.data?.tiles ?? []).map(([x, y, w, h]) => ({ x, y, w, h, color: TILE_COLOR, dashed: true })) : []),
+    [layers.tiles, found.data])
   const toggle = (key: keyof Layers) => setLayers({ ...layers, [key]: !layers[key] })
   const pick = drawn.find((o) => o.index === selected) ?? null
   const describe = (i: number) => {
@@ -140,10 +136,8 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
           )}
           <label className="layer-toggle"><input type="checkbox" checked={layers.dab} onChange={() => toggle('dab')} />
             <span className="swatch" style={{ background: RASTER_LAYERS.dab.color }} />Stained area (brown above this slide’s threshold)</label>
-          {fields.length > 0 && <label className="layer-toggle"><input type="checkbox" checked={layers.fields} onChange={() => toggle('fields')} />
-            <span className="swatch outline" style={{ borderColor: FIELD_COLOR }} />Sampled fields ({fields.length})</label>}
           {(found.data?.tiles.length ?? 0) > 0 && <label className="layer-toggle"><input type="checkbox" checked={layers.tiles} onChange={() => toggle('tiles')} />
-            <span className="swatch outline dashed" />Analysed tiles ({found.data!.tiles.length})</label>}
+            <span className="swatch outline dashed" />Tile grid ({found.data!.tiles.length} tiles analysed)</label>}
         </div>
         {pick && (
           <div className="card">
@@ -156,18 +150,6 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
             </dl>
             <div className="row"><button className="btn small" onClick={() => go(pick.x, pick.y, 1)}>Zoom to it</button>
               <button className="btn small" onClick={() => setSelected(null)}>Clear</button></div>
-          </div>
-        )}
-        {fields.length > 0 && (
-          <div className="card">
-            <h3>Sampled fields</h3>
-            <p className="muted small" style={{ marginTop: 0 }}>The fixed spots chosen in every core for the field-based measures. Click one to go there.</p>
-            <div className="field-list">
-              {fields.map((f, i) => (
-                <button key={f.tile_id} className="btn small" disabled={!ready} title={f.tile_id}
-                  onClick={() => go(f.x_px + f.width_px / 2, f.y_px + f.height_px / 2, 0.45)}>Field {i + 1}</button>
-              ))}
-            </div>
           </div>
         )}
         <Advanced title="Details">

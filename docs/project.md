@@ -24,8 +24,6 @@ sample_region_ids: {plain_prefix: "", prefixed_prefix: "", region: name}   # don
 groups:                      # diagnostic group codes used in the TMA map, in plot order
   - {code: CT, label: Control, color: 3}     # color = palette slot 1-8 (optional)
   - {code: AD, label: Alzheimer disease}
-analysis:
-  tiles: whole_core          # detect objects in every tissue tile of each core, or: sampled_fields
 precision:                   # arithmetic on CUDA GPUs (CPU always fp32): fp32, tf32 or bf16 — keep one per cohort
   cellpose: bf16             # tf32 reproduces fp32 masks cell for cell; bf16 is faster, ~1% of cells differ
   sam: tf32
@@ -34,10 +32,8 @@ inputs:
   slides_dir: data/slides                                        # folder with the slide scans
   slides_table: data/slides.csv                                  # which scan is which TMA and stain
   core_manifest: data/core_manifest.csv                          # stainid dearray (+ layout, export, qc)
-  core_images: data/analysis/core_images.csv                     # stainid select
-  field_manifest: data/analysis/cohort_systematic_tiles.csv      # stainid select (all fields)
-  tile_manifest: data/analysis/cohort_primary_tiles.csv          # stainid select (sampled fields: label, train, test)
-  whole_core_manifest: data/analysis/cohort_whole_core_tiles.csv # stainid tiles (whole-core analysis)
+  core_images: data/analysis/core_images.csv                     # stainid tiles
+  whole_core_manifest: data/analysis/cohort_whole_core_tiles.csv # stainid tiles (every tile of every core)
   calibration: data/analysis/slide_dab_calibration.csv           # stainid calibrate
   manual_exclusions: data/annotations/cohort_manual_exclusions.json
   donor_metadata: data/donor_metadata.csv
@@ -80,8 +76,7 @@ steps.
 | `manual_exclusions` | you, optional |
 | `slides.csv` | *Register slides* |
 | core table (`core_manifest`) | *Find cores*, then updated by *Attach TMA map*, *Export cores* and *Check core quality* |
-| sampled fields (`tile_manifest`, `field_manifest`), `core_images` | *Choose analysis fields* |
-| whole-core tiles (`whole_core_manifest`) | *Cut whole cores into tiles* |
+| tiles (`whole_core_manifest`), `core_images` | *Cut cores into tiles* |
 | `calibration` | *Calibrate stain thresholds* |
 
 **`slides.csv`**: one row per scan, written by the *Register slides* step: `slide_path`, `tma`, `stain`. Optional:
@@ -111,16 +106,17 @@ found by *Find cores* already listed.
 - Required: `donor_id`, `disease_group`.
 - Optional: covariates (age, sex, APOE, PMI, …), used by downstream analyses only.
 
-**Analysis fields** (`tile_manifest`): one row per field.
+**Tiles** (`whole_core_manifest`): one row per tile of tissue in each core image.
 
 | column | |
 |---|---|
-| `tile_id`, `core_id`, `tma`, `stain` | field identity |
+| `tile_id`, `core_id`, `tma`, `stain` | tile identity (`…_W<row><column>`; squares that were sampled fields in older projects keep `…_S<n>`) |
 | `donor_id`, `sample_region_id`, `region`, `disease_group`, `technical_replicate` | sample identity |
 | `image_path` | exported core image (relative to the project) |
-| `x_px`, `y_px`, `width_px`, `height_px` | field position in the core image |
+| `x_px`, `y_px`, `width_px`, `height_px` | tile position in the core image |
 | `pixel_width_um`, `pixel_height_um` | pixel size |
-| `selection_order`, `nested_sample` | selection rank; `primary_four` / `extended_eight` |
+| `selection_order` | the order detection works through a core (100 + 100 × row + column) |
+| `preview_tissue_fraction` | share of the tile that is tissue, on the core preview |
 
 **`manual_exclusions`**: JSON mapping each core image path to a list of polygons (`polygon_core_px`,
 core-image pixel coordinates) to drop before measurement.

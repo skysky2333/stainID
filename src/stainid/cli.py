@@ -61,20 +61,15 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--workers", type=int, default=2)
         p.add_argument("--overwrite", action="store_true")
 
-    p = sub.add_parser("select", help="core image table and analysis-field selection")
-    p.add_argument("--fields-per-core", type=int, default=8)
-    p.add_argument("--primary", type=int, default=4, help="first N fields per stain-core form the analysis manifest")
-    p.add_argument("--field-size", type=int, default=2048)
+    p = sub.add_parser("tiles", help="core image table, and every core cut into tissue tiles (detection runs on these)")
+    p.add_argument("--tile-size", "--field-size", dest="tile_size", type=int, default=2048, help="side of each square tile in pixels")
 
-    p = sub.add_parser("tiles", help="cut every core into tissue tiles for whole-core analysis")
-    p.add_argument("--field-size", type=int, default=2048)
-
-    p = sub.add_parser("calibrate", help="per-slide DAB thresholds (TMA x stain)")
+    p = sub.add_parser("calibrate", help="per-slide DAB thresholds (TMA x stain) from every tile of every core")
     p.add_argument("--stain", action="append")
-    p.add_argument("--fields-per-core", type=int, default=1)
+    p.add_argument("--redo", action="store_true", help="calibrate slides again that already have a threshold")
     p.add_argument("--output", type=Path)
 
-    p = sub.add_parser("nuclei", help="Cellpose-SAM nuclei for analysis fields")
+    p = sub.add_parser("nuclei", help="Cellpose-SAM nuclei for every tile")
     p.add_argument("--stain", action="append", required=True)
     p.add_argument("--device", default="mps")
     p.add_argument("--batch-size", type=int, default=8)
@@ -121,6 +116,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("train", help="train a stain model from the labels in the label store")
     p.add_argument("--stain", required=True, choices=("NeuN", "6E10", "AT8"))
+    p.add_argument("--session", action="append", help="train only on the labels of this session (repeat for several; \"reference\" = the "
+                   "imported reference labels); default: every session")
 
     p = sub.add_parser("download-models", help="download the public model weights (Cellpose-SAM, SAM, Phikon)")
     p.add_argument("--which", action="append", choices=("cellpose", "sam", "huggingface_home"))
@@ -191,19 +188,14 @@ def run(args: argparse.Namespace, project) -> None:
             slides.export(project, args.overwrite, args.workers)
         else:
             slides.core_qc(project, args.overwrite, args.workers)
-    elif args.command == "select":
-        from stainid.workflows.select import select_fields
-
-        for path in select_fields(project, args.fields_per_core, args.primary, args.field_size):
-            print(path)
     elif args.command == "tiles":
         from stainid.sampling.whole_core import write_whole_core_manifest
 
-        write_whole_core_manifest(project, args.field_size)
+        write_whole_core_manifest(project, args.tile_size)
     elif args.command == "calibrate":
         from stainid.workflows.calibrate import calibrate_slides
 
-        print(calibrate_slides(project, args.stain, args.fields_per_core, output=args.output))
+        print(calibrate_slides(project, args.stain, args.redo, output=args.output))
     elif args.command == "nuclei":
         from stainid.workflows.nuclei import run_nuclei
 
@@ -253,7 +245,7 @@ def run(args: argparse.Namespace, project) -> None:
     elif args.command == "train":
         from stainid.training.train import train_model
 
-        train_model(project, args.stain)
+        train_model(project, args.stain, [s.strip() for v in args.session or [] for s in v.split(",") if s.strip()] or None)
 
 
 def serve(args: argparse.Namespace) -> None:

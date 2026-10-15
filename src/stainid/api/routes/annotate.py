@@ -15,11 +15,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
-from stainid.api import render
+from stainid.api import pyramid, render
 from stainid.api.routes.images import OVERLAYS
 from stainid.api.session import annotator, annotator_name, is_admin, require_admin
 from stainid.api.state import get_state
-from stainid.labels import overview, pool, sessions, store
+from stainid.labels import overview, pool, readiness, sessions, store
 from stainid.labels.tasks import CLASSES, CROP_UM, FIELD_TAGS, INSTRUCTIONS, NEGATIVE, STAINS, positive
 
 router = APIRouter(tags=["labels"])
@@ -28,6 +28,8 @@ LAYERS = {"NeuN": ["dab", "exclusions"], "6E10": ["dab", "exclusions"], "AT8": [
 _BUSY: dict[tuple[str, str], dict[str, float]] = {}
 _BUSY_LOCK = threading.Lock()
 admin = [Depends(require_admin)]
+FIELD_FACTS = ("core_id", "core_label", "tma", "region", "disease_group")
+BOX = ("x_px", "y_px", "width_px", "height_px")
 
 
 def root() -> Path:
@@ -131,6 +133,11 @@ class Opening(BaseModel):
 
 class MoreFields(BaseModel):
     n: int = 10
+    tile_ids: list[str] | None = None
+
+
+class FieldList(BaseModel):
+    tile_ids: list[str]
 
 
 class Prepare(BaseModel):
@@ -153,7 +160,54 @@ def labels_overview() -> dict:
     for name in sessions.names(root()):
         meta = sessions.meta(root(), name)
         listed.append({**{k: v for k, v in meta.items() if k != "fields"}, **session_progress(meta, labels), "link": annotate_path(name)})
-    return {"stains": stains, "sessions": listed}
+    reference = labels[sessions.session_of(labels) == sessions.REFERENCE]
+    objects = reference[reference.task == "class"]
+    summary = {"name": sessions.REFERENCE, "title": sessions.REFERENCE_TITLE, "labels": int(len(objects)),
+               "stains": {str(k): int(v) for k, v in objects.stain.value_counts().items()}, "sets": sorted(set(reference.source)),
+               "fields": int(objects.tile_id.nunique())} if len(reference) else None
+    return {"stains": stains, "sessions": listed, "reference": summary}
+
+
+def _titles() -> dict[str, str]:
+    return {name: sessions.meta(root(), name).get("title", name) for name in sessions.names(root())}
+
+
+@router.get("/labels/sets", dependencies=admin)
+def label_sets(stain: str) -> list[dict]:
+    """The sessions (and the reference labels) with object labels of this stain, to choose what a model learns from."""
+    return sessions.label_sets(store.current(root()), stain, _titles())
+
+
+@router.get("/labels/sessions/{name}/labels", dependencies=admin)
+def session_labels(name: str, request: Request, stain: str = "", value: str = "", tile: str = "", offset: int = 0, limit: int = 24) -> dict:
+    """What one session (or the reference labels) holds: counts per class and person, and its fields with every
+    labelled object (positions in field-picture pixels), filtered by class or field, a page of fields at a time."""
+    reference = name == sessions.REFERENCE
+    meta = {"title": sessions.REFERENCE_TITLE, "stain": ""} if reference else session_meta(name, request)
+    labels = store.current(root())
+    mine = labels[(sessions.session_of(labels) == name) & (labels.task == "class")]
+    stains = sorted(set(mine.stain))
+    stain = stain or meta.get("stain") or (stains[0] if stains else "")
+    mine = mine[mine.stain == stain]
+    classes = {str(k): int(v) for k, v in mine.value.value_counts().items()}
+    people = {str(k): int(v) for k, v in mine.source.value_counts().items()}
+    if value:
+        mine = mine[mine.value == value]
+    if tile:
+        mine = mine[mine.tile_id.str.contains(tile, case=False, regex=False)]
+    order = sorted(set(mine.tile_id))
+    page = order[max(0, offset): max(0, offset) + max(1, min(limit, 96))]
+    facts = _field_facts(page)
+    context = get_state().project.context_px
+    fields = []
+    for tile_id in page:
+        info = facts.get(tile_id)
+        group = mine[mine.tile_id == tile_id]
+        objects = [{"x": float(r.x), "y": float(r.y), "value": r.value, "source": r.source} for r in group.itertuples()]
+        offset_xy = [info["x_px"] - max(0, info["x_px"] - context), info["y_px"] - max(0, info["y_px"] - context)] if info else None
+        fields.append({"tile_id": tile_id, **(info or {}), "picture": info is not None, "offset": offset_xy, "objects": objects})
+    return {"name": name, "title": meta.get("title", name), "reference": reference, "stain": stain, "stains": stains, "classes": classes,
+            "people": people, "fields": fields, "total_fields": len(order), "objects": int(len(mine))}
 
 
 @router.get("/labels/share", dependencies=admin)
@@ -187,8 +241,38 @@ def annotate_path(session: str = "") -> str:
 def free_name(title: str, stain: str, kind: str) -> str:
     """A session name made from its title (or stain and kind) that no session uses yet."""
     base = re.sub(r"[^a-z0-9]+", "_", (title or f"{stain} {'review' if kind == 'fields' else 'queue'}").lower()).strip("_")[:40] or "session"
-    taken = set(sessions.names(root())) | {p.name.rsplit("-", 2)[0] for p in (root() / sessions.FOLDER / ".deleted").glob("*")}
+    taken = set(sessions.names(root())) | {p.name.rsplit("-", 2)[0] for p in (root() / sessions.FOLDER / ".deleted").glob("*")} | {sessions.REFERENCE}
     return next(name for name in (base if i == 1 else f"{base}_{i}" for i in range(1, 10_000)) if name not in taken)
+
+
+def _known_fields(stain: str, tile_ids: list[str]) -> list[str]:
+    """These fields, checked to be tiles of this stain that can be labelled now (400 with the reason otherwise)."""
+    tiles = get_state().tiles
+    tiles = tiles[tiles.stain == stain] if not tiles.empty else tiles
+    wanted = list(dict.fromkeys(tile_ids))
+    unknown = [t for t in wanted if t not in set(tiles.tile_id)]
+    if unknown:
+        raise HTTPException(400, f"unknown {stain} fields: {', '.join(unknown[:5])}")
+    chosen = tiles[tiles.tile_id.isin(set(wanted))].drop_duplicates("tile_id")
+    blocked = [b for b in readiness.blockers(get_state().project, chosen) if b]
+    if blocked:
+        raise HTTPException(400, f"{len(blocked)} of these fields cannot be labelled yet. " + " ".join(sorted({b["reason"] for b in blocked})))
+    return wanted
+
+
+def _pick(stain: str, n: int, seed: int) -> list[str]:
+    """n fields that are ready, that nobody has checked and no session has, spread over TMAs and groups."""
+    tiles = get_state().labelling_tiles
+    tiles = tiles[tiles.stain == stain] if not tiles.empty else tiles
+    reviewed = set(store.reviewed_fields(store.current(root()), stain))
+    free = tiles[~tiles.tile_id.isin(reviewed | set(sessions.taken(root())))] if not tiles.empty else tiles
+    if free.empty:
+        raise HTTPException(400, f"Every {stain} field has been checked or belongs to a session already.")
+    blocked = readiness.blockers(get_state().project, free)
+    if all(blocked):
+        first = pd.Series([b["reason"] for b in blocked]).value_counts().index[0]
+        raise HTTPException(400, f"No {stain} field can be labelled yet. {first}")
+    return sessions.pick_fields(free[[b is None for b in blocked]], set(), n, seed)
 
 
 @router.post("/labels/sessions", dependencies=admin)
@@ -197,19 +281,11 @@ def create_session(body: NewSession) -> dict:
         body.name = free_name(body.title, body.stain, body.kind)
     if not re.fullmatch(r"[A-Za-z0-9_\-]+", body.name):
         raise HTTPException(400, "name may contain letters, digits, - and _ only")
-    state = get_state()
-    tiles = state.tiles[state.tiles.stain == body.stain]
+    if body.name == sessions.REFERENCE:
+        raise HTTPException(400, f"{sessions.REFERENCE} is the name of the imported reference labels; choose another name")
     fields: list[str] = []
     if body.kind == "fields":
-        if body.tile_ids:
-            unknown = set(body.tile_ids) - set(tiles.tile_id)
-            if unknown:
-                raise HTTPException(400, f"unknown {body.stain} fields: {', '.join(sorted(unknown)[:5])}")
-            fields = list(body.tile_ids)
-        else:
-            reviewed = set(store.reviewed_fields(store.current(root()), body.stain))
-            taken = {t for n in sessions.names(root()) for t in sessions.meta(root(), n).get("fields", [])}
-            fields = sessions.pick_fields(tiles, reviewed | taken, body.n_fields, len(sessions.names(root())))
+        fields = _known_fields(body.stain, body.tile_ids) if body.tile_ids else _pick(body.stain, body.n_fields, len(sessions.names(root())))
         if not fields:
             raise HTTPException(400, f"no {body.stain} fields left to review")
     try:
@@ -231,17 +307,112 @@ def set_open(name: str, body: Opening, request: Request) -> dict:
 
 @router.post("/labels/sessions/{name}/fields", dependencies=admin)
 def add_fields(name: str, body: MoreFields, request: Request) -> dict:
+    """More fields for a session: these exact ones (`tile_ids`), or `n` that stainID picks."""
     meta = session_meta(name, request)
-    state = get_state()
     if meta["kind"] != "fields":
         prepare_job(meta["stain"], body.n)
         return meta
-    reviewed = set(store.reviewed_fields(store.current(root()), meta["stain"]))
-    taken = {t for n in sessions.names(root()) for t in sessions.meta(root(), n).get("fields", [])}
-    more = sessions.pick_fields(state.tiles[state.tiles.stain == meta["stain"]], reviewed | taken, body.n, len(meta["fields"]))
-    updated = sessions.update(root(), name, fields=meta["fields"] + more)
+    more = _known_fields(meta["stain"], body.tile_ids) if body.tile_ids else _pick(meta["stain"], body.n, len(meta["fields"]))
+    if not more:
+        raise HTTPException(400, f"no {meta['stain']} fields left that nobody has checked")
+    updated = sessions.add_fields(root(), name, more)
     prepare_job(meta["stain"], 0, name)
     return updated
+
+
+@router.post("/labels/sessions/{name}/fields/remove", dependencies=admin)
+def remove_fields(name: str, body: FieldList, request: Request) -> dict:
+    """Take fields out of a session; labels already made on them are kept."""
+    session_meta(name, request)
+    return sessions.remove_fields(root(), name, body.tile_ids)
+
+
+def _field_facts(tile_ids: list[str]) -> dict[str, dict]:
+    """Where each field is (core, TMA, region, group) and its square in the core image."""
+    tiles = get_state().tiles
+    rows = tiles[tiles.tile_id.isin(set(tile_ids))] if not tiles.empty else tiles
+    return {r["tile_id"]: {k: _text(r.get(k)) for k in FIELD_FACTS} | {k: int(r[k]) for k in BOX} for r in rows.to_dict("records")}
+
+
+def _text(value) -> str | None:
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return None
+    return str(int(value)) if isinstance(value, float) and value.is_integer() else str(value)
+
+
+@router.get("/labels/sessions/{name}/fields", dependencies=admin)
+def session_fields(name: str, request: Request) -> list[dict]:
+    """Every field of a session with where it stands (see `sessions.field_states`) and where it is."""
+    meta = session_meta(name, request)
+    labels = store.current(root())
+    states = sessions.field_states(meta, store.reviewed_fields(labels, meta["stain"]), sessions.labelled_by(labels[labels.session == name], meta["stain"]),
+                                   pool.prepared(get_state().project, meta["stain"]), busy(name))
+    facts = _field_facts(meta["fields"])
+    return [{**facts.get(s["tile_id"], {}), **s} for s in states]
+
+
+@router.get("/labels/picker", dependencies=admin)
+def picker(stain: str, tma: str = "", region: str = "", group: str = "", core: str = "", free: bool = False, offset: int = 0,
+           limit: int = 12) -> dict:
+    """The fields people can be asked to label, core by core (for choosing them by hand): each field's square in its
+    core image, whether it already has labels or belongs to a session, and, when it cannot be labelled yet, why and
+    which step comes first (`blocked`, see `labels.readiness`; a core whose fields all wait for the same thing carries
+    it too). `free` keeps only fields nobody has labelled that no session has."""
+    state = get_state()
+    tiles = state.labelling_tiles
+    tiles = tiles[tiles.stain == stain] if not tiles.empty else tiles
+    facets = {key: sorted({str(v) for v in tiles[column].dropna()}, key=lambda v: (len(v), v)) if column in tiles else []
+              for key, column in (("tmas", "tma"), ("regions", "region"), ("groups", "disease_group"))}
+    labelled = sessions.labelled_by(store.current(root()), stain)
+    taken = sessions.taken(root())
+    for column, value in (("tma", tma), ("region", region), ("disease_group", group)):
+        if value and column in tiles:
+            tiles = tiles[tiles[column].astype(str) == value]
+    if core:
+        tiles = tiles[tiles.core_id.str.contains(core, case=False, regex=False)]
+    if free:
+        tiles = tiles[~tiles.tile_id.isin(set(labelled) | set(taken))]
+    blocked = dict(zip(tiles.tile_id, readiness.blockers(state.project, tiles))) if not tiles.empty else {}
+    first_rows = tiles.drop_duplicates("core_id") if not tiles.empty else tiles
+    order = [r["core_id"] for r in sorted(first_rows.to_dict("records"), key=_core_order)]
+    page = order[max(0, offset): max(0, offset) + max(1, min(limit, 48))]
+    images = state.core_images
+    cores = []
+    for core_id, group_tiles in tiles[tiles.core_id.isin(set(page))].groupby("core_id"):
+        first = group_tiles.iloc[0]
+        image = images[(images.core_id == core_id) & (images.stain == stain)] if not images.empty else images
+        fields = [{"tile_id": t["tile_id"], **{k: int(t[k]) for k in BOX}, "labelled_by": sorted(labelled.get(t["tile_id"], set())),
+                   "sessions": taken.get(t["tile_id"], []), "blocked": blocked.get(t["tile_id"])}
+                  for t in group_tiles.sort_values("selection_order").to_dict("records")]
+        reasons = {f["blocked"]["reason"] if f["blocked"] else None for f in fields}
+        cores.append({"core_id": core_id, **{k: _text(first.get(k)) for k in ("tma", "core_label", "region", "disease_group", "donor_id")},
+                      "width": int(image.native_width_px.iloc[0]) if len(image) else None,
+                      "height": int(image.native_height_px.iloc[0]) if len(image) else None, "fields": fields,
+                      "blocked": fields[0]["blocked"] if len(reasons) == 1 and None not in reasons else None})
+    cores.sort(key=lambda c: order.index(c["core_id"]))
+    return {"cores": cores, "total_cores": len(order), "total_fields": int(len(tiles)), "ready_fields": sum(b is None for b in blocked.values()),
+            "facets": facets}
+
+
+def _core_order(row: dict) -> tuple:
+    """TMA by number, then the core's position on it row by row ('B-12' is row 12, column B)."""
+    tma, label = str(row.get("tma", "")), str(row.get("core_label", ""))
+    column, _, number = label.partition("-")
+    return (int(tma) if tma.isdigit() else 1 << 30, tma, int(number) if number.isdigit() else 0, column)
+
+
+@router.get("/labels/fields/{tile_id}/thumb.jpg", dependencies=admin)
+def field_thumb(tile_id: str) -> FileResponse:
+    return _thumb(tile_id)
+
+
+def _thumb(tile_id: str) -> FileResponse:
+    state = get_state()
+    try:
+        return FileResponse(pyramid.field_thumbnail(state, state.tile(tile_id)), headers={"Cache-Control": "private, max-age=86400"})
+    except (KeyError, FileNotFoundError) as error:
+        raise HTTPException(404, str(error).strip("'"))
+
 
 
 @router.delete("/labels/sessions/{name}", dependencies=admin)
@@ -422,6 +593,12 @@ def finish(name: str, tile_id: str, request: Request, person: str = Depends(anno
 def image(name: str, tile_id: str, request: Request, person: str | None = Depends(viewer)) -> FileResponse:
     field_tile(session_meta(name, request), tile_id)
     return FileResponse(render.field_jpeg(get_state(), tile_id), headers={"Cache-Control": "private, max-age=86400"})
+
+
+@router.get("/annotate/{name}/fields/{tile_id}/thumb.jpg")
+def annotate_thumb(name: str, tile_id: str, request: Request, person: str | None = Depends(viewer)) -> FileResponse:
+    field_tile(session_meta(name, request), tile_id)
+    return _thumb(tile_id)
 
 
 @router.get("/annotate/{name}/fields/{tile_id}/layer/{layer}.png")
