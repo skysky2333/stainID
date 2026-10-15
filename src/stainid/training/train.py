@@ -19,7 +19,8 @@ from sklearn.metrics import precision_score, recall_score, roc_auc_score
 from sklearn.model_selection import LeaveOneGroupOut, StratifiedGroupKFold
 from sklearn.pipeline import make_pipeline
 
-from stainid.labels import pool, sessions as label_sessions, store
+from stainid.labels import pool, store
+from stainid.labels import sessions as label_sessions
 from stainid.labels.tasks import MODEL_KEY
 from stainid.project import Project, save_project
 from stainid.stains.amyloid.model import MORPHOTYPE_MINIMUM_DIAMETER_UM, morphotype_threshold

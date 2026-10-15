@@ -812,7 +812,7 @@ th.num .col-head { justify-items: end; }
 .picker-filters { align-items: flex-end; }
 .picker-legend { gap: 6px 14px; }
 .picker-legend > span { display: inline-flex; gap: 5px; align-items: center; }
-.swatch.picker-free { border: 1px solid rgb(20 20 20 / 45%); background: transparent; }
+.swatch.picker-free { border: 1px solid var(--text-muted); background: transparent; }
 .swatch.picker-chosen { background: var(--accent); }
 .swatch.picker-labelled { border-color: var(--good); }
 .swatch.picker-blocked { background: repeating-linear-gradient(45deg, var(--text-muted) 0 2px, transparent 2px 4px); }
