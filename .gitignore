@@ -30,3 +30,6 @@ webapp/dist/
 *~
 old_tma.yaml
 *.yaml.before_*
+
+# ---- local tool folders (agent worktrees) ----
+.claude/
