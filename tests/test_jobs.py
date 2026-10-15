@@ -186,3 +186,12 @@ def test_command_line_runs_that_die_or_are_stopped_from_the_app(tmp_path, monkey
 @pytest.mark.skipif(not Path("/proc/self/stat").exists(), reason="process start times come from /proc")
 def test_a_reused_process_number_is_not_taken_for_the_job():
     assert alive(os.getpid(), time.time()) and not alive(os.getpid(), time.time() - 3600 * 24 * 365 * 30)
+
+
+def test_preparing_labels_does_not_wait_for_a_long_detection_run():
+    """Label preparation is light and only waits for what it needs, not for steps making inputs it merely uses."""
+    from stainid.workflows.steps import BY_ID, wait_reason
+    prepare = BY_ID["prepare_labels"]
+    assert not prepare.heavy
+    assert wait_reason(BY_ID["nuclei"], prepare) == ""
+    assert wait_reason(BY_ID["nuclei"], BY_ID["neun"]) != ""  # detection steps still wait for the nuclei they use

@@ -70,9 +70,14 @@ class Step:
     status: Callable[[Project], dict] = field(default=lambda project: {}, repr=False)
     uses: tuple[str, ...] = ()
     writes: tuple[str, ...] = ()
+    waits_for_uses: bool = True  # False: start while a step that makes a `uses` input runs (takes what is there already)
 
     def reads(self) -> set[str]:
         return set(self.needs) | set(self.uses)
+
+    def waits_on(self) -> set[str]:
+        """What a running step must finish making before this one starts."""
+        return self.reads() if self.waits_for_uses else set(self.needs)
 
 
 def _rows(path: Path, columns: tuple[str, ...] | None = None) -> list[dict[str, str]]:
@@ -399,7 +404,9 @@ STEPS = (
          ("tile_manifest", "calibration"), ("candidate_pool",), ("labels", "prepare"),
          (Option("stain", "Stain", "select", "AT8", choices=tuple(STAINS)), Option("fields", "Fields", "number", 20, "How many more fields to prepare."),
           Option("session", "Session", "text", "", "Prepare every field of this labelling session instead.", advanced=True)),
-         heavy=True, view="/labels", duration="10–30 s per field", status=_labels_status, uses=("nuclei", "model_cellpose")),
+         # light: a session's few fields must not wait for a long detection run to finish
+         heavy=False, view="/labels", duration="10–30 s per field", status=_labels_status, uses=("nuclei", "model_cellpose"),
+         waits_for_uses=False),  # a session's fields usually have their nuclei already; missing ones are found on the spot
     Step("train", "Models", "Train a model", "Train a new model from the labels people made.",
          "Fits the same kind of model the pipeline uses, checks it by leaving one TMA out at a time, and compares it with the current model on "
          "your labels. The new model is only used after you choose it on the Models page.",
@@ -434,7 +441,7 @@ def wait_reason(earlier: Step, later: Step, running_from: str = "") -> str:
     """Why a later step must wait for an earlier running / waiting one ("" = no need): it makes something the later step reads,
     or both write the same file (e.g. the core table). `running_from` names where the earlier one runs, if not in the app."""
     which = f"“{earlier.title}”" + (f", running from the {running_from}," if running_from else "")
-    made = set(earlier.produces) & later.reads()
+    made = set(earlier.produces) & later.waits_on()
     if made:
         return f"Waits for {which} to finish (needs: {', '.join(RESOURCES[r].label for r in sorted(made))})"
     shared = set(earlier.writes + earlier.produces) & set(later.writes + later.produces)
