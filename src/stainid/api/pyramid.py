@@ -4,8 +4,10 @@ A core image is a ~16 000 px PNG (about 750 MB once decoded) that may sit on a s
 a core, its image is decoded once and cut into a deep-zoom pyramid: 512 px JPEG tiles at full resolution, half, quarter …
 down to a single tile, packed into one file per core image (`data/cache/core_pyramids/<core>_<stain>.tiles`, with a
 `.json` index). From then on the browser asks only for the few tiles it shows, at the resolution of the screen. The core
-grid uses small thumbnails made from a reduced decode (`data/cache/thumbs`). Both are rebuilt when the image file
-changes (its modification time and size are stored with them); the source images are only ever read.
+grid uses small thumbnails (`data/cache/thumbs`, see `stainid.imaging.thumbnails`): written by core export, else made
+from the pyramid or from the ~2000 px picture Check core quality kept (a fraction of a second), else from a reduced
+decode of the whole image. Both are rebuilt when the image file changes (the pyramid stores its modification time and
+size, a thumbnail must be newer than it); the source images are only ever read.
 
 Decoding is the memory-hungry part, so it runs on one background thread, one image at a time (`DECODE` also guards
 the few decodes made while a request waits). Pages ask for a picture, get "waiting"/"preparing", and ask again; work
@@ -28,10 +30,11 @@ import numpy as np
 
 from stainid.api.state import ProjectState
 from stainid.imaging.color import rgb_to_hed
+from stainid.imaging.thumbnails import THUMB_BASE, base_path, jpeg, shrink, without_outlines, write_atomic, write_base
+from stainid.qc.core_qc import overlay_path
 
 TILE = 512
 JPEG_QUALITY = 85
-THUMB_BASE = 2048  # the stored thumbnail every smaller size is made from
 STALE_SECONDS = 45  # queued work nobody asked about for this long is dropped
 DECODE = threading.Semaphore(1)  # whole core images decoded at once, across all projects (one is ~750 MB)
 
@@ -122,24 +125,6 @@ def _fresh(path: Path, source: Path) -> bool:
         return False
 
 
-def _write_atomic(path: Path, data: bytes) -> None:
-    temporary = path.with_name(path.name + ".tmp")
-    temporary.write_bytes(data)
-    os.replace(temporary, path)
-
-
-def _jpeg(bgr: np.ndarray, quality: int = JPEG_QUALITY) -> bytes:
-    ok, encoded = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, quality])
-    if not ok:
-        raise ValueError("could not encode a JPEG")
-    return encoded.tobytes()
-
-
-def _shrink(bgr: np.ndarray, size: int) -> np.ndarray:
-    scale = size / max(bgr.shape[:2])
-    return bgr if scale >= 1 else cv2.resize(bgr, (max(1, round(bgr.shape[1] * scale)), max(1, round(bgr.shape[0] * scale))), interpolation=cv2.INTER_AREA)
-
-
 def _read(source: Path, flag: int = cv2.IMREAD_COLOR) -> np.ndarray:
     with DECODE:
         bgr = cv2.imread(str(source), flag)
@@ -199,18 +184,18 @@ def build_pyramid(source: Path, pack: Path, index_path: Path, thumb: Path | None
             tiles = []
             for row in range(rows):
                 for col in range(cols):
-                    data = _jpeg(level[row * TILE:(row + 1) * TILE, col * TILE:(col + 1) * TILE])
+                    data = jpeg(level[row * TILE:(row + 1) * TILE, col * TILE:(col + 1) * TILE], JPEG_QUALITY)
                     tiles.append([out.tell(), len(data)])
                     out.write(data)
             levels.append({"width": width, "height": height, "cols": cols, "rows": rows, "tiles": tiles})
             if thumb is not None and max(width, height) <= THUMB_BASE and not _fresh(thumb, source):
-                _write_atomic(thumb, _jpeg(level, 90))
+                write_base(thumb, level)
             if max(width, height) <= TILE:
                 break
             level = cv2.resize(level, ((width + 1) // 2, (height + 1) // 2), interpolation=cv2.INTER_AREA)
     os.replace(temporary, pack)
     index = {"width": levels[0]["width"], "height": levels[0]["height"], "tile": TILE, "levels": levels, **stamp}
-    _write_atomic(index_path, json.dumps(index).encode())
+    write_atomic(index_path, json.dumps(index).encode())
     return index
 
 
@@ -228,8 +213,9 @@ def picture(state: ProjectState, core_id: str, stain: str, prepare: bool = True)
     pack, index_path = _pyramid_paths(state, core_id, stain)
     thumb = _thumb_base(state, core_id, stain)
     status = _ask(str(pack), 0, lambda: build_pyramid(source, pack, index_path, thumb)) if prepare else {"state": "not_started"}
-    # a picture to show meanwhile, of a size that is already made (asking for another would decode the image again)
-    thumb_size = 1024 if _fresh(thumb, source) else next((n for n in (512, 256) if _fresh(_thumb_sized(state, core_id, stain, n), source)), None)
+    # a picture to show meanwhile, of a size that is made or quick to make (any other would decode the image again)
+    thumb_size = 1024 if thumbnail_state(state, core_id, stain, 1024) != "slow" else next(
+        (n for n in (512, 256) if _fresh(_thumb_sized(state, core_id, stain, n), source)), None)
     return {"ready": False, **status, "thumb_size": thumb_size}
 
 
@@ -279,50 +265,91 @@ def dab_tile(state: ProjectState, core_id: str, stain: str, level: int, col: int
 
 # ---------------------------------------------------------------- thumbnails
 
+QUALITY_DECODES = threading.Semaphore(4)  # quality pictures (~2000 px, ~12 MB decoded) made into thumbnails at once
+_MAKERS: dict[str, threading.Lock] = {}  # one maker per thumbnail file; parallel requests for it wait for that one
+_MAKERS_GUARD = threading.Lock()
+
+
+def _maker(path: Path) -> threading.Lock:
+    with _MAKERS_GUARD:
+        return _MAKERS.setdefault(str(path), threading.Lock())
+
+
 def _thumb_base(state: ProjectState, core_id: str, stain: str) -> Path:
-    return state.cache_dir("thumbs") / f"{core_id}_{stain}_base.jpg"
+    return base_path(state.cache_dir("thumbs"), core_id, stain)
 
 
 def _thumb_sized(state: ProjectState, core_id: str, stain: str, size: int) -> Path:
     return state.cache_dir("thumbs") / f"{core_id}_{stain}_{size}.jpg"
 
 
-def _make_base(state: ProjectState, core_id: str, stain: str) -> Path:
-    """The thumbnail base, from the pyramid when there is one, else from a reduced decode of the image."""
-    source, base = _source(state, core_id, stain), _thumb_base(state, core_id, stain)
-    if _fresh(base, source):
-        return base
+def _quality_picture(state: ProjectState, core_id: str, stain: str) -> Path | None:
+    """The ~2000 px picture Check core quality kept of this core image (outlines drawn on), if made from this version
+    of the image."""
+    source, manifest = _source(state, core_id, stain), state.project.input("core_manifest")
+    if not source.is_relative_to(manifest.parent):
+        return None
+    picture = overlay_path(manifest, {"output_path": source.relative_to(manifest.parent).as_posix()})
+    return picture if _fresh(picture, source) else None
+
+
+def _pyramid_level(state: ProjectState, core_id: str, stain: str) -> int | None:
+    """The largest level of the core's pyramid (if it has one) that is no larger than a thumbnail base."""
     index = _index(state, core_id, stain)
-    small = next((i for i, level in enumerate(index["levels"]) if max(level["width"], level["height"]) <= THUMB_BASE), None) if index else None
-    if small is not None:
-        info = index["levels"][small]
-        canvas = np.zeros((info["height"], info["width"], 3), np.uint8)
-        for row in range(info["rows"]):
-            for col in range(info["cols"]):
-                part = cv2.imdecode(np.frombuffer(tile(state, core_id, stain, small, col, row), np.uint8), cv2.IMREAD_COLOR)
-                canvas[row * TILE:row * TILE + part.shape[0], col * TILE:col * TILE + part.shape[1]] = part
-        bgr = canvas
-    else:
-        bgr = _shrink(_read(source, cv2.IMREAD_REDUCED_COLOR_4), THUMB_BASE)
-    _write_atomic(base, _jpeg(bgr, 90))
-    return base
+    return next((i for i, level in enumerate(index["levels"]) if max(level["width"], level["height"]) <= THUMB_BASE), None) if index else None
 
 
-def thumbnail_ready(state: ProjectState, core_id: str, stain: str, size: int) -> bool:
+def _from_quality_picture(picture: Path) -> np.ndarray | None:
+    with QUALITY_DECODES:
+        bgr = cv2.imread(str(picture), cv2.IMREAD_COLOR)
+        return without_outlines(bgr) if bgr is not None else None
+
+
+def _make_base(state: ProjectState, core_id: str, stain: str) -> Path:
+    """The thumbnail base: from the pyramid when there is one, else from the core's quality picture (a fraction of a
+    second), else from a reduced decode of the whole image (seconds; one at a time)."""
+    source, base = _source(state, core_id, stain), _thumb_base(state, core_id, stain)
+    with _maker(base):
+        if _fresh(base, source):
+            return base
+        bgr = None
+        if (small := _pyramid_level(state, core_id, stain)) is not None:
+            info = _index(state, core_id, stain)["levels"][small]
+            bgr = np.zeros((info["height"], info["width"], 3), np.uint8)
+            for row in range(info["rows"]):
+                for col in range(info["cols"]):
+                    part = cv2.imdecode(np.frombuffer(tile(state, core_id, stain, small, col, row), np.uint8), cv2.IMREAD_COLOR)
+                    bgr[row * TILE:row * TILE + part.shape[0], col * TILE:col * TILE + part.shape[1]] = part
+        elif (picture := _quality_picture(state, core_id, stain)) is not None:
+            bgr = _from_quality_picture(picture)
+        if bgr is None:
+            bgr = _read(source, cv2.IMREAD_REDUCED_COLOR_4)
+        return write_base(base, bgr)
+
+
+def thumbnail_state(state: ProjectState, core_id: str, stain: str, size: int) -> str:
+    """'ready' (made), 'quick' (made on request in a fraction of a second, from the pyramid or the quality picture) or
+    'slow' (the whole image has to be decoded: queue it with `prepare_thumbnail`)."""
     source = _source(state, core_id, stain)
-    return _fresh(_thumb_sized(state, core_id, stain, size), source) or _fresh(_thumb_base(state, core_id, stain), source)
+    if _fresh(_thumb_sized(state, core_id, stain, size), source) or _fresh(_thumb_base(state, core_id, stain), source):
+        return "ready"
+    if _pyramid_level(state, core_id, stain) is not None or _quality_picture(state, core_id, stain) is not None:
+        return "quick"
+    return "slow"
 
 
 def prepare_thumbnail(state: ProjectState, core_id: str, stain: str) -> dict:
-    """Queue the grid thumbnail of a core image (a background decode)."""
+    """Queue the thumbnail of a core image that needs its whole image decoded (one at a time, in the background)."""
     return _ask(str(_thumb_base(state, core_id, stain)), 1, lambda: _make_base(state, core_id, stain))
 
 
 def thumbnail(state: ProjectState, core_id: str, stain: str, size: int) -> Path:
-    """A JPEG of the whole core at most `size` px across (made now if need be: this can take a few seconds)."""
+    """A JPEG of the whole core at most `size` px across (made now if need be: this can take a few seconds when
+    `thumbnail_state` is 'slow')."""
     source = _source(state, core_id, stain)
     target = _thumb_sized(state, core_id, stain, size)
-    if not _fresh(target, source):
-        base = cv2.imread(str(_make_base(state, core_id, stain)), cv2.IMREAD_COLOR)
-        _write_atomic(target, _jpeg(_shrink(base, size), 85))
+    with _maker(target):
+        if not _fresh(target, source):
+            base = cv2.imread(str(_make_base(state, core_id, stain)), cv2.IMREAD_COLOR)
+            write_atomic(target, jpeg(shrink(base, size), 85))
     return target

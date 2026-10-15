@@ -9,7 +9,7 @@ interface CohortInfo { tmas: { tma: string; cores: number; stains: string[] }[];
 type Detection = 'done' | 'partial' | 'not_run'
 interface GridCell {
   core_label: string; core_id: string | null; tissue_control: string | null; donor_id?: string | null; region?: string | null
-  disease_group?: string | null; technical_replicate?: string | null; thumb?: boolean; detection?: Detection
+  disease_group?: string | null; technical_replicate?: string | null; thumb?: boolean; placeholder?: string | null; detection?: Detection
 }
 interface TmaGrid { tma: string; stain: string; columns: string[]; rows: number[]; cells: GridCell[]; thumbs_waiting: number; detection: { done: number; total: number } }
 
@@ -144,8 +144,7 @@ function CoreGrid({ grid, onOpen }: { grid: TmaGrid; onOpen: (cell: GridCell) =>
             const about = [label, cell.donor_id && `donor ${cell.donor_id}`, cell.region, cell.disease_group && groupLabel(cell.disease_group), DETECTION_TEXT[detection]].filter(Boolean).join(' · ')
             return (
               <button key={label} className="core-cell" style={{ borderColor: cell.disease_group ? groupColor(cell.disease_group) : 'var(--border)' }} title={about} aria-label={about} onClick={() => onOpen(cell)}>
-                {cell.thumb ? <img loading="lazy" src={coreThumb(cell.core_id, grid.stain, 256)} alt="" />
-                  : <span className="core-cell-wait"><span className="spinner" aria-hidden="true" /></span>}
+                <CorePicture src={cell.thumb ? coreThumb(cell.core_id, grid.stain, 256) : null} placeholder={cell.placeholder} />
                 {detection !== 'done' && <DetectionMark detection={detection} corner />}
                 <span className="tag">{label}{cell.region ? ` · ${cell.region}` : ''}</span>
               </button>
@@ -154,6 +153,20 @@ function CoreGrid({ grid, onOpen }: { grid: TmaGrid; onOpen: (cell: GridCell) =>
         ])}
       </div>
     </div>
+  )
+}
+
+/** A core's thumbnail, faded in over its blurred stand-in (cut from the slide picture) once it has loaded. Both fill the
+ *  same square, so nothing moves. The stand-in is kept: the grid stops sending it once the thumbnail is made. */
+function CorePicture({ src, placeholder }: { src: string | null; placeholder?: string | null }) {
+  const [standIn] = useState(placeholder)
+  const [loaded, setLoaded] = useState(false)
+  if (!src && !standIn) return <span className="core-cell-wait"><span className="spinner" aria-hidden="true" /></span>
+  return (
+    <>
+      {standIn && <img className="core-cell-standin" src={standIn} alt="" />}
+      {src && <img className={`core-cell-pic${loaded ? ' loaded' : ''}`} loading="lazy" src={src} alt="" onLoad={() => setLoaded(true)} />}
+    </>
   )
 }
 

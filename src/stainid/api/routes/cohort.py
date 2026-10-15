@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from fastapi import APIRouter, HTTPException
 
-from stainid.api import pyramid, render
+from stainid.api import placeholders, pyramid, render
 from stainid.api.state import ProjectState, get_state
 from stainid.api.util import records
 from stainid.outputs import objects
@@ -95,8 +95,9 @@ def _analysis_tiles(state: ProjectState) -> pd.DataFrame:
 
 @router.get("/tmas/{tma}/grid")
 def grid(tma: str, stain: str, prepare: bool = True) -> dict:
-    """Every position of one TMA for one stain: the core there, whether its picture is ready (missing ones are queued
-    when `prepare`), and whether detection has run on it."""
+    """Every position of one TMA for one stain: the core there, whether its thumbnail can be asked for now (`thumb`;
+    the ones that need their whole image decoded first are queued when `prepare`), a tiny stand-in picture until the
+    thumbnail is made (`placeholder`), and whether detection has run on it."""
     state = get_state()
     cores = _cores(state)
     cores = cores[(cores.tma.astype(str) == tma) & (cores.stain == stain)] if not cores.empty else cores
@@ -107,19 +108,22 @@ def grid(tma: str, stain: str, prepare: bool = True) -> dict:
     tiles = _analysis_tiles(state)
     tiles = tiles[(tiles.tma.astype(str) == tma) & (tiles.stain == stain)] if not tiles.empty else tiles
     tiles_by_core = dict(list(tiles.groupby("core_id"))) if not tiles.empty else {}
-    cells, waiting = [], 0
+    pictured = not state.core_images.empty
+    cells, waiting, stand_ins = [], 0, None
     for label in labels:
         core, place = by_label.get(label), positions.get(label, {})
         cell = {"core_label": label, "tissue_control": _text(place.get("tissue_control")), "core_id": None}
         if core is not None:
             core_id = str(core["core_id"])
-            pictured = not state.core_images.empty
-            ready = pictured and pyramid.thumbnail_ready(state, core_id, stain, GRID_THUMB)
-            if not ready and prepare and pictured:
+            thumb = pyramid.thumbnail_state(state, core_id, stain, GRID_THUMB) if pictured else None
+            if thumb == "slow" and prepare:
                 pyramid.prepare_thumbnail(state, core_id, stain)
                 waiting += 1
+            if thumb != "ready" and stand_ins is None:
+                stand_ins = placeholders.for_tma(state.project, tma, stain)
             cell.update({k: _text(core.get(k, place.get(k))) for k in ("core_id", "donor_id", "region", "disease_group", "technical_replicate")},
-                        thumb=ready, detection=_quick_detection(state, tiles_by_core.get(core_id, pd.DataFrame()), stain))
+                        thumb=thumb in ("ready", "quick"), placeholder=(stand_ins or {}).get(label) if thumb != "ready" else None,
+                        detection=_quick_detection(state, tiles_by_core.get(core_id, pd.DataFrame()), stain))
         cells.append(cell)
     columns = sorted({_position(c["core_label"])[1] for c in cells}, key=lambda c: (len(c), c))
     rows = sorted({_position(c["core_label"])[0] for c in cells})

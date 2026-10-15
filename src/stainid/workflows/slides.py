@@ -5,6 +5,7 @@ import json
 import time
 from pathlib import Path
 
+from stainid.imaging import thumbnails
 from stainid.project import Project
 from stainid.qc.core_qc import analyze_manifest
 from stainid.slides.export import export_cores
@@ -94,7 +95,7 @@ def attach_map(project: Project) -> Path:
 def export(project: Project, overwrite: bool = False, workers: int = 2) -> None:
     slides = {r["slide"] for r in read_csv(project.input("core_manifest"))}
     print(f"[0/{len(slides)}] Opening {len(slides)} slides. {READER_NOTE}", flush=True)
-    export_cores(project.input("core_manifest"), None, None, overwrite, workers, project.tma_prefix)
+    export_cores(project.input("core_manifest"), None, None, overwrite, workers, project.tma_prefix, thumbnails.cache_folder(project.root))
 
 
 def core_qc(project: Project, overwrite: bool = False, workers: int = 2) -> Path:
