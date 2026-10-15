@@ -175,8 +175,9 @@ the sign-in as a token instead of a cookie.
 
 ## Labels
 
-Everything people say about the tissue is a **label**: the class of an object (e.g. *NeuN+ neuron*, *compact plaque*,
-*not a tau+ neuron*), its outline, a tag on a whole field (*white matter*, *unusable*, …) or a note. Labels are attached
+Everything people say about the tissue is a **label**: the class of an object and, where it has types, its type (e.g.
+*NeuN+ neuron*, *plaque · compact*, *tau+ neuron · pretangle*, *thread*; see [label_classes.md](label_classes.md) for
+the classes, their keys and how to change them in Settings), its outline, a tag on a whole field (*white matter*, *unusable*, …) or a note. Labels are attached
 to the objects the pipeline considers in the analysed fields, accepted or rejected; the AI's own call is shown next to
 them but is not a label. An object's label is what most people said; ties stay unresolved. All labels live in one
 append-only file, `outputs.reviews/labels/labels.jsonl` (one line per saved label with who, what, where and when;

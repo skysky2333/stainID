@@ -133,10 +133,11 @@ Then
   outlines), so they show on the Labels page and can train models; nobody can add to or change them.
 
 The class map (`dataset.class_map`, label → stainID class or `ignore`) comes from the package and can be changed on the
-import page or with `PUT /api/labels/imported/class-map`, which places the labels again. stainID's classes:
-NeuN `NeuN+ neuron`, `not a neuron`; amyloid `compact plaque`, `diffuse plaque`, `small plaque`, `plaque` (type not
-recorded), `not a plaque`, `vascular` (CAA), `artifact or unclear`; tau `tau+ neuron: tangle`, `tau+ neuron: pretangle`,
-`tau+ neuron`, `not a tau+ neuron`, `neuritic plaque`, `thread`.
+import page or with `PUT /api/labels/imported/class-map`, which places the labels again. A class map entry names a
+stainID class, or a class and its type as `class/type` (`plaque/compact`, `tau+ neuron/pretangle`); the classes and
+types of each stain are in [label_classes.md](label_classes.md) (e.g. amyloid `plaque`, `plaque/compact`,
+`plaque/diffuse`, `CAA`, `intraneuronal`, `not a plaque`; tau `tau+ neuron/mature tangle`, `neuritic plaque`, `thread`,
+`not tau`). Older values (`compact plaque`, `vascular`, `tau+ neuron: tangle`, …) still work.
 
 ## Scoring the models on imported labels
 
