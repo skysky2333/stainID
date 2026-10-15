@@ -162,8 +162,21 @@ def share(request: Request) -> dict:
     port = request.url.port or 80
     host = socket.gethostname()
     addresses = sorted({a[4][0] for a in socket.getaddrinfo(host, None, socket.AF_INET)} - {"127.0.0.1"})
-    return {"links": [f"http://{a}:{port}{annotate_path()}" for a in [*addresses, host]],
-            "network": os.environ.get("STAINID_HOST", "0.0.0.0") != "127.0.0.1"}
+    links = [f"http://{a}:{port}{annotate_path()}" for a in [*addresses, host]]
+    public = public_address(request)
+    return {"links": ([f"{public}{annotate_path()}"] if public else []) + links,
+            "network": bool(public) or os.environ.get("STAINID_HOST", "0.0.0.0") != "127.0.0.1"}
+
+
+def public_address(request: Request) -> str:
+    """The address this page was opened at when it is a name rather than this computer (e.g. through a tunnel or a
+    reverse proxy: https://tma.example.org); empty for localhost and plain IP addresses."""
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host", "")
+    name = host.rsplit(":", 1)[0] if not host.startswith("[") else ""
+    if not name or name == "localhost" or re.fullmatch(r"[\d.]+", name) or "." not in name:
+        return ""
+    scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
+    return f"{scheme}://{host}"
 
 
 def annotate_path(session: str = "") -> str:

@@ -357,3 +357,12 @@ def test_steps_list_every_running_part(client):
     steps = {s["id"]: s for s in client.get("/api/steps").json()}
     assert sorted(j["id"] for j in steps["nuclei"]["active"]) == ["part-0", "part-1"]
     assert steps["neun"]["active"] == [] and steps["nuclei"]["job"]["id"] in ("part-0", "part-1")
+
+
+def test_share_link_uses_the_public_address_behind_a_tunnel(client):
+    """Opened through a tunnel or proxy (a host name, https), the labellers' link is that address, not this computer's."""
+    tunnelled = client.get("/api/labels/share", headers={"host": "tma.example.org", "x-forwarded-proto": "https"}).json()
+    assert tunnelled["links"][0].startswith("https://tma.example.org/p/") and tunnelled["links"][0].endswith("/annotate")
+    assert tunnelled["network"] is True
+    local = client.get("/api/labels/share", headers={"host": "127.0.0.1:7070"}).json()
+    assert not any("example.org" in link for link in local["links"])
