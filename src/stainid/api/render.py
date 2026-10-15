@@ -14,6 +14,7 @@ from stainid import disk_cache
 from stainid.api import pyramid
 from stainid.api.state import ProjectState
 from stainid.imaging.color import rgb_to_hed
+from stainid.imaging.core_images import open_image
 from stainid.imaging.tissue import field_tissue_mask, fold_mask, linear_artifact_mask
 from stainid.qc.exclusions import rasterize_core_exclusions, read_manual_exclusions
 from stainid.tables import read_csv
@@ -55,7 +56,7 @@ def field_rgb(state: ProjectState, tile_id: str) -> np.ndarray:
 def _crop_field(state: ProjectState, tile: dict, target: Path) -> None:
     """Cut one tile (with its context margin) out of its core image."""
     context = state.project.context_px
-    with pyramid.DECODE, Image.open(state.root / tile["image_path"]) as image:
+    with pyramid.DECODE, open_image(state.root / tile["image_path"]) as image:
         x0, y0 = crop_origin(tile, context)
         x1 = min(int(tile["x_px"]) + int(tile["width_px"]) + context, image.width)
         y1 = min(int(tile["y_px"]) + int(tile["height_px"]) + context, image.height)
@@ -152,4 +153,3 @@ def mask_outlines(state: ProjectState, tile_id: str) -> list[dict]:
                     "circularity": float(row.get("circularity") or "nan"), "seed_source": row.get("seed_source", "")})
     disk_cache.write(target, json.dumps(out).encode())
     return out
-

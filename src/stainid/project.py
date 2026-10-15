@@ -1,4 +1,5 @@
-"""Project configuration: where inputs, models and outputs live for one TMA study."""
+"""Project configuration: where inputs, models and outputs live for one study (a TMA study, an image set or a set of
+whole slides; see `KINDS` and docs/project_kinds.md)."""
 from __future__ import annotations
 
 import copy
@@ -14,10 +15,15 @@ PRECISIONS = ("fp32", "tf32", "bf16")
 # Sampled-field tables of projects analysed before whole-core analysis. Nothing makes them any more; where they exist
 # they are read only because earlier labels, labelling sessions and training sets name their fields (…_S01).
 LEGACY_INPUTS = ("field_manifest", "tile_manifest")
+# What a project holds. A TMA study cuts cores out of slide scans with a TMA map; an image set is a folder of image tiles
+# or regions, each linked to a donor; whole slides are scans whose tissue regions are tiled like whole cores. In the last
+# two every image (or tissue region) plays the part of a core image, so every step from the stain thresholds on is the same.
+KINDS = {"tma": "TMA study", "images": "Image set", "slides": "Whole slides"}
 ENVIRONMENT_KEYS = ("HF_HOME", "CELLPOSE_LOCAL_MODELS_PATH", "STAINID_PLAQUE_CNN_DIR")  # set per project (`Project.environment`)
 
 DEFAULTS: dict = {
     "name": "stainID project",
+    "kind": "tma",
     "pixel_size_um": 0.2738,
     "field_context_px": 128,
     "stains": dict(SUPPORTED_STAINS),
@@ -41,10 +47,18 @@ DEFAULTS: dict = {
     # Cellpose bf16 2.9 s/tile (about 1% of cells differ from fp32), tf32 3.8 s (fp32 masks cell for cell), fp32 10 s;
     # Segment Anything tf32 1.5x fp32 (median area change 0%), bf16 1.4x (0.14%), so tf32 is its better choice.
     "precision": {"cellpose": "bf16", "sam": "tf32"},
+    # How the images of an image set or whole-slide project are read (`stainid.imaging.settings`): their own pixel size
+    # (null: from each file or the image list), how they reach the models' scale (`pixel_size_um`): converted once when
+    # the images are prepared ("on_import") or each time they are read ("on_the_fly"), and per stain its model family and
+    # colours. A TMA study reads brown (DAB) slides at the analysis scale and ignores this section.
+    "imaging": {"native_pixel_size_um": None, "rescale": "on_import", "stains": {}},
+    # The dataset package a project was made from (id, title, licence, citation, package folder); {} for your own data.
+    "dataset": {},
     # Space the pictures the app makes for viewing (data/cache/) may take, in GB; the least recently used are deleted
     # beyond it and made again when needed (`stainid.disk_cache`). null: the server's --cache-limit, else 100 GB.
     "cache_limit_gb": None,
     "inputs": {
+        "image_list": "data/images.csv",
         "slides_dir": "data/slides",
         "slides_table": "data/slides.csv",
         "core_manifest": "data/core_manifest.csv",
@@ -115,6 +129,17 @@ class Project:
     @property
     def context_px(self) -> int:
         return int(self.config["field_context_px"])
+
+    @property
+    def kind(self) -> str:
+        kind = str(self.config.get("kind") or "tma")
+        if kind not in KINDS:
+            raise ValueError(f"kind must be one of {', '.join(KINDS)}, not {kind!r}")
+        return kind
+
+    @property
+    def is_tma(self) -> bool:
+        return self.kind == "tma"
 
     @property
     def stains(self) -> dict[str, str]:

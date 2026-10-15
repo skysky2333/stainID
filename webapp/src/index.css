@@ -989,3 +989,23 @@ tr.significant-row td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 .iou-proposal { background: var(--series-1); }
 .iou-detection { background: var(--series-3); }
 @media (max-width: 700px) { .segcheck-numbers { grid-template-columns: 1fr; } }
+
+/* ---- project kinds: new study kinds, Images screen, imaging settings, scores on imported labels (imageset) ---- */
+.new-study-kinds { border: none; margin: 0 0 14px; padding: 0; min-width: 0; }
+.new-study-kinds legend { padding: 0; margin-bottom: 6px; }
+.images-found { display: grid; gap: 8px; margin-top: 10px; }
+.images-table { max-height: 420px; overflow: auto; }
+.images-table td.ellipsis { max-width: 260px; }
+.images-table input { width: 100%; min-width: 70px; font: inherit; }
+.imaging-card { display: grid; gap: 10px; }
+.imaging-stains { display: grid; gap: 10px; }
+.imaging-stain { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 14px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-1); }
+.imaging-stain-name { display: grid; gap: 2px; min-width: 120px; }
+.imaging-note { flex-basis: 100%; margin: 0; }
+.imaging-preview { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 8px; margin: 0; }
+.imaging-preview img { width: 180px; max-width: calc(50% - 4px); aspect-ratio: 1; object-fit: contain; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; }
+.imaging-preview figcaption { flex-basis: 100%; }
+.score-card { display: grid; gap: 10px; margin-bottom: 16px; }
+.score-card p { margin: 0; }
+.score-summary { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+.score-table td.num, .score-table th.num { text-align: right; font-variant-numeric: tabular-nums; }

@@ -9,6 +9,7 @@ from PIL import Image
 
 from stainid.imaging.calibration import calibrate_threshold
 from stainid.imaging.color import rgb_to_hed
+from stainid.imaging.core_images import open_image
 from stainid.imaging.tissue import field_tissue_mask
 from stainid.project import Project
 from stainid.tables import read_csv, write_records
@@ -24,7 +25,7 @@ def sample_dab(root: Path, tiles: list[dict[str, str]], stride: int = STRIDE) ->
     for tile in tiles:
         by_image[tile["image_path"]].append(tile)
     for image_path, image_tiles in sorted(by_image.items()):
-        with Image.open(root / image_path) as image:
+        with open_image(root / image_path) as image:
             image.load()
             for tile in image_tiles:
                 x, y = int(tile["x_px"]), int(tile["y_px"])

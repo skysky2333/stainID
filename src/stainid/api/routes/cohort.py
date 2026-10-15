@@ -17,6 +17,7 @@ from stainid.outputs import objects
 router = APIRouter(tags=["cohort"])
 CORE_COLUMNS = ["core_id", "tma", "core_label", "donor_id", "sample_region_id", "region", "disease_group", "technical_replicate"]
 GRID_THUMB = 256
+IMAGE_COLUMNS = 6  # pictures per row of an image set or whole-slide project on the Cores page
 OBJECT_COLUMNS = ["x", "y", "radius_px", "model_class", "probability", "area_um2"]
 OUTLINE_COLUMNS = ["x", "y", "area_um2", "rings"]
 MATCH_PX = 2.0  # an outline's prompt point lies on its detection (up to rounding)
@@ -104,7 +105,12 @@ def grid(tma: str, stain: str, prepare: bool = True) -> dict:
     cores = _cores(state)
     cores = cores[(cores.tma.astype(str) == tma) & (cores.stain == stain)] if not cores.empty else cores
     by_label = {str(r["core_label"]): r for r in cores.to_dict("records")}
-    layout = state.layout[state.layout.tma.astype(str) == tma] if not state.layout.empty else state.layout
+    names: dict[str, str] = {}
+    if not state.project.is_tma:  # image sets and slide regions have no array: shown in reading order, IMAGE_COLUMNS to a row
+        ordered = sorted(by_label)
+        names = {f"{chr(65 + i % IMAGE_COLUMNS)}-{i // IMAGE_COLUMNS + 1}": label for i, label in enumerate(ordered)}
+        by_label = {position: by_label[label] for position, label in names.items()}
+    layout = state.layout[state.layout.tma.astype(str) == tma] if not state.layout.empty and state.project.is_tma else state.layout.iloc[:0]
     positions = {str(r["core_label"]): r for r in layout.to_dict("records")}
     labels = sorted(set(positions) | set(by_label), key=_position)
     tiles = state.analysis_tiles
@@ -114,7 +120,7 @@ def grid(tma: str, stain: str, prepare: bool = True) -> dict:
     cells, waiting, stand_ins = [], 0, None
     for label in labels:
         core, place = by_label.get(label), positions.get(label, {})
-        cell = {"core_label": label, "tissue_control": _text(place.get("tissue_control")), "core_id": None}
+        cell = {"core_label": label, "tissue_control": _text(place.get("tissue_control")), "core_id": None, **({"name": names[label]} if names else {})}
         if core is not None:
             core_id = str(core["core_id"])
             thumb = pyramid.thumbnail_state(state, core_id, stain, GRID_THUMB) if pictured else None
@@ -130,7 +136,7 @@ def grid(tma: str, stain: str, prepare: bool = True) -> dict:
     columns = sorted({_position(c["core_label"])[1] for c in cells}, key=lambda c: (len(c), c))
     rows = sorted({_position(c["core_label"])[0] for c in cells})
     done = sum(c.get("detection") == "done" for c in cells)
-    return {"tma": tma, "stain": stain, "columns": columns, "rows": rows, "cells": cells, "thumbs_waiting": waiting,
+    return {"tma": tma, "stain": stain, "columns": columns, "rows": rows, "cells": cells, "thumbs_waiting": waiting, "positional": bool(names),
             "detection": {"done": done, "total": sum(c["core_id"] is not None for c in cells)}}
 
 

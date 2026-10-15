@@ -18,8 +18,7 @@ from pydantic import BaseModel
 from stainid import cache
 from stainid.api import render
 from stainid.api.outlines import label_rings
-from stainid.api.routes.annotate import (NewSession, _known_fields, annotate_path, busy, field_tile, free_name, root,
-                                          session_meta, viewer)
+from stainid.api.routes.annotate import NewSession, _known_fields, annotate_path, busy, field_tile, free_name, root, session_meta, viewer, writable
 from stainid.api.session import annotator, require_admin
 from stainid.api.state import get_state
 from stainid.labels import outline, readiness, sessions, store
@@ -31,8 +30,8 @@ admin = [Depends(require_admin)]
 REFERENCE_SIMPLIFY_PX = 1.5
 
 
-def _outline_meta(name: str, request: Request) -> dict:
-    meta = session_meta(name, request)
+def _outline_meta(name: str, request: Request, write: bool = False) -> dict:
+    meta = writable(session_meta(name, request)) if write else session_meta(name, request)
     if meta["kind"] != outline.KIND:
         raise HTTPException(404, f"{name} is not an outline session")
     return meta
@@ -102,7 +101,7 @@ def segment(name: str, tile_id: str, body: Clicks, request: Request, person: str
 
 @router.post("/annotate/{name}/outline/{tile_id}/objects")
 def save_objects(name: str, tile_id: str, body: OutlineObjects, request: Request, person: str = Depends(annotator)) -> list[dict]:
-    meta = _outline_meta(name, request)
+    meta = _outline_meta(name, request, write=True)
     field_tile(meta, tile_id)
     busy(name, tile_id, person)
     try:
@@ -115,7 +114,7 @@ def save_objects(name: str, tile_id: str, body: OutlineObjects, request: Request
 @router.post("/annotate/{name}/outline/{tile_id}/complete")
 def mark_complete(name: str, tile_id: str, body: Completion, request: Request, person: str = Depends(annotator)) -> dict:
     """The person says every object in the field is outlined (or takes that back)."""
-    meta = _outline_meta(name, request)
+    meta = _outline_meta(name, request, write=True)
     field_tile(meta, tile_id)
     return store.append(root(), [outline.complete_record(meta, person, tile_id, body.complete)])[0]
 
@@ -165,15 +164,19 @@ def _pick(stain: str, n: int, tmas: list[str], seed: int) -> list[str]:
     tiles = state.labelling_tiles
     tiles = tiles[(tiles.stain == stain) & tiles.tma.astype(str).isin(set(tmas))] if not tiles.empty else tiles
     if tiles.empty:
-        raise HTTPException(400, f"There are no {stain} fields on TMA {', '.join(tmas)}.")
+        raise HTTPException(400, f"There are no {stain} fields in {_where(tmas)}.")
     blocked = readiness.blockers(state.project, tiles)
     ready = tiles[[b is None for b in blocked]]
     if ready.empty:
         first = pd.Series([b["reason"] for b in blocked if b]).value_counts().index[0]
-        raise HTTPException(400, f"No {stain} field on TMA {', '.join(tmas)} can be outlined yet. {first}")
+        raise HTTPException(400, f"No {stain} field in {_where(tmas)} can be outlined yet. {first}")
     labels = store.current(root())
     avoid = set(sessions.labelled_by(labels, stain)) | set(sessions.taken(root()))
     return outline.pick_fields(ready, _levels(stain, ready, seed), n, seed, avoid)
+
+
+def _where(tmas: list[str]) -> str:
+    return f"TMA {', '.join(tmas)}" if get_state().project.is_tma else f"batch {', '.join(tmas)}"
 
 
 def _levels(stain: str, tiles: pd.DataFrame, seed: int) -> pd.Series:
@@ -200,6 +203,10 @@ def _all_tmas(stain: str) -> list[str]:
     return sorted({str(t) for t in tiles[tiles.stain == stain].tma}, key=lambda t: (len(t), t)) if not tiles.empty else []
 
 
+def _default_tmas(stain: str) -> list[str]:
+    return outline.default_tmas(_all_tmas(stain), get_state().project.is_tma)
+
+
 def create_outline_session(body: NewSession) -> dict:
     """A segmentation check for one stain: `n_fields` fields chosen by `outline.pick_fields` (or `tile_ids`), blind."""
     if body.stain not in STAINS:
@@ -208,7 +215,7 @@ def create_outline_session(body: NewSession) -> dict:
     name = body.name or free_name(title, body.stain, outline.KIND)
     if name in sessions.names(root()) or name == sessions.REFERENCE:
         raise HTTPException(409, "a session with this name exists")
-    tmas = body.tmas or outline.default_tmas(_all_tmas(body.stain))
+    tmas = body.tmas or _default_tmas(body.stain)
     seed = len(sessions.names(root()))
     fields = _known_fields(body.stain, body.tile_ids) if body.tile_ids else _pick(body.stain, max(1, body.n_fields), [str(t) for t in tmas], seed)
     benchmark = {"tmas": [str(t) for t in tmas], "density": _density_of(body.stain, fields, seed),
@@ -220,7 +227,7 @@ def create_outline_session(body: NewSession) -> dict:
 
 
 def add_outline_fields(meta: dict, n: int, tile_ids: list[str] | None) -> dict:
-    tmas = meta.get("benchmark", {}).get("tmas") or outline.default_tmas(_all_tmas(meta["stain"]))
+    tmas = meta.get("benchmark", {}).get("tmas") or _default_tmas(meta["stain"])
     more = _known_fields(meta["stain"], tile_ids) if tile_ids else _pick(meta["stain"], n, tmas, len(meta["fields"]) + 1)
     more = [t for t in more if t not in set(meta["fields"])]
     if not more:
@@ -270,5 +277,5 @@ def overview() -> dict:
              for label, name in (("Scores (JSON)", "report.json"), ("One row per outlined object", "objects.csv"),
                                  ("One row per counted object", "detections.csv"), ("One row per field", "fields.csv"))]
     return {"stains": present, "checks": checks, "report": scores, "files": files, "segment_anything": state.project.model("sam").exists(),
-            "tmas": {s: {"all": _all_tmas(s), "default": outline.default_tmas(_all_tmas(s))} for s in present},
-            "default_fields": outline.DEFAULT_FIELDS, "now": time.time()}
+            "tmas": {s: {"all": _all_tmas(s), "default": _default_tmas(s)} for s in present}, "tma_study": state.project.is_tma,
+            "default_fields": outline.DEFAULT_FIELDS, "now": time.time(), "imported_sessions": len(report.imported_sessions(state.project))}

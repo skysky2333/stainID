@@ -59,8 +59,10 @@ def known_tile_rows(project: Project) -> dict[str, dict[str, str]]:
 
 def labelling_tiles(project: Project) -> pd.DataFrame:
     """The whole-core tiles new labelling fields are drawn from: full-size squares that are at least half tissue, so
-    every field shows the same area and mostly tissue."""
+    every field shows the same area and mostly tissue. In an image set every tile that is mostly tissue (the images are
+    the size the lab chose)."""
     path = project.analysis_tiles()
+    whole_squares = project.is_tma
 
     def make() -> pd.DataFrame:
         tiles = table(path)
@@ -68,6 +70,7 @@ def labelling_tiles(project: Project) -> pd.DataFrame:
             return tiles
         size = tiles.width_px.max()
         tissue = tiles.preview_tissue_fraction.fillna(1.0) if "preview_tissue_fraction" in tiles else 1.0
-        return tiles[(tiles.width_px == size) & (tiles.height_px == size) & (tissue >= LABEL_TISSUE)].reset_index(drop=True)
+        full = (tiles.width_px == size) & (tiles.height_px == size) if whole_squares else True
+        return tiles[full & (tissue >= LABEL_TISSUE)].reset_index(drop=True)
 
-    return cache.memo(("labelling tiles", str(path)), [path], make)
+    return cache.memo(("labelling tiles", str(path), whole_squares), [path], make)

@@ -69,6 +69,14 @@ def session_meta(name: str, request: Request) -> dict:
     return meta
 
 
+def writable(meta: dict) -> dict:
+    """A session people may add labels to: not one of the read-only sessions imported from a dataset package."""
+    if meta.get("read_only"):
+        raise HTTPException(403, "These labels were imported from a dataset and stay as they were; to label these fields yourself, start a new "
+                                 "labelling session on the Labels page")
+    return meta
+
+
 def field_tile(meta: dict, tile_id: str) -> dict:
     if meta["kind"] != "queue" and tile_id not in meta["fields"]:
         raise HTTPException(404, f"{tile_id} is not part of this session")
@@ -765,7 +773,7 @@ def field_added(name: str, tile_id: str, request: Request, person: str = Depends
 
 @router.post("/annotate/{name}/labels")
 def save(name: str, body: Marks, request: Request, person: str = Depends(annotator)) -> list[dict]:
-    meta = session_meta(name, request)
+    meta = writable(session_meta(name, request))
     for mark in body.records:
         if meta["kind"] != "queue":
             field_tile(meta, mark.tile_id)
@@ -784,7 +792,7 @@ def save(name: str, body: Marks, request: Request, person: str = Depends(annotat
 @router.post("/annotate/{name}/fields/{tile_id}/finish")
 def finish(name: str, tile_id: str, request: Request, person: str = Depends(annotator)) -> list[dict]:
     """Done with this field: every AI call (and AI outline of a positive object) the person left untouched counts as confirmed."""
-    meta = session_meta(name, request)
+    meta = writable(session_meta(name, request))
     field_tile(meta, tile_id)
     objects = field_objects(meta, tile_id)
     labels = store.current(root())

@@ -7,6 +7,7 @@ import numpy as np
 from joblib import load
 from PIL import Image
 
+from stainid.imaging.core_images import open_image
 from stainid.imaging.tissue import core_glass_darkness, fold_mask, linear_artifact_mask
 from stainid.pipelines.cohort_v1 import context_crop
 from stainid.project import Project
@@ -85,7 +86,7 @@ def run_fields(project: Project, stains: list[str] = ("6E10", "AT8"), shard_inde
             if feature_path.exists():  # finished by another process meanwhile
                 continue
             features, objects = [], []
-            with Image.open(project.root / tiles[0]["image_path"]) as image:
+            with open_image(project.root / tiles[0]["image_path"]) as image:
                 image.load()
                 glass = core_glass_darkness(image)
                 for tile in tiles:

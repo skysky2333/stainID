@@ -3,9 +3,9 @@ deliberately missed, merged, split, badly outlined and rejected candidates."""
 from __future__ import annotations
 
 import cv2
-import pytest
 import numpy as np
 import pandas as pd
+import pytest
 
 from stainid.labels import outline
 from stainid.segmentation import scoring
@@ -207,3 +207,34 @@ def test_outline_session_from_set_up_to_scores(client):
     assert len(objects) == 6 and set(objects.outcome) == {"counted", "rejected", "missed"}
     shown = client.get("/api/segmentation").json()
     assert shown["checks"][0]["complete"] == 1 and shown["report"]["stains"][0]["objects"] == 5 and all(f["exists"] for f in shown["files"])
+    assert shown["tma_study"] and shown["report"]["imported"] == []
+
+
+def test_polygons_imported_from_a_dataset_are_scored_per_rater(tmp_path):
+    """An image-set project made from a dataset package: the rater who drew polygons is scored, the boxes are not."""
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).parent))
+    from package_files import fake_plaques, regions_with_boxes
+
+    from stainid.imageset import package, prepare
+    from stainid.project import load_project
+    from stainid.sampling.tiles import table
+    from stainid.segmentation import report
+
+    made = package.create_project(regions_with_boxes(tmp_path / "dataset"), tmp_path / "project")
+    prepare.prepare_images(made, log=lambda *a, **k: None)
+    project = load_project(made.root)
+    cores = pd.read_csv(project.input("core_images"), dtype=str)
+    pd.DataFrame([{"tma": t, "stain": "6E10", "threshold_dab_od": 0.05} for t in sorted(set(cores.tma))]).to_csv(project.input("calibration"), index=False)
+    tiles = table(project.analysis_tiles())
+    fake_plaques(project.root, tiles, {"r0": [(200.0, 300.0)], "r1": [(200.0, 450.0)]}, classes="diffuse")
+    found = report.truths(project)
+    assert [(t.imported, t.meta["imported"]["rater"]) for t in found] == [(True, "expert1")]  # the consensus drew boxes only
+    scores = report.run(project)
+    assert scores["stains"] == [] and len(scores["imported"]) == 1
+    rater = scores["imported"][0]
+    assert rater["rater"] == "expert1" and rater["objects"] == 4 and rater["fields_scored"] == 2
+    assert rater["outcomes"]["missed"] == 0 and sum(rater["outcomes"].values()) == 4  # every plaque is proposed in some form
+    assert rater["counted"] == 2 and "Synthetic boxes: expert1" in report.plain(rater)

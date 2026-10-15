@@ -141,10 +141,11 @@ def density_levels(density: pd.Series, seed: int = 0) -> pd.Series:
     return out
 
 
-def default_tmas(tmas: Iterable[str]) -> list[str]:
-    """The TMAs a check uses unless told otherwise: TMAs 1 to 7 where the project has them, else every TMA."""
+def default_tmas(tmas: Iterable[str], tma_study: bool = True) -> list[str]:
+    """The TMAs a check uses unless told otherwise: in a TMA study TMAs 1 to 7 where it has them, else every TMA (in an
+    image set or whole-slide project the `tma` column holds the staining batch, slide or site: all of them)."""
     present = sorted(set(map(str, tmas)), key=lambda t: (len(t), t))
-    chosen = [t for t in present if t in DEFAULT_TMAS]
+    chosen = [t for t in present if t in DEFAULT_TMAS] if tma_study else []
     return chosen or present
 
 
@@ -164,7 +165,7 @@ def pick_fields(tiles: pd.DataFrame, levels: pd.Series, n: int, seed: int, avoid
         return []
     rng = np.random.default_rng(seed)
     frame = tiles.assign(level=levels.reindex(tiles.tile_id).fillna("unknown").to_numpy(), avoided=tiles.tile_id.isin(avoid).to_numpy())
-    frame = frame.sample(frac=1, random_state=seed).fillna({"disease_group": "", "region": ""})
+    frame = frame.sample(frac=1, random_state=seed).fillna({"tma": "", "disease_group": "", "region": ""})
     by_tma: dict[str, list[list[tuple]]] = {}
     for tma, part in frame.groupby("tma", sort=False):
         by_group = [[(tma, group, region) for region in part[part.disease_group == group].region.unique()]

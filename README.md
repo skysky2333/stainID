@@ -76,7 +76,29 @@ The Help page in the app has the same guide, answers to common questions and a g
 
 Steps run in the background, in dependency order, at most two heavy ones at a time; all of them can be stopped and
 resumed. [docs/webapp.md](docs/webapp.md) explains how the queue works, and [docs/pipelines.md](docs/pipelines.md)
-says what each step computes.
+says what each step computes. Image sets and whole slides replace the six steps from Register slides to Cut cores into tiles with *Prepare images*
+(`stainid images`, below).
+
+## Image sets, whole slides and other labs' datasets
+
+A study does not have to be a TMA. *New study* asks what you will analyse:
+
+| Kind | What it is | Set up |
+|---|---|---|
+| **TMA study** | slide scans of tissue microarrays and their TMA maps | Slides → Cores → Map → Donors → Checks → Run |
+| **Image set** | a folder of image tiles or regions, each from a known donor | Images → Donors → Checks → Run |
+| **Whole slides** | whole-slide scans (.svs, .ndpi, .tif, .czi, OME-Zarr); the tissue of each slide is analysed region by region | Slides → Donors → Checks → Run |
+| **From a dataset package** | a public or shared dataset described by `dataset.yaml`, `images.csv`, `annotations.csv` and `donors.csv` | made for you; then as an image set or whole slides |
+
+There is no map and no core grid for image sets and whole slides: each image, or each region of tissue, takes the place
+of a core, so detection, results, labels, models and the viewer work the same. Per study you say what each stain is
+(6E10-type amyloid such as 4G8 or NAB228, AT8-type tau such as PHF-1, NeuN), the colour it was developed in (brown DAB,
+Fast Red, NovaRed, a blue chromogen; also two colours on one slide, of which you analyse one) and the pixel size;
+stainID brings every image to the models' scale (0.274 µm/px) and colours without copying the files. A dataset
+package's annotations become one read-only labelling session per rater plus their consensus, and *Models → Score the
+models on these labels* gives precision, recall, F1 and AUC against each rater and the consensus, beside how well the
+raters agree with each other: a test of the models on another lab's data. Whole slides need
+`pip install "stainid[slides]"` (OpenSlide, Zarr, Bio-Formats). See [docs/project_kinds.md](docs/project_kinds.md).
 
 ## The app
 
@@ -105,7 +127,7 @@ stainid --project path/to/study status     # progress of every step
 stainid --project path/to/study neun       # run one step
 ```
 
-Install extras: `slides` reads scanner files (Bio-Formats, needs Java); `deep` adds PyTorch, Cellpose-SAM, Segment
+Install extras: `slides` reads scanner files (Bio-Formats, needs Java; OpenSlide and Zarr for whole-slide projects); `deep` adds PyTorch, Cellpose-SAM, Segment
 Anything and transformers; `app` is the web server; `dev` adds pytest and ruff. Heavy steps can be split across
 machines with `--shard-index/--shard-count`. The web app is committed prebuilt, so Node is only needed to change the
 front end.
@@ -117,6 +139,8 @@ Read in this order:
 1. [Adding new slides to a study](docs/guide_adding_slides.md): the guided setup, step by step, for people new to stainID.
 2. [Using the app](docs/webapp.md): every page, how steps are queued, labelling and training models.
 3. [Project files](docs/project.md): the project settings (`stainid.yaml`), the input tables and every output file.
+   [Project kinds](docs/project_kinds.md): image sets, whole slides, imaging settings, dataset packages and scoring on
+   imported labels.
 4. [Methods](docs/pipelines.md): what each step computes, with its parameters, and the models.
 5. [Development](docs/development.md): tests, front end, the API and adding a step.
 

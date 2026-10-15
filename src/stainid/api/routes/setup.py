@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from stainid.api import render
 from stainid.api.state import get_state, reload_project
+from stainid.imageset.table import donor_rows as image_donor_rows
 from stainid.project import save_project
 from stainid.setup import checks, donors, guide, maps
 from stainid.setup.files import parse_text, read_tables
@@ -98,7 +99,8 @@ def overview() -> dict:
     screens = guide.screens(project, steps)
     state = {s["id"]: s["state"] for s in screens}
     remaining = _remaining(steps)
-    return {"screens": screens, "set_up": all(state[s] in ("done", "optional") for s in ("slides", "cores", "map")),
+    inputs = ("slides", "cores", "map") if project.is_tma else ("images",)
+    return {"screens": screens, "kind": project.kind, "set_up": all(state[s] in ("done", "optional") for s in inputs),
             "estimate": guide.estimate(project, [s["id"] for s in remaining]), "remaining": [{"id": s["id"], "title": s["title"]} for s in remaining]}
 
 
@@ -333,7 +335,7 @@ async def read_donor_file(file: UploadFile = File(...)) -> dict:
 
 def _sheet(request: DonorRequest):
     project = get_state().project
-    layout = maps.read_layout_rows(project.input("tma_layout"))
+    layout = maps.read_layout_rows(project.input("tma_layout")) if project.is_tma else image_donor_rows(project)
     on_map = {r["donor_id"] for r in layout if r.get("donor_id")}
     mapping = {int(k): v for k, v in (request.mapping or {}).items()}
     try:
@@ -351,8 +353,12 @@ def donor_preview(request: DonorRequest) -> dict:
     found = {r["donor_id"] for r in kept}
     notes = list(sheet.notes)
     if on_map and request.keep != "all":
-        notes.append(f"{len(kept)} of {len(sheet.records)} donors are kept: those on the TMA maps or on a TMA of this study "
-                     f"({len(on_map & found)} of the {len(on_map)} donors on the maps are in the sheet).")
+        if get_state().project.is_tma:
+            notes.append(f"{len(kept)} of {len(sheet.records)} donors are kept: those on the TMA maps or on a TMA of this study "
+                         f"({len(on_map & found)} of the {len(on_map)} donors on the maps are in the sheet).")
+        else:
+            notes.append(f"{len(kept)} of {len(sheet.records)} donors are kept: those with images in this study "
+                         f"({len(on_map & found)} of the {len(on_map)} donors of the images are in the sheet).")
     return {"header_row": sheet.header_row, "columns": sheet.columns, "records": kept[:60], "total": len(sheet.records), "kept": len(kept),
             "notes": notes, "table_columns": donors.columns_of(kept), "fields": {k: v[0] for k, v in donors.FIELDS.items()}}
 

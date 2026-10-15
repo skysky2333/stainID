@@ -9,7 +9,7 @@ import { useFetch } from '../hooks'
 import { objectsOf, percent } from '../labelling'
 import { useProject } from '../project'
 import { Advanced } from '../setup/parts'
-import type { CheckGroup, CheckOverview, CheckSession, Outcome, SizeBin, StainScores } from './types'
+import type { CheckGroup, CheckOverview, CheckSession, Outcome, RaterScores, SizeBin, StainScores } from './types'
 
 const OUTCOMES: { key: Outcome; label: string; hint: string }[] = [
   { key: 'counted', label: 'found and counted', hint: 'the AI counted it, with an outline that fits (IoU ≥ 0.5)' },
@@ -29,22 +29,24 @@ export function SegmentationCheck() {
   const job = (jobs.data ?? []).find((j) => j.workflow === 'score_segmentation')
   const running = active(job)
   const score = () => withError(async () => { await runStep('score_segmentation', { stain: 'all' }); jobs.reload() }, setError)
+  const scorable = !!overview.data && (overview.data.checks.some((c) => c.complete > 0) || overview.data.imported_sessions > 0)
   return (
     <section className="card segcheck">
       <div className="row"><h2 style={{ margin: 0 }}>How well does detection outline objects?</h2><span className="spacer" />
-        {overview.data && overview.data.checks.length > 0 && <button className="btn small" disabled={running || !overview.data.checks.some((c) => c.complete)}
-          title={overview.data.checks.some((c) => c.complete) ? 'Compares every complete field with what the AI found' : 'No field is marked complete yet'}
+        {overview.data && (overview.data.checks.length > 0 || overview.data.imported_sessions > 0) && <button className="btn small" disabled={running || !scorable}
+          title={scorable ? 'Compares every complete field with what the AI found' : 'No field is marked complete yet'}
           onClick={score}>{running ? 'Scoring…' : 'Score now'}</button>}</div>
       <p className="secondary small" style={{ marginTop: 4 }}>The model scores above are measured only on the objects the AI proposed. Here people outline
         <i> every</i> object in a few fields, so the check also counts objects the AI never proposed, cut into pieces or merged with a neighbour.</p>
       <Loaded state={overview} label="Loading the segmentation check…">
-        {(data) => data.checks.length ? <>
+        {(data) => data.checks.length || data.imported_sessions ? <>
           {running && job && <JobLine job={job} />}
           {!running && job?.status === 'failed' && <ErrorNote error={`Scoring stopped: ${job.progress.error || job.progress.last_line || 'see the log on the Run page'}`} />}
           <div className="segcheck-stains">
             {data.stains.map((stain) => <StainCheck key={stain} stain={stain} checks={data.checks.filter((c) => c.stain === stain)}
               scores={data.report?.stains.find((s) => s.stain === stain)} onSetUp={() => setSettingUp(true)} />)}
           </div>
+          {data.imported_sessions > 0 && <Imported raters={data.report?.imported ?? []} scored={!!data.report} />}
           {data.report && <p className="muted small">Scored {timeAgo(data.report.made)}{data.report.failed.length > 0 && ` · ${data.report.failed.length} fields could not be scored`}.
             {' '}Fields marked complete since then count after <b>Score now</b>.</p>}
           <Details data={data} />
@@ -59,6 +61,23 @@ export function SegmentationCheck() {
       <ErrorNote error={error} />
       {settingUp && overview.data && <SetUp data={overview.data} onClose={() => setSettingUp(false)} onDone={() => { overview.reload(); jobs.reload() }} />}
     </section>
+  )
+}
+
+/** The polygons of a dataset package's raters, each scored like a check (only fields where a rater drew polygons). */
+function Imported({ raters, scored }: { raters: RaterScores[]; scored: boolean }) {
+  return (
+    <div>
+      <h3 style={{ margin: '6px 0' }}>Outlines from the dataset’s raters</h3>
+      {raters.length ? <div className="segcheck-stains">{raters.map((r) => (
+        <div key={r.sessions[0]?.name ?? r.title} className="segcheck-stain">
+          <div className="row"><h3 style={{ margin: 0 }}>{r.title}</h3></div>
+          <div className="small muted">{r.stain} · {r.fields_scored.toLocaleString()} images or fields with polygons</div>
+          {r.objects > 0 ? <Scores s={r} words={objectsOf(r.stain)} /> : <p className="small muted">No polygon of the stain’s classes.</p>}
+        </div>
+      ))}</div> : <p className="small muted">{scored ? 'None of the imported raters drew polygons (boxes and points cannot measure outlines).'
+        : 'Press Score now to compare the polygons the dataset’s raters drew with what the AI found.'}</p>}
+    </div>
   )
 }
 
@@ -135,11 +154,11 @@ function Details({ data }: { data: CheckOverview }) {
   const { tmaName } = useProject()
   return (
     <Advanced hint="all figures by TMA, group, density and size; IoU 0.5 and 0.3; the files">
-      {report ? report.stains.filter((s) => s.objects > 0).map((s) => (
-        <div key={s.stain} className="segcheck-details">
-          <h3>{s.stain}</h3>
+      {report ? [...report.stains, ...(report.imported ?? [])].filter((s) => s.objects > 0).map((s) => (
+        <div key={'title' in s ? `${s.title}` : s.stain} className="segcheck-details">
+          <h3>{'title' in s ? `${s.title} (${s.stain})` : s.stain}</h3>
           <FigureTable rows={[{ key: 'All fields', fields: s.fields_scored, ...(s as Required<StainScores>) }]} first="" />
-          <FigureTable rows={s.by_tma.map((g) => ({ ...g, key: tmaName(g.key) }))} first="TMA" />
+          <FigureTable rows={s.by_tma.map((g) => ({ ...g, key: data.tma_study ? tmaName(g.key) : g.key }))} first={data.tma_study ? 'TMA' : 'Batch'} />
           <FigureTable rows={s.by_group} first="Group" />
           <FigureTable rows={s.by_density} first="Stain density" />
           <SizeTable bins={s.by_size} />
@@ -165,7 +184,7 @@ function Details({ data }: { data: CheckOverview }) {
 }
 
 function FigureTable({ rows, first }: { rows: CheckGroup[]; first: string }) {
-  if (!rows.length || (first && rows.length < 2 && first !== 'TMA')) return null
+  if (!rows.length || (first && rows.length < 2 && first !== 'TMA' && first !== 'Batch')) return null
   return (
     <div className="table-scroll">
       <table className="compact segcheck-table">
@@ -249,10 +268,10 @@ function SetUp({ data, onClose, onDone }: { data: CheckOverview; onClose: () => 
       </fieldset>
       <label className="field">Fields per stain<input type="number" min={1} max={200} value={n} style={{ width: 90 }} onChange={(e) => setN(Math.max(1, Number(e.target.value)))} /></label>
       <label className="layer-toggle"><input type="checkbox" checked={open} onChange={(e) => setOpen(e.target.checked)} />Open to labellers right away</label>
-      <Advanced hint="which TMAs">
-        <fieldset className="field"><legend>Fields come from these TMAs</legend>
+      <Advanced hint={data.tma_study ? 'which TMAs' : 'which batches of images'}>
+        <fieldset className="field"><legend>Fields come from these {data.tma_study ? 'TMAs' : 'batches of images'}</legend>
           <div className="row">{allTmas.map((t) => <label key={t} className="layer-toggle">
-            <input type="checkbox" checked={tmas.includes(t)} onChange={() => setTmas(toggle(tmas, t))} />{tmaName(t)}</label>)}</div>
+            <input type="checkbox" checked={tmas.includes(t)} onChange={() => setTmas(toggle(tmas, t))} />{data.tma_study ? tmaName(t) : t}</label>)}</div>
         </fieldset>
       </Advanced>
       <ErrorNote error={error} />

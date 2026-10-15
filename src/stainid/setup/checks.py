@@ -192,6 +192,10 @@ def find_issues(layout: list[dict], donors: list[dict], positions: set[tuple[str
 
 def project_issues(project: Project) -> list[dict]:
     """Everything that does not fit together yet (read from shared, read-only rows: the setup overview polls this)."""
+    if not project.is_tma:
+        from stainid.imageset.checks import image_issues
+
+        return image_issues(project)
     layout = cache.rows(project.input("tma_layout"))
     donors = cache.rows(project.input("donor_metadata"))
     manifest = cache.rows(project.input("core_manifest"), ("tma", "core_label"))
@@ -255,6 +259,12 @@ def _apply(project: Project, action: str, args: dict) -> str:
         return f"Pathology taken from the {'donor table' if action == 'pathology_from_sheet' else 'map'} for {len(chosen)} donors"
     if action == "add_donors":
         new = [{"donor_id": d, "tma": on_map[d]["tma"], "disease_group": on_map[d].get("disease_group", "")} for d in sorted(chosen) if d in on_map]
+        _write(donors_path, donors + new)
+        return f"{len(new)} donors added to the donor table"
+    if action == "add_image_donors":
+        from stainid.imageset.checks import add_image_donors
+
+        new = add_image_donors(project, chosen - set(sheet))
         _write(donors_path, donors + new)
         return f"{len(new)} donors added to the donor table"
     if action == "remove_donors":

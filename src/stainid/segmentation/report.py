@@ -9,17 +9,23 @@ candidates (the model's AUC) cannot see objects that were never proposed or were
 Writes into `<tables>/segmentation_benchmark/`: `report.json` (per stain: the figures in plain numbers, by TMA, group,
 density third and object size), `objects.csv` (one row per outlined object), `detections.csv` (one row per counted
 object) and `fields.csv` (one row per field and person). Candidates are found first where missing (`proposals`).
+
+Outlines imported from a dataset package (the read-only sessions of `imageset.annotations`, one per rater) are scored
+the same way, each rater on its own under `imported` in the report: a field counts for a rater when every object the
+rater marked on it is a polygon (boxes and points cannot measure outlines), and the rater is taken to have outlined
+every object of the stain's classes there (marks of other classes are left out, like "unsure").
 """
 from __future__ import annotations
 
 import json
 import time
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
 
 from stainid.labels import outline, sessions, store
-from stainid.labels.tasks import STAINS
+from stainid.labels.tasks import STAINS, positive
 from stainid.project import Project
 from stainid.sampling.tiles import known_tile_rows, table
 from stainid.segmentation import proposals, scoring
@@ -35,20 +41,69 @@ def report_path(project: Project):
     return proposals.folder(project) / "report.json"
 
 
-def outline_sessions(project: Project, stains: list[str] | None = None, names: list[str] | None = None) -> list[dict]:
+def _sessions(project: Project, keep, stains: list[str] | None, names: list[str] | None) -> list[dict]:
     root = project.output("reviews")
     metas = [sessions.meta(root, n) for n in sessions.names(root)]
-    return [m for m in metas if m["kind"] == outline.KIND and (not stains or m["stain"] in stains) and (not names or m["name"] in names)]
+    return [m for m in metas if keep(m) and (not stains or m["stain"] in stains) and (not names or m["name"] in names)]
 
 
-def find_proposals(project: Project, metas: list[dict], redo: bool = False) -> list[str]:
-    """Find the candidates of every field of these sessions that has none (or old ones); returns the fields that failed,
-    with the reason."""
+def outline_sessions(project: Project, stains: list[str] | None = None, names: list[str] | None = None) -> list[dict]:
+    return _sessions(project, lambda m: m["kind"] == outline.KIND, stains, names)
+
+
+def imported_sessions(project: Project, stains: list[str] | None = None, names: list[str] | None = None) -> list[dict]:
+    return _sessions(project, lambda m: bool(m.get("read_only") and m.get("imported")), stains, names)
+
+
+def _is_box(points) -> bool:
+    xy = np.asarray(points, float)
+    return len(xy) == 4 and len(set(xy[:, 0].round(1))) == 2 and len(set(xy[:, 1].round(1))) == 2
+
+
+@dataclass
+class Truth:
+    """One session's outlines that can be scored: per complete field, per person, their objects (points, value)."""
+    meta: dict
+    imported: bool
+    fields: dict[str, dict[str, pd.DataFrame]]
+
+    @property
+    def todo(self) -> list[str]:
+        """The fields whose candidates are needed: every field of a check (found ahead), the usable ones of an import."""
+        return list(self.fields) if self.imported else list(self.meta["fields"])
+
+
+def check_truth(labels: pd.DataFrame, meta: dict) -> Truth:
+    done = outline.finished(labels, meta["name"])
+    return Truth(meta, False, {t: {p: outline.objects(labels, meta["name"], t, p)[["points", "value"]] for p in sorted(done[t])}
+                               for t in meta["fields"] if done.get(t)})
+
+
+def imported_truth(labels: pd.DataFrame, meta: dict) -> Truth:
+    """The polygons of an imported rater, on the fields where all of the rater's marks are polygons."""
+    mine = labels[labels.session == meta["name"]]
+    classes = mine[(mine.task == "class") & mine.x.notna()]
+    shapes = mine[(mine.task == "outline") & mine.points.notna()]
+    classes = classes.assign(key=classes.id.str.split(":", n=1).str[1])  # tile:x:y, shared by a mark's class and outline
+    shapes = shapes.assign(key=shapes.id.str.split(":", n=1).str[1])
+    joined = classes.merge(shapes[["key", "source", "points"]].rename(columns={"points": "shape"}), on=["key", "source"], how="left")
+    fields: dict[str, dict[str, pd.DataFrame]] = {}
+    for (tile_id, person), part in joined.groupby(["tile_id", "source"]):
+        shapes_here = list(part["shape"])
+        if any(not isinstance(p, list) or _is_box(p) for p in shapes_here):
+            continue
+        values = [v if positive(meta["stain"], v) else "unsure" for v in part.value]
+        fields.setdefault(tile_id, {})[person] = pd.DataFrame({"points": shapes_here, "value": values})
+    return Truth(meta, True, fields)
+
+
+def find_proposals(project: Project, truths: list[Truth], redo: bool = False) -> list[str]:
+    """Find the candidates of every field these outlines need that has none (or old ones); returns the fields that
+    failed, with the reason."""
     from stainid.training.candidates import FieldLoader
 
     tiles = known_tile_rows(project)
-    todo = [(m["stain"], t) for m in metas for t in m["fields"]]
-    todo = list(dict.fromkeys(todo))
+    todo = list(dict.fromkeys((t.meta["stain"], tile) for t in truths for tile in t.todo))
     loader = FieldLoader(project)
     waiting = [(s, t) for s, t in todo if t in tiles and (redo or not proposals.current(project, tiles[t], loader))]
     failed = []
@@ -209,66 +264,85 @@ def _histogram(values: pd.Series) -> list[int]:
     return np.histogram(values.clip(0, 1), bins=np.linspace(0, 1, 11))[0].astype(int).tolist() if len(values) else [0] * 10
 
 
-def score(project: Project, metas: list[dict], failed: list[str] | None = None) -> dict:
-    """Score every complete field of these outline sessions and write the report and tables."""
-    labels = store.current(project.output("reviews"))
+def _score_fields(project: Project, truth: Truth, tiles: dict, analysis: pd.DataFrame, entry: dict, rows: dict[str, list]) -> None:
+    """Score every field of one session's outlines into `rows` (objects, counted, fields) and count into `entry`."""
+    stain, name = truth.meta["stain"], truth.meta["name"]
+    density = truth.meta.get("benchmark", {}).get("density", {})
+    for tile_id, people in truth.fields.items():
+        if tile_id not in tiles:
+            continue
+        tile = tiles[tile_id]
+        core_tiles = analysis[(analysis.core_id == tile["core_id"]) & (analysis.stain == stain)] if not analysis.empty else analysis
+        entry["fields_complete"] += 1
+        for person, objects_of in people.items():
+            result = score_field(project, tile, core_tiles, objects_of)
+            if result is None:
+                entry["waiting"] += 1
+                continue
+            objects, counted, field = result
+            extra = {"source": "imported" if truth.imported else "check", "stain": stain, "session": name, "person": person,
+                     "density": density.get(tile_id, "unknown")}
+            rows["objects"] += [{**extra, **o} for o in objects]
+            rows["counted"] += [{**extra, **c} for c in counted]
+            rows["fields"].append({**extra, **field})
+            entry["people"].add(person)
+            entry["not_found_again"] += field["counted_not_found_again"]
+
+
+def _figures(stain: str, entry: dict, objects: pd.DataFrame, counted: pd.DataFrame) -> dict:
+    scored = bool(len(objects))
+    levels = [lv for lv in (*outline.LEVELS, "unknown") if scored and (objects.density == lv).any()]
+    return {**{k: v for k, v in entry.items() if k != "people"}, "people": sorted(entry["people"]),
+            "fields_scored": int(objects.tile_id.nunique()) if scored else 0,
+            **(summarize(objects, counted) if scored else {"objects": 0}),
+            "by_tma": _by(objects, counted, "tma") if scored else [],
+            "by_group": _by(objects, counted, "disease_group") if scored else [],
+            "by_density": _by(objects, counted, "density", levels) if scored else [],
+            "by_size": _size_bins(stain, objects) if scored else [],
+            "proposal_iou_histogram": _histogram(objects[objects.counted_in_scores].proposal_iou) if scored else [],
+            "detection_iou_histogram": _histogram(objects[objects.counted_in_scores].detection_iou) if scored else []}
+
+
+def _part(frame: pd.DataFrame, **match) -> pd.DataFrame:
+    """The rows of `frame` with these values (an empty frame with the columns used later when there are none)."""
+    if frame.empty:
+        return pd.DataFrame(columns=["source", "stain", "session", "counted_in_scores", "outcome", "tile_id", "density"])
+    keep = np.ones(len(frame), bool)
+    for column, value in match.items():
+        keep &= (frame[column] == value).to_numpy()
+    return frame[keep]
+
+
+def score(project: Project, truths: list[Truth], failed: list[str] | None = None) -> dict:
+    """Score every complete field of these outlines (checks and imported raters) and write the report and tables."""
     tiles = known_tile_rows(project)
     analysis = table(project.analysis_tiles())
-    all_objects, all_counted, all_fields = [], [], []
+    rows: dict[str, list] = {"objects": [], "counted": [], "fields": []}
     stains: dict[str, dict] = {}
-    for meta in metas:
-        stain, name = meta["stain"], meta["name"]
-        entry = stains.setdefault(stain, {"stain": stain, "sessions": [], "fields_total": 0, "fields_complete": 0, "people": set(),
-                                          "waiting": 0, "not_found_again": 0})
-        entry["sessions"].append({"name": name, "title": meta.get("title", name)})
-        entry["fields_total"] += len(meta["fields"])
-        done = outline.finished(labels, name)
-        density = meta.get("benchmark", {}).get("density", {})
-        for tile_id in meta["fields"]:
-            if tile_id not in tiles or not done.get(tile_id):
-                continue
-            tile = tiles[tile_id]
-            core_tiles = analysis[(analysis.core_id == tile["core_id"]) & (analysis.stain == stain)] if not analysis.empty else analysis
-            entry["fields_complete"] += 1
-            for person in sorted(done[tile_id]):
-                rows = outline.objects(labels, name, tile_id, person)
-                result = score_field(project, tile, core_tiles, rows)
-                if result is None:
-                    entry["waiting"] += 1
-                    continue
-                objects, counted, field = result
-                extra = {"stain": stain, "session": name, "person": person, "density": density.get(tile_id, "unknown")}
-                all_objects += [{**extra, **o} for o in objects]
-                all_counted += [{**extra, **c} for c in counted]
-                all_fields.append({**extra, **field})
-                entry["people"].add(person)
-                entry["not_found_again"] += field["counted_not_found_again"]
-    objects = pd.DataFrame(all_objects)
-    counted = pd.DataFrame(all_counted)
-    out = []
-    for stain in [s for s in STAINS if s in stains]:
-        entry = stains[stain]
-        mine = objects[objects.stain == stain] if len(objects) else pd.DataFrame(columns=["stain", "counted_in_scores", "outcome"])
-        mine_counted = counted[counted.stain == stain] if len(counted) else pd.DataFrame(columns=["stain", "outcome"])
-        scored = bool(len(mine))
-        out.append({**{k: v for k, v in entry.items() if k != "people"}, "people": sorted(entry["people"]),
-                    "fields_scored": int(mine.tile_id.nunique()) if scored else 0,
-                    **(summarize(mine, mine_counted) if scored else {"objects": 0}),
-                    "by_tma": _by(mine, mine_counted, "tma") if scored else [],
-                    "by_group": _by(mine, mine_counted, "disease_group") if scored else [],
-                    "by_density": _by(mine, mine_counted, "density", [lv for lv in (*outline.LEVELS, "unknown") if (mine.density == lv).any()]) if scored else [],
-                    "by_size": _size_bins(stain, mine) if scored else [],
-                    "proposal_iou_histogram": _histogram(mine[mine.counted_in_scores].proposal_iou) if scored else [],
-                    "detection_iou_histogram": _histogram(mine[mine.counted_in_scores].detection_iou) if scored else []})
-    report = {"made": time.time(), "iou": scoring.IOU, "iou_low": scoring.IOU_LOW, "stains": out, "failed": failed or [],
+    raters: list[tuple[dict, dict]] = []
+    for truth in truths:
+        meta = truth.meta
+        new = {"stain": meta["stain"], "sessions": [], "fields_total": 0, "fields_complete": 0, "people": set(), "waiting": 0, "not_found_again": 0}
+        entry = new if truth.imported else stains.setdefault(meta["stain"], new)
+        entry["sessions"].append({"name": meta["name"], "title": meta.get("title", meta["name"])})
+        entry["fields_total"] += len(truth.todo)
+        _score_fields(project, truth, tiles, analysis, entry, rows)
+        if truth.imported:
+            raters.append((meta, entry))
+    objects, counted = pd.DataFrame(rows["objects"]), pd.DataFrame(rows["counted"])
+    out = [_figures(stain, stains[stain], _part(objects, source="check", stain=stain), _part(counted, source="check", stain=stain))
+           for stain in STAINS if stain in stains]
+    imported = [{"title": meta.get("title", meta["name"]), "dataset": meta["imported"].get("dataset", ""), "rater": meta["imported"].get("rater", ""),
+                 **_figures(meta["stain"], entry, _part(objects, session=meta["name"]), _part(counted, session=meta["name"]))}
+                for meta, entry in raters if entry["fields_complete"]]
+    report = {"made": time.time(), "iou": scoring.IOU, "iou_low": scoring.IOU_LOW, "stains": out, "imported": imported, "failed": failed or [],
               "rules": {"overlap_of_object": scoring.OVERLAP_OF_OBJECT, "overlap_of_candidate": scoring.OVERLAP_OF_CANDIDATE,
                         "merge_cover": scoring.MERGE_COVER, "split_part": scoring.SPLIT_PART, "boundary_band": scoring.BAND,
                         "match_px": proposals.MATCH_PX, "size_bins_um": SIZE_BINS}}
     target = proposals.folder(project)
     target.mkdir(parents=True, exist_ok=True)
-    write_records(target / "objects.csv", all_objects, ["stain", "session", "person", "tile_id"])
-    write_records(target / "detections.csv", all_counted, ["stain", "session", "person", "tile_id"])
-    write_records(target / "fields.csv", all_fields, ["stain", "session", "person", "tile_id"])
+    for name, key in (("objects.csv", "objects"), ("detections.csv", "counted"), ("fields.csv", "fields")):
+        write_records(target / name, rows[key], ["source", "stain", "session", "person", "tile_id"])
     write_text_atomic(report_path(project), json.dumps(report, indent=1, default=lambda v: v.item() if hasattr(v, "item") else str(v)))
     return report
 
@@ -277,26 +351,34 @@ def plain(stain_report: dict) -> str:
     """The report of one stain in a sentence or two."""
     n = stain_report.get("objects", 0)
     if not n:
-        return f"{stain_report['stain']}: no field is outlined completely yet."
+        return f"{stain_report.get('title', stain_report['stain'])}: no field is outlined completely yet."
     words = WORDS.get(stain_report["stain"], "objects")
     o = stain_report["outcomes"]
     pct = lambda v: "—" if v is None else f"{100 * v:.0f}%"  # noqa: E731
-    return (f"{stain_report['stain']}: of {n} {words} people outlined in {stain_report['fields_scored']} fields, the AI proposed "
+    return (f"{stain_report.get('title', stain_report['stain'])}: of {n} {words} outlined in {stain_report['fields_scored']} fields, the AI proposed "
             f"{pct(stain_report['proposal_recall'])} with a fitting outline and counted {pct(stain_report['detection_recall'])}. "
             f"{o['missed']} were never proposed, {o['split']} were cut into pieces, {o['merged']} were merged with a neighbour, "
             f"{o['poor outline']} had a poor outline and {o['rejected']} were proposed but not counted. "
             f"{pct(stain_report['detection_precision'])} of what it counted is a real object with a fitting outline.")
 
 
+def truths(project: Project, stains: list[str] | None = None, names: list[str] | None = None) -> list[Truth]:
+    """Every source of outlines: the checks (outline sessions) and the imported raters with polygons."""
+    labels = store.current(project.output("reviews"))
+    found = [check_truth(labels, m) for m in outline_sessions(project, stains, names)]
+    found += [t for t in (imported_truth(labels, m) for m in imported_sessions(project, stains, names)) if t.fields]
+    return found
+
+
 def run(project: Project, stain: str = "all", session: str = "", proposals_only: bool = False, redo: bool = False) -> dict | None:
-    metas = outline_sessions(project, None if stain in ("", "all") else [stain], [s for s in session.split(",") if s] or None)
-    if not metas:
+    found = truths(project, None if stain in ("", "all") else [stain], [s for s in session.split(",") if s] or None)
+    if not found:
         raise ValueError("There is no segmentation check yet: set one up under Models → How well does detection outline objects?")
-    failed = find_proposals(project, metas, redo)
+    failed = find_proposals(project, found, redo)
     if proposals_only:
         return None
-    report = score(project, metas, failed)
-    for entry in report["stains"]:
+    report = score(project, found, failed)
+    for entry in report["stains"] + report["imported"]:
         print(plain(entry), flush=True)
     print(f"Report: {report_path(project)}", flush=True)
     return report

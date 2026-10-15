@@ -36,7 +36,11 @@ export interface StainScores extends Partial<CheckFigures> {
   by_tma: CheckGroup[]; by_group: CheckGroup[]; by_density: CheckGroup[]; by_size: SizeBin[]
   proposal_iou_histogram: number[]; detection_iou_histogram: number[]
 }
-export interface CheckReport { made: number; iou: number; iou_low: number; stains: StainScores[]; failed: string[]; rules: Record<string, unknown> }
+/** One rater of a dataset package whose polygons were scored (image-set and whole-slide projects). */
+export interface RaterScores extends StainScores { title: string; dataset: string; rater: string }
+export interface CheckReport {
+  made: number; iou: number; iou_low: number; stains: StainScores[]; imported: RaterScores[]; failed: string[]; rules: Record<string, unknown>
+}
 
 /** One outline session of the check, and how far it is. */
 export interface CheckSession {
@@ -46,4 +50,6 @@ export interface CheckSession {
 export interface CheckOverview {
   stains: string[]; checks: CheckSession[]; report: CheckReport | null; files: { label: string; path: string; exists: boolean }[]
   segment_anything: boolean; tmas: Record<string, { all: string[]; default: string[] }>; default_fields: number; now: number
+  /** a TMA study (else the `tma` column holds image batches); read-only sessions imported from a dataset package */
+  tma_study: boolean; imported_sessions: number
 }
