@@ -9,12 +9,16 @@ import { Advanced } from '../setup/parts'
 import type { Measure, TableColumns } from './data'
 import { ID_LABELS, downloadCsv, formatNumber, measureTitle, tableUrl, useShared } from './data'
 import { Choice, Pager, Waiting } from './parts'
+import type { MeasureFilter, TableStats } from './stats'
+import { GroupDifferences, IccChip, TestLine } from './StatsParts'
 
 type Facet = 'region' | 'tma' | ''
 const FACET_TEXT: Record<Facet, string> = { region: 'Brain region', tma: 'TMA', '': 'Nothing' }
 
 /** One measure: the plot by diagnosis group, a summary per group and the value of every donor-region (or core). */
-export function MeasureView({ table, info, measure }: { table: string; info: TableColumns; measure: Measure }) {
+export function MeasureView({ table, info, measure, stats, filter }: {
+  table: string; info: TableColumns; measure: Measure; stats: TableStats | null; filter: MeasureFilter
+}) {
   const [facet, setFacet] = useStored<Facet>('stainid.results.facet', 'region')
   const [log, setLog] = useState(false)
   const split = facet && info.groupable.includes(facet) ? facet : ''
@@ -29,8 +33,10 @@ export function MeasureView({ table, info, measure }: { table: string; info: Tab
       <div className="measure-head">
         <h2>{measure.label}</h2>
         {measure.unit && <span className="badge">{measure.unit}</span>}
+        {stats ? <IccChip icc={stats.icc[measure.column]} long /> : <span className="muted small">Loading ICC…</span>}
       </div>
       {measure.description && <p className="secondary measure-meaning">{measure.description}</p>}
+      {stats && <TestLine stats={stats} filter={filter} column={measure.column} />}
       <div className="row chart-controls">
         <span className="small secondary">Side by side by</span>
         <Choice label="Side by side by" value={split} options={facetOptions} onChange={setFacet} />
@@ -50,7 +56,8 @@ export function MeasureView({ table, info, measure }: { table: string; info: Tab
               <GroupStrip points={list} yLabel={measureTitle(measure)} facetLabel={FACET_TEXT[split]} log={log && canLog} format={formatNumber} />
               <p className="muted small chart-note">Each dot is one {idColumn === 'core_id' ? 'core' : 'donor-region'}; hover a dot for its name.
                 Boxes show the middle half of the values and the line the median. These are raw values, for looking at the data;
-                formal comparisons should adjust for age, TMA and other covariates.</p>
+                the tests of the differences between groups are below.</p>
+              {stats && <GroupDifferences stats={stats} filter={filter} column={measure.column} />}
               <GroupSummary points={list} measure={measure} facetLabel={split ? FACET_TEXT[split] : ''} />
               <ValueList rows={data.points} measure={measure} idColumn={idColumn} />
             </>

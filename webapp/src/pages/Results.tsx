@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import type { TableInfo } from '../api'
 import { downloadUrl } from '../api'
@@ -11,6 +12,8 @@ import { MeasureView } from '../measures/MeasureView'
 import type { TableColumns } from '../measures/data'
 import { CORE_TABLE, DONOR_REGION_TABLE, ResultsCache, tableUrl, useShared } from '../measures/data'
 import { Choice, Waiting } from '../measures/parts'
+import type { MeasureFilter, TableStats } from '../measures/stats'
+import { DEFAULT_FILTER } from '../measures/stats'
 
 type Tab = 'plot' | 'numbers' | 'guide' | 'downloads'
 const TABS: [Tab, string][] = [['plot', 'Plot by group'], ['numbers', 'Table of numbers'], ['guide', 'What the measures mean'], ['downloads', 'Downloads']]
@@ -31,7 +34,10 @@ function ResultsPage() {
         <ul>
           <li>Pick a measure on the left to see it plotted by diagnosis group, with a summary per group and the value of every <Term>donor-region</Term> below.</li>
           <li>Counts and areas are pooled over all fields and replicate cores before dividing, so every <Term>density</Term> is per mm² of usable tissue.</li>
-          <li>The plots show raw values, for looking at the data. Formal comparisons should adjust for age, TMA and other covariates.</li>
+          <li>The plots show raw values, for looking at the data. Below each plot are the tests of the differences between groups, with what
+            they were adjusted for: the study's own analysis where the project has it, otherwise a quick test.</li>
+          <li><b>ICC</b> next to a measure says how well two cores of the same donor and region agree (good from 0.75, weak below 0.5).
+            “Significant only” and “Reproducible only” above the list narrow it to the measures that differ between two groups or that are reproducible.</li>
         </ul>
       </HelpBox>
       <Waiting state={tables} label="Looking for results tables…">
@@ -101,10 +107,13 @@ function Explore({ table, info, measure, onMeasure, onTable }: {
     )
   }
   const chosen = info.measures.find((m) => m.column === measure) ?? info.measures.find((m) => m.key) ?? info.measures[0]
+  const stats = useShared<TableStats>(tableUrl(table, 'stats'))
+  const [stored, setFilter] = useStored<MeasureFilter>('stainid.results.filter', DEFAULT_FILTER)
+  const filter = useMemo(() => ({ ...DEFAULT_FILTER, ...stored }), [stored])
   return (
     <div className="explore">
-      <MeasurePicker measures={info.measures} topics={info.topics} value={chosen.column} onChange={onMeasure} />
-      <MeasureView key={chosen.column} table={table} info={info} measure={chosen} />
+      <MeasurePicker measures={info.measures} topics={info.topics} value={chosen.column} onChange={onMeasure} stats={stats} filter={filter} onFilter={setFilter} />
+      <MeasureView key={chosen.column} table={table} info={info} measure={chosen} stats={stats.data} filter={filter} />
     </div>
   )
 }

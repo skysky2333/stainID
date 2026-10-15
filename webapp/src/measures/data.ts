@@ -19,7 +19,7 @@ export const ID_LABELS: Record<string, string> = {
   sample_region_id: 'Donor-region', core_id: 'Core', donor_id: 'Donor', region: 'Brain region', disease_group: 'Diagnosis group', tma: 'TMA',
 }
 
-export const tableUrl = (table: string, part: 'columns' | 'rows' | 'feature') => `/api/tables/${enc(table)}/${part}`
+export const tableUrl = (table: string, part: 'columns' | 'rows' | 'feature' | 'stats') => `/api/tables/${enc(table)}/${part}`
 
 /** "Neuron density (neurons per mm²)" */
 export const measureTitle = (m: Measure) => (!m.unit ? m.label : m.label.endsWith(')') ? `${m.label}, ${m.unit}` : `${m.label} (${m.unit})`)

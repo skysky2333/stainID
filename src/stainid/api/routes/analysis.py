@@ -9,9 +9,11 @@ from pathlib import Path
 import pandas as pd
 from fastapi import APIRouter, HTTPException
 
+from stainid.analysis import measure_stats as ms
 from stainid.analysis.dictionary import TOPICS, describe, measure
 from stainid.api.state import get_state
 from stainid.api.util import records
+from stainid.setup.naming import Groups
 
 router = APIRouter(tags=["analysis"])
 GROUP_COLUMNS = ("disease_group", "region", "tma")
@@ -127,10 +129,14 @@ def tables() -> list[dict]:
     return sorted(out, key=lambda t: (not t["main"], list(TABLES).index(t["name"]) if t["main"] else 0, t["name"]))
 
 
+def measure_columns(frame: pd.DataFrame) -> list[str]:
+    return [c for c in frame.columns if pd.api.types.is_numeric_dtype(frame[c]) and c not in NOT_MEASURES and not c.endswith("_id")]
+
+
 @router.get("/tables/{name:path}/columns")
 def columns(name: str) -> dict:
     frame = read_table(resolve(name))
-    numeric = [c for c in frame.columns if pd.api.types.is_numeric_dtype(frame[c]) and c not in NOT_MEASURES and not c.endswith("_id")]
+    numeric = measure_columns(frame)
     return {"columns": list(frame.columns), "numeric": numeric, "groupable": [c for c in GROUP_COLUMNS if c in frame],
             "descriptions": {c: describe(c) for c in frame.columns if describe(c)},
             "measures": [measure(c) for c in numeric], "topics": TOPICS, "rows": len(frame)}
@@ -164,3 +170,104 @@ def feature(name: str, column: str, group: str = "disease_group", facet: str | N
         raise HTTPException(400, "unknown column")
     keep = [c for c in dict.fromkeys(["sample_region_id", "core_id", "donor_id", group, facet, column]) if c and c in frame]
     return {"column": column, "group": group, "facet": facet, "points": records(frame[keep].dropna(subset=[column]))}
+
+
+# ---------------------------------------------------------------- reproducibility and group differences per measure
+
+_stats: dict[str, tuple[tuple, dict]] = {}
+
+
+def _sibling(path: Path, part: str, other: str) -> Path | None:
+    """The same table at the other level (results_donor_region.csv <-> results_core.csv)."""
+    if f"_{part}" not in path.stem:
+        return None
+    sibling = path.with_name(path.name.replace(f"_{part}", f"_{other}", 1))
+    return sibling if sibling.exists() else None
+
+
+def _one_extent(frame: pd.DataFrame, extent: str | None = None) -> pd.DataFrame:
+    """Tables with several tile sets (sampling_extent) hold one row per set: keep one, `extent` when the table has it."""
+    if "sampling_extent" not in frame or frame.empty:
+        return frame
+    keep = extent if extent is not None and (frame.sampling_extent == extent).any() else frame.sampling_extent.iloc[0]
+    return frame[frame.sampling_extent == keep]
+
+
+def _fresh(path: Path, since: float) -> bool:
+    """A study table made from the current results (not written before the table on screen)."""
+    return path.exists() and path.stat().st_mtime >= since
+
+
+@router.get("/tables/{name:path}/stats")
+def table_stats(name: str) -> dict:
+    """For every measure of a table: its replicate-core ICC, and its difference between pairs of diagnosis groups
+    (effect in SD, p and FDR), from the study's tables where they hold the same numbers, else computed here. Kept until
+    one of the files it is made from changes."""
+    path = resolve(name)
+    project = get_state().project
+    base = tables_root()
+    shown_time = path.stat().st_mtime
+    is_core = "_core" in path.stem
+    donor_region = _sibling(path, "core", "donor_region") if is_core else path
+    core = path if is_core else _sibling(path, "donor_region", "core")
+    tiles = str(project.config.get("analysis", {}).get("tiles") or "whole_core")
+    biology = base / "biology"
+    primary = biology / "cohort_morphology" / tiles / "replicate_reliability.csv"  # the study's main reliability table
+    icc_files = [primary] + [p for p in _folder(biology)[0] if p.name.endswith("_replicate_icc.csv")]
+    icc_files = [p for p in icc_files if _fresh(p, shown_time)]
+    specs = [s for s in ms.STUDY_CONTRASTS if _fresh(base / s.file, shown_time)]
+    inputs = sorted({base / i for s in specs for i in s.inputs if (base / i).exists()})
+    files = [p for p in [path, donor_region, core, *icc_files, *(base / s.file for s in specs), *inputs] if p is not None]
+    stamp = (tuple((str(p), _stamp(p)) for p in files), repr(project.config.get("groups")), tiles)
+    with _lock:
+        known = _stats.get(name)
+    if known and known[0] == stamp:
+        return known[1]
+
+    frame = _one_extent(read_table(path), tiles)
+    measures = measure_columns(frame)
+    core_frame = _one_extent(read_table(core), tiles) if core is not None else None
+    icc = ms.reliability(measures, core_frame, ms.study_icc(icc_files, project.relative, primary))
+    comparisons = []
+    if donor_region is not None:
+        shown = _one_extent(read_table(donor_region), tiles)
+        if "disease_group" in shown:
+            groups = Groups(project.config.get("groups"))
+            kinds = {kind: groups.code(kind) for pair in ms.PREFERRED for kind in pair}
+            order = [g["code"] for g in get_state().groups()]
+            found = set(shown.disease_group.dropna().astype(str))
+            present = [c for c in order if c in found] + sorted(found - set(order))
+            inputs_read = {p: _one_extent(read_table(p), tiles) for p in inputs}
+            tested = [m for m in measures if m in shown]
+            for first, second in ms.comparisons(present, kinds):
+                comparisons.append(_comparison(shown, tested, (first, second), kinds, specs, inputs_read))
+    result = {"icc": icc, "comparisons": comparisons, "icc_files": [project.relative(p) for p in icc_files],
+              "contrast_files": [project.relative(base / s.file) for s in specs]}
+    with _lock:
+        _stats[name] = (stamp, result)
+    return result
+
+
+def _comparison(shown: pd.DataFrame, measures: list[str], pair: tuple[str, str], kinds: dict[str, str],
+                specs: list[ms.StudyContrasts], inputs: dict[Path, pd.DataFrame]) -> dict:
+    """One pair of groups: the study's tests of the measures it tested, a quick test of the others, and the models."""
+    base, project = tables_root(), get_state().project
+    tests: dict[str, dict[str, dict]] = {}
+    within = ""
+    for spec in specs:
+        if (kinds.get(spec.groups[0]), kinds.get(spec.groups[1])) != pair:
+            continue
+        study = ms.study_tests(shown, spec, read_table(base / spec.file), [inputs.get(base / i) for i in spec.inputs])
+        for column, by_model in study.items():
+            for model, test in by_model.items():
+                tests.setdefault(column, {}).setdefault(model, {**test, "file": project.relative(base / spec.file)})
+        within = within or spec.within
+    quick = ms.quick_tests(shown, [m for m in measures if m not in tests], *pair)
+    for column, test in quick.items():
+        tests.setdefault(column, {})[ms.QUICK] = test
+    models = sorted({m for by_model in tests.values() for m in by_model if m != ms.QUICK}, key=lambda m: len(ms.model_terms(m)))
+    listed = [ms.model_info(m, ms.model_terms(m), "study", i == len(models) - 1) for i, m in enumerate(models)]
+    if quick:
+        listed.append(ms.model_info(ms.QUICK, list(ms.QUICK_TERMS), "quick", not models))
+    return {"key": "|".join(pair), "first": pair[0], "second": pair[1], "within": within or "Within TMAs that hold both groups.",
+            "models": listed, "tests": tests}
