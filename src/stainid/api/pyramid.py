@@ -366,5 +366,5 @@ def field_thumbnail(state: ProjectState, tile: dict, size: int = 192) -> Path:
         x, y = int(int(tile["x_px"]) * scale), int(int(tile["y_px"]) * scale)
         w, h = max(1, round(int(tile["width_px"]) * scale)), max(1, round(int(tile["height_px"]) * scale))
         part = base[y:y + h, x:x + w]
-        _write_atomic(target, _jpeg(cv2.resize(part, (size, max(1, round(size * part.shape[0] / part.shape[1]))), interpolation=cv2.INTER_AREA), 85))
+        write_atomic(target, jpeg(cv2.resize(part, (size, max(1, round(size * part.shape[0] / part.shape[1]))), interpolation=cv2.INTER_AREA), 85))
     return target
