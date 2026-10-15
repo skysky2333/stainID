@@ -9,7 +9,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from stainid.api import registry, state
-from stainid.project import CONFIG_NAME, DEFAULTS, Project, load_project, save_project
+from stainid.imageset import package
+from stainid.project import CONFIG_NAME, DEFAULTS, KINDS, Project, load_project, save_project
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -29,12 +30,25 @@ class OpenRequest(BaseModel):
 class CreateRequest(BaseModel):
     path: str
     name: str = ""
+    kind: str = "tma"  # see stainid.project.KINDS
     copy_from: str = ""  # a project id: start with (some of) its settings
     settings: list[str] = list(COPYABLE)  # which (keys of COPYABLE)
 
 
 class FolderSetting(BaseModel):
     path: str
+
+
+class PackageRequest(BaseModel):
+    package: str
+
+
+class PackageCreate(BaseModel):
+    package: str
+    path: str
+    name: str = ""
+    class_map: dict[str, str] = {}
+    stains: dict[str, dict] = {}
 
 
 def known() -> list[registry.Entry]:
@@ -52,7 +66,8 @@ def _entry(project_id: str) -> registry.Entry:
 
 
 def describe(entry: registry.Entry) -> dict:
-    return {**registry.as_dict(entry), "status": state.project_status(Path(entry.path))}
+    kind = load_project(entry.path).kind if entry.exists and (Path(entry.path) / CONFIG_NAME).exists() else "tma"
+    return {**registry.as_dict(entry), "status": state.project_status(Path(entry.path)), "kind": kind, "kind_label": KINDS.get(kind, kind)}
 
 
 @router.get("")
@@ -61,7 +76,7 @@ def projects() -> dict:
     folder = registry.projects_dir()
     return {"projects": [describe(e) for e in known()], "default": state.default_id(), "projects_dir": str(folder) if folder else "",
             "projects_dir_from": "command line" if os.environ.get(registry.PROJECTS_DIR_ENV) else "setting" if folder else "",
-            "copyable": {key: label for key, (label, _) in COPYABLE.items()}}
+            "copyable": {key: label for key, (label, _) in COPYABLE.items()}, "kinds": KINDS}
 
 
 @router.post("/open")
@@ -96,12 +111,42 @@ def create(request: CreateRequest) -> dict:
         raise HTTPException(409, f"{path} already holds a stainID project; open it instead.")
     if path.exists() and not path.is_dir():
         raise HTTPException(400, f"{path} is a file, not a folder")
-    changes = {"name": request.name.strip() or path.name}
+    if request.kind not in KINDS:
+        raise HTTPException(400, f"kind must be one of {', '.join(KINDS)}")
+    changes = {"name": request.name.strip() or path.name, "kind": request.kind}
+    if request.kind != "tma":  # another lab's ids are kept as written; whole slides are read region by region, not copied
+        changes |= {"donor_ids": {"digits": 0, "prefixed_digits": 0}, "tma": {"prefix": ""},
+                    "imaging": {"rescale": "on_the_fly" if request.kind == "slides" else "on_import"}}
     if request.copy_from:
         source = _entry(request.copy_from)
         changes = {**copied_settings(load_project(source.path), request.settings), **changes}
     save_project(Project(root=path.resolve(), config=DEFAULTS), changes)
     opened = state.open_project(path)
+    return describe(_entry(opened.id))
+
+
+@router.post("/package-preview")
+def package_preview(request: PackageRequest) -> dict:
+    """What a dataset package holds, before a project is made from it."""
+    try:
+        return package.preview(request.package)
+    except (ValueError, OSError) as error:
+        raise HTTPException(400, str(error))
+
+
+@router.post("/from-package")
+def package_create(request: PackageCreate) -> dict:
+    """A new project from a dataset package: its kind, imaging settings, image list (linked, not copied) and donors. The
+    labels are placed on the tiles when its images are prepared (Set up → Run)."""
+    if not request.path.strip():
+        raise HTTPException(400, "Choose a folder for the new study")
+    try:
+        project = package.create_project(request.package, Path(request.path), request.name, request.class_map, request.stains)
+    except FileExistsError as error:
+        raise HTTPException(409, f"{error}; open it instead.")
+    except (ValueError, OSError) as error:
+        raise HTTPException(400, str(error))
+    opened = state.open_project(project.root)
     return describe(_entry(opened.id))
 
 

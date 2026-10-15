@@ -9,6 +9,7 @@ from pathlib import Path
 
 from PIL import Image
 
+from stainid.imaging.core_images import open_image
 from stainid.nuclei import CELLPOSE_SETTINGS, cellpose_masks, load_cellpose
 from stainid.pipelines.cohort_v1 import context_crop
 from stainid.project import Project
@@ -26,7 +27,7 @@ class CoreImages:
     def get(self, path: Path) -> Image.Image:
         with self.lock:
             if path not in self.loaded:
-                image = Image.open(path)
+                image = open_image(path)
                 image.load()
                 self.loaded = {**dict(list(self.loaded.items())[-1:]), path: image}
             return self.loaded[path]

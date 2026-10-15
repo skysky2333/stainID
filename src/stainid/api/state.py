@@ -288,7 +288,8 @@ def project_status(root: Path) -> dict:
         return {"state": "running", "text": "Running: " + ", ".join(dict.fromkeys(running)), "running": running}
     if (project.output("tables") / "results_donor_region.csv").exists():
         return {"state": "results", "text": "Results ready", "running": []}
-    if all(project.input(key).exists() for key in ("slides_table", "core_manifest", "tma_layout")):
+    needed = ("slides_table", "core_manifest", "tma_layout") if project.is_tma else ("image_list", "whole_core_manifest")
+    if all(project.input(key).exists() for key in needed):
         return {"state": "set_up", "text": "Set up", "running": []}
     return {"state": "not_set_up", "text": "Not set up yet", "running": []}
 

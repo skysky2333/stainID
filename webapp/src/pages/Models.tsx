@@ -6,6 +6,7 @@ import { Empty, ErrorNote, HelpBox, Loaded, Modal, PageHead, PathLine, Progress,
 import { useFetch } from '../hooks'
 import { ConfirmDialog, DetectionLine, QualityBadge, QualityLine, objectsOf, quality } from '../labelling'
 import { useProject } from '../project'
+import { ScoreOnLabels } from '../scoring'
 import { Advanced } from '../setup/parts'
 
 const TITLES: Record<string, string> = {
@@ -70,6 +71,7 @@ export default function Models() {
             ))}
           </div>
           <ErrorNote error={trained.error} />
+          <ScoreOnLabels />
           <h2 className="stage-title">Published models</h2>
           <PublishedModels models={list.filter((m) => m.source !== 'train')} job={download} onChanged={() => { jobs.reload(); models.reload() }} />
         </>}

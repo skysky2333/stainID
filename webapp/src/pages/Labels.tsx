@@ -112,7 +112,7 @@ function SessionRow({ s, link, onChanged }: { s: SessionInfo; link: string; onCh
     <div className={`session-row${s.open ? ' is-open' : ''}`}>
       <div className="session-main">
         <div className="session-title">
-          <b>{s.title}</b> <span className={`badge ${state.className}`}>{state.text}</span>
+          <b>{s.title}</b> {s.read_only ? <span className="badge" title="Imported from a dataset package; the labels stay as they were">read only</span> : <span className={`badge ${state.className}`}>{state.text}</span>}
           {s.labelling_now > 0 && <span className="badge status-running"><span className="pulse" />{s.labelling_now} labelling now</span>}
         </div>
         <div className="muted small">{s.stain} · {KIND_TEXT[s.kind]}{s.kind === 'fields' && s.per_field > 1 ? ` · ${s.per_field} people per field` : ''}</div>
@@ -120,9 +120,9 @@ function SessionRow({ s, link, onChanged }: { s: SessionInfo; link: string; onCh
         <People people={s.labellers} fields={s.kind === 'fields' ? s.fields ?? 0 : null} />
       </div>
       <div className="session-actions">
-        {s.open && <CopyButton text={link} />}
-        <button className="btn small" disabled={busy} onClick={toggle} title={s.open ? 'People can no longer open it; nothing is lost' : 'People with the link can start labelling'}>
-          {busy ? '…' : s.open ? 'Close' : 'Open to labellers'}</button>
+        {s.open && !s.read_only && <CopyButton text={link} />}
+        {!s.read_only && <button className="btn small" disabled={busy} onClick={toggle} title={s.open ? 'People can no longer open it; nothing is lost' : 'People with the link can start labelling'}>
+          {busy ? '…' : s.open ? 'Close' : 'Open to labellers'}</button>}
         <button className="btn small" onClick={() => setOpen(!open)} aria-expanded={open}>{open ? 'Less' : 'More'}</button>
       </div>
       <ErrorNote error={error} />
