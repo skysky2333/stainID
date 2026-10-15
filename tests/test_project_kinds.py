@@ -260,6 +260,8 @@ def test_package_import_setup_and_scoring_through_the_app(client, tmp_path):
     client.put(f"{base}/setup/images/imaging", json={"stains": {"4G8": {"family": "amyloid", "chromogen": "DAB"}}})
     project = load_project(tmp_path / "study")
     prepare.prepare_images(project, log=_quiet)  # what the Prepare images step runs
+    grid = client.get(f"{base}/tmas/SD1/grid", params={"stain": "6E10"}).json()  # the Cores page: pictures in reading order, by name
+    assert grid["positional"] and [c["name"] for c in grid["cells"]] == ["tile0", "tile1"] and grid["cells"][0]["core_label"] == "A-1"
     imported = client.get(f"{base}/labels/imported").json()
     assert imported["placed"] == {"expert1": 12, "expert2": 12, "consensus": 12}  # expert2's diffuse plaque is ignored by the class map
     assert client.post(f"{base}/models/score").status_code == 400  # no detections yet

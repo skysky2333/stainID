@@ -67,7 +67,7 @@ export default function Setup() {
   return (
     <>
       <PageHead title="Set up"
-        subtitle={<>{overview.data?.set_up ? `Add new ${kind === 'tma' ? 'slides' : kind === 'slides' ? 'slides' : 'images'}, or change what was set up.` : SUBTITLE[kind]} You can leave at any time and come back; nothing is lost.</>} />
+        subtitle={<>{overview.data?.set_up ? `Add new ${kind === 'images' ? 'images' : 'slides'}, or change what was set up.` : SUBTITLE[kind]} You can leave at any time and come back; nothing is lost.</>} />
       <Stepper screens={overview.data ? screens : []} kind={kind} current={id} overview={overview.data} onGo={go} />
       {overview.error && <Problem text={`The state of each step could not be loaded: ${plainError(overview.error)}`} onRetry={overview.reload} />}
       {!id ? (!overview.error && <Loading label="Finding where you left off…" />) : (

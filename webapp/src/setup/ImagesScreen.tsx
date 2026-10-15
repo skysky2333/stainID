@@ -101,7 +101,7 @@ function AddImages({ data, onSaved, onCancel }: { data: ImagesOverview; onSaved:
           </Found>
           {noStain > 0 && <label className="inline-field small">Stain of the {thing}s without one
             <input type="text" value={stain} placeholder="e.g. 4G8, AT8, NeuN" onChange={(e) => setStain(e.target.value)} /></label>}
-          <ImageTable rows={rows.slice(0, 12)} />
+          <ImageTable rows={rows.slice(0, 12)} thing={thing} />
           {rows.length > 12 && <p className="small muted">… and {plural(rows.length - 12, `more ${thing}`)}</p>}
           <div className="row">
             <button className="btn primary" disabled={busy || !rows.length} onClick={() => save(data.total ? 'add' : 'replace')}>
@@ -116,14 +116,14 @@ function AddImages({ data, onSaved, onCancel }: { data: ImagesOverview; onSaved:
   )
 }
 
-function ImageTable({ rows, onEdit }: { rows: ImageRow[]; onEdit?: (index: number, column: 'donor_id' | 'stain' | 'region', value: string) => void }) {
+function ImageTable({ rows, thing = 'image', onEdit }: { rows: ImageRow[]; thing?: string; onEdit?: (index: number, column: 'donor_id' | 'stain' | 'region', value: string) => void }) {
   const cell = (r: ImageRow, i: number, column: 'donor_id' | 'stain' | 'region') => onEdit
     ? <input type="text" value={r[column] ?? ''} aria-label={column} onChange={(e) => onEdit(i, column, e.target.value)} />
     : r[column] || <span className="muted">—</span>
   return (
     <div className="table-wrap images-table">
       <table className="compact small">
-        <thead><tr><th>Image</th><th>Donor</th><th>Stain</th><th>Region</th></tr></thead>
+        <thead><tr><th>{thing === 'slide' ? 'Slide' : 'Image'}</th><th>Donor</th><th>Stain</th><th>Region</th></tr></thead>
         <tbody>{rows.map((r, i) => (
           <tr key={`${r.path}-${i}`}><td className="ellipsis" title={r.path}>{r.image_id || r.path.split(/[\\/]/).pop()}</td>
             <td>{cell(r, i, 'donor_id')}</td><td>{cell(r, i, 'stain')}</td><td>{cell(r, i, 'region')}</td></tr>
@@ -157,7 +157,7 @@ function ImageList({ data, onChanged, onAdd }: { data: ImagesOverview; onChanged
         <h3>The {thing}s</h3><span className="spacer" />
         <button className="btn small" onClick={onAdd}>Add {thing}s…</button>
       </div>
-      <ImageTable rows={shown.slice(page * PAGE, (page + 1) * PAGE)} onEdit={editable ? edit : undefined} />
+      <ImageTable rows={shown.slice(page * PAGE, (page + 1) * PAGE)} thing={thing} onEdit={editable ? edit : undefined} />
       <div className="row small">
         {pages > 1 && <span className="pager">
           <button className="btn small" disabled={page === 0} onClick={() => setPage(page - 1)}>← Previous</button>

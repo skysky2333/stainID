@@ -12,7 +12,8 @@ folder. On the command line the project is found from `--project`, then `$STAINI
 
 ```yaml
 name: My TMA study
-pixel_size_um: 0.2738        # fallback when a table has no pixel size
+kind: tma                    # tma, images (an image set) or slides (whole slides): see project_kinds.md
+pixel_size_um: 0.2738        # fallback when a table has no pixel size; the analysis scale of image sets and whole slides
 field_context_px: 128        # margin read around each field
 stains: {NeuN: neun, 6E10: amyloid, AT8: tau}
 tma:
@@ -29,7 +30,11 @@ precision:                   # arithmetic on CUDA GPUs (CPU always fp32): fp32, 
   cellpose: bf16             # tf32 reproduces fp32 masks cell for cell; bf16 is faster, ~1% of cells differ
   sam: tf32
 
+imaging: {native_pixel_size_um: null, rescale: on_import, stains: {}}   # image sets and whole slides (project_kinds.md)
+dataset: {}                  # the dataset package a project was made from (project_kinds.md)
+
 inputs:
+  image_list: data/images.csv                                    # image sets and whole slides: every image, its donor and stain
   slides_dir: data/slides                                        # folder with the slide scans
   slides_table: data/slides.csv                                  # which scan is which TMA and stain
   core_manifest: data/core_manifest.csv                          # stainid dearray (+ layout, export, qc)

@@ -10,8 +10,9 @@ type Detection = 'done' | 'partial' | 'not_run'
 interface GridCell {
   core_label: string; core_id: string | null; tissue_control: string | null; donor_id?: string | null; region?: string | null
   disease_group?: string | null; technical_replicate?: string | null; thumb?: boolean; placeholder?: string | null; detection?: Detection
+  name?: string  // image sets and whole slides: the image (or region) at this place of the picture grid
 }
-interface TmaGrid { tma: string; stain: string; columns: string[]; rows: number[]; cells: GridCell[]; thumbs_waiting: number; detection: { done: number; total: number } }
+interface TmaGrid { tma: string; stain: string; columns: string[]; rows: number[]; cells: GridCell[]; thumbs_waiting: number; detection: { done: number; total: number }; positional?: boolean }
 
 const DETECTION_TEXT: Record<Detection, string> = { done: 'detected', partial: 'detection part-way', not_run: 'not detected yet' }
 const DETECTION_STATUS: Record<Detection, string> = { done: 'done', partial: 'partial', not_run: 'todo' }
@@ -130,23 +131,24 @@ function CoreGrid({ grid, onOpen }: { grid: TmaGrid; onOpen: (cell: GridCell) =>
     <div className="card">
       <div className="core-grid" style={{ gridTemplateColumns: `20px repeat(${grid.columns.length}, minmax(0, 200px))` }}>
         <div />
-        {grid.columns.map((c) => <div key={c} className="muted small core-axis">{c}</div>)}
+        {grid.columns.map((c) => <div key={c} className="muted small core-axis">{grid.positional ? '' : c}</div>)}
         {grid.rows.map((row) => [
-          <div key={`r${row}`} className="muted small core-axis" style={{ alignSelf: 'center' }}>{row}</div>,
+          <div key={`r${row}`} className="muted small core-axis" style={{ alignSelf: 'center' }}>{grid.positional ? '' : row}</div>,
           ...grid.columns.map((col) => {
             const label = `${col}-${row}`
             const cell = byLabel.get(label)
             if (!cell?.core_id) {
+              if (grid.positional) return <div key={label} />
               return <div key={label} className="core-cell empty" title={cell?.tissue_control ? `${label}: control tissue (${cell.tissue_control})` : `${label}: no core`}>
                 <span className="tag">{label}{cell?.tissue_control ? ` · ${cell.tissue_control}` : ''}</span></div>
             }
             const detection = cell.detection ?? 'not_run'
-            const about = [label, cell.donor_id && `donor ${cell.donor_id}`, cell.region, cell.disease_group && groupLabel(cell.disease_group), DETECTION_TEXT[detection]].filter(Boolean).join(' · ')
+            const about = [cell.name ?? label, cell.donor_id && `donor ${cell.donor_id}`, cell.region, cell.disease_group && groupLabel(cell.disease_group), DETECTION_TEXT[detection]].filter(Boolean).join(' · ')
             return (
               <button key={label} className="core-cell" style={{ borderColor: cell.disease_group ? groupColor(cell.disease_group) : 'var(--border)' }} title={about} aria-label={about} onClick={() => onOpen(cell)}>
                 <CorePicture src={cell.thumb ? coreThumb(cell.core_id, grid.stain, 256) : null} placeholder={cell.placeholder} />
                 {detection !== 'done' && <DetectionMark detection={detection} corner />}
-                <span className="tag">{label}{cell.region ? ` · ${cell.region}` : ''}</span>
+                <span className="tag">{cell.name ?? label}{cell.region ? ` · ${cell.region}` : ''}</span>
               </button>
             )
           }),
