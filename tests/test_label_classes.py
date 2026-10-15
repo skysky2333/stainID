@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import numpy as np
@@ -55,6 +56,9 @@ def test_each_stain_has_identities_with_subtypes_and_plain_descriptions():
     ("AT8", float("nan"), float("nan"), ("", "")),
     # class maps of dataset packages: "identity / subtype" or "identity: subtype", by id or by name
     ("6E10", "plaque / compact", None, ("plaque", "compact")),
+    ("6E10", "plaque/compact", None, ("plaque", "compact")),
+    ("AT8", "tau+ neuron/pretangle", None, ("tau+ neuron", "pretangle")),
+    ("6E10", "plaque/no such type", None, ("plaque", "no such type")),  # kept: the type is shown as written
     ("6E10", "plaque: compact (dense-core)", None, ("plaque", "compact")),
     ("6E10", "CAA / vascular amyloid", None, ("CAA", "")),
     ("AT8", "Tau+ Neuron / Mature Tangle", None, ("tau+ neuron", "mature tangle")),
@@ -249,7 +253,7 @@ def test_example_pictures_are_stored_with_the_labels_and_shown_to_labellers(clie
 
     picture = io.BytesIO()
     Image.new("RGB", (1200, 900), (180, 120, 60)).save(picture, "PNG")
-    made = client.post("/api/labels/classes/AT8/examples", content=picture.getvalue(), headers={"Content-Type": "image/png"})
+    made = client.post("/api/labels/classes/AT8/examples", files={"file": ("example.png", picture.getvalue(), "image/png")})
     assert made.status_code == 200, made.text
     name = made.json()["file"]
     stored = state.get_state().project.output("reviews") / "class_examples" / "AT8" / name
@@ -257,4 +261,18 @@ def test_example_pictures_are_stored_with_the_labels_and_shown_to_labellers(clie
         assert max(image.size) == 480
     assert client.get(f"/api/annotate/class-examples/AT8/{name}").headers["content-type"] == "image/jpeg"
     assert client.get("/api/annotate/class-examples/AT8/stainid.yaml").status_code == 404  # only example pictures by their names
-    assert client.post("/api/labels/classes/AT8/examples", content=b"not a picture").status_code == 400
+    assert client.post("/api/labels/classes/AT8/examples", files={"file": ("notes.txt", b"not a picture")}).status_code == 400
+
+    # a labelled object's picture, from the labels view, as the example of its class and type
+    spot = {"tile_id": TILE, "x": 100.0, "y": 200.0}
+    store.append(state.get_state().project.output("reviews"), [{"id": f"class:{TILE}:100:200", "source": "Ann", "stain": "6E10", "task": "class",
+                                                                **spot, "value": "plaque", "subtype": "compact"}])
+    assert client.post("/api/labels/classes/6E10/examples/from-object", json={**spot, "identity": "plaque", "subtype": "pretangle"}).status_code == 400
+    for _ in range(100):  # 409 while the core image is read in the background
+        made = client.post("/api/labels/classes/6E10/examples/from-object", json={**spot, "identity": "plaque", "subtype": "compact"})
+        if made.status_code != 409:
+            break
+        time.sleep(0.1)
+    assert made.status_code == 200, made.text
+    plaque = next(c for c in client.get("/api/labels/classes").json()["stains"]["6E10"]["classes"] if c["id"] == "plaque")
+    assert plaque["subtypes"][0]["example"] == made.json()["file"] and plaque["example"] == ""

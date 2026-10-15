@@ -98,7 +98,7 @@ DEFAULTS: dict[str, tuple[Identity, ...]] = {
             _s("compact", "compact (dense-core)", "A dense, well-defined brown core.", "q"),
             _s("diffuse", "diffuse", "A loose, fluffy brown deposit without a dense core.", "w"),
             _s("cored-neuritic", "cored-neuritic", "A dense core with a halo of swollen nerve endings around it, if you can see them.", "e"),
-            _s("small", "small, too small to type", "A real plaque only 10–15 µm across: too small to tell its type.", "r"),
+            _s("small", "small (too small to type)", "A real plaque only 10–15 µm across: too small to tell its type.", "r"),
         )),
         _i("CAA", "CAA / vascular amyloid", NEGATIVE, "Brown amyloid in the wall of a blood vessel (cerebral amyloid angiopathy).", "2"),
         _i("intraneuronal", "intraneuronal staining", NEGATIVE,
@@ -134,7 +134,7 @@ LEGACY: dict[str, dict[str, tuple[str, str]]] = {
              "plaque (type not recorded)": ("plaque", "")},
     "NeuN": {},
 }
-_SPLIT = re.compile(r"\s*(?: / |:\s)\s*")
+_SPLIT = re.compile(r"\s*[/:]\s*")  # "identity / subtype", "identity/subtype", "identity: subtype"
 
 
 def text(value) -> str:
@@ -195,14 +195,6 @@ class Vocabulary:
 
     def describe(self, value, subtype=None) -> str:
         return self.display(*self.resolve(value, subtype))
-
-    def order(self) -> list[str]:
-        """Every class as `display` names it, in a fixed order: each identity (positive ones first), then its subtypes."""
-        out = []
-        for c in sorted(self.classes, key=lambda c: c.role != POSITIVE):
-            out.append(self.display(c.id))
-            out += [self.display(c.id, s.id) for s in c.subtypes]
-        return out
 
     def record(self, value: str, subtype: str = "") -> dict:
         """The label fields for a class given as an id, a name, an old value or "identity / subtype": canonical ids."""

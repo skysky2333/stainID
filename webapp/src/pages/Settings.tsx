@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { Group, ProjectConfig, ProjectInfo } from '../api'
 import { api } from '../api'
 import { CacheSpace } from '../cacheSpace'
+import { ClassSettings } from '../labels/ClassSettings'
 import { ErrorNote, FilePicker, HelpBox, Loading, PageHead, PathLine, withError } from '../components'
 import type { Theme } from '../hooks'
 import { useTheme } from '../hooks'
@@ -46,6 +47,7 @@ export default function Settings() {
         Everything else has sensible defaults inside the project folder and is under Advanced. Nothing changes until you press <b>Save settings</b>.
       </HelpBox>
       {info ? <StudySettings info={info} /> : <Loading label="Loading the settings…" />}
+      <ClassSettings />
       <div className="grid grid-2 settings-more">
         <AdminPassword />
         <Appearance />

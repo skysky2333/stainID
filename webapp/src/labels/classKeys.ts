@@ -61,7 +61,7 @@ export function resolveClass(vocabulary: Vocabulary, value: string | null | unde
     return { identity, subtype: sub ?? (legacy || null) }
   }
   if (!found) {
-    const parts = v.split(/\s*(?: \/ |:\s)\s*/)
+    const parts = v.split(/\s*[/:]\s*/)
     const head = parts.length > 1 ? byRef(parts[0]) : undefined
     if (!head) return { identity: v, subtype: sub }
     found = head

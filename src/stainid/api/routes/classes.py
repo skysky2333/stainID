@@ -13,7 +13,7 @@ import re
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel
@@ -41,6 +41,8 @@ class ObjectSpot(BaseModel):
     tile_id: str
     x: float
     y: float
+    identity: str = ""  # the class (and type) whose example picture this becomes
+    subtype: str = ""
 
 
 def _stain(stain: str) -> str:
@@ -71,28 +73,29 @@ def set_classes(stain: str, body: ClassesChange) -> dict:
     """Save a stain's classes (checked first; built-in classes keep their role and come back if left out), or go
     back to the built-in ones (`classes` null)."""
     _stain(stain)
+    if body.subtype_wait_s is not None and not 0 <= body.subtype_wait_s <= 10:
+        raise HTTPException(400, "The time to pick a type must be between 0 and 10 seconds.")
+    _store(stain, None if body.classes is None else vocab.entry_of(body.classes), body.subtype_wait_s)
+    return all_classes()
+
+
+def _store(stain: str, entries: list[dict] | None, subtype_wait_s: float | None = None) -> None:
+    """Write a stain's classes to stainid.yaml (checked first; 400 with the problems), or remove them (None: the
+    built-in classes); ones equal to the built-in classes are not written."""
     project = get_state().project
     settings = copy.deepcopy(project.config.get("labels") or {})
     stored = dict(settings.get("classes") or {})
-    if body.classes is not None:
-        entries = vocab.entry_of(body.classes)
-        chosen = vocab.from_config(stain, entries)
-        issues = vocab.problems(chosen)
-        if issues:
-            raise HTTPException(400, " ".join(issues))
-        if chosen == vocab.defaults(stain):
-            stored.pop(stain, None)
-        else:
-            stored[stain] = chosen.to_config()
-    else:
+    chosen = vocab.from_config(stain, entries) if entries is not None else None
+    if chosen is not None and vocab.problems(chosen):
+        raise HTTPException(400, " ".join(vocab.problems(chosen)))
+    if chosen is None or chosen == vocab.defaults(stain):
         stored.pop(stain, None)
+    else:
+        stored[stain] = chosen.to_config()
     settings["classes"] = stored
-    if body.subtype_wait_s is not None:
-        if not 0 <= body.subtype_wait_s <= 10:
-            raise HTTPException(400, "The time to pick a type must be between 0 and 10 seconds.")
-        settings["subtype_wait_s"] = float(body.subtype_wait_s)
+    if subtype_wait_s is not None:
+        settings["subtype_wait_s"] = float(subtype_wait_s)
     reload_project(save_project(Project(project.root, {**project.config, "labels": settings}), {}).root)
-    return all_classes()
 
 
 def _save_example(stain: str, image: Image.Image) -> dict:
@@ -108,11 +111,10 @@ def _save_example(stain: str, image: Image.Image) -> dict:
 
 
 @router.post("/labels/classes/{stain}/examples", dependencies=admin)
-async def upload_example(stain: str, request: Request) -> dict:
-    """An example picture sent as the request body (a JPEG, PNG or TIFF file); answers its file name, which the
-    class's `example` then names."""
+async def upload_example(stain: str, file: UploadFile = File(...)) -> dict:
+    """An example picture (a JPEG, PNG or TIFF file); answers its file name, which the class's `example` then names."""
     _stain(stain)
-    data = await request.body()
+    data = await file.read(MAX_UPLOAD + 1)
     if not data or len(data) > MAX_UPLOAD:
         raise HTTPException(400, "Choose a picture file (JPEG, PNG or TIFF) of at most 20 MB.")
     try:
@@ -124,16 +126,30 @@ async def upload_example(stain: str, request: Request) -> dict:
 
 @router.post("/labels/classes/{stain}/examples/from-object", dependencies=admin)
 def example_from_object(stain: str, body: ObjectSpot) -> dict:
-    """A labelled object's crop (as the labels view shows it) as an example picture."""
+    """A labelled object's crop (as the labels view shows it) as an example picture; with `identity` (and `subtype`),
+    it becomes that class's example picture in the settings at once."""
     _stain(stain)
+    words = vocab.of(get_state().project, stain)
+    target = words.identity(body.identity) if body.identity else None
+    if body.identity and (target is None or (body.subtype and target.subtype(body.subtype) is None)):
+        raise HTTPException(400, f"{stain} has no class {body.identity}{' · ' + body.subtype if body.subtype else ''}")
+    spot = label_crops.Spot(stain, body.tile_id, body.x, body.y)
     try:
-        crop = label_crops.get(get_state(), label_crops.Spot(stain, body.tile_id, body.x, body.y))
+        crop = label_crops.get(get_state(), spot)
     except label_crops.NotReady as error:
+        label_crops.status(get_state(), spot)  # its core image is read in the background
         raise HTTPException(409, "The picture of this object is still being made; try again in a moment.") from error
     except (KeyError, FileNotFoundError) as error:
         raise HTTPException(404, "There is no picture of this object.") from error
     with Image.open(crop) as image:
-        return _save_example(stain, image)
+        saved = _save_example(stain, image)
+    if target is not None:
+        entries = words.to_config()
+        entry = next(e for e in entries if e["id"] == target.id)
+        place = next(s for s in entry["subtypes"] if s["id"] == target.subtype(body.subtype).id) if body.subtype else entry
+        place["example"] = saved["file"]
+        _store(stain, entries)
+    return saved
 
 
 @router.get("/annotate/class-examples/{stain}/{file}")

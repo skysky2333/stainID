@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import type { AiView, LabelsOverview, Labeller, ReferenceLabels, SessionInfo, StainOverview } from '../api'
+import type { AiView, ClassCount, LabelsOverview, Labeller, ReferenceLabels, SessionInfo, StainOverview, Vocabulary } from '../api'
 import { api, apiUrl, appPath } from '../api'
 import { Empty, ErrorNote, HelpBox, Loaded, Modal, PageHead, Progress, fmt, timeAgo, withError } from '../components'
 import { useFetch } from '../hooks'
@@ -9,7 +9,9 @@ import { SessionLabelsView } from '../labels/examine'
 import { FIELD_TEXT, FieldChoice, SessionFields } from '../labels/fields'
 import { Advanced } from '../setup/parts'
 
-interface Defaults { classes: Record<string, string[]>; tags: string[]; tools: string[]; ai_views: AiView[]; rules: Record<string, string> }
+interface Defaults {
+  classes: Record<string, string[]>; vocabularies: Record<string, Vocabulary>; tags: string[]; tools: string[]; ai_views: AiView[]; rules: Record<string, string>
+}
 interface Share { links: string[]; network: boolean }
 
 export default function Labels() {
@@ -266,7 +268,8 @@ function LabelledSoFar({ stains, onChanged }: { stains: StainOverview[]; onChang
               <td><div className="labelled-fields"><Progress done={s.fields_with_labels} total={s.fields} />
                 <span className="small secondary">{s.fields_with_labels.toLocaleString()} of {s.fields.toLocaleString()}
                   {s.fields_reviewed > 0 && <span className="muted"> · {s.fields_reviewed.toLocaleString()} fully checked</span>}</span></div></td>
-              <td className="small secondary wrap-cell">{Object.entries(s.values).map(([k, v]) => `${k} ${v.toLocaleString()}`).join(' · ') || '—'}</td>
+              <td className="small secondary wrap-cell">{s.classes ? <ClassCounts classes={s.classes} />
+                : Object.entries(s.values).map(([k, v]) => `${k} ${v.toLocaleString()}`).join(' · ') || '—'}</td>
               <td className="small wrap-cell">{s.detection ? <DetectionLine d={s.detection} stain={s.stain} /> : '—'}</td>
             </tr>
           ))}</tbody>
@@ -278,6 +281,23 @@ function LabelledSoFar({ stains, onChanged }: { stains: StainOverview[]; onChang
         <div className="grid grid-3">{stains.map((s) => <StainDetails key={s.stain} s={s} onChanged={onChanged} />)}</div>
       </Advanced>
     </section>
+  )
+}
+
+/** "tau+ neuron 431 (pretangle 175 · mature tangle 250 · no type 6) · thread 12 · not tau 1,100": objects per class
+ *  (most agreed), with their types; classes nobody used are left out. */
+function ClassCounts({ classes }: { classes: ClassCount[] }) {
+  const used = classes.filter((c) => c.objects > 0)
+  if (!used.length) return <>—</>
+  return (
+    <span className="class-counts">{used.map((c) => {
+      const typed = c.subtypes.filter((t) => t.objects > 0)
+      return (
+        <span key={c.id} className="class-count"><b className={c.role === 'positive' ? '' : 'secondary'}>{c.name}</b> {c.objects.toLocaleString()}
+          {typed.length > 0 && <span className="muted"> ({[...typed.map((t) => `${t.name} ${t.objects.toLocaleString()}`),
+            ...(c.untyped ? [`no type ${c.untyped.toLocaleString()}`] : [])].join(' · ')})</span>}</span>
+      )
+    })}</span>
   )
 }
 
@@ -316,12 +336,28 @@ function StainDetails({ s, onChanged }: { s: StainOverview; onChanged: () => voi
 
 /* ---------- new session ---------- */
 
+/** The classes people will choose from, and whether they are also asked for each object's type (pretangle or mature tangle…). */
+function SessionClasses({ vocabulary, typesAsked, onTypesAsked }: { vocabulary: Vocabulary; typesAsked: boolean; onTypesAsked: (on: boolean) => void }) {
+  const shown = vocabulary.classes.filter((c) => !c.hidden)
+  const typed = shown.filter((c) => c.subtypes.some((s) => !s.hidden))
+  return (
+    <div className="session-classes">
+      <p className="muted small" style={{ margin: 0 }}>People choose between: {shown.map((c) => c.name).join(' · ')}.
+        {' '}<Link to="/settings#label-classes">Change the classes</Link></p>
+      {typed.length > 0 && <label className="layer-toggle">
+        <input type="checkbox" checked={typesAsked} onChange={(e) => onTypesAsked(e.target.checked)} />
+        Also ask for the type: {typed.map((c) => `${c.name} (${c.subtypes.filter((s) => !s.hidden).map((s) => s.name).join(', ')})`).join('; ')}
+      </label>}
+    </div>
+  )
+}
+
 type Kind = 'fields' | 'queue'
 
 function NewSession({ stains, onClose, onCreated }: { stains: string[]; onClose: () => void; onCreated: (s: SessionInfo) => void }) {
   const defaults = useFetch<Defaults>('/api/labels/defaults')
   const [form, setForm] = useState({ stain: stains[0] ?? 'NeuN', kind: 'fields' as Kind, n_fields: 20, title: '', instructions: '', open: true,
-    name: '', per_field: 1, tools: ['class', 'point', 'outline', 'tag'], ai_view: 'full' as AiView, rule: 'uncertain', tile_ids: '' })
+    name: '', per_field: 1, tools: ['class', 'point', 'outline', 'tag'], ai_view: 'full' as AiView, rule: 'uncertain', tile_ids: '', subtypes: true })
   const [mode, setMode] = useState<'auto' | 'pick'>('auto')
   const [chosen, setChosen] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -364,7 +400,8 @@ function NewSession({ stains, onClose, onCreated }: { stains: string[]; onClose:
           onN={(n) => set('n_fields', n)} onChosen={setChosen} />}
         <label className="field">Title people see<input type="text" value={form.title} placeholder={placeholder} onChange={(e) => set('title', e.target.value)} /></label>
         <label className="field">Note for labellers (optional)<textarea rows={2} value={form.instructions} placeholder="e.g. Count only neurons with a visible nucleus." onChange={(e) => set('instructions', e.target.value)} /></label>
-        {defaults.data && <p className="muted small" style={{ margin: 0 }}>People choose between: {defaults.data.classes[form.stain]?.join(' · ')}.</p>}
+        {defaults.data?.vocabularies[form.stain] && <SessionClasses vocabulary={defaults.data.vocabularies[form.stain]} typesAsked={form.subtypes}
+          onTypesAsked={(on) => set('subtypes', on)} />}
         <label className="layer-toggle"><input type="checkbox" checked={form.open} onChange={(e) => set('open', e.target.checked)} />Open to labellers right away</label>
         <Advanced hint="session ID, people per field, what people see of the AI, tasks, field IDs">
           <div className="row" style={{ alignItems: 'flex-end' }}>

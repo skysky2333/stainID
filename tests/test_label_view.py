@@ -100,8 +100,8 @@ def test_every_label_source_gets_a_crop_centred_on_its_object(client):
     missed = by[(TILE, 100, 200)]
     assert missed["ai_value"] == "plaque · compact (dense-core)" and missed["ai"] == "disagrees" and missed["radius_px"] > 10
     assert page["classes"] == {"plaque · compact (dense-core)": 1, "plaque · diffuse": 1, "not a plaque": 2} and page["ai"]["disagrees"] == 2  # the AI found no plaque at the field object
-    assert page["vocabulary"][:5] == ["plaque (type not recorded)", "plaque · compact (dense-core)", "plaque · diffuse", "plaque · cored-neuritic",
-                                      "plaque · small, too small to type"]
+    assert page["vocabulary"][:5] == ["plaque · compact (dense-core)", "plaque · diffuse", "plaque · cored-neuritic",
+                                      "plaque · small (too small to type)", "plaque (type not recorded)"]
     assert [g["name"] for g in page["groups"]][:2] == ["plaque", "CAA / vascular amyloid"] and page["groups"][-1]["name"] == "people disagree"
 
     size = page["crop"]["size_px"]

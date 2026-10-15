@@ -261,7 +261,7 @@ def class_groups(vocabulary: vocab.Vocabulary, shown: set[str]) -> list[dict]:
     no longer has, and objects people split on, come last."""
     groups, known = [], set()
     for colour, c in enumerate(sorted(vocabulary.classes, key=lambda c: c.role != vocab.POSITIVE)):
-        keys = [vocabulary.display(c.id), *(vocabulary.display(c.id, s.id) for s in c.subtypes if not s.hidden or vocabulary.display(c.id, s.id) in shown)]
+        keys = [*(vocabulary.display(c.id, s.id) for s in c.subtypes if not s.hidden or vocabulary.display(c.id, s.id) in shown), vocabulary.display(c.id)]
         keys += [vocabulary.disputed(c.id)] if c.subtypes and vocabulary.disputed(c.id) in shown else []
         known |= set(keys)
         if not c.hidden or shown & set(keys):
@@ -336,7 +336,7 @@ def session_objects(name: str, request: Request, stain: str = "", values: str = 
     ai_counts = {k: int(v) for k, v in found.verdict.fillna("unknown").value_counts().items()}
     chosen = found
     if values:
-        chosen = chosen[chosen.shown.isin(set(values.split(",")))]
+        chosen = chosen[chosen.shown.isin(set(values.split("\n")))]  # one class per line (names may hold commas)
     if tile:
         chosen = chosen[chosen.tile_id.str.contains(tile, case=False, regex=False)]
     if person:
