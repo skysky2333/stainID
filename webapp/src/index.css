@@ -944,3 +944,8 @@ tr.significant-row td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 .upload-button { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .upload-button .error-note { flex-basis: 100%; margin: 0; }
 .draft-card { scroll-margin-top: 16px; }
+/* ---- Quick-check queue (labels/quickcheck.tsx) ---- */
+.quick-pictures { display: grid; gap: 4px; max-width: 520px; margin: 0 0 12px; }
+.quick-failed { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; max-width: calc(100% - 16px); }
+.quick-save-problem { align-items: center; margin-bottom: 8px; }
+.annotate-progress .warning-text { color: var(--warning); }

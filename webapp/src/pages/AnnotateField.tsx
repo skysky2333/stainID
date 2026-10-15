@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import type { AddedState, FieldObjectLite, FieldWork, Label, QueueItem, SessionDetail } from '../api'
+import type { AddedState, FieldObjectLite, FieldWork, Label, SessionDetail } from '../api'
 import { api, apiUrl, enc } from '../api'
 import { Empty, ErrorNote, Loaded, Loading, PageHead, Progress, fmt } from '../components'
 import { useFetch, useStored } from '../hooks'
 import { AI_VIEW_FOR_LABELLERS } from '../labelling'
 import { FieldThumb } from '../labels/fields'
+import { QuickCheck } from '../labels/quickcheck'
 import { Register, useSession } from '../session'
 import type { ImagePoint } from '../viewer'
 import { RASTER_LAYERS, ZoomViewer } from '../viewer'
@@ -39,7 +40,7 @@ export default function AnnotatePage() {
   if (!session.annotator) return <><PageHead title="Help check tissue images" subtitle="Type your name to start." /><Register /></>
   if (detail.error) return <SessionProblem error={detail.error} retry={detail.reload} />
   if (!detail.data) return <Loading label="Opening the session…" />
-  if (detail.data.meta.kind === 'queue') return <Queue detail={detail.data} />
+  if (detail.data.meta.kind === 'queue') return <QuickCheck detail={detail.data} />
   return tile ? <Workspace key={tile} detail={detail.data} reload={detail.reload} tile={tile} /> : <SessionOverview detail={detail.data} reload={detail.reload} />
 }
 
@@ -513,104 +514,6 @@ function KeyHelp({ classes, tools }: { classes: number; tools: { id: Tool; key: 
       <span><span className="kbd">Delete</span> remove</span>
       <span><span className="kbd">Enter</span> close outline</span>
       <span><span className="kbd">Esc</span> cancel</span>
-    </div>
-  )
-}
-
-function Queue({ detail }: { detail: SessionDetail }) {
-  const meta = detail.meta
-  const next = useFetch<{ object: QueueItem | null }>(`/api/annotate/${meta.name}/next`)
-  const [history, setHistory] = useState<QueueItem[]>([])
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const item = next.data?.object
-  const classes = meta.classes
-  const { reload } = next
-
-  const send = useCallback(async (record: Record<string, unknown>, after: () => void) => {
-    setBusy(true)
-    try {
-      await api.post(`/api/annotate/${meta.name}/labels`, { records: [record] })
-      after()
-      setError(null)
-      reload()
-    } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      setBusy(false)
-    }
-  }, [meta.name, reload])
-
-  const choose = useCallback((value: string) => {
-    if (!item || busy) return
-    send({ task: 'class', tile_id: item.tile_id, x: item.x, y: item.y, value }, () => setHistory((h) => [item, ...h].slice(0, 50)))
-  }, [item, busy, send])
-
-  const undo = useCallback(() => {
-    const last = history[0]
-    if (!last || busy) return
-    send({ task: 'class', tile_id: last.tile_id, x: last.x, y: last.y, deleted: true }, () => setHistory((h) => h.slice(1)))
-  }, [history, busy, send])
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (typing(e) || e.metaKey || e.ctrlKey) return
-      const n = Number(e.key)
-      if (n >= 1 && n <= Math.min(9, classes.length)) choose(classes[n - 1])
-      else if (e.key === 'Backspace' || e.key.toLowerCase() === 'z') { e.preventDefault(); undo() }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [classes, choose, undo])
-
-  return (
-    <div className="annotate-page">
-      <div className="annotate-top">
-        <div className="annotate-heading">
-          <Link to="/annotate" className="small">← All sessions</Link>
-          <h1>{meta.title}</h1>
-          <div className="muted small">{meta.stain} · one object at a time{meta.ai_view === 'full' ? ' · the AI’s guess is shown' : ' · decide for yourself'}</div>
-        </div>
-        <div className="annotate-progress">
-          <span className="small secondary">{history.length ? `${history.length} labelled by you this visit` : 'Press a number key to answer'}
-            {item ? ` · ${item.remaining.toLocaleString()} left` : ''}</span>
-        </div>
-      </div>
-      {meta.instructions && <div className="instructions">{meta.instructions}</div>}
-      <ErrorNote error={error} />
-      <Loaded state={next} label="Finding the next object…">
-        {(n) => n.object ? (
-          <div className="queue-layout">
-            <div className="card queue-image">
-              <div className="queue-crop">
-                <img key={`${n.object.tile_id}:${n.object.x}:${n.object.y}`} src={apiUrl(`/api/annotate/${meta.name}/object.jpg?tile_id=${enc(n.object.tile_id)}&x=${n.object.x}&y=${n.object.y}`)} alt="the object to label" />
-                <svg viewBox="0 0 100 100" aria-hidden="true">
-                  <path d="M50 40 V46 M50 54 V60 M40 50 H46 M54 50 H60" stroke="#00e5ff" strokeWidth={0.9} />
-                </svg>
-                {busy && <div className="queue-busy"><Loading inline label="Saving…" /></div>}
-              </div>
-              <p className="muted small">{n.object.labels_so_far ? `${n.object.labels_so_far} other ${n.object.labels_so_far === 1 ? 'person has' : 'people have'} labelled this one` : 'Nobody has labelled this one yet'}</p>
-            </div>
-            <div className="card queue-choices">
-              <h2>What is under the cross?</h2>
-              {meta.ai_view === 'full' && <p className="small secondary" title={`probability ${fmt(n.object.ai_probability, 2)}`}>The AI’s guess: <b>{n.object.ai_value}</b></p>}
-              <div className="class-list">
-                {classes.map((c, i) => (
-                  <button key={c} className="btn class-btn big" disabled={busy} onClick={() => choose(c)}>{i < 9 && <span className="kbd">{i + 1}</span>} {c}</button>
-                ))}
-              </div>
-              <p className="muted small">{meta.class_instructions}</p>
-              <div className="row">
-                <button className="btn small" disabled={!history.length || busy} onClick={undo}><span className="kbd">Z</span> Undo last</button>
-                <span className="muted small">Keys: <span className="kbd">1</span>–<span className="kbd">{Math.min(9, classes.length)}</span> answer, <span className="kbd">Z</span> undo</span>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <Empty><p style={{ marginTop: 0 }}><b>Nothing left for you in this queue right now. Thank you!</b></p>
-            <div className="row" style={{ justifyContent: 'center' }}><button className="btn" onClick={reload}>Check again</button><Link className="btn" to="/annotate">All sessions</Link></div></Empty>
-        )}
-      </Loaded>
     </div>
   )
 }

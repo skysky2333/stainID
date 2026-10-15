@@ -45,8 +45,9 @@ DECODE = threading.Semaphore(1)  # whole core images decoded at once, across all
 @dataclass
 class _Task:
     key: str
-    priority: int  # 0 = someone is looking at this core, 1 = a thumbnail for the grid
+    priority: int  # 0 = someone is looking at this core, 1 = a thumbnail for the grid, 2 = pictures made ahead
     run: Callable[[], None]
+    keep: bool = False  # work made ahead: kept in the queue although nobody is asking about it
     asked: float = field(default_factory=time.monotonic)
     queued: float = field(default_factory=time.monotonic)
     running: bool = False
@@ -62,7 +63,7 @@ def _next_task() -> _Task:
     with _COND:
         while True:
             now = time.monotonic()
-            for key in [k for k, t in _TASKS.items() if not t.running and now - t.asked > STALE_SECONDS]:
+            for key in [k for k, t in _TASKS.items() if not t.running and not t.keep and now - t.asked > STALE_SECONDS]:
                 del _TASKS[key]
             waiting = [t for t in _TASKS.values() if not t.running]
             if waiting:
@@ -85,8 +86,9 @@ def _work() -> None:
                 _TASKS.pop(task.key, None)
 
 
-def _ask(key: str, priority: int, run: Callable[[], None]) -> dict:
-    """Queue `run` under `key` (or note that someone still wants it). Returns where it stands."""
+def _ask(key: str, priority: int, run: Callable[[], None], keep: bool = False) -> dict:
+    """Queue `run` under `key` (or note that someone still wants it). Returns where it stands. `keep`: work made ahead,
+    which stays queued until it runs (other work is dropped once nobody has asked about it for `STALE_SECONDS`)."""
     global _WORKER
     with _COND:
         failed = _FAILED.get(key)
@@ -94,9 +96,10 @@ def _ask(key: str, priority: int, run: Callable[[], None]) -> dict:
             return {"state": "failed", "error": failed[0]}
         task = _TASKS.get(key)
         if task is None:
-            task = _TASKS[key] = _Task(key, priority, run)
+            task = _TASKS[key] = _Task(key, priority, run, keep=keep)
         task.asked = time.monotonic()
         task.priority = min(task.priority, priority)
+        task.keep = task.keep or keep
         if _WORKER is None or not _WORKER.is_alive():
             _WORKER = threading.Thread(target=_work, name="stainid-pictures", daemon=True)
             _WORKER.start()

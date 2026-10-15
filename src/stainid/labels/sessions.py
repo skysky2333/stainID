@@ -4,8 +4,9 @@ A session is `sessions/<name>/meta.json`; its labels go into the shared label st
 - `fields`: review whole fields. The AI's calls and outlines are pre-filled; people correct them, add what was missed,
   and press Finished, which records every call they left untouched as confirmed by them.
 - `queue`: one object at a time, chosen by a rule (where the AI is unsure, where people or the AI disagree, objects
-  with one label so far, or at random) from the fields whose candidate pool is prepared. The rule is applied anew for
-  every item, so the queue follows new data and new labels.
+  with one label so far, or at random) from the fields whose candidate pool is prepared. The page asks for the next
+  few objects at a time; those are held for that person for a while (`Reservations`), so people labelling at once get
+  different objects. The rule is applied anew on every ask, so the queue follows new data and new labels.
 
 A field is one square tile of a core (about 560 µm, 2048 pixels), shown to people as one picture.
 
@@ -18,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import threading
 import time
 from pathlib import Path
 
@@ -178,33 +180,106 @@ def next_field(session: dict, reviewed: dict[str, set[str]], annotator: str, bus
     return min(todo, key=rank) if todo else None
 
 
-def next_object(session: dict, objects: pd.DataFrame, labels: pd.DataFrame, annotator: str) -> dict | None:
-    """The next object for this person under the session's rule: fewest labels first, in an order of their own."""
-    stain = session["stain"]
-    human = labels[(labels.stain == stain) & (labels.task == "class")]
-    key = lambda f: f.tile_id + ":" + f.x.astype(float).round().astype(int).astype(str) + ":" + f.y.astype(float).round().astype(int).astype(str)  # noqa: E731
-    objects = objects.assign(key=key(objects))
-    by_object = human.assign(key=key(human)).groupby("key")
-    sources = by_object.source.agg(set)
-    values = by_object.value.agg(list)
-    mine = {k for k, s in sources.items() if annotator in s}
-    candidates = objects[~objects.key.isin(mine)]
-    count = candidates.key.map(lambda k: len(sources.get(k, ())))
-    rule = session["rule"]
+RESERVE_SECONDS = 120.0  # how long objects handed to someone (the next few on their screen) are kept from others
+
+
+def object_keys(frame: pd.DataFrame) -> pd.Series:
+    """`tile:x:y` (rounded pixels) of each row: one key per object, shared by the pool and the labels on it."""
+    rounded = lambda v: v.astype(float).round().astype(int).astype(str)  # noqa: E731
+    return frame.tile_id.astype(str) + ":" + rounded(frame.x) + ":" + rounded(frame.y)
+
+
+class Reservations:
+    """Objects of a queue session handed to someone and not yet answered, so others get other objects meanwhile. A hold
+    lasts `seconds` and is renewed whenever the same person is handed the object again; answering releases it."""
+
+    def __init__(self, seconds: float = RESERVE_SECONDS, clock=time.monotonic):
+        self.seconds, self.clock = seconds, clock
+        self._held: dict[tuple, dict[str, dict[str, float]]] = {}  # session -> object key -> person -> until
+        self._lock = threading.Lock()
+
+    def held(self, session: tuple) -> dict[str, set[str]]:
+        """Who holds each object of this session now."""
+        now = self.clock()
+        with self._lock:
+            objects = self._held.get(session, {})
+            for key in [k for k, people in objects.items() if not any(until > now for until in people.values())]:
+                del objects[key]
+            return {k: {p for p, until in people.items() if until > now} for k, people in objects.items()}
+
+    def hold(self, session: tuple, person: str, keys: list[str]) -> None:
+        until = self.clock() + self.seconds
+        with self._lock:
+            objects = self._held.setdefault(session, {})
+            for key in keys:
+                objects.setdefault(key, {})[person] = until
+
+    def release(self, session: tuple, person: str, keys: list[str]) -> None:
+        with self._lock:
+            objects = self._held.get(session, {})
+            for key in keys:
+                objects.get(key, {}).pop(person, None)
+
+
+def _rule_filter(session: dict, candidates: pd.DataFrame, count: pd.Series, values: pd.Series) -> pd.DataFrame:
+    """The candidates the session's rule asks about (`count`: labels so far, `values`: what people said, by key)."""
+    stain, rule = session["stain"], session["rule"]
     if rule == "uncertain":
-        candidates = candidates[candidates.ai_probability.between(0.3, 0.7)]
-    elif rule == "second":
-        candidates = candidates[count.loc[candidates.index] == 1]
-    elif rule == "disagree":
+        return candidates[candidates.ai_probability.between(0.3, 0.7)]
+    if rule == "second":
+        return candidates[count.loc[candidates.index] == 1]
+    if rule == "disagree" and len(candidates):
         def disputed(row) -> bool:
             votes = [positive(stain, v) for v in values.get(row.key, []) if v != "unsure"]
             return bool(votes) and (len(set(votes)) > 1 or votes[0] != positive(stain, row.ai_value))
-        candidates = candidates[candidates.apply(disputed, axis=1)] if len(candidates) else candidates
+        return candidates[candidates.apply(disputed, axis=1)]
+    return candidates
+
+
+def _labels_by_object(session: dict, labels: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+    """Who labelled each object (by key) and what they said."""
+    human = labels[(labels.stain == session["stain"]) & (labels.task == "class")]
+    by_object = human.assign(key=object_keys(human)).groupby("key")
+    return by_object.source.agg(set), by_object.value.agg(list)
+
+
+def may_serve(session: dict, objects: pd.DataFrame, labels: pd.DataFrame) -> pd.DataFrame:
+    """Every object this queue could hand to someone now or after more labels come in (the pictures to make ahead):
+    all candidates of the rule `random`, the AI-unsure ones of `uncertain`, and the labelled ones of `second` and
+    `disagree` (only objects someone labelled can be asked about a second time or be disputed)."""
+    sources, _ = _labels_by_object(session, labels)
+    objects = objects.assign(key=object_keys(objects))
+    if session["rule"] == "uncertain":
+        return objects[objects.ai_probability.between(0.3, 0.7)]
+    if session["rule"] in ("second", "disagree"):
+        return objects[objects.key.isin(set(sources.index))]
+    return objects
+
+
+def next_objects(session: dict, objects: pd.DataFrame, labels: pd.DataFrame, annotator: str, count: int = 1,
+                 ready: pd.Series | None = None, held: dict[str, set[str]] | None = None) -> tuple[list[dict], int]:
+    """The next `count` objects for this person under the session's rule, and how many the rule leaves them in all.
+
+    Order: objects already handed to this person (still on their screen), then objects whose picture is `ready`
+    (a boolean per row of `objects`), then fewest labels first, counting the objects others are holding (`held`:
+    object key -> people) as labelled once more, so two people at once get different objects while there are any;
+    ties in an order of the person's own."""
+    held = held or {}
+    sources, values = _labels_by_object(session, labels)
+    objects = objects.assign(key=object_keys(objects), ready=True if ready is None else ready.to_numpy(bool))
+    mine = {k for k, s in sources.items() if annotator in s}
+    candidates = objects[~objects.key.isin(mine)]
+    count_so_far = candidates.key.map(lambda k: len(sources.get(k, ())))
+    candidates = _rule_filter(session, candidates, count_so_far, values)
     if candidates.empty:
-        return None
+        return [], 0
     seed = int(hashlib.sha256(annotator.encode()).hexdigest()[:8], 16)
     order = np.random.default_rng(seed).permutation(len(candidates))
-    ranked = candidates.iloc[order].assign(n=count.loc[candidates.index].iloc[order].to_numpy()).sort_values("n", kind="stable")
-    row = ranked.iloc[0]
-    return {"tile_id": row.tile_id, "x": float(row.x), "y": float(row.y), "radius_px": float(row.radius_px), "ai_value": row.ai_value,
-            "ai_probability": float(row.ai_probability), "labels_so_far": int(row.n), "remaining": int(len(candidates))}
+    ranked = candidates.iloc[order].assign(n=count_so_far.loc[candidates.index].iloc[order].to_numpy())
+    holders = ranked.key.map(lambda k: held.get(k, set()))
+    ranked = ranked.assign(handed=holders.map(lambda h: annotator in h), others=holders.map(lambda h: len(h - {annotator})))
+    ranked = ranked.assign(busy=ranked.n + ranked.others).sort_values(["handed", "ready", "busy"], ascending=[False, False, True], kind="stable")
+    out = [{"tile_id": row.tile_id, "x": float(row.x), "y": float(row.y), "radius_px": float(row.radius_px), "ai_value": row.ai_value,
+            "ai_probability": float(row.ai_probability), "labels_so_far": int(row.n), "remaining": int(len(candidates)), "key": row.key}
+           for row in ranked.head(max(1, count)).itertuples()]
+    return out, int(len(candidates))

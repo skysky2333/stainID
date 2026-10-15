@@ -5,7 +5,8 @@ A crop is cut from the cheapest picture that holds it: the field picture if the 
 PNG, or the core's deep-zoom pyramid (`pyramid.region`), all made on request in a moment. Otherwise the whole core
 image has to be decoded (seconds, on a busy drive more): that goes to the background picture queue (one decode at a
 time) and cuts every labelled object of that core image, of every session, in the same pass, so the next objects of
-the core are ready at once. Pages ask `status` and show a placeholder until the crop is ready.
+the core are ready at once. Pages ask `status` and show a placeholder until the crop is ready. Quick-check queues use
+the same crops and have them all cut ahead (`stainid.api.queue_pictures`).
 
 Positions follow `stainid.labels.frames`: field-picture pixels on a project tile, pilot-picture pixels on a pilot field,
 core-image pixels when a label names a core.
@@ -203,20 +204,34 @@ def labelled_spots(state: ProjectState, stain: str) -> pd.DataFrame:
     return cache.memo(("labelled spots", str(state.root), stain), [store.log_path(root)], make)
 
 
-def cut_core(state: ProjectState, core_id: str, stain: str) -> int:
-    """Decode one core image and cut every labelled object on it that has no crop yet. Returns how many were cut."""
-    spots = labelled_spots(state, stain)
-    tiles = state.tiles
-    mine = set(tiles.tile_id[(tiles.core_id == core_id) & (tiles.stain == stain)]) | {core_id} if not tiles.empty else {core_id}
-    todo = [Spot(stain, r.tile_id, float(r.x), float(r.y)) for r in spots[spots.tile_id.isin(mine)].itertuples()]
-    todo = [s for s in todo if not path(state, s).exists() and core_of(state, s) is not None]
-    if not todo:
-        return 0
-    bgr = pyramid._read(pyramid._source(state, core_id, stain))
-    for spot in todo:
-        _, cx, cy = core_of(state, spot)
-        _write(state, spot, crop_with_padding(bgr, cx, cy, size_px(state, stain)))
-    return len(todo)
+def cut_core(state: ProjectState, core_id: str, stain: str, extra: list[Spot] = ()) -> int:
+    """Cut every labelled object on one core image that has no crop yet, and the `extra` spots on it (the objects a
+    quick-check queue may show, `stainid.api.queue_pictures`): from the core's pyramid when it has one, else from one
+    decode of the whole image. Returns how many were cut."""
+    with _lock(f"core {state.root} {core_id} {stain}"):
+        spots = labelled_spots(state, stain)
+        tiles = state.tiles
+        mine = set(tiles.tile_id[(tiles.core_id == core_id) & (tiles.stain == stain)]) | {core_id} if not tiles.empty else {core_id}
+        todo = [Spot(stain, r.tile_id, float(r.x), float(r.y)) for r in spots[spots.tile_id.isin(mine)].itertuples()] + list(extra)
+        todo = [s for s in {path(state, s): s for s in todo}.values() if not path(state, s).exists() and core_of(state, s) is not None]
+        if not todo:
+            return 0
+        size = size_px(state, stain)
+        bgr = None if pyramid._index(state, core_id, stain) is not None else pyramid._read(pyramid._source(state, core_id, stain))
+        for spot in todo:
+            _, cx, cy = core_of(state, spot)
+            x0, y0, _ = _box(state, spot, cx, cy)
+            crop = crop_with_padding(bgr, cx, cy, size) if bgr is not None else pyramid.region(state, core_id, stain, x0, y0, size, size)
+            if crop is None:  # the pyramid went out of date meanwhile: the next round decodes the image
+                return 0
+            _write(state, spot, crop)
+        return len(todo)
+
+
+def file_names(state: ProjectState, stain: str, spots: pd.DataFrame) -> pd.Series:
+    """The crop file name (`path(...).name`) of each row of a table of spots (tile_id, x, y), at once."""
+    rounded = lambda v: v.astype(float).round().astype(int).astype(str)  # noqa: E731
+    return spots.tile_id.astype(str) + "_" + rounded(spots.x) + "_" + rounded(spots.y) + f"_{size_px(state, stain)}.jpg"
 
 
 def outline(state: ProjectState, spot: Spot) -> list[list[float]] | None:
