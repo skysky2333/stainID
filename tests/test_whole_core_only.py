@@ -124,8 +124,9 @@ def test_core_view_has_no_sampled_fields_and_old_fields_still_open(client, synth
 
 def test_a_stain_named_like_a_number_stays_text(tmp_path):
     """A tile table whose only stain is 6E10 must not turn it into the number 6e10."""
-    from stainid.sampling.tiles import TEXT_COLUMNS
     import pandas as pd
+
+    from stainid.sampling.tiles import TEXT_COLUMNS
     path = tmp_path / "tiles.csv"
     path.write_text("tile_id,stain,tma,x_px\nLIP-1_A-1_6E10_W0001,6E10,1,0\n")
     assert pd.read_csv(path, dtype=TEXT_COLUMNS).stain.tolist() == ["6E10"]
