@@ -28,6 +28,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from stainid import disk_cache
 from stainid.api.state import ProjectState
 from stainid.imaging.color import rgb_to_hed
 from stainid.imaging.thumbnails import THUMB_BASE, base_path, jpeg, shrink, without_outlines, write_atomic, write_base
@@ -151,8 +152,10 @@ def _load_index(path: Path) -> dict | None:
     cached = _INDEXES.get(str(path))
     if cached and cached[0] == mtime:
         _INDEXES.move_to_end(str(path))
+        disk_cache.used(path)
         return cached[1]
     index = json.loads(path.read_text())
+    disk_cache.used(path)
     _INDEXES[str(path)] = (mtime, index)
     while len(_INDEXES) > 48:
         _INDEXES.popitem(last=False)
@@ -160,10 +163,11 @@ def _load_index(path: Path) -> dict | None:
 
 
 def _index(state: ProjectState, core_id: str, stain: str, check_source: bool = True) -> dict | None:
-    """The pyramid of this core image if it is ready and made from the current image file, else None."""
-    _, index_path = _pyramid_paths(state, core_id, stain)
+    """The pyramid of this core image if it is ready and made from the current image file, else None (`check_source`
+    False: any pyramid of it, without looking at the image file or the pack)."""
+    pack, index_path = _pyramid_paths(state, core_id, stain)
     index = _load_index(index_path)
-    if index is None:
+    if index is None or (check_source and not pack.exists()):  # the pack may have been cleaned up: made again
         return None
     if check_source and {k: index.get(k) for k in ("source_mtime_ns", "source_size")} != _stamp(_source(state, core_id, stain)):
         return None
@@ -194,6 +198,7 @@ def build_pyramid(source: Path, pack: Path, index_path: Path, thumb: Path | None
                 break
             level = cv2.resize(level, ((width + 1) // 2, (height + 1) // 2), interpolation=cv2.INTER_AREA)
     os.replace(temporary, pack)
+    disk_cache.wrote(pack)
     index = {"width": levels[0]["width"], "height": levels[0]["height"], "tile": TILE, "levels": levels, **stamp}
     write_atomic(index_path, json.dumps(index).encode())
     return index
@@ -229,9 +234,12 @@ def tile(state: ProjectState, core_id: str, stain: str, level: int, col: int, ro
         raise KeyError(f"no tile {col},{row} on level {level}")
     offset, length = info["tiles"][row * info["cols"] + col]
     pack, _ = _pyramid_paths(state, core_id, stain)
-    with pack.open("rb") as handle:
-        handle.seek(offset)
-        return handle.read(length)
+    try:
+        with pack.open("rb") as handle:
+            handle.seek(offset)
+            return handle.read(length)
+    except FileNotFoundError:  # cleaned up: the viewer asks for the picture again, which makes it again
+        raise KeyError(f"the pyramid of {core_id} {stain} is being made again") from None
 
 
 def region(state: ProjectState, core_id: str, stain: str, x0: int, y0: int, width: int, height: int) -> np.ndarray | None:
@@ -330,6 +338,7 @@ def _make_base(state: ProjectState, core_id: str, stain: str) -> Path:
     source, base = _source(state, core_id, stain), _thumb_base(state, core_id, stain)
     with _maker(base):
         if _fresh(base, source):
+            disk_cache.used(base)
             return base
         bgr = None
         if (small := _pyramid_level(state, core_id, stain)) is not None:
@@ -371,6 +380,7 @@ def thumbnail(state: ProjectState, core_id: str, stain: str, size: int) -> Path:
         if not _fresh(target, source):
             base = cv2.imread(str(_make_base(state, core_id, stain)), cv2.IMREAD_COLOR)
             write_atomic(target, jpeg(shrink(base, size), 85))
+    disk_cache.used(target)
     return target
 
 
@@ -386,4 +396,5 @@ def field_thumbnail(state: ProjectState, tile: dict, size: int = 192) -> Path:
         w, h = max(1, round(int(tile["width_px"]) * scale)), max(1, round(int(tile["height_px"]) * scale))
         part = base[y:y + h, x:x + w]
         write_atomic(target, jpeg(cv2.resize(part, (size, max(1, round(size * part.shape[0] / part.shape[1]))), interpolation=cv2.INTER_AREA), 85))
+    disk_cache.used(target)
     return target

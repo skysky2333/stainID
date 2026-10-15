@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from stainid import cache
+from stainid import cache, disk_cache
 from stainid.api import registry
 from stainid.jobs import Job, JobStore, alive
 from stainid.project import Project, load_project
@@ -66,9 +66,8 @@ class ProjectState:
         return JobManager(self.root, self.project.output("jobs"), name=self.project.name)
 
     def cache_dir(self, name: str) -> Path:
-        path = self.root / "data" / "cache" / name
-        path.mkdir(parents=True, exist_ok=True)
-        return path
+        """The folder of one kind of cache (see `stainid.disk_cache`: record what is written and read there)."""
+        return disk_cache.folder(self.root, name)
 
     @property
     def tiles(self) -> pd.DataFrame:
@@ -171,6 +170,7 @@ def open_project(path: Path | str) -> ProjectState:
         if state.project.is_configured:
             registry.remember(state.root)
             if new:
+                disk_cache.watch(state.root)
                 threading.Thread(target=_warm_up, args=(state.project,), daemon=True).start()
         return state
 
