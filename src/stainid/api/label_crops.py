@@ -24,10 +24,10 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 
-from stainid import cache
+from stainid import cache, disk_cache
 from stainid.api import pyramid
 from stainid.api.state import ProjectState
-from stainid.imaging.thumbnails import jpeg, write_atomic
+from stainid.imaging.thumbnails import jpeg
 from stainid.labels import frames, store
 from stainid.labels.tasks import CROP_UM
 from stainid.stains.neun.audit import crop_with_padding
@@ -101,7 +101,7 @@ def _pilot(state: ProjectState, tile_id: str) -> Path:
 
 def _write(state: ProjectState, spot: Spot, bgr: np.ndarray) -> Path:
     target = path(state, spot)
-    write_atomic(target, jpeg(bgr, QUALITY))
+    disk_cache.write(target, jpeg(bgr, QUALITY))
     return target
 
 
@@ -121,6 +121,7 @@ def _field_picture(state: ProjectState, spot: Spot) -> Path | None:
             width, height = picture.size
     except OSError:
         return None
+    disk_cache.used(cached)
     x0, y0, size = _box(state, spot, spot.x, spot.y)
     return cached if x0 >= 0 and y0 >= 0 and x0 + size <= width and y0 + size <= height else None
 
@@ -166,6 +167,7 @@ def get(state: ProjectState, spot: Spot) -> Path:
     FileNotFoundError when there is no picture of the spot at all."""
     target = path(state, spot)
     if target.exists():
+        disk_cache.used(target)
         return target
     if frame(state, spot.tile_id, spot.stain) is None:
         raise FileNotFoundError(f"there is no picture of {spot.tile_id}")
@@ -243,12 +245,13 @@ def outline(state: ProjectState, spot: Spot) -> list[list[float]] | None:
     kept = path(state, spot).with_suffix(".outline.json")
     try:
         if kept.stat().st_mtime >= masks.stat().st_mtime:
+            disk_cache.used(kept)
             return json.loads(kept.read_text())
     except FileNotFoundError:
         if not masks.exists():
             return None
     points = _mask_outline(masks, *_box(state, spot, spot.x, spot.y))
-    write_atomic(kept, json.dumps(points).encode())
+    disk_cache.write(kept, json.dumps(points).encode())
     return points
 
 

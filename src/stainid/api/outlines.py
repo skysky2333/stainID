@@ -18,9 +18,10 @@ import numpy as np
 import pandas as pd
 from scipy import ndimage
 
+from stainid import disk_cache
 from stainid.api.render import crop_origin
 from stainid.api.state import ProjectState
-from stainid.tables import read_csv, write_text_atomic
+from stainid.tables import read_csv
 
 CACHE_VERSION = 2
 EPSILON_PX = 1.0  # polygon simplification at full resolution
@@ -87,9 +88,10 @@ def core_outlines(state: ProjectState, core_id: str, stain: str, tiles: pd.DataF
     try:
         cached = json.loads(target.read_text())
         if cached.get("source") == key:
+            disk_cache.used(target)
             return cached["objects"]
     except (FileNotFoundError, ValueError, KeyError, AttributeError):
         pass
     objects = _build(state, parts, tiles)
-    write_text_atomic(target, json.dumps({"source": key, "objects": objects}, separators=(",", ":")))
+    disk_cache.write(target, json.dumps({"source": key, "objects": objects}, separators=(",", ":")).encode())
     return objects

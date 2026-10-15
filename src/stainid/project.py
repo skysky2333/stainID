@@ -41,6 +41,9 @@ DEFAULTS: dict = {
     # Cellpose bf16 2.9 s/tile (about 1% of cells differ from fp32), tf32 3.8 s (fp32 masks cell for cell), fp32 10 s;
     # Segment Anything tf32 1.5x fp32 (median area change 0%), bf16 1.4x (0.14%), so tf32 is its better choice.
     "precision": {"cellpose": "bf16", "sam": "tf32"},
+    # Space the pictures the app makes for viewing (data/cache/) may take, in GB; the least recently used are deleted
+    # beyond it and made again when needed (`stainid.disk_cache`). null: the server's --cache-limit, else 100 GB.
+    "cache_limit_gb": None,
     "inputs": {
         "slides_dir": "data/slides",
         "slides_table": "data/slides.csv",

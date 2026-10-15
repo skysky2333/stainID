@@ -86,7 +86,7 @@ function visibleTiles(pyramid: Pyramid, level: number, view: View, box: { w: num
  * `boxes` (tiles, fields) are drawn on a canvas on top; a click near
  * a mark or inside its outline reports its index to `onPick` (null for empty space), hovering shows `describe(index)`.
  */
-export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lineColor = '#fff', boxes = [], selected = null, describe, onPick, target, pixelUm, toolbar, height = 'min(72vh, 760px)' }: {
+export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lineColor = '#fff', boxes = [], selected = null, describe, onPick, target, pixelUm, toolbar, height = 'min(72vh, 760px)', onTileError }: {
   pyramid: Pyramid
   tileUrl: (level: number, col: number, row: number, layer?: string) => string
   layers?: string[]
@@ -101,6 +101,8 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
   pixelUm?: number | null
   toolbar?: ReactNode
   height?: string
+  /** A tile could not be loaded (the server cleaned up the picture to save space): ask for the picture again. */
+  onTileError?: () => void
 }) {
   const box = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
@@ -326,7 +328,7 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
           <div className="dz-plane" style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.s})` }}>
             {shown.map((t) => {
               const key = `${t.level}-${t.col}-${t.row}`
-              return <img key={key} src={tileUrl(t.level, t.col, t.row)} style={tileStyle(t)} alt="" draggable={false} onLoad={() => markLoaded(key)} />
+              return <img key={key} src={tileUrl(t.level, t.col, t.row)} style={tileStyle(t)} alt="" draggable={false} onLoad={() => markLoaded(key)} onError={onTileError} />
             })}
             {layers.flatMap((layer) => sharp.map((t) => (
               <img key={`${layer}-${t.level}-${t.col}-${t.row}`} src={tileUrl(t.level, t.col, t.row, layer)} style={tileStyle(t)} alt="" draggable={false} />

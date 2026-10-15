@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from stainid.api import jobs as job_queue
 from stainid.api import state
 from stainid.api.routes import analysis, annotate, cohort, images, jobs, models, project, projects, session, setup, slides
+from stainid.api.routes import cache as cache_routes
 from stainid.api.session import allowed_origins, is_admin
 
 STATIC = Path(__file__).parent / "static"
@@ -43,7 +44,7 @@ class ProjectScope:
 
 def create_app() -> FastAPI:
     app = FastAPI(title="stainID", version="2.0", docs_url=None, redoc_url=None, openapi_url=None)
-    for module in (projects, project, slides, setup, cohort, images, jobs, analysis, models, session, annotate):
+    for module in (projects, project, slides, setup, cohort, images, jobs, analysis, models, session, annotate, cache_routes):
         app.include_router(module.router, prefix="/api")
     job_queue.SLOTS.elsewhere = state.running_elsewhere  # heavy steps of known projects that are not open count too
 

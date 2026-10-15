@@ -949,3 +949,11 @@ tr.significant-row td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 .quick-failed { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; max-width: calc(100% - 16px); }
 .quick-save-problem { align-items: center; margin-bottom: 8px; }
 .annotate-progress .warning-text { color: var(--warning); }
+/* ---- Settings: space for pictures the app makes (cacheSpace.tsx) ---- */
+.cache-space { display: grid; gap: 10px; max-width: 720px; }
+.cache-space p { margin: 0; }
+.cache-space-total { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; }
+.cache-space-total b { font-size: 1.25rem; }
+.cache-space-limit { display: grid; gap: 6px; }
+.cache-space-limit label { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.cache-space-kinds td.num, .cache-space-kinds th.num { text-align: right; font-variant-numeric: tabular-nums; }

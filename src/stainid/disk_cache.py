@@ -36,7 +36,6 @@ import fcntl
 import logging
 import os
 import re
-import shutil
 import sqlite3
 import stat as statmod
 import threading

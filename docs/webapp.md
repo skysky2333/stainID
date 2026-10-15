@@ -11,6 +11,7 @@ stainid serve --projects-dir ~/Studies     # also list every project folder in ~
 stainid serve --no-browser --port 9000
 stainid serve --host 127.0.0.1             # reachable from this computer only
 stainid serve --allow-origin http://lab-pc:8080   # also answer a copy of the web app served from there (see below)
+stainid serve --cache-limit 200G           # space each project's pictures for viewing may take (default 100G; Settings can set it per project)
 ```
 
 The app opens on the **Projects** page (see [Projects](#projects)), or on the project given with `--project`. If

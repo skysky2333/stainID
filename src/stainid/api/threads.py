@@ -27,6 +27,7 @@ import pandas as pd
 from PIL import Image
 from scipy import ndimage
 
+from stainid import disk_cache
 from stainid.api import pyramid
 from stainid.api.render import crop_origin
 from stainid.api.state import ProjectState
@@ -35,7 +36,6 @@ from stainid.pipelines.cohort_v1 import context_crop
 from stainid.qc.exclusions import read_manual_exclusions
 from stainid.stains.tau.network import segment_at8_network
 from stainid.stains.tau.threads import thread_network
-from stainid.tables import write_text_atomic
 from stainid.workflows import calibration_table
 from stainid.workflows.fields import exclusion_mask
 
@@ -190,7 +190,7 @@ def _run(state: ProjectState, target: Path, tiles: list[dict], job: _Job) -> Non
                 return
             job.running = True
             results = _trace_core(state, tiles, job)
-            write_text_atomic(target, json.dumps({"source": job.key, "tiles": results}, separators=(",", ":")))
+            disk_cache.write(target, json.dumps({"source": job.key, "tiles": results}, separators=(",", ":")).encode())
         finally:
             _ONE_CORE.release()
     except Exception as error:  # noqa: BLE001 - reported to the page that asked
@@ -224,6 +224,7 @@ def core_threads(state: ProjectState, core_id: str, tiles: pd.DataFrame, prepare
     try:
         cached = json.loads(target.read_text())
         if cached.get("source") == key:
+            disk_cache.used(target)
             return _summary("done", cached["tiles"], len(records), **extra)
     except (FileNotFoundError, ValueError, KeyError, AttributeError):
         pass

@@ -49,7 +49,7 @@ def shrink(image: np.ndarray, size: int) -> np.ndarray:
 def write_base(path: Path, bgr: np.ndarray) -> Path:
     """Save the thumbnail base of a core image from the image (or any reduced copy of it), BGR."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    write_atomic(path, jpeg(shrink(bgr, THUMB_BASE), 90))
+    disk_cache.write(path, jpeg(shrink(bgr, THUMB_BASE), 90))
     return path
 
 
