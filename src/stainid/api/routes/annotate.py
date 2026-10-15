@@ -214,7 +214,7 @@ def session_labels(name: str, request: Request, stain: str = "", value: str = ""
 @router.get("/labels/share", dependencies=admin)
 def share(request: Request) -> dict:
     """Addresses at which other computers on the network reach this project's annotation pages."""
-    port = request.url.port or 80
+    port = (request.scope.get("server") or (None, request.url.port or 80))[1]  # the port this server listens on, also behind a proxy
     host = socket.gethostname()
     links = [f"http://{a}:{port}{annotate_path()}" for a in [*local_addresses(host), host]]
     opened = request.headers.get("host", "")  # the address this page was opened at, when other computers can use it too
