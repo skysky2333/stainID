@@ -287,7 +287,7 @@ def test_core_picture_tiles_and_detections(client, synthetic_project):
     found = client.get("/api/cores/LIP-1_B-2/6E10/objects").json()
     assert found["status"] == "done" and len(found["rows"]) == 8 and found["columns"][:2] == ["x", "y"]
     assert found["tiles"] == [[300, 300, 512, 512]]
-    assert client.get("/api/cores/LIP-1_B-2/NeuN/objects").json() == {"status": "not_run", "tiles_done": 0, "tiles_total": 1, "columns": found["columns"], "rows": [], "tiles": [[300, 300, 512, 512]], "outlines": False}
+    assert client.get("/api/cores/LIP-1_B-2/NeuN/objects").json() == {"status": "not_run", "tiles_done": 0, "tiles_total": 1, "columns": found["columns"], "rows": [], "tiles": [[300, 300, 512, 512]], "outlines": False, "threads": None}
 
 
 def test_cohort_lists_tmas_and_grid_without_pipeline_outputs(client):
