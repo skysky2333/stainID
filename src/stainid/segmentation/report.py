@@ -25,7 +25,8 @@ import numpy as np
 import pandas as pd
 
 from stainid.labels import outline, sessions, store
-from stainid.labels.tasks import STAINS, positive
+from stainid.labels import vocabulary as vocab
+from stainid.labels.tasks import STAINS
 from stainid.project import Project
 from stainid.sampling.tiles import known_tile_rows, table
 from stainid.segmentation import proposals, scoring
@@ -79,13 +80,17 @@ class Truth:
         return list(self.fields) if self.imported else list(self.meta["fields"])
 
 
-def check_truth(labels: pd.DataFrame, meta: dict) -> Truth:
+def _scored(frame: pd.DataFrame, words: vocab.Vocabulary) -> pd.DataFrame:
+    return pd.DataFrame({"points": list(frame.points), "value": [outline.scored_value(words, v) for v in frame.value]})
+
+
+def check_truth(labels: pd.DataFrame, meta: dict, words: vocab.Vocabulary) -> Truth:
     done = outline.finished(labels, meta["name"])
-    return Truth(meta, False, {t: {p: outline.objects(labels, meta["name"], t, p)[["points", "value"]] for p in sorted(done[t])}
+    return Truth(meta, False, {t: {p: _scored(outline.objects(labels, meta["name"], t, p), words) for p in sorted(done[t])}
                                for t in meta["fields"] if done.get(t)})
 
 
-def imported_truth(labels: pd.DataFrame, meta: dict) -> Truth:
+def imported_truth(labels: pd.DataFrame, meta: dict, words: vocab.Vocabulary) -> Truth:
     """The polygons of an imported rater, on the fields where all of the rater's marks are polygons."""
     mine = labels[labels.session == meta["name"]]
     classes = mine[(mine.task == "class") & mine.x.notna()]
@@ -98,8 +103,7 @@ def imported_truth(labels: pd.DataFrame, meta: dict) -> Truth:
         shapes_here = list(part["shape"])
         if any(not isinstance(p, list) or _is_box(p) for p in shapes_here):
             continue
-        values = [v if positive(meta["stain"], v) else "unsure" for v in part.value]
-        fields.setdefault(tile_id, {})[person] = pd.DataFrame({"points": shapes_here, "value": values})
+        fields.setdefault(tile_id, {})[person] = _scored(part.assign(points=shapes_here), words)
     return Truth(meta, True, fields)
 
 
@@ -377,8 +381,9 @@ def plain(stain_report: dict) -> str:
 def truths(project: Project, stains: list[str] | None = None, names: list[str] | None = None) -> list[Truth]:
     """Every source of outlines: the checks (outline sessions) and the imported raters with polygons."""
     labels = store.current(project.output("reviews"))
-    found = [check_truth(labels, m) for m in outline_sessions(project, stains, names)]
-    found += [t for t in (imported_truth(labels, m) for m in imported_sessions(project, stains, names)) if t.fields]
+    words = lambda meta: vocab.of(project, meta["stain"])  # noqa: E731
+    found = [check_truth(labels, m, words(m)) for m in outline_sessions(project, stains, names)]
+    found += [t for t in (imported_truth(labels, m, words(m)) for m in imported_sessions(project, stains, names)) if t.fields]
     return found
 
 

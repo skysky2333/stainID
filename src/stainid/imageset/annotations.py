@@ -26,6 +26,7 @@ import pandas as pd
 
 from stainid.imageset.package import IGNORE, read_package
 from stainid.labels import sessions, store
+from stainid.labels import vocabulary as vocab
 from stainid.project import Project
 from stainid.sampling.tiles import table
 from stainid.tables import read_csv, write_records, write_text_atomic
@@ -224,7 +225,7 @@ def _label_records(project: Project, frame: pd.DataFrame, source: str, session: 
     for row in frame[frame.kind != "image_label"].to_dict("records"):
         x, y = float(row["x"]), float(row["y"])
         records.append({"id": store.object_id("class", row["tile_id"], x, y), "source": source, "stain": row["stain"], "task": "class",
-                        "tile_id": row["tile_id"], "x": x, "y": y, "value": row["class"], "session": session})
+                        "tile_id": row["tile_id"], "x": x, "y": y, **vocab.of(project, row["stain"]).record(row["class"]), "session": session})
         corners = _outline(row)
         if corners:
             records.append({"id": store.object_id("outline", row["tile_id"], x, y), "source": source, "stain": row["stain"], "task": "outline",

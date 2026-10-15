@@ -11,30 +11,39 @@ import numpy as np
 import pandas as pd
 
 from stainid import cache
-from stainid.labels import frames, pool
-from stainid.labels.tasks import SKIP, ai_value
+from stainid.labels import frames, pool, store
+from stainid.labels import vocabulary as vocab
+from stainid.labels.tasks import ai_value
+from stainid.labels.vocabulary import Vocabulary
 from stainid.outputs import objects as pipeline_objects
 from stainid.project import Project
 
 COLUMNS = ["tile_id", "x", "y", "value", "values", "labels", "n", "sources", "time", "ai_value", "ai_probability", "radius_px"]
 
 
-def group(labels: pd.DataFrame) -> pd.DataFrame:
-    """One row per object of these class labels: majority value ("" when people are split), every label, newest time."""
+def group(labels: pd.DataFrame, vocabulary: Vocabulary) -> pd.DataFrame:
+    """One row per object of these class labels (of one stain): the majority class as `Vocabulary.display` names it
+    (identity, and the subtype most of the people who typed it gave, or `Vocabulary.disputed` when they are split on
+    the type; "" when people are split on the identity), its
+    `identity` and `subtype` ids, every label, newest time."""
     if labels.empty:
-        return pd.DataFrame(columns=COLUMNS[:9])
-    rows = labels.assign(rx=labels.x.astype(float).round().astype(int), ry=labels.y.astype(float).round().astype(int),
-                         t=pd.to_numeric(labels.time, errors="coerce"))
+        return pd.DataFrame(columns=COLUMNS[:9] + ["identity", "subtype"])
+    rows = store.classes(labels, vocabulary.stain, vocabulary)
+    rows = rows.assign(rx=rows.x.astype(float).round().astype(int), ry=rows.y.astype(float).round().astype(int),
+                       t=pd.to_numeric(rows.time, errors="coerce"), shown=[vocabulary.display(i, s) for i, s in zip(rows.identity, rows.subtype)])
     out = []
     for (tile, _, _), g in rows.groupby(["tile_id", "rx", "ry"], sort=True):
-        counts = g.value[~g.value.isin(SKIP)].value_counts()
-        top = "" if counts.empty or (len(counts) > 1 and counts.iloc[0] == counts.iloc[1]) else str(counts.index[0])
-        if counts.empty:
-            top = str(g.value.iloc[-1])  # only "unsure"
-        out.append({"tile_id": tile, "x": float(g.x.iloc[0]), "y": float(g.y.iloc[0]), "value": top, "values": sorted(set(g.value)),
-                    "labels": [{"value": r.value, "source": r.source, "time": None if pd.isna(r.t) else float(r.t)} for r in g.itertuples()],
+        said = g[g.role != vocab.SKIP]
+        identity = store.majority(said.identity)[0] if len(said) else str(g.identity.iloc[-1])  # only "unsure": that
+        typed = g.subtype[(g.identity == identity) & (g.subtype != "")] if identity else g.subtype.iloc[:0]
+        subtype = store.majority(typed)[0]
+        shown = "" if not identity else vocabulary.disputed(identity) if len(typed) and not subtype else vocabulary.display(identity, subtype)
+        out.append({"tile_id": tile, "x": float(g.x.iloc[0]), "y": float(g.y.iloc[0]), "value": shown,
+                    "values": sorted(set(g.shown)), "identity": identity, "subtype": subtype,
+                    "labels": [{"value": r.shown, "identity": r.identity, "subtype": r.subtype, "source": r.source, "time": None if pd.isna(r.t) else float(r.t)}
+                               for r in g.itertuples()],
                     "n": len(g), "sources": sorted(set(g.source)), "time": float(g.t.max()) if g.t.notna().any() else None})
-    return pd.DataFrame(out, columns=COLUMNS[:9])
+    return pd.DataFrame(out, columns=COLUMNS[:9] + ["identity", "subtype"])
 
 
 def _published(project: Project, tiles: pd.DataFrame, tile_id: str, stain: str) -> tuple[pd.DataFrame, bool]:
@@ -86,4 +95,4 @@ def labelled(project: Project, tiles: pd.DataFrame, labels: pd.DataFrame, stain:
     """Every object these labels (of any task) give a class of this stain, in their own frames, with the AI's call."""
     mine = labels[(labels.task == "class") & (labels.stain == stain) & labels.x.notna()]
     mine = frames.in_field_frame(mine, tiles, project.context_px)
-    return with_ai(project, tiles, group(mine), stain)
+    return with_ai(project, tiles, group(mine, vocab.of(project, stain)), stain)

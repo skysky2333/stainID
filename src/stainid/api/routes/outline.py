@@ -22,6 +22,7 @@ from stainid.api.routes.annotate import NewSession, _known_fields, annotate_path
 from stainid.api.session import annotator, require_admin
 from stainid.api.state import get_state
 from stainid.labels import outline, readiness, sessions, store
+from stainid.labels import vocabulary as vocab
 from stainid.labels.tasks import STAINS
 from stainid.segmentation import proposals, report
 
@@ -105,7 +106,8 @@ def save_objects(name: str, tile_id: str, body: OutlineObjects, request: Request
     field_tile(meta, tile_id)
     busy(name, tile_id, person)
     try:
-        records = [outline.object_record(meta, person, tile_id, r.ref, r.value, r.points, r.deleted) for r in body.records]
+        words = vocab.of(get_state().project, meta["stain"])
+        records = [outline.object_record(meta, words, person, tile_id, r.ref, r.value, r.points, r.deleted) for r in body.records]
     except ValueError as error:
         raise HTTPException(400, str(error))
     return store.append(root(), records)

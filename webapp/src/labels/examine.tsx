@@ -3,21 +3,27 @@
    by how the AI compares, by field and by person; one object opens larger with everything known about it. */
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import type { AiVerdict, LabelledObject, SessionObjects } from '../api'
-import { apiUrl, enc, fieldImage } from '../api'
-import { Empty, Loaded, Loading, Modal, Progress, fmt, timeAgo } from '../components'
+import type { AiVerdict, ClassGroup, LabelledObject, SessionObjects } from '../api'
+import { api, apiUrl, enc, fieldImage } from '../api'
+import { Empty, ErrorNote, Loaded, Loading, Modal, Progress, fmt, timeAgo, withError } from '../components'
 import { useFetch } from '../hooks'
 import { useProject } from '../project'
 import { Advanced } from '../setup/parts'
 
 const PAGE = 60
-const SPLIT = 'people disagree'
 const NOTHING = '-'  // a class filter no class matches: every class hidden
 type AiFilter = '' | 'disagrees' | 'type' | 'unknown'
 
-/** One colour per class, from the class's place in the stain's vocabulary, so a class keeps its colour whatever is shown. */
-export const classColor = (vocabulary: string[], value: string) =>
-  value === SPLIT ? 'var(--text-muted)' : `var(--series-${(Math.max(0, vocabulary.indexOf(value)) % 8) + 1})`
+/** One colour per identity (its types share it), from the identity's place among the stain's classes, so a class keeps its
+ *  colour whatever is shown. */
+export const classColor = (groups: ClassGroup[], value: string) => {
+  const group = groups.find((g) => g.keys.includes(value))
+  return !group || group.colour == null ? 'var(--text-muted)' : `var(--series-${(group.colour % 8) + 1})`
+}
+
+/** A class under its identity's chip, without the identity's name: "pretangle", "type not recorded". */
+const typeName = (identity: string, key: string) =>
+  key.startsWith(`${identity} · `) ? key.slice(identity.length + 3) : key.startsWith(`${identity} (`) ? key.slice(identity.length + 2, -1) : key
 
 /** Who made a label, in plain words: a person's name, or the earlier label set it was brought in from. */
 const who = (source: string) => source.replace(/^import: /, '')
@@ -37,7 +43,7 @@ export function SessionLabelsView({ name, title, onClose }: { name: string; titl
   const [preparing, setPreparing] = useState(false)
   const [known, setKnown] = useState<SessionObjects | null>(null)  // classes of the stain shown, to send the ones not hidden
   const shownClasses = known && hidden.length ? known.vocabulary.filter((c) => known.classes[c] && !hidden.includes(c)) : []
-  const values = hidden.length && !shownClasses.length ? NOTHING : shownClasses.join(',')
+  const values = hidden.length && !shownClasses.length ? NOTHING : shownClasses.join('\n')  // class names may hold commas
   const query = new URLSearchParams({ stain, values, ai, tile, person, offset: String(page * PAGE), limit: String(PAGE) })
   const data = useFetch<SessionObjects>(`/api/labels/sessions/${name}/objects?${query}`, preparing ? 3000 : undefined)
   useEffect(() => {
@@ -51,8 +57,8 @@ export function SessionLabelsView({ name, title, onClose }: { name: string; titl
       <Loaded state={data} label="Loading the labels…">
         {(d) => {
           const crop = d.crop
-          const toggle = (c: string) => filter(() => setHidden(hidden.includes(c) ? hidden.filter((h) => h !== c) : [...hidden, c]))
-          const present = d.vocabulary.filter((c) => d.classes[c])
+          const toggle = (keys: string[]) => filter(() => setHidden(keys.every((k) => hidden.includes(k)) ? hidden.filter((h) => !keys.includes(h)) : [...new Set([...hidden, ...keys])]))
+          const present = d.groups.map((g) => ({ ...g, keys: g.keys.filter((k) => d.classes[k]) })).filter((g) => g.keys.length)
           return (
             <div className="examine">
               <p className="small secondary" style={{ margin: 0 }}>
@@ -64,14 +70,24 @@ export function SessionLabelsView({ name, title, onClose }: { name: string; titl
                 <div className="segmented">{d.stains.map((s) => <button key={s} className={`btn small${s === d.stain ? ' chosen' : ''}`} aria-pressed={s === d.stain}
                   onClick={() => filter(() => { setStain(s); setHidden([]); setPerson('') })}>{s}</button>)}</div>
               )}
-              <div className="class-chips" role="group" aria-label="Classes shown">
-                {present.map((c) => {
-                  const on = !hidden.includes(c)
+              <div className="class-groups" role="group" aria-label="Classes shown">
+                {present.map((g) => {
+                  const total = g.keys.reduce((a, k) => a + d.classes[k], 0)
+                  const typed = g.keys.length > 1 || g.keys[0] !== g.name
+                  const chip = (key: string, text: string, n: number, keys: string[]) => {
+                    const on = !keys.every((k) => hidden.includes(k))
+                    return (
+                      <button key={key} className={`btn small class-toggle${on ? ' chosen' : ''}`} aria-pressed={on} onClick={() => toggle(keys)}
+                        title={on ? `Hide ${text}` : `Show ${text}`}>
+                        <span className="swatch round" style={{ background: on ? classColor(d.groups, keys[0]) : 'transparent', borderColor: classColor(d.groups, keys[0]) }} />
+                        {text} <span className="muted">{n.toLocaleString()}</span></button>
+                    )
+                  }
                   return (
-                    <button key={c} className={`btn small class-toggle${on ? ' chosen' : ''}`} aria-pressed={on} onClick={() => toggle(c)}
-                      title={on ? `Hide ${c}` : `Show ${c}`}>
-                      <span className="swatch round" style={{ background: on ? classColor(d.vocabulary, c) : 'transparent', borderColor: classColor(d.vocabulary, c) }} />
-                      {c} <span className="muted">{d.classes[c].toLocaleString()}</span></button>
+                    <div key={g.id} className="class-chips">
+                      {chip(g.id, typed ? `${g.name}: all` : g.name, total, g.keys)}
+                      {typed && g.keys.map((k) => chip(k, typeName(g.name, k), d.classes[k], [k]))}
+                    </div>
                   )
                 })}
                 {hidden.length > 0 && <button className="link-btn small" onClick={() => filter(() => setHidden([]))}>Show all classes</button>}
@@ -161,7 +177,7 @@ function ObjectCard({ o, d, onOpen }: { o: LabelledObject; d: SessionObjects; on
   return (
     <button className={`object-card${o.ai === 'disagrees' ? ' ai-disagrees' : ''}`} onClick={onOpen} title={hoverText(o, place(o))}>
       <ObjectPicture o={o} d={d} />
-      <span className="object-class small"><span className="swatch round" style={{ background: classColor(d.vocabulary, o.value) }} />
+      <span className="object-class small"><span className="swatch round" style={{ background: classColor(d.groups, o.value) }} />
         <span className="ellipsis">{o.value}</span>{o.labels.length > 1 && <span className="muted"> ×{o.labels.length}</span>}</span>
       <AiLine o={o} />
       <span className="small muted ellipsis">{place(o)}</span>
@@ -195,7 +211,7 @@ function ObjectPicture({ o, d, large = false }: { o: LabelledObject; d: SessionO
       {o.crop.state === 'missing' || o.crop.state === 'failed' ? null : <span className="spinner" aria-hidden="true" />}
       <span className="small muted">{text}</span></div>
   }
-  const color = classColor(d.vocabulary, o.value)
+  const color = classColor(d.groups, o.value)
   const c = size / 2
   const ring = o.radius_px ? Math.min(Math.max(o.radius_px * 1.15, size * 0.06), size * 0.46) : size * 0.12
   return (
@@ -211,6 +227,26 @@ function ObjectPicture({ o, d, large = false }: { o: LabelledObject; d: SessionO
           <circle className={`mark${o.radius_px ? '' : ' unknown-size'}`} cx={c} cy={c} r={ring} style={{ stroke: color }} />
         </>}
       </svg>
+    </div>
+  )
+}
+
+/** This object's picture as the example people see for its class (and type) when they label. */
+function UseAsExample({ o, stain }: { o: LabelledObject; stain: string }) {
+  const [state, setState] = useState<'idle' | 'saving' | 'done'>('idle')
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => { setState('idle'); setError(null) }, [o.tile_id, o.x, o.y])
+  const use = async () => {
+    setState('saving')
+    const done = await withError(() => api.post(`/api/labels/classes/${enc(stain)}/examples/from-object`,
+      { tile_id: o.tile_id, x: o.x, y: o.y, identity: o.identity, subtype: o.subtype }), setError)
+    setState(done ? 'done' : 'idle')
+  }
+  return (
+    <div className="row">
+      <button className="btn small" disabled={state !== 'idle'} onClick={use}>{state === 'saving' ? 'Saving…' : `Use as the example picture of “${o.value}”`}</button>
+      {state === 'done' && <span className="small status-finished">✓ People labelling now see it (Settings → Label classes)</span>}
+      <ErrorNote error={error} />
     </div>
   )
 }
@@ -235,7 +271,7 @@ function ObjectDetail({ o, d, position, onPrevious, onNext, onClose }: {
         <div className="object-facts">
           <table className="compact"><tbody>
             {o.labels.map((l, i) => (
-              <tr key={i}><td><span className="swatch round" style={{ background: classColor(d.vocabulary, l.value) }} /> {l.value}</td>
+              <tr key={i}><td><span className="swatch round" style={{ background: classColor(d.groups, l.value) }} /> {l.value}</td>
                 <td className="secondary">{who(l.source)}{l.source.startsWith('import: ') ? ' (earlier label set)' : ''}{l.time ? ` · ${timeAgo(l.time)}` : ''}</td></tr>
             ))}
           </tbody></table>
@@ -254,6 +290,7 @@ function ObjectDetail({ o, d, position, onPrevious, onNext, onClose }: {
               {o.core_id && o.core_x != null && <Link className="btn small" to={`/cores/${enc(o.core_id)}?stain=${enc(d.stain)}&x=${o.core_x}&y=${o.core_y}`}>Show on the core</Link>}
               {o.frame === 'field' && <a className="btn small" href={fieldImage(o.tile_id)} target="_blank" rel="noreferrer">Open the whole field picture</a>}
             </div>
+            {o.identity && o.crop.state === 'ready' && <UseAsExample o={o} stain={d.stain} />}
           </Advanced>
         </div>
       </div>

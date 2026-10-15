@@ -24,15 +24,13 @@ import yaml
 
 from stainid.imaging import chromogens
 from stainid.imaging.settings import FAMILIES, family_of
-from stainid.labels.tasks import CLASSES
+from stainid.labels import vocabulary as vocab
 from stainid.project import DEFAULTS, Project, save_project
 from stainid.tables import write_csv
 
 KIND_OF = {"tiles": "images", "regions": "images", "images": "images", "wsi": "slides", "slides": "slides"}
 ANNOTATION_KINDS = ("point", "box", "polygon", "image_label")
 IGNORE = "ignore"
-# stainID classes a package may map its labels to, per family (besides "ignore")
-EXTRA_CLASSES = {"amyloid": ["plaque", "vascular", "artifact or unclear"], "tau": ["tau+ neuron", "neuritic plaque", "thread"], "neun": []}
 FAMILY_STAIN = {"amyloid": "6E10", "tau": "AT8", "neun": "NeuN"}
 DONOR_GROUP_COLUMNS = ("disease_group", "diagnosis", "adnc", "group", "cognition")
 
@@ -47,8 +45,13 @@ def _number(value) -> float | None:
 
 
 def class_choices() -> dict[str, list[str]]:
-    """Every class a label can be mapped to, per model family."""
-    return {family: [c for c in CLASSES[FAMILY_STAIN[family]] if c != "unsure"] + EXTRA_CLASSES[family] for family in FAMILY_STAIN}
+    """Every class a label can be mapped to, per model family: the stain's identity classes and, as "identity/subtype",
+    their types (`labels.vocabulary`; "unsure" left out)."""
+    out = {}
+    for family, stain in FAMILY_STAIN.items():
+        classes = [c for c in vocab.defaults(stain).classes if c.role != vocab.SKIP]
+        out[family] = [name for c in classes for name in (c.id, *(f"{c.id}/{s.id}" for s in c.subtypes))]
+    return out
 
 
 @dataclass

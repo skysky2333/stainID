@@ -1,3 +1,5 @@
+import type { ClassRole, KeyMap, Vocabulary } from './labels/classKeys'
+
 export type Row = Record<string, string | number | boolean | null>
 
 export interface StageStatus { done: number; total: number; unit: string }
@@ -144,7 +146,7 @@ export interface StainOverview {
   objects_labelled: number; objects_added: number; values: Record<string, number>; outlines: number; outlines_edited: number
   people: string[]; agreement: number | null; objects_with_several_labels: number
   ai: { n: number; agreement: number | null; precision: number | null; recall: number | null }; tags: Record<string, number>
-  detection?: Detection & { not_checked: number }; added?: AddedObjects
+  detection?: Detection & { not_checked: number }; added?: AddedObjects; classes?: ClassCount[]
 }
 /** Of the real objects people labelled: how many the AI finds, and why it misses the others (never proposed, or proposed but rejected). */
 export interface Detection {
@@ -159,6 +161,7 @@ export interface SessionInfo {
   instructions: string; created: number; open: boolean; people: number; labels: number
   fields?: number; fields_covered?: number; fields_prepared?: number; labellers: Labeller[]; labelling_now: number
   pictures?: QueuePictures  // quick-check queues
+  subtypes?: boolean  // people are asked for the type of objects (sessions made before this choice: yes)
   read_only?: boolean; imported?: { dataset: string; rater: string }  // labels imported from a dataset package
 }
 export interface Labeller { person: string; fields_done: number; labels: number; changed: number; confirmed: number; outlines: number; tags: number; last_active: number }
@@ -166,12 +169,12 @@ export interface LabelsOverview { stains: StainOverview[]; sessions: SessionInfo
 export interface OpenSession { name: string; title: string; stain: string; kind: 'fields' | 'queue' | 'outline'; open: boolean; instructions: string; fields: number; done_by_me: number; my_labels: number }
 export interface SessionField { tile_id: string; done_by_me: boolean; annotators_done: number; open_by_others: number; prepared: boolean }
 export interface SessionDetail {
-  meta: SessionInfo & { fields: string[]; classes: string[]; tags: string[]; class_instructions: string }
+  meta: SessionInfo & { fields: string[]; tags: string[]; vocabulary: Vocabulary; keys: KeyMap; subtypes: boolean }
   fields: SessionField[]; annotator: string | null
 }
 export interface Label {
   id: string; source: string; stain: string; task: 'class' | 'outline' | 'tag' | 'note' | 'done'; tile_id: string
-  x: number | null; y: number | null; value: string; points: number[][] | null; session: string; confirmed: boolean; time: number; deleted?: boolean
+  x: number | null; y: number | null; value: string; subtype?: string | null; points: number[][] | null; session: string; confirmed: boolean; time: number; deleted?: boolean
 }
 export interface FieldObjectLite { x: number; y: number; radius_px: number; ai_value?: string; ai_probability?: number }
 export interface FieldWork {
@@ -200,17 +203,17 @@ export interface ReferenceLabels { name: string; title: string; labels: number; 
 /* the labelled objects of a session, each as the crop the model sees (labels view) */
 export type LabelFrame = 'field' | 'pilot' | 'core'
 export type AiVerdict = 'agrees' | 'type' | 'disagrees'
-export interface ObjectLabel { value: string; source: string; time: number | null }
+export interface ObjectLabel { value: string; identity: string; subtype: string; source: string; time: number | null }
 export interface CropState { state: 'ready' | 'waiting' | 'preparing' | 'failed' | 'missing'; ahead?: number; error?: string }
 export interface LabelledObject {
-  tile_id: string; x: number; y: number; frame: LabelFrame | null; value: string; labels: ObjectLabel[]; time: number | null
+  tile_id: string; x: number; y: number; frame: LabelFrame | null; value: string; identity: string; subtype: string; labels: ObjectLabel[]; time: number | null
   ai_value: string | null; ai_probability: number | null; ai: AiVerdict | null; radius_px: number | null
   outline: number[][] | null; outline_by: 'person' | 'AI' | null; crop: CropState
   core_id?: string | null; core_label?: string | null; tma?: string | null; region?: string | null; disease_group?: string | null
   core_x: number | null; core_y: number | null
 }
 export interface SessionObjects {
-  name: string; title: string; reference: boolean; stain: string; stains: string[]; vocabulary: string[]
+  name: string; title: string; reference: boolean; stain: string; stains: string[]; vocabulary: string[]; groups: ClassGroup[]
   classes: Record<string, number>; people: Record<string, number>; ai: Partial<Record<AiVerdict | 'unknown', number>>
   objects: LabelledObject[]; total: number; all: number
   crop: { size_px: number; um: number; pixel_um: number } | null; preparing: { objects: number; cores: number; ahead: number } | null
@@ -330,6 +333,15 @@ export const coreThumb = (coreId: string, stain: string, size = 512) => apiUrl(`
 export const fieldImage = (tileId: string) => apiUrl(`/api/images/fields/${enc(tileId)}.jpg`)
 export const fieldLayer = (tileId: string, layer: string) => apiUrl(`/api/images/fields/${enc(tileId)}/${layer}.png`)
 
+/* ---------- label classes: identity and type (subtype), see labels/classKeys.ts ---------- */
+export type { ClassDef, ClassPick, ClassRole, KeyMap, SubtypeDef, Vocabulary } from './labels/classKeys'
+/** Labelled objects of one identity in the overview: how many carry each type, and how many no type. */
+export interface ClassCount { id: string; name: string; role: ClassRole; objects: number; subtypes: { id: string; name: string; objects: number }[]; untyped: number }
+/** The classes the labels view shows, by identity: its colour (place in the series colours; null: none) and its classes as shown. */
+export interface ClassGroup { id: string; name: string; role: ClassRole; colour: number | null; keys: string[] }
+/** Every stain's classes (as used, and as built in) and how long a type may follow a class key. */
+export interface ClassSettings { stains: Record<string, Vocabulary>; builtin: Record<string, Vocabulary>; subtype_wait_s: number }
+export const classExample = (stain: string, file: string) => apiUrl(`/api/annotate/class-examples/${enc(stain)}/${enc(file)}`)
 /* ---- project kinds: image sets, whole slides, dataset packages, scoring on imported labels ---- */
 export type ProjectKind = 'tma' | 'images' | 'slides'
 export type StainFamily = 'amyloid' | 'tau' | 'neun' | 'ignore' | ''

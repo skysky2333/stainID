@@ -57,7 +57,8 @@ def test_tiles_package_is_rescaled_linked_and_its_raters_become_sessions(tmp_pat
     meta = sessions.meta(project.output("reviews"), "import-synthetic_points-consensus")
     assert meta["read_only"] and meta["stain"] == "6E10" and len(meta["fields"]) == 3
     labels = store.current(project.output("reviews"))
-    assert set(labels.value[labels.session == "import-synthetic_points-expert2"]) == {"compact plaque", "diffuse plaque"}
+    mine = labels[labels.session == "import-synthetic_points-expert2"]  # stored as identity and type (labels.vocabulary)
+    assert set(zip(mine.value, mine.subtype)) == {("plaque", "compact"), ("plaque", "diffuse")}
     # importing again replaces the labels instead of doubling them
     annotations.import_package_labels(project, log=_quiet)
     labels = store.current(project.output("reviews"))

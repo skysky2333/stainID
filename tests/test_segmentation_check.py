@@ -165,7 +165,7 @@ def test_outline_session_from_set_up_to_scores(client):
     ann = TestClient(client.app)
     ann.post("/api/session/annotator", json={"name": "Ann"})
     detail = ann.get(f"/api/annotate/{name}").json()
-    assert detail["meta"]["classes"] == ["compact plaque", "diffuse plaque", "small plaque", "unsure"]
+    assert [(c["id"], c["scored"]) for c in detail["meta"]["outline_classes"]] == [("plaque", True), ("unsure", False)]
     assert detail["fields"] == [{"tile_id": TILE, "done_by_me": False, "annotators_done": 0, "open_by_others": 0, "prepared": True}]
     assert ann.get(f"/api/annotate/{name}/next").json()["tile_id"] == TILE
     work = ann.get(f"/api/annotate/{name}/outline/{TILE}").json()

@@ -109,13 +109,13 @@ def test_every_label_belongs_to_a_session_and_each_can_be_examined(client):
     ann.post("/api/session/annotator", json={"name": "Ann"})
     ann.post("/api/annotate/round_1/labels", json={"records": [{"task": "class", "tile_id": READY, "x": 100.0, "y": 200.0, "value": "diffuse plaque"}]})
     sets = client.get("/api/labels/sets", params={"stain": "6E10"}).json()
-    assert [(s["name"], s["title"], s["classes"]) for s in sets] == [("round_1", "Round 1", {"diffuse plaque": 1}),
-                                                                       ("reference", "AI reference labels", {"compact plaque": 1})]
+    assert [(s["name"], s["title"], s["classes"]) for s in sets] == [("round_1", "Round 1", {"plaque · diffuse": 1}),
+                                                                       ("reference", "AI reference labels", {"plaque · compact (dense-core)": 1})]
     assert client.get("/api/labels/overview").json()["reference"]["sets"] == ["import: reference_6e10"]
     seen = client.get("/api/labels/sessions/reference/objects").json()
-    assert seen["reference"] and seen["stain"] == "6E10" and seen["classes"] == {"compact plaque": 1}
+    assert seen["reference"] and seen["stain"] == "6E10" and seen["classes"] == {"plaque · compact (dense-core)": 1}
     found = seen["objects"][0]
-    assert found["tile_id"] == READY and found["frame"] == "field" and found["value"] == "compact plaque" and found["ai_value"] == "compact plaque"
-    assert client.get("/api/labels/sessions/round_1/objects", params={"values": "compact plaque"}).json()["objects"] == []
+    assert found["tile_id"] == READY and found["frame"] == "field" and found["value"] == "plaque · compact (dense-core)" and found["ai_value"] == "plaque · compact (dense-core)"
+    assert client.get("/api/labels/sessions/round_1/objects", params={"values": "plaque · compact (dense-core)"}).json()["objects"] == []
     assert client.get("/api/labels/sessions/round_1/objects").json()["objects"][0]["labels"][0]["source"] == "Ann"
     assert client.post("/api/labels/sessions", json={"name": "reference", "stain": "6E10", "n_fields": 1}).status_code == 400

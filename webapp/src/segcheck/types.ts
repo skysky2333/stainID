@@ -1,5 +1,8 @@
 /* The segmentation check (outline sessions and their scores): what the API sends. */
 
+/** A class an outlined object can have (the stain's object classes, and "unsure", which is not `scored`). */
+export interface OutlineClass { id: string; name: string; description: string; scored: boolean }
+
 /** One object a person outlined: `ref` is its id within the field, `points` its polygon in field pixels. */
 export interface OutlineObject { ref: string; value: string; points: number[][] }
 

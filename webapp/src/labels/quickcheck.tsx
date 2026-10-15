@@ -1,4 +1,5 @@
-/* The quick-check queue: one object at a time, answered with the number keys, without waiting. The page keeps the next
+/* The quick-check queue: one object at a time, answered with the class keys (and, where the session asks for types,
+   a number for the type right after, see labels/classKeys.ts), without waiting. The page keeps the next
    few objects (the server holds them for this person, so people labelling together get different ones) with their
    pictures already loaded, so an answer shows the next object at once. Answers are saved in the background, in order,
    and tried again until they are; Undo brings the last object back. */
@@ -7,6 +8,9 @@ import { Link } from 'react-router-dom'
 import type { QueueItem, QueueNext, QueuePictures, SessionDetail } from '../api'
 import { api, apiUrl, enc } from '../api'
 import { Empty, ErrorNote, Loading, Progress, fmt } from '../components'
+import type { ClassPick } from './classKeys'
+import { classText, resolveClass } from './classKeys'
+import { ClassChooser, ClassKeyHint, useClassKeys } from './classes'
 
 const ASK = 8  // objects asked for at a time: the one on screen and the next ones, pictures loaded
 const REFILL = 4  // ask for more when fewer than this many are left on the page
@@ -115,9 +119,10 @@ function useLasting(value: boolean, ms: number) {
 
 export function QuickCheck({ detail }: { detail: SessionDetail }) {
   const meta = detail.meta
-  const classes = meta.classes
+  const { vocabulary, keys, subtypes: typesAsked } = meta
+  const waitMs = Math.round(1000 * vocabulary.subtype_wait_s)
   const [items, setItems] = useState<QueueItem[]>([])  // the object on screen first, then the next ones
-  const [history, setHistory] = useState<{ item: QueueItem; save: number }[]>([])
+  const [history, setHistory] = useState<{ item: QueueItem; save: number; pick: ClassPick }[]>([])
   const [remaining, setRemaining] = useState(0)
   const [pictures, setPictures] = useState<QueuePictures | null>(null)
   const [asked, setAsked] = useState<'never' | 'asking' | 'more' | 'nothing'>('never')
@@ -163,38 +168,45 @@ export function QuickCheck({ detail }: { detail: SessionDetail }) {
   const picture: Picture = item ? states[urls[0]] ?? 'loading' : 'loading'
   useEffect(() => { if (picture === 'ready') shownAt.current = performance.now() }, [item?.key, picture])
 
-  const choose = useCallback((value: string) => {
-    if (!item || picture !== 'ready' || performance.now() - shownAt.current < GUARD_MS) return
-    const save = saver.save({ task: 'class', tile_id: item.tile_id, x: item.x, y: item.y, value })
-    answered.current.add(item.key)
-    setHistory((h) => [{ item, save }, ...h].slice(0, 50))
-    setItems((have) => have.slice(1))
+  const statesRef = useRef(states)
+  statesRef.current = states
+  /** Answers the object on screen (several answers of one key press go to one object after the other). */
+  const choose = useCallback((pick: ClassPick) => {
+    const current = itemsRef.current[0]
+    if (!current || statesRef.current[pictureUrl(meta.name, current)] !== 'ready' || performance.now() - shownAt.current < GUARD_MS) return
+    const save = saver.save({ task: 'class', tile_id: current.tile_id, x: current.x, y: current.y, value: pick.identity, subtype: pick.subtype ?? '' })
+    answered.current.add(current.key)
+    itemsRef.current = itemsRef.current.slice(1)
+    setHistory((h) => [{ item: current, save, pick }, ...h].slice(0, 50))
+    setItems((have) => have.filter((i) => i.key !== current.key))
     setRemaining((r) => Math.max(0, r - 1))
     setAsked((a) => (a === 'nothing' ? 'more' : a))  // answers change what the queue serves: ask again when running low
-  }, [item, picture, saver])
+  }, [meta.name, saver])
+  const classKeys = useClassKeys(keys, waitMs, choose)
 
   const undo = useCallback(() => {
     const last = history[0]
+    classKeys.cancel()
     if (!last) return
     if (!saver.cancel(last.save)) saver.save({ task: 'class', tile_id: last.item.tile_id, x: last.item.x, y: last.item.y, deleted: true })
     answered.current.delete(last.item.key)
     setHistory((h) => h.slice(1))
     setItems((have) => [last.item, ...have.filter((i) => i.key !== last.item.key)])
     setRemaining((r) => r + 1)
-  }, [history, saver])
+  }, [history, saver, classKeys])
 
-  const skip = useCallback(() => setItems((have) => have.slice(1)), [])
+  const skip = useCallback(() => { classKeys.cancel(); setItems((have) => have.slice(1)) }, [classKeys])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (typing(e) || e.metaKey || e.ctrlKey || e.altKey || e.repeat) return
-      const n = Number(e.key)
-      if (n >= 1 && n <= Math.min(9, classes.length)) choose(classes[n - 1])
-      else if (e.key === 'Backspace' || e.key.toLowerCase() === 'z') { e.preventDefault(); undo() }
+      if (e.key === 'Backspace' || e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); return }
+      if (e.key === 'Escape') { classKeys.cancel(); return }
+      if (picture === 'ready' && classKeys.press(e.key)) e.preventDefault()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [classes, choose, undo])
+  }, [classKeys, picture, undo])
 
   const saving = useLasting(saver.waiting > 0, 800)
   const done = history.length
@@ -241,17 +253,18 @@ export function QuickCheck({ detail }: { detail: SessionDetail }) {
           </div>
           <div className="card queue-choices">
             <h2>What is under the cross?</h2>
-            {meta.ai_view === 'full' && <p className="small secondary" title={`probability ${fmt(item.ai_probability, 2)}`}>The AI’s guess: <b>{item.ai_value}</b></p>}
-            <div className="class-list">
-              {classes.map((c, i) => (
-                <button key={c} className="btn class-btn big" disabled={picture !== 'ready'} onClick={() => choose(c)}>{i < 9 && <span className="kbd">{i + 1}</span>} {c}</button>
-              ))}
-            </div>
-            <p className="muted small">{meta.class_instructions}</p>
+            {meta.ai_view === 'full' && <p className="small secondary" title={`probability ${fmt(item.ai_probability, 2)}`}>
+              The AI’s guess: <b>{classText(vocabulary, resolveClass(vocabulary, item.ai_value), typesAsked)}</b></p>}
+            <fieldset className="plain-fieldset" disabled={picture !== 'ready'}>
+              <ClassChooser vocabulary={vocabulary} keys={keys} typesAsked={typesAsked} active={null} waiting={classKeys.waiting} waitMs={waitMs} big
+                onPick={classKeys.pick} onPickType={classKeys.pickType} />
+            </fieldset>
             <div className="row">
               <button className="btn small" disabled={!history.length} onClick={undo}><span className="kbd">Z</span> Undo last</button>
-              <span className="muted small">Keys: <span className="kbd">1</span>–<span className="kbd">{Math.min(9, classes.length)}</span> answer, <span className="kbd">Z</span> undo</span>
+              {history[0] && <span className="muted small ellipsis">Last: {classText(vocabulary, history[0].pick, typesAsked)}</span>}
             </div>
+            <p className="muted small" style={{ margin: 0 }}>Keys: <ClassKeyHint vocabulary={vocabulary} keys={keys} typesAsked={typesAsked} waitMs={waitMs} />,
+              {' '}<span className="kbd">Z</span> undo</p>
           </div>
         </div>
       ) : asked === 'never' || asked === 'asking' || asked === 'more' ? (

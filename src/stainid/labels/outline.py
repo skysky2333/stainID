@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 
 from stainid import cache
-from stainid.labels.tasks import CLASSES, positive
+from stainid.labels import vocabulary as vocab
 from stainid.project import Project
 
 KIND = "outline"
@@ -37,9 +37,17 @@ def title(stain: str) -> str:
     return f"Segmentation check – {stain}"
 
 
-def classes(stain: str) -> list[str]:
-    """What an outlined object can be: the stain's object classes, then "unsure" (left out of the scores)."""
-    return [c for c in CLASSES[stain] if positive(stain, c)] + [UNSURE]
+def classes(words: vocab.Vocabulary) -> list[dict]:
+    """What an outlined object can be: the stain's shown object classes (identities with the role `positive`), then the
+    ones left out of the scores ("unsure"). The types of a class are not asked: outlines measure the identity only."""
+    shown = [c for c in words.visible if c.role in (vocab.POSITIVE, vocab.SKIP)]
+    return [{"id": c.id, "name": c.name, "description": c.description, "scored": c.role == vocab.POSITIVE}
+            for c in sorted(shown, key=lambda c: c.role != vocab.POSITIVE)]
+
+
+def scored_value(words: vocab.Vocabulary, value) -> str:
+    """The class an object is scored as: its identity when that is the stain's object, else `UNSURE` (left out)."""
+    return words.resolve(value)[0] if words.positive(value) else UNSURE
 
 
 def object_id(session: str, tile_id: str, ref: str) -> str:
@@ -61,7 +69,8 @@ def centre(points: list[list[float]]) -> tuple[float, float]:
     return float(((x + np.roll(x, -1)) * cross).sum() / (6 * area)), float(((y + np.roll(y, -1)) * cross).sum() / (6 * area))
 
 
-def object_record(session: dict, person: str, tile_id: str, ref: str, value: str, points: list[list[float]] | None, deleted: bool) -> dict:
+def object_record(session: dict, words: vocab.Vocabulary, person: str, tile_id: str, ref: str, value: str, points: list[list[float]] | None,
+                  deleted: bool) -> dict:
     """The label of one outlined object (or its deletion), checked."""
     if not ref or len(ref) > 40 or not ref.replace("-", "").replace("_", "").isalnum():
         raise ValueError("an object needs a short id (letters, digits, - and _)")
@@ -69,8 +78,10 @@ def object_record(session: dict, person: str, tile_id: str, ref: str, value: str
               "tile_id": tile_id, "session": session["name"], "deleted": deleted, "value": value}
     if deleted:
         return record
-    if value not in classes(session["stain"]):
+    identity = words.resolve(value)[0]
+    if identity not in {c["id"] for c in classes(words)}:
         raise ValueError(f"unknown class {value!r}")
+    record["value"] = identity
     if not points or len(points) < 3 or any(len(p) != 2 for p in points):
         raise ValueError("an outline needs at least three [x, y] corners")
     points = [[round(float(px), 1), round(float(py), 1)] for px, py in points]

@@ -28,6 +28,7 @@ import numpy as np
 import pandas as pd
 
 from stainid.imageset.annotations import CONSENSUS, MATCH_UM, folder, imported
+from stainid.labels import vocabulary as vocab
 from stainid.labels.tasks import ai_value, positive
 from stainid.outputs import objects as pipeline_objects
 from stainid.project import Project
@@ -86,8 +87,19 @@ def detections(project: Project, stain: str, core_ids: set[str]) -> pd.DataFrame
                          "probability": pd.to_numeric(found.probability, errors="coerce").to_numpy(), "model_class": found.model_class.astype(str).to_numpy()})
 
 
+def _kind(stain: str, value: str) -> str:
+    """A class (a rater's, through the class map, or the AI's) as "identity/subtype" ("identity" without a type), so the
+    rater's "plaque/compact" and the AI's "compact plaque" are the same kind (`labels.vocabulary`)."""
+    identity, subtype = vocab.defaults(stain).resolve(value)
+    return f"{identity}/{subtype}" if subtype else identity
+
+
+def _typed(stain: str, value: str) -> bool:
+    return bool(vocab.defaults(stain).resolve(value)[1])
+
+
 def _same_class(label: str, value: str, stain: str) -> bool:
-    return positive(stain, value) and (label in GENERIC or label == value or not positive(stain, label))
+    return positive(stain, value) and (not _typed(stain, label) or _kind(stain, label) == _kind(stain, value) or not positive(stain, label))
 
 
 def _match_marks(marks: pd.DataFrame, found: pd.DataFrame, project: Project, stain: str) -> tuple[list[int | None], list[int | None]]:
@@ -156,23 +168,25 @@ def score_objects(project: Project, marks: pd.DataFrame, found: pd.DataFrame, st
     found_n = int(sum(h is not None for h, o in zip(hit, is_object) if o))
     # Raters who marked only some types (e.g. only cored plaques) say nothing about the others: precision counts the AI's
     # objects of the types they marked.
-    types = {c for c, o in zip(marks["class"], is_object) if o}
-    scope = (found.accepted & found.core_id.isin(reviewed)) & (True if types & GENERIC else found.value.isin(types))
+    types = {_kind(stain, c) for c, o in zip(marks["class"], is_object) if o}
+    untyped = any(o and not _typed(stain, c) for c, o in zip(marks["class"], is_object))  # marked without a type: every type counts
+    scope = (found.accepted & found.core_id.isin(reviewed)) & (True if untyped else found.value.map(lambda v: _kind(stain, v)).isin(types))
     in_scope = found[scope]
     matched = {h for h in hit if h is not None}
     marked = int(sum(i in matched for i in in_scope.index))
     precision, recall = _ratio(marked, len(in_scope)), _ratio(found_n, targets)
     scores = [float(found.probability.loc[n]) if n is not None and np.isfinite(found.probability.loc[n]) else 0.0 for n in nearest]
-    typed = [(c, found.value.loc[h]) for c, h, o in zip(marks["class"], hit, is_object) if o and h is not None and c not in GENERIC]
+    typed = [(_kind(stain, c), _kind(stain, found.value.loc[h])) for c, h, o in zip(marks["class"], hit, is_object)
+             if o and h is not None and _typed(stain, c)]
     return {"images": int(marks.image_id.nunique()), "marks": targets, "found": found_n, "missed": targets - found_n, "ai_objects": int(len(in_scope)),
             "ai_unmarked": int(len(in_scope) - marked), "precision": precision, "recall": recall, "f1": _f1(precision, recall),
             "auc": None if found.probability.isna().all() else _auc(scores, is_object), "iou_recall": _iou_recall(marks, found),
-            "same_type": _ratio(sum(c == v for c, v in typed), len(typed)), "scope": "all accepted" if types & GENERIC or not types else ", ".join(sorted(types))}
+            "same_type": _ratio(sum(c == v for c, v in typed), len(typed)), "scope": "all accepted" if untyped or not types else ", ".join(sorted(types))}
 
 
 def score_vessels(project: Project, marks: pd.DataFrame, found: pd.DataFrame, reviewed: set[str]) -> dict | None:
     """Vessel (CAA) marks against the deposits the AI set aside as on a vessel or the tissue edge."""
-    vessels = marks[marks["class"] == "vascular"].reset_index(drop=True)
+    vessels = marks[[vocab.defaults("6E10").resolve(c)[0] == "CAA" for c in marks["class"]]].reset_index(drop=True)  # "vascular" too
     if vessels.empty or "model_class" not in found:
         return None
     flagged = found[found.model_class.astype(str).eq("vascular_or_edge")].assign(accepted=True, value="plaque")

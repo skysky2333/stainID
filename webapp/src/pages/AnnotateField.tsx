@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import type { AddedState, FieldObjectLite, FieldWork, Label, SessionDetail } from '../api'
 import { api, apiUrl, enc } from '../api'
 import { Empty, ErrorNote, Loaded, Loading, PageHead, Progress, fmt } from '../components'
 import { useFetch, useStored } from '../hooks'
 import { AI_VIEW_FOR_LABELLERS } from '../labelling'
+import type { ClassPick } from '../labels/classKeys'
+import { classText, resolveClass, roleOf } from '../labels/classKeys'
+import { ClassChooser, ClassKeyHint, useClassKeys } from '../labels/classes'
 import { FieldThumb } from '../labels/fields'
 import { QuickCheck } from '../labels/quickcheck'
 import { Register, useSession } from '../session'
@@ -22,7 +26,7 @@ const TOOLS: { id: Tool; needs: string; key: string; name: string; hint: string 
 
 const rkey = (x: number, y: number) => `${Math.round(x)}:${Math.round(y)}`
 const typing = (e: KeyboardEvent) => ['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement).tagName)
-const NEGATIVE = /^not a|artifact|^unsure/
+const samePick = (a: ClassPick | undefined, b: ClassPick | undefined) => !!a && !!b && a.identity === b.identity && (a.subtype ?? null) === (b.subtype ?? null)
 
 function inside(polygon: number[][], x: number, y: number) {
   let hit = false
@@ -123,7 +127,9 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
   const work = useFetch<FieldWork>(`/api/annotate/${name}/fields/${enc(tile)}`)
   const [mine, setMine] = useState<Record<string, Label>>({})
   const [tool, setTool] = useState<Tool | null>(null)
-  const [labelIndex, setLabelIndex] = useState(0)
+  const { vocabulary, keys, subtypes: typesAsked } = meta
+  const waitMs = Math.round(1000 * vocabulary.subtype_wait_s)
+  const [label, setLabel] = useState<ClassPick>(() => ({ identity: vocabulary.classes.find((c) => !c.hidden)?.id ?? '', subtype: null }))
   const [selected, setSelected] = useState<string | null>(null)
   const [draft, setDraft] = useState<number[][]>([])
   const [redrawing, setRedrawing] = useState(false)
@@ -142,9 +148,15 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
     setAddedStates(work.data.added ?? [])
   }, [work.data])
 
-  const classes = meta.classes
-  const label = classes[labelIndex] ?? classes[0]
-  const color = (v: string | undefined) => (v ? COLORS[Math.max(0, classes.indexOf(v)) % COLORS.length] : '#ffffff')
+  const classKeys = useClassKeys(keys, waitMs, setLabel)
+  useEffect(() => { if (classKeys.waiting) setLabel({ identity: classKeys.waiting.identity, subtype: null }) }, [classKeys.waiting])
+  const order = useMemo(() => [...vocabulary.classes].sort((a, b) => Number(a.role !== 'positive') - Number(b.role !== 'positive')).map((c) => c.id), [vocabulary])
+  const color = (v: ClassPick | undefined) => (v ? COLORS[Math.max(0, order.indexOf(v.identity)) % COLORS.length] : '#ffffff')
+  const negativePick = (v: ClassPick | undefined) => !v || roleOf(vocabulary, v.identity) !== 'positive'
+  const pickOf = (m: Label | undefined) => (m ? resolveClass(vocabulary, m.value, m.subtype) : undefined)
+  const aiPick = (o: FieldObjectLite | undefined) => (o?.ai_value ? resolveClass(vocabulary, o.ai_value) : undefined)
+  const text = (v: ClassPick | undefined) => (v ? classText(vocabulary, v, typesAsked) : '')
+  const asLabel = (v: ClassPick) => ({ value: v.identity, subtype: typesAsked ? v.subtype ?? '' : '' })
   const full = meta.ai_view === 'full'
   const tools = useMemo(() => TOOLS.filter((t) => meta.tools.includes(t.needs)), [meta.tools])
   const active = tools.find((t) => t.id === tool) ?? tools[0]
@@ -153,7 +165,7 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
   const aiOutlines = useMemo(() => Object.fromEntries((work.data?.outlines ?? []).map((o) => [rkey(o.x, o.y), o.points])), [work.data])
   const myClass = useCallback((x: number, y: number) => mine[`class:${tile}:${rkey(x, y)}`], [mine, tile])
   const myOutline = useCallback((x: number, y: number) => mine[`outline:${tile}:${rkey(x, y)}`], [mine, tile])
-  const value = (o: FieldObjectLite) => myClass(o.x, o.y)?.value ?? (full ? o.ai_value : undefined)
+  const value = (o: FieldObjectLite) => pickOf(myClass(o.x, o.y)) ?? (full ? aiPick(o) : undefined)
   const added = Object.values(mine).filter((m) => m.task === 'class' && !objectKeys.has(rkey(m.x!, m.y!)))
   const done = !!mine[`done:${tile}`]
   const fields = detail.fields
@@ -197,7 +209,7 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
     const centre = { x: Math.round(points.reduce((a, p) => a + p[0], 0) / points.length), y: Math.round(points.reduce((a, p) => a + p[1], 0) / points.length) }
     const target = selectedObject ?? centre
     const records: Partial<Label>[] = [{ task: 'outline', x: target.x, y: target.y, points }]
-    if (!selectedObject) records.push({ task: 'class', x: target.x, y: target.y, value: label })
+    if (!selectedObject) records.push({ task: 'class', x: target.x, y: target.y, ...asLabel(label) })
     save(records)
     setSelected(rkey(target.x, target.y))
     setDraft([])
@@ -227,13 +239,13 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
     if (active.id === 'label') {
       if (!o) return
       setSelected(rkey(o.x, o.y))
-      if (myClass(o.x, o.y)?.value === label) save([{ task: 'class', x: o.x, y: o.y, deleted: true }])
-      else save([{ task: 'class', x: o.x, y: o.y, value: label }])
+      if (samePick(pickOf(myClass(o.x, o.y)), { ...label, subtype: typesAsked ? label.subtype : null })) save([{ task: 'class', x: o.x, y: o.y, deleted: true }])
+      else save([{ task: 'class', x: o.x, y: o.y, ...asLabel(label) }])
       return
     }
     if (active.id === 'add') {
       if (o) { setSelected(rkey(o.x, o.y)); return }
-      save([{ task: 'class', x: Math.round(p.x), y: Math.round(p.y), value: label }])
+      save([{ task: 'class', x: Math.round(p.x), y: Math.round(p.y), ...asLabel(label) }])
       setSelected(rkey(p.x, p.y))
       return
     }
@@ -287,12 +299,11 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (typing(e) || e.metaKey || e.ctrlKey) return
-      const n = Number(e.key)
-      if (n >= 1 && n <= Math.min(9, classes.length)) { setLabelIndex(n - 1); return }
+      if (e.key === 'Enter' && draft.length) { closeDraft(); return }
+      if (!e.repeat && classKeys.press(e.key)) return
       const chosen = tools.find((t) => t.key === e.key.toLowerCase())
       if (chosen) { setTool(chosen.id); setDraft([]); return }
-      if (e.key === 'Escape') { setDraft([]); setRedrawing(false); setSelected(null) }
-      if (e.key === 'Enter') closeDraft()
+      if (e.key === 'Escape') { classKeys.cancel(); setDraft([]); setRedrawing(false); setSelected(null) }
       if (e.key === 'Backspace' || e.key === 'Delete') {
         e.preventDefault()
         if (draft.length) setDraft(draft.slice(0, -1))
@@ -301,15 +312,15 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [classes, tools, draft, closeDraft, removeSelected])
+  }, [classKeys, tools, draft, closeDraft, removeSelected])
 
-  const counts: Record<string, number> = {}
-  for (const o of objects) { const v = value(o); if (v) counts[v] = (counts[v] ?? 0) + 1 }
-  for (const m of added) counts[m.value] = (counts[m.value] ?? 0) + 1
+  const counts: Record<string, number> = {}  // objects of each class (identity) in this field, as they stand now
+  for (const o of objects) { const v = value(o); if (v) counts[v.identity] = (counts[v.identity] ?? 0) + 1 }
+  for (const m of added) { const v = pickOf(m)!; counts[v.identity] = (counts[v.identity] ?? 0) + 1 }
   const changed = Object.values(mine).filter((m) => m.task === 'class' && !m.confirmed).length
   const toggle = (key: string) => setLayers({ ...layers, [key]: !layers[key] })
   const selectedAi = selected ? objects.find((o) => rkey(o.x, o.y) === selected) : undefined
-  const selectedValue = selectedObject ? (myClass(selectedObject.x, selectedObject.y)?.value ?? selectedAi?.ai_value) : undefined
+  const selectedValue = selectedObject ? (pickOf(myClass(selectedObject.x, selectedObject.y)) ?? aiPick(selectedAi)) : undefined
   const editing = active?.id === 'outline' && selectedObject && !draft.length ? (dragging?.points ?? outlineOf(selectedObject.x, selectedObject.y)) : undefined
   const finishedByMe = fields.filter((f) => f.done_by_me).length
 
@@ -348,23 +359,23 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
                   {layers.box && <rect x={data.box.x} y={data.box.y} width={data.box.width} height={data.box.height} fill="none" stroke="#ffd21f" strokeWidth={2 * unit} strokeDasharray={`${12 * unit} ${8 * unit}`} />}
                   {layers.outlines && all.map((o) => {
                     const k = rkey(o.x, o.y)
-                    const v = myClass(o.x, o.y)?.value ?? objects.find((q) => rkey(q.x, q.y) === k)?.ai_value
+                    const v = pickOf(myClass(o.x, o.y)) ?? aiPick(objects.find((q) => rkey(q.x, q.y) === k))
                     const poly = k === selected && editing ? undefined : outlineOf(o.x, o.y)
-                    if (!poly || (v && NEGATIVE.test(v) && !myOutline(o.x, o.y))) return null
+                    if (!poly || (v && negativePick(v) && !myOutline(o.x, o.y))) return null
                     return <polygon key={`o${k}`} points={poly.map((p) => p.join(',')).join(' ')} fill="none" stroke={myOutline(o.x, o.y) ? color(v) : '#ffffff'}
                       strokeOpacity={0.9} strokeWidth={(myOutline(o.x, o.y) ? 2 : 1.2) * unit} />
                   })}
                   {objects.map((o) => {
                     const v = value(o)
                     const decided = !!myClass(o.x, o.y)
-                    const negative = !v || NEGATIVE.test(v)
+                    const negative = negativePick(v)
                     if (negative && !decided && !layers.negatives) return null
                     const k = rkey(o.x, o.y)
                     return (
                       <circle key={k} cx={o.x} cy={o.y} r={Math.max(8, o.radius_px) + 4} fill={decided ? color(v) : 'none'} fillOpacity={0.18}
                         stroke={v ? color(v) : '#ffffff'} strokeOpacity={negative && !decided ? 0.55 : 1}
                         strokeWidth={(k === selected ? 3.5 : negative && !decided ? 1.2 : 2) * unit} strokeDasharray={decided ? undefined : `${5 * unit} ${3 * unit}`}>
-                        <title>{[full && o.ai_value && `AI: ${o.ai_value} (p ${fmt(o.ai_probability, 2)})`, decided && `you: ${v}`].filter(Boolean).join(' · ') || 'candidate'}</title>
+                        <title>{[full && o.ai_value && `AI: ${text(aiPick(o))} (p ${fmt(o.ai_probability, 2)})`, decided && `you: ${text(v)}`].filter(Boolean).join(' · ') || 'candidate'}</title>
                       </circle>
                     )
                   })}
@@ -372,9 +383,9 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
                     const chosen = rkey(m.x!, m.y!) === selected
                     const d = 9 * unit
                     return (
-                      <polygon key={m.id} points={`${m.x!},${m.y! - d} ${m.x! + d},${m.y!} ${m.x!},${m.y! + d} ${m.x! - d},${m.y!}`} fill={color(m.value)}
+                      <polygon key={m.id} points={`${m.x!},${m.y! - d} ${m.x! + d},${m.y!} ${m.x!},${m.y! + d} ${m.x! - d},${m.y!}`} fill={color(pickOf(m))}
                         stroke={chosen ? '#fff' : '#000'} strokeWidth={(chosen ? 2.5 : 1.2) * unit}>
-                        <title>{`added by you: ${m.value}`}</title>
+                        <title>{`added by you: ${text(pickOf(m))}`}</title>
                       </polygon>
                     )
                   })}
@@ -391,7 +402,7 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
                   </>}
                 </>}
               </ZoomViewer>
-              <KeyHelp classes={classes.length} tools={tools} />
+              <KeyHelp classes={<ClassKeyHint vocabulary={vocabulary} keys={keys} typesAsked={typesAsked} waitMs={waitMs} />} tools={tools} />
             </div>
             <aside className="annotate-side">
               <div className="card">
@@ -406,20 +417,15 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
                 {active && <p className="small secondary tool-hint">{redrawing ? 'Click the corners of the new outline, then the first corner or press Enter.' : active.hint}</p>}
                 {tools.some((t) => t.id === 'add') && <MissedCallout adding={active?.id === 'add'} count={added.length} onAdd={() => { setTool('add'); setDraft([]) }} />}
                 <h3 style={{ marginTop: 14 }}>2 · Class</h3>
-                <div className="class-list">
-                  {classes.map((c, i) => (
-                    <button key={c} className={`btn class-btn${c === label ? ' chosen' : ''}`} aria-pressed={c === label} onClick={() => setLabelIndex(i)}>
-                      {i < 9 && <span className="kbd">{i + 1}</span>}<span className="swatch" style={{ background: color(c) }} />{c}<span className="spacer" /><span className="muted small">{counts[c] ?? ''}</span>
-                    </button>
-                  ))}
-                </div>
-                <p className="muted small">{meta.class_instructions}</p>
+                <ClassChooser vocabulary={vocabulary} keys={keys} typesAsked={typesAsked} active={label} waiting={classKeys.waiting} waitMs={waitMs}
+                  counts={counts} onPick={(identity) => { classKeys.cancel(); setLabel({ identity, subtype: null }) }}
+                  onPickType={(subtype) => { classKeys.cancel(); setLabel((l) => ({ identity: classKeys.waiting?.identity ?? l.identity, subtype })) }} />
               </div>
               {selectedObject && (
                 <div className="card">
                   <h3>Selected object</h3>
-                  {selectedAi?.ai_value && <p className="small">The AI’s guess: <b>{selectedAi.ai_value}</b></p>}
-                  <p className="small">{myClass(selectedObject.x, selectedObject.y) ? <>Your class: <b>{myClass(selectedObject.x, selectedObject.y)!.value}</b></> : 'Not changed by you'}
+                  {selectedAi?.ai_value && <p className="small">The AI’s guess: <b>{text(aiPick(selectedAi))}</b></p>}
+                  <p className="small">{myClass(selectedObject.x, selectedObject.y) ? <>Your class: <b>{text(pickOf(myClass(selectedObject.x, selectedObject.y)))}</b></> : 'Not changed by you'}
                     {!objectKeys.has(selected!) && ' (added by you)'}</p>
                   {!objectKeys.has(selected!) && <AddedNote state={addedState(selectedObject.x, selectedObject.y)}
                     reason={addedStates.find((a) => rkey(a.x, a.y) === selected)?.reason ?? ''} />}
@@ -507,11 +513,11 @@ function AddedNote({ state, reason }: { state: AddedState['state']; reason: stri
 }
 
 /** The keys of the field page, always on screen under the image. */
-function KeyHelp({ classes, tools }: { classes: number; tools: { id: Tool; key: string; name: string }[] }) {
+function KeyHelp({ classes, tools }: { classes: ReactNode; tools: { id: Tool; key: string; name: string }[] }) {
   return (
     <div className="key-help small secondary">
       <span>Scroll to zoom, drag to move</span>
-      <span><span className="kbd">1</span>–<span className="kbd">{Math.min(9, classes)}</span> class</span>
+      {classes}
       {tools.map((t) => <span key={t.id}><span className="kbd">{t.key.toUpperCase()}</span> {t.name.toLowerCase()}</span>)}
       <span><span className="kbd">Delete</span> remove</span>
       <span><span className="kbd">Enter</span> close outline</span>

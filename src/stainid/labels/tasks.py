@@ -1,29 +1,13 @@
-"""What can be labelled, per stain: the object class (one vocabulary per stain), object outlines and field tags."""
+"""What can be labelled, per stain: the object class (`labels.vocabulary`: identity and subtype), object outlines and field tags."""
 from __future__ import annotations
+
+from stainid.labels import vocabulary as vocab
 
 STAINS = ("NeuN", "6E10", "AT8")
 MODEL_KEY = {"NeuN": "neun", "6E10": "amyloid", "AT8": "tau"}
-CLASSES = {
-    "NeuN": ["NeuN+ neuron", "not a neuron", "artifact or unclear", "unsure"],
-    "6E10": ["compact plaque", "diffuse plaque", "small plaque", "not a plaque", "unsure"],
-    "AT8": ["tau+ neuron: tangle", "tau+ neuron: pretangle", "not a tau+ neuron", "unsure"],
-}
-POSITIVE = {
-    "NeuN": {"NeuN+ neuron"},
-    "6E10": {"compact plaque", "diffuse plaque", "small plaque", "plaque"},
-    "AT8": {"tau+ neuron: tangle", "tau+ neuron: pretangle", "tau+ neuron"},
-}
+# The AI's calls, in the words of the labels made before subtypes existed (`vocabulary.LEGACY` maps them onto classes).
 NEGATIVE = {"NeuN": "not a neuron", "6E10": "not a plaque", "AT8": "not a tau+ neuron"}
-SKIP = {"unsure", ""}
 FIELD_TAGS = ["white matter", "mixed grey and white matter", "poor image quality", "fold or tear", "unusable"]
-INSTRUCTIONS = {
-    "NeuN": "NeuN+ neuron: a brown (DAB) neuronal cell body. Not a neuron: blue-only nuclei (glia, vessels) or background. "
-            "Artifact: folds, edges, stain precipitate.",
-    "6E10": "Compact plaque: a dense, well-defined brown core. Diffuse plaque: loose, fluffy brown deposit without a dense core. "
-            "Small plaque: a real plaque 10–15 µm across, too small to type. Not a plaque: vessel wall, cell, speck under 10 µm, edge or fold.",
-    "AT8": "Tangle: a dense brown flame- or globe-shaped neuron. Pretangle: a neuron with diffuse brown cytoplasm around its nucleus. "
-           "Not a tau+ neuron: threads, dots, glia, vessels or background.",
-}
 CROP_UM = {"NeuN": 45.0, "6E10": 85.0, "AT8": 55.0}
 
 
@@ -38,5 +22,11 @@ def ai_value(stain: str, model_class: str | None, mature: bool | None = None) ->
     return "tau+ neuron: tangle" if mature else "tau+ neuron: pretangle"
 
 
-def positive(stain: str, value: str) -> bool:
-    return value in POSITIVE[stain]
+def positive(stain: str, value, vocabulary: vocab.Vocabulary | None = None, subtype=None) -> bool:
+    """Whether a label (or an AI call) says the object is the stain's object: its identity's role is `positive`."""
+    return (vocabulary or vocab.defaults(stain)).positive(value, subtype)
+
+
+def skipped(stain: str, value, vocabulary: vocab.Vocabulary | None = None) -> bool:
+    """Labels that say nothing about the object ("unsure", or empty)."""
+    return (vocabulary or vocab.defaults(stain)).skipped(value)

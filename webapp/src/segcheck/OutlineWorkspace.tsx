@@ -11,7 +11,7 @@ import { useFetch } from '../hooks'
 import { objectsOf } from '../labelling'
 import type { ImagePoint } from '../viewer'
 import { ZoomViewer } from '../viewer'
-import type { OutlineField, OutlineObject, OutlineReference, SamOptions } from './types'
+import type { OutlineClass, OutlineField, OutlineObject, OutlineReference, SamOptions } from './types'
 
 /* drawn on the tissue picture, so the same in light and dark mode */
 const COLORS = ['#ff4fd8', '#ff8c1a', '#facc15', '#4ade80', '#a78bfa', '#f87171']
@@ -71,7 +71,11 @@ function Outliner({ detail, reload, tile, field }: { detail: SessionDetail; relo
   const navigate = useNavigate()
   const { meta, fields } = detail
   const name = meta.name
-  const classes = meta.classes
+  const choices = (meta as typeof meta & { outline_classes?: OutlineClass[] }).outline_classes ?? []
+  const classes = useMemo(() => choices.map((c) => c.id), [choices])
+  const classOf = (id: string) => choices.find((c) => c.id === id)
+  const nameOf = (id: string) => classOf(id)?.name ?? id
+  const scored = (id: string) => classOf(id)?.scored ?? true
   const words = objectsOf(meta.stain)
   const one = words.replace(/s$/, '')  // one plaque, one tau+ neuron
   const [objects, setObjects] = useState<Record<string, OutlineObject>>(() => Object.fromEntries(field.objects.map((o) => [o.ref, o])))
@@ -93,7 +97,7 @@ function Outliner({ detail, reload, tile, field }: { detail: SessionDetail; relo
   const [showCandidates, setShowCandidates] = useState(false)
   const reference = useFetch<OutlineReference>(showCounted || showCandidates ? `/api/annotate/${name}/outline/${enc(tile)}/reference` : null)
   const label = classes[labelIndex] ?? classes[0]
-  const color = (value: string) => (value === 'unsure' ? UNSURE_COLOR : COLORS[Math.max(0, classes.indexOf(value)) % COLORS.length])
+  const color = (value: string) => (!scored(value) ? UNSURE_COLOR : COLORS[Math.max(0, classes.indexOf(value)) % COLORS.length])
   const px = field.pixel_size_um
   const box = field.box
   const position = fields.findIndex((f) => f.tile_id === tile)
@@ -296,8 +300,8 @@ function Outliner({ detail, reload, tile, field }: { detail: SessionDetail; relo
               </>}
               {list.map((o) => o.ref === selected && editing ? null : (
                 <polygon key={o.ref} points={svgPoints(o.points)} fill={color(o.value)} fillOpacity={0.12} stroke={color(o.value)}
-                  strokeWidth={2 * unit} strokeDasharray={o.value === 'unsure' ? `${4 * unit} ${3 * unit}` : undefined}>
-                  <title>{o.value}</title>
+                  strokeWidth={2 * unit} strokeDasharray={!scored(o.value) ? `${4 * unit} ${3 * unit}` : undefined}>
+                  <title>{nameOf(o.value)}</title>
                 </polygon>
               ))}
               {editing && <>
@@ -333,18 +337,19 @@ function Outliner({ detail, reload, tile, field }: { detail: SessionDetail; relo
             <h3 style={{ marginTop: 14 }}>2 · Class</h3>
             <div className="class-list">
               {classes.map((c, i) => (
-                <button key={c} className={`btn class-btn${c === label ? ' chosen' : ''}`} aria-pressed={c === label}
+                <button key={c} className={`btn class-btn${c === label ? ' chosen' : ''}`} aria-pressed={c === label} title={classOf(c)?.description}
                   onClick={() => { setLabelIndex(i); if (chosen && chosen.value !== c) save([{ ref: chosen.ref, value: c, points: chosen.points }]) }}>
-                  {i < 9 && <span className="kbd">{i + 1}</span>}<span className="swatch" style={{ background: color(c) }} />{c}<span className="spacer" /><span className="muted small">{counts[c] ?? ''}</span>
+                  {i < 9 && <span className="kbd">{i + 1}</span>}<span className="swatch" style={{ background: color(c) }} />{nameOf(c)}<span className="spacer" /><span className="muted small">{counts[c] ?? ''}</span>
                 </button>
               ))}
             </div>
-            <p className="muted small">{meta.class_instructions} Use “unsure” for something you cannot decide: it is left out of the scores.</p>
+            <p className="muted small">{classOf(label)?.description} {choices.some((c) => !c.scored)
+              && `Use “${choices.filter((c) => !c.scored).map((c) => c.name).join('” or “')}” for something you cannot decide: it is left out of the scores.`}</p>
           </div>
           {chosen && (
             <div className="card">
               <h3>Selected object</h3>
-              <p className="small">{chosen.value} · {fmt(area(chosen.points) * px * px, 3)} µm²</p>
+              <p className="small">{nameOf(chosen.value)} · {fmt(area(chosen.points) * px * px, 3)} µm²</p>
               <div className="row">
                 {prompt && prompt.options.length > 1 && <button className="btn small" onClick={() => otherSize(1)}>Other size ({prompt.chosen + 1} of {prompt.options.length})</button>}
                 <button className="btn small" onClick={() => { setDraft([]); setRedrawing(chosen.ref) }}>Redraw by hand</button>
