@@ -1,122 +1,215 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import type { LabelsOverview, Metrics, ModelInfo, Step, TrainedModel } from '../api'
+import type { Job, LabelsOverview, Metrics, ModelInfo, TrainedModel } from '../api'
 import { api, runStep } from '../api'
-import { ErrorNote, HelpBox, PageHead, PathLine, Term, fmt, timeAgo, withError } from '../components'
+import { ErrorNote, HelpBox, Loaded, PageHead, PathLine, Progress, Term, fmt, timeAgo, withError } from '../components'
 import { useFetch } from '../hooks'
+import { ConfirmDialog, QualityBadge, QualityLine, objectsOf, quality } from '../labelling'
 import { useProject } from '../project'
-import { StepCard } from './Workflow'
+import { Advanced } from '../setup/parts'
 
 const TITLES: Record<string, string> = {
   neun: 'NeuN model', amyloid: '6E10 model', tau: 'AT8 model', cellpose: 'Cellpose-SAM', sam: 'Segment Anything',
   huggingface_home: 'Phikon', plaque_cnn_dir: 'Published plaque CNNs',
 }
+const PURPOSE: Record<string, string> = {
+  neun: 'Decides which objects on NeuN slides are neurons.', amyloid: 'Decides which 6E10 deposits are plaques, and whether compact or diffuse.',
+  tau: 'Decides which AT8 objects are tau+ neurons (tangles and pretangles).',
+}
+const DETECT_STEP: Record<string, string> = { NeuN: 'Detect NeuN neurons', '6E10': 'Detect plaques and tau', AT8: 'Detect plaques and tau' }
 const DETAILS: Record<string, string> = {
   n_features: 'measurements per object', training_labels: 'training labels', training_n: 'training labels', training_positive_n: 'positive labels',
   probability_threshold: 'counts an object at probability ≥', context_threshold: 'counts an object at probability ≥', identity_threshold: 'counts a plaque at probability ≥',
   morphotype_threshold: 'compact if core stain ≥ × slide threshold', morphotype_minimum_diameter_um: 'compact / diffuse from diameter (µm)',
   nms_radius_um: 'merges detections closer than (µm)',
 }
+const f1 = (m: Metrics) => (m.precision + m.recall ? (2 * m.precision * m.recall) / (m.precision + m.recall) : 0)
+const day = (seconds: number) => (Date.now() / 1000 - seconds < 86400 ? timeAgo(seconds)
+  : new Date(seconds * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }))
+const activeJob = (job: Job | null | undefined) => !!job && (job.status === 'running' || job.status === 'queued')
 
 export default function Models() {
-  const { reload: reloadProject } = useProject()
   const models = useFetch<ModelInfo[]>('/api/models')
-  const steps = useFetch<Step[]>('/api/steps', 3000)
-  const trained = useFetch<TrainedModel[]>('/api/models/trained', 5000)
-  const labels = useFetch<LabelsOverview>('/api/labels/overview', 15000)
-  const [error, setError] = useState<string | null>(null)
-  const step = (id: string) => steps.data?.find((s) => s.id === id)
-
-  const download = (key: string) => withError(async () => { await runStep('download_models', { which: [key] }); steps.reload() }, setError)
-  const activate = (path: string) => withError(async () => {
-    await api.post('/api/models/activate', { path })
-    trained.reload(); models.reload(); reloadProject()
-  }, setError)
+  const jobs = useFetch<Job[]>('/api/jobs', 4000)
+  const latest = (workflow: string, stain?: string) => (jobs.data ?? []).find((j) => j.workflow === workflow && (!stain || j.options.stain === stain)) ?? null
+  const trainingStain = (jobs.data ?? []).find((j) => j.workflow === 'train' && activeJob(j))?.options.stain as string | undefined
+  const training = !!trainingStain
+  const trained = useFetch<TrainedModel[]>('/api/models/trained', training ? 4000 : undefined)
+  const labels = useFetch<LabelsOverview>('/api/labels/overview', 30000)
+  const download = latest('download_models')
+  const { reload: reloadTrained } = trained
+  const wasTraining = useRef(false)
+  useEffect(() => {  // a training just ended: show the new model at once
+    if (wasTraining.current && !training) reloadTrained()
+    wasTraining.current = training
+  }, [training, reloadTrained])
 
   return (
     <>
-      <PageHead title="Models" subtitle="The models that decide what counts as a neuron, a plaque or a tau+ neuron — and how to train your own." />
+      <PageHead title="Models" subtitle="The models that decide what counts as a neuron, a plaque or a tau+ neuron — how good each one is, and how to train a better one." />
       <HelpBox id="models">
-        <p>stainID uses two kinds of models:</p>
         <ul>
-          <li><b>Published models</b> (Cellpose-SAM, Segment Anything, Phikon) are the same for every study. Press <b>Download</b> if one is missing.</li>
-          <li><b>Stain models</b> (NeuN, 6E10, AT8) learn what a real neuron / plaque / tau+ neuron looks like with <i>your</i> staining.
-            They are <Term term="random forest">random forests</Term> trained on every object people have labelled (the majority label of each object).
-            To improve one: <b>1</b> label more objects on <Link to="/labels">Labels</Link>, <b>2</b> train, then compare it with the current model and choose which to use.</li>
+          <li><b>Stain models</b> (NeuN, 6E10, AT8) learn what a real neuron, plaque or tau+ neuron looks like with <i>your</i> staining, from the objects
+            people labelled on <Link to="/labels">Labels</Link>. To improve one: label more, press <b>Train a new model</b>, then switch to it if it scores better.</li>
+          <li>Each score is measured fairly: the model is tested on whole TMAs it never saw while learning. “Finds 90% of real neurons” means it misses 1 in 10;
+            “85% of what it counts is right” means 15 in 100 of its calls are wrong.</li>
+          <li><b>Published models</b> (Cellpose-SAM, Segment Anything, Phikon) are the same for every study; download them once.</li>
         </ul>
-        <p className="muted small">Switching to a new model does not change results you already have: run the detection step again with “Start over” to redo them.</p>
+        <p className="muted small">Switching models does not change results you already have: run the detection step again with “Start over” to redo them.</p>
       </HelpBox>
-      <ErrorNote error={error ?? models.error} />
-
-      <h2 className="stage-title">Models in use</h2>
-      <div className="grid grid-3">
-        {(models.data ?? []).map((m) => (
-          <div key={m.key} className="card model-card">
-            <div className="row"><h3 className="step-title">{TITLES[m.key] ?? m.key}</h3><span className="spacer" />
-              <span className={`badge ${m.exists ? 'status-finished' : 'status-failed'}`}>{m.exists ? 'ready' : 'missing'}</span></div>
-            <p className="secondary small">{m.role}</p>
-            <PathLine path={m.path} exists={m.exists} wrap />
-            {m.bundle && (
-              <table className="compact"><tbody>
-                {Object.entries(m.bundle).filter(([k]) => k in DETAILS).map(([k, v]) => (
-                  <tr key={k}><td className="secondary">{DETAILS[k]}</td><td className="num">{typeof v === 'number' ? +v.toPrecision(3) : String(v)}</td></tr>
-                ))}
-              </tbody></table>
-            )}
-            {!m.exists && m.source === 'download' && <button className="btn primary small" onClick={() => download(m.key)}>Download</button>}
-            {!m.exists && m.source === 'train' && <a className="btn small" href="#train">Train one below</a>}
-            {!m.exists && m.source === 'manual' && <p className="muted small">Optional. Copy the published weights (Wong et al. 2022; Tang et al. 2019) into this folder.</p>}
+      <Loaded state={models} label="Loading models…">
+        {(list) => <>
+          <h2 className="stage-title">Stain models</h2>
+          <div className="stain-models">
+            {list.filter((m) => m.source === 'train').map((m) => (
+              <StainModel key={m.key} info={m} versions={(trained.data ?? []).filter((t) => t.stain === m.stain)} versionsLoading={!trained.data && !trained.error}
+                job={latest('train', m.stain ?? '')} otherTraining={training && trainingStain !== m.stain}
+                labelled={labels.data?.stains.find((s) => s.stain === m.stain)?.objects_labelled ?? null}
+                onChanged={() => { jobs.reload(); trained.reload(); models.reload() }} />
+            ))}
           </div>
-        ))}
-      </div>
-      {step('download_models')?.job && <div style={{ marginTop: 12 }}><StepCard step={step('download_models')!} onChanged={steps.reload} /></div>}
+          <ErrorNote error={trained.error} />
+          <h2 className="stage-title">Published models</h2>
+          <PublishedModels models={list.filter((m) => m.source !== 'train')} job={download} onChanged={() => { jobs.reload(); models.reload() }} />
+        </>}
+      </Loaded>
+    </>
+  )
+}
 
-      <h2 className="stage-title" id="train">Train a stain model</h2>
-      <div className="train-flow">
-        <div>
-          <div className="flow-number">1</div>
-          <div className="card">
-            <h3 className="step-title">Label objects</h3>
-            <p className="step-summary">Every label in the label store counts: review sessions, queues and imported earlier labels. Labels on objects no candidate covers
-              (objects people added) show what the detector misses but cannot train the classifier.</p>
-            <table className="compact"><tbody>
-              {(labels.data?.stains ?? []).map((st) => (
-                <tr key={st.stain}><td><b>{st.stain}</b></td><td className="num">{st.objects_labelled.toLocaleString()} objects</td>
-                  <td className="muted small">{Object.entries(st.values).map(([k, v]) => `${k}: ${v}`).join(' · ')}</td></tr>
-              ))}
-            </tbody></table>
-            <Link className="btn small" to="/labels" style={{ marginTop: 8, display: 'inline-block' }}>Go to Labels</Link>
-          </div>
-        </div>
-        <div>
-          <div className="flow-number">2</div>
-          {step('train') && <StepCard step={step('train')!} onChanged={() => { steps.reload(); trained.reload() }} />}
-        </div>
+/* ---------- one stain ---------- */
+
+function StainModel({ info, versions, versionsLoading, job, otherTraining, labelled, onChanged }: {
+  info: ModelInfo; versions: TrainedModel[]; versionsLoading: boolean; job: Job | null; otherTraining: boolean; labelled: number | null; onChanged: () => void
+}) {
+  const { reload: reloadProject } = useProject()
+  const stain = info.stain ?? ''
+  const [asking, setAsking] = useState<'train' | TrainedModel | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [all, setAll] = useState(false)
+  const inUse = versions.find((v) => v.active)
+  const newest = versions[0]
+  const fresh = newest && !newest.active && (!inUse || newest.created > inUse.created) ? newest : undefined
+  const freshBetter = fresh && (!inUse || f1(fresh.new_model) > f1(inUse.new_model) + 0.005)
+  const others = versions.filter((v) => !v.active && v !== fresh)
+  const training = activeJob(job)
+  const failed = job?.status === 'failed' && (!newest || (job.ended ?? 0) > newest.created) ? job : null
+
+  const train = () => withError(async () => { await runStep('train', { stain }); onChanged() }, setError)
+  const use = (v: TrainedModel) => withError(async () => { await api.post('/api/models/activate', { path: v.path }); onChanged(); reloadProject() }, setError)
+
+  return (
+    <section className={`card stain-model${info.exists ? '' : ' missing'}`}>
+      <div className="row"><h2 style={{ margin: 0 }}>{TITLES[info.key]}</h2><span className="spacer" />
+        {info.exists ? <QualityBadge m={inUse?.new_model} /> : <span className="badge status-failed">No model yet</span>}</div>
+      <p className="secondary small" style={{ marginTop: 4 }}>{PURPOSE[info.key]}</p>
+
+      <div className="in-use">
+        {!info.exists ? <p>There is no {stain} model yet. Label some {objectsOf(stain)} on <Link to="/labels">Labels</Link>, then train one.</p>
+          : versionsLoading ? <p className="muted small">Loading its test results…</p>
+          : inUse ? <>
+            <div className="small muted">In use · trained {day(inUse.created)} from {inUse.new_model.n.toLocaleString()} labelled objects</div>
+            <div className="quality-line"><QualityLine m={inUse.new_model} stain={stain} /></div>
+          </> : <p className="small secondary">The model in use was not trained in this project, so it has no test score here. Train one to compare.</p>}
       </div>
 
-      <div className="card" style={{ marginTop: 16 }}>
-        <h2>Trained models</h2>
-        <p className="muted small">
-          Each new model is tested with <Term>leave-one-TMA-out</Term> checks on your labels; the current model is scored on the same labels.
-          <Term> precision</Term>: of the objects counted, how many are right. <Term>recall</Term>: of the real objects, how many are found.
-          <Term> AUC</Term>: overall ranking quality (1 = perfect). Prefer the model with higher precision <i>and</i> recall.
-        </p>
-        {trained.data && trained.data.length ? (
-          <table>
-            <thead><tr><th>Stain</th><th>Trained</th><th>Labels</th><th>New model</th><th>Current model on the same labels</th><th /></tr></thead>
-            <tbody>{trained.data.map((t) => (
-              <tr key={t.path}>
-                <td><b>{t.stain}</b></td>
-                <td className="small">{timeAgo(t.created)}<div className="muted ellipsis" title={Object.keys(t.sources ?? {}).join(', ')}>
-                  {t.sources ? `${Object.keys(t.sources).length} label sources` : (t.sets ?? []).join(', ')}</div></td>
-                <td className="num">{t.new_model.n}<div className="muted small">{t.new_model.positives} positive</div></td>
-                <td><MetricLine m={t.new_model} /><div className="muted small">{t.validation}</div></td>
-                <td>{t.current_model ? <MetricLine m={t.current_model} /> : <span className="muted small">no current model</span>}</td>
-                <td>{t.active ? <span className="badge status-finished">in use</span> : <button className="btn small primary" onClick={() => activate(t.path)}>Use this model</button>}</td>
+      {fresh && !training && (
+        <div className={`fresh-model ${freshBetter ? 'better' : ''}`}>
+          <div className="row"><b>New model, trained {day(fresh.created)}</b><QualityBadge m={fresh.new_model} /></div>
+          <div className="small"><QualityLine m={fresh.new_model} stain={stain} /></div>
+          <div className="small secondary">{inUse ? (freshBetter ? 'Scores better than the model in use.' : 'Does not score better than the model in use — keeping the current one is fine.') : 'Not in use yet.'}</div>
+          <button className={`btn small${freshBetter ? ' primary' : ''}`} onClick={() => setAsking(fresh)}>Use the new model</button>
+        </div>
+      )}
+
+      {training && job && (
+        <div className="training-now">
+          <div className="row"><span className="pulse" /><b>{job.status === 'queued' ? 'Waiting to start training…' : 'Training a new model…'}</b></div>
+          <Progress done={job.progress.done} total={job.progress.total || 3} />
+          <span className="muted small">Usually under a minute. You can leave this page; the result appears here.</span>
+        </div>
+      )}
+      {failed && <ErrorNote error={`Training stopped: ${failed.progress.error || failed.progress.last_line || 'see the log on the Run page'}`} />}
+      <ErrorNote error={error} />
+
+      <div className="row stain-model-actions">
+        <button className={`btn small${info.exists ? '' : ' primary'}`} disabled={training || otherTraining} onClick={() => setAsking('train')}
+          title={otherTraining ? 'Another model is training; wait for it to finish' : 'Learns from every label people have made for this stain'}>Train a new model</button>
+        {labelled != null && <span className="muted small">{labelled.toLocaleString()} {stain} objects labelled so far</span>}
+      </div>
+
+      {others.length > 0 && (
+        <details className="versions">
+          <summary className="small">Earlier versions ({others.length})</summary>
+          <table className="compact versions-table"><tbody>
+            {(all ? others : others.slice(0, 5)).map((v) => (
+              <tr key={v.path}>
+                <td className="small">{day(v.created)}<div className="muted">{v.new_model.n.toLocaleString()} labels</div></td>
+                <td><QualityBadge m={v.new_model} /></td>
+                <td className="small wrap-cell"><QualityLine m={v.new_model} stain={stain} /></td>
+                <td className="num"><button className="btn small" onClick={() => setAsking(v)}>Use</button></td>
               </tr>
-            ))}</tbody>
-          </table>
-        ) : <p className="muted small">No trained models yet.</p>}
+            ))}
+          </tbody></table>
+          {others.length > 5 && <button className="link-btn small" onClick={() => setAll(!all)}>{all ? 'Show fewer' : `Show all ${others.length}`}</button>}
+        </details>
+      )}
+
+      <Advanced hint="file, settings, all test figures">
+        <PathLine path={info.path} exists={info.exists} wrap />
+        {info.bundle && (
+          <table className="compact"><tbody>
+            {Object.entries(info.bundle).filter(([k]) => k in DETAILS).map(([k, v]) => (
+              <tr key={k}><td className="secondary">{DETAILS[k]}</td><td className="num">{typeof v === 'number' ? +v.toPrecision(3) : String(v)}</td></tr>
+            ))}
+          </tbody></table>
+        )}
+        {versions.length > 0 && <VersionTable versions={versions} />}
+      </Advanced>
+
+      {asking === 'train' && (
+        <ConfirmDialog title={`Train a new ${stain} model?`} confirm="Start training" onClose={() => setAsking(null)} onConfirm={train}>
+          <p>It learns from {labelled != null ? <b>{labelled.toLocaleString()} {stain} objects</b> : <>every {stain} object</>} people have labelled, and is tested on
+            whole TMAs it did not see. It usually takes under a minute and uses this computer’s processors.</p>
+          <p>The model in use does not change: you choose afterwards whether to switch.</p>
+        </ConfirmDialog>
+      )}
+      {asking && asking !== 'train' && (
+        <ConfirmDialog title={`Use the ${stain} model trained ${day(asking.created)}?`} confirm="Switch model" onClose={() => setAsking(null)} onConfirm={() => use(asking)}>
+          {quality(asking.new_model) && <p>Its test score: <b>{quality(asking.new_model)!.word}</b> — <QualityLine m={asking.new_model} stain={stain} />.
+            {inUse && <> The model in use: <QualityLine m={inUse.new_model} stain={stain} />.</>}</p>}
+          <p>New detections use it from now on. Results you already have stay as they are; to redo them with this model, run “{DETECT_STEP[stain]}” again
+            on the <Link to="/workflow">Run</Link> page with “Start over”. You can switch back at any time.</p>
+        </ConfirmDialog>
+      )}
+    </section>
+  )
+}
+
+function VersionTable({ versions }: { versions: TrainedModel[] }) {
+  return (
+    <>
+      <p className="muted small" style={{ margin: 0 }}>
+        Each model is tested with <Term>leave-one-TMA-out</Term> checks on the labels of its day. <Term>AUC</Term>: overall ranking quality (1 = perfect);
+        <Term> precision</Term>: of the objects counted, how many are right; <Term>recall</Term>: of the real objects, how many are found.
+        “Model in use then” is the model that was in use, scored on the same labels (it may have learned from some of them).
+      </p>
+      <div className="table-scroll">
+        <table className="compact">
+          <thead><tr><th>Trained</th><th className="num">Labels</th><th>Tested by</th><th>This model</th><th>Model in use then</th><th className="num">Threshold</th><th /></tr></thead>
+          <tbody>{versions.map((t) => (
+            <tr key={t.path}>
+              <td className="small">{day(t.created)}<div className="muted ellipsis" title={Object.keys(t.sources ?? {}).join(', ')}>
+                {t.sources ? `${Object.keys(t.sources).length} label sources` : (t.sets ?? []).join(', ')}</div></td>
+              <td className="num">{t.new_model.n.toLocaleString()}<div className="muted small">{t.new_model.positives.toLocaleString()} positive</div></td>
+              <td className="small">{t.validation}</td>
+              <td><MetricLine m={t.new_model} /></td>
+              <td>{t.current_model ? <MetricLine m={t.current_model} /> : <span className="muted small">none</span>}</td>
+              <td className="num">{fmt(t.threshold, 2)}</td>
+              <td>{t.active && <span className="badge status-done">in use</span>}</td>
+            </tr>
+          ))}</tbody>
+        </table>
       </div>
     </>
   )
@@ -124,4 +217,45 @@ export default function Models() {
 
 function MetricLine({ m }: { m: Metrics }) {
   return <span className="small">AUC <b>{fmt(m.auc, 2)}</b> · precision <b>{fmt(m.precision, 2)}</b> · recall <b>{fmt(m.recall, 2)}</b></span>
+}
+
+/* ---------- published models ---------- */
+
+function PublishedModels({ models, job, onChanged }: { models: ModelInfo[]; job: Job | null; onChanged: () => void }) {
+  const [error, setError] = useState<string | null>(null)
+  const downloading = activeJob(job) ? (job!.options.which as string[] | undefined) ?? [] : []
+  const download = (key: string) => withError(async () => { await runStep('download_models', { which: [key] }); onChanged() }, setError)
+  const wasDownloading = useRef(false)
+  useEffect(() => {  // a download just ended: show the model as ready
+    if (wasDownloading.current && !downloading.length) onChanged()
+    wasDownloading.current = downloading.length > 0
+  }, [downloading.length, onChanged])
+  return (
+    <section className="card">
+      <div className="table-scroll">
+        <table className="published-table">
+          <thead><tr><th>Model</th><th>What it does</th><th>Status</th><th /></tr></thead>
+          <tbody>{models.map((m) => (
+            <tr key={m.key}>
+              <td><b>{TITLES[m.key] ?? m.key}</b></td>
+              <td className="small secondary wrap-cell">{m.role}</td>
+              <td>{m.exists ? <span className="badge status-done">Ready</span> : <span className={`badge ${m.source === 'manual' ? '' : 'status-failed'}`}>{m.source === 'manual' ? 'Optional' : 'Missing'}</span>}</td>
+              <td className="num">
+                {!m.exists && m.source === 'download' && (downloading.includes(m.key)
+                  ? <span className="small secondary"><span className="pulse" />{job?.status === 'queued' ? 'Waiting…' : 'Downloading…'}</span>
+                  : <button className="btn small" disabled={downloading.length > 0} onClick={() => download(m.key)}>Download</button>)}
+              </td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+      <ErrorNote error={error} />
+      {job?.status === 'failed' && models.some((m) => !m.exists && m.source === 'download') && <ErrorNote error={`The download stopped: ${job.progress.error || job.progress.last_line || 'see the log on the Run page'}`} />}
+      <Advanced hint="where the files are">
+        {models.map((m) => <div key={m.key}><PathLine path={m.path} exists={m.exists} label={TITLES[m.key] ?? m.key} wrap />
+          {m.size_mb != null && <span className="muted small"> {m.size_mb.toLocaleString()} MB · {m.modified}</span>}</div>)}
+        <p className="muted small" style={{ margin: 0 }}>Published plaque CNNs are optional: copy the published weights (Wong et al. 2022; Tang et al. 2019) into their folder.</p>
+      </Advanced>
+    </section>
+  )
 }

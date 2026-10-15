@@ -89,13 +89,12 @@ export function Register() {
     if (await withError(() => api.post('/api/session/annotator', { name }), setError)) reload()
   }
   return (
-    <form className="card" style={{ maxWidth: 420 }} onSubmit={submit}>
-      <h2>Your name</h2>
-      <p className="muted small">Every annotation you make is saved under this name, so several people can annotate the same fields independently.
-        Use the same name each time to continue where you left off.</p>
+    <form className="card register-card" onSubmit={submit}>
+      <label className="field" htmlFor="annotator-name"><h2 style={{ margin: 0 }}>Your name</h2></label>
+      <p className="muted small">Several people can label the same images independently; your labels are kept under your name.</p>
       <div className="row">
-        <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Jane Doe" autoFocus style={{ flex: 1 }} />
-        <button className="btn primary" disabled={!name.trim()}>Start annotating</button>
+        <input id="annotator-name" type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Jane Doe" autoFocus style={{ flex: 1, minWidth: 180 }} />
+        <button className="btn primary" disabled={!name.trim()}>Start</button>
       </div>
       <ErrorNote error={error} />
     </form>

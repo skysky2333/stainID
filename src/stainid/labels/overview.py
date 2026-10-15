@@ -1,6 +1,8 @@
 """Where labelling stands, per stain: coverage, what people said, how often people agree, and how the AI compares."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 
 from stainid.labels import pool, store
@@ -8,6 +10,7 @@ from stainid.labels.tasks import positive
 from stainid.project import Project
 
 UNTYPED = {"plaque": "plaque (type not recorded)", "tau+ neuron": "tau+ neuron (type not recorded)"}
+_CACHE: dict[tuple, tuple[tuple, dict]] = {}
 
 
 def match(consensus: pd.DataFrame, objects: pd.DataFrame, stain: str) -> pd.DataFrame:
@@ -52,3 +55,12 @@ def stain_overview(project: Project, stain: str, labels: pd.DataFrame, tiles: pd
                "recall": float((human & ai).sum() / human.sum()) if human.sum() else None},
         "tags": {k: int(v) for k, v in mine[mine.task == "tag"].drop_duplicates(["tile_id", "value"]).value.value_counts().items()},
     }
+
+
+def cached_stain_overview(project: Project, stain: str, root: Path, tiles: pd.DataFrame) -> dict:
+    """`stain_overview`, worked out again only when a label is saved or a pool field is (re)built."""
+    key = (str(project.root), stain)
+    stamp = (store.signature(root), pool.signature(project, stain), len(tiles))
+    if key not in _CACHE or _CACHE[key][0] != stamp:
+        _CACHE[key] = (stamp, stain_overview(project, stain, store.current(root), tiles))
+    return _CACHE[key][1]

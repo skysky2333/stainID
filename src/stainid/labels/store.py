@@ -45,6 +45,15 @@ def append(root: Path, records: list[dict]) -> list[dict]:
     return stamped
 
 
+def signature(root: Path) -> tuple[int, int] | None:
+    """Changes whenever a label is saved."""
+    path = log_path(root)
+    if not path.exists():
+        return None
+    stat = path.stat()
+    return stat.st_mtime_ns, stat.st_size
+
+
 def history(root: Path) -> pd.DataFrame:
     path = log_path(root)
     if not path.exists():
