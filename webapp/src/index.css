@@ -864,3 +864,7 @@ th.num .col-head { justify-items: end; }
   .picker-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
   .field-grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
 }
+
+/* Core viewer: exact outlines layer */
+.layer-toggle.wrap { flex-wrap: wrap; }
+.layer-note { margin: 0 0 4px; padding-left: 22px; color: var(--text-secondary); }

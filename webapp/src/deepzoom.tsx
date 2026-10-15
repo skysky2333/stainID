@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 
 export interface PyramidLevel { width: number; height: number; cols: number; rows: number }
 /** A core image the server has cut into tiles: level 0 is full resolution, each next level half the size. */
 export interface Pyramid { width: number; height: number; tile: number; version: string; levels: PyramidLevel[] }
-/** Something drawn over the image, in image pixels: a circle (radius `r`) or, with `w`/`h`, a box. */
-export interface Mark { x: number; y: number; r?: number; w?: number; h?: number; color: string; dashed?: boolean }
+/** Something drawn over the image, in image pixels: a circle (radius `r`) or, with `w`/`h`, a box. `rings` adds the
+ *  object's exact outline (polygons as flat [x0, y0, x1, y1, …] pixel indices); `circle: false` leaves the circle out. */
+export interface Mark { x: number; y: number; r?: number; w?: number; h?: number; color: string; dashed?: boolean; rings?: number[][]; circle?: boolean }
 /** Where to look: the image point to centre, and optionally the zoom (screen px per image px). Change `key` to go again. */
 export interface ViewTarget { x: number; y: number; scale?: number; key: number }
 interface View { s: number; x: number; y: number }  // s = screen px per image px; (x, y) = screen position of the image corner
@@ -18,6 +19,29 @@ const NICE_UM = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000]
 function chooseLevel(pyramid: Pyramid, scale: number) {
   const ratio = 1 / (scale * (window.devicePixelRatio || 1))
   return Math.max(0, Math.min(pyramid.levels.length - 1, Math.floor(Math.log2(Math.max(1, ratio)))))
+}
+
+/** The outlines of some marks as one path, in image pixels (a polygon runs through its edge pixels' centres). */
+function ringPath(marks: Mark[]) {
+  const path = new Path2D()
+  for (const m of marks) for (const ring of m.rings ?? []) {
+    path.moveTo(ring[0] + 0.5, ring[1] + 0.5)
+    for (let k = 2; k < ring.length; k += 2) path.lineTo(ring[k] + 0.5, ring[k + 1] + 0.5)
+    path.closePath()
+  }
+  return path
+}
+
+/** Whether image point (x, y) lies inside one of the mark's outline polygons (even-odd rule). */
+function insideRings(m: Mark, x: number, y: number) {
+  let inside = false
+  for (const ring of m.rings ?? []) {
+    for (let k = 0, j = ring.length - 2; k < ring.length; j = k, k += 2) {
+      const [xi, yi, xj, yj] = [ring[k] + 0.5, ring[k + 1] + 0.5, ring[j] + 0.5, ring[j + 1] + 0.5]
+      if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside
+    }
+  }
+  return inside
 }
 
 function visibleTiles(pyramid: Pyramid, level: number, view: View, box: { w: number; h: number }): TileRef[] {
@@ -35,8 +59,8 @@ function visibleTiles(pyramid: Pyramid, level: number, view: View, box: { w: num
 /**
  * A whole core image to zoom (wheel, double-click, + / −, keyboard) and drag around. Only the tiles in view are
  * fetched, at the screen's resolution; the coarse picture underneath stays visible while sharper tiles arrive.
- * `marks` (detected objects) and `boxes` (tiles, fields) are drawn on a canvas on top; a click near a mark reports its
- * index to `onPick` (null for empty space), hovering shows `describe(index)`.
+ * `marks` (detected objects, with their outlines) and `boxes` (tiles, fields) are drawn on a canvas on top; a click near
+ * a mark or inside its outline reports its index to `onPick` (null for empty space), hovering shows `describe(index)`.
  */
 export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], boxes = [], selected = null, describe, onPick, target, pixelUm, toolbar, height = 'min(72vh, 760px)' }: {
   pyramid: Pyramid
@@ -60,6 +84,22 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], boxes = []
   const [loaded, setLoaded] = useState<Set<string>>(() => new Set())
   const [tip, setTip] = useState<{ x: number; y: number; text: string } | null>(null)
   const [dragging, setDragging] = useState(false)
+  // outlines: one path per colour, built once (redrawn with the view's transform), and each outline's bounding box
+  const outlines = useMemo(() => {
+    const byColor = new Map<string, Mark[]>()
+    for (const m of marks) {
+      if (!m.rings?.length) continue
+      if (!byColor.has(m.color)) byColor.set(m.color, [])
+      byColor.get(m.color)!.push(m)
+    }
+    return [...byColor].map(([color, group]) => ({ color, path: ringPath(group) }))
+  }, [marks])
+  const ringBoxes = useMemo(() => marks.map((m) => {
+    if (!m.rings?.length) return null
+    const xs = m.rings.flatMap((ring) => ring.filter((_, k) => k % 2 === 0))
+    const ys = m.rings.flatMap((ring) => ring.filter((_, k) => k % 2 === 1))
+    return { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs) + 1, y1: Math.max(...ys) + 1 }
+  }), [marks])
 
   const fit = (): View => {
     const s = Math.min(size.w / pyramid.width, size.h / pyramid.height) * 0.96
@@ -119,7 +159,18 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], boxes = []
       g.strokeRect(b.x * view.s + view.x, b.y * view.s + view.y, (b.w ?? 0) * view.s, (b.h ?? 0) * view.s)
     }
     g.setLineDash([])
+    if (outlines.length) {
+      g.save()
+      g.setTransform(dpr * view.s, 0, 0, dpr * view.s, dpr * view.x, dpr * view.y)
+      g.lineJoin = 'round'
+      g.lineWidth = 1.6 / view.s
+      for (const o of outlines) { g.strokeStyle = o.color; g.stroke(o.path) }
+      const chosen = selected === null ? null : marks[selected]
+      if (chosen?.rings?.length) { g.strokeStyle = chosen.color; g.lineWidth = 3.5 / view.s; g.stroke(ringPath([chosen])) }
+      g.restore()
+    }
     marks.forEach((m, i) => {
+      if (m.circle === false) return
       const x = m.x * view.s + view.x
       const y = m.y * view.s + view.y
       const r = (m.r ?? 4) * view.s + 2
@@ -136,7 +187,7 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], boxes = []
       g.arc(x, y, Math.max(r, 4) + (i === selected ? 3 : 0), 0, 2 * Math.PI)
       g.stroke()
     })
-  }, [view, size, marks, boxes, selected])
+  }, [view, size, marks, boxes, selected, outlines])
 
   const local = (e: React.PointerEvent | React.MouseEvent) => {
     const rect = box.current!.getBoundingClientRect()
@@ -146,9 +197,14 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], boxes = []
     if (!view) return null
     let best: number | null = null
     let bestDistance = Infinity
+    const ix = (px - view.x) / view.s
+    const iy = (py - view.y) / view.s
     marks.forEach((m, i) => {
       const d = Math.hypot(m.x * view.s + view.x - px, m.y * view.s + view.y - py)
-      if (d < Math.max(8, (m.r ?? 4) * view.s + 6) && d < bestDistance) { best = i; bestDistance = d }
+      const b = ringBoxes[i]
+      const hit = d < (m.circle === false ? 8 : Math.max(8, (m.r ?? 4) * view.s + 6))
+        || (!!b && ix >= b.x0 && ix <= b.x1 && iy >= b.y0 && iy <= b.y1 && insideRings(m, ix, iy))
+      if (hit && d < bestDistance) { best = i; bestDistance = d }
     })
     return best
   }
