@@ -1,12 +1,18 @@
 """Reading image files and whole slides of any lab: plain pictures (PNG, JPEG, TIFF), whole-slide scans (.svs, .ndpi,
-.tif, .mrxs, .scn, .czi) and OME-Zarr, with their size, levels and pixel size, one region at a time.
+.tif, .mrxs, .scn, .czi), OME-Zarr, and plain Zarr v2 arrays (e.g. the Tangle-Tracer slides: one RGB array in 5000 px
+chunks, each a JPEG-XR picture), with their size, levels and pixel size, one region at a time.
 
-Whole slides need the `slides` extra (`pip install "stainid[slides]"`: OpenSlide, Zarr, Bio-Formats). Without it a
-tiled TIFF is still read with tifffile, one level at a time, and the error for anything else says what to install.
+Whole slides need the `slides` extra (`pip install "stainid[slides]"`: OpenSlide, Zarr, Bio-Formats, imagecodecs).
+Without it a tiled TIFF is still read with tifffile, one level at a time, and the error for anything else says what to
+install. A plain Zarr array is read chunk by chunk without the zarr package (imagecodecs decodes the chunks), so it
+works with any numcodecs.
 """
 from __future__ import annotations
 
+import json
+import math
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -30,7 +36,7 @@ class MissingReader(RuntimeError):
 def available() -> dict[str, bool]:
     """Which optional readers work in this installation (shown on the setup page)."""
     out = {}
-    for name in ("openslide", "zarr", "tifffile", "aicsimageio"):
+    for name in ("openslide", "zarr", "tifffile", "aicsimageio", "imagecodecs"):
         try:
             __import__(name)
             out[name] = True
@@ -41,7 +47,7 @@ def available() -> dict[str, bool]:
 
 def is_zarr(path: Path) -> bool:
     path = Path(path)
-    return path.suffix.lower() == ".zarr" or (path.is_dir() and any((path / name).exists() for name in (".zattrs", ".zgroup", "zarr.json")))
+    return path.suffix.lower() == ".zarr" or (path.is_dir() and any((path / name).exists() for name in (".zattrs", ".zgroup", ".zarray", "zarr.json")))
 
 
 def is_image(path: Path) -> bool:
@@ -260,6 +266,127 @@ def _read_zarr(source: Source, x: int, y: int, width: int, height: int, level: i
     return _pad(_rgb(array), y1 - y0, x1 - x0)
 
 
+# --------------------------------------------------------------------------- plain Zarr v2 arrays (Tangle-Tracer)
+
+ARRAY_MIN_LEVEL_PX = 256  # a plain array's reduced levels (made while reading) go down to about this size
+ARRAY_THREADS = 4  # chunks decoded at once (a 5000 px JPEG-XR chunk takes ~0.3 s and 75 MB)
+# An RGB array whose fill value is 0 stores the unscanned parts of its chunks as black: pixels this dark are glass (white);
+# the darkest stain in brightfield is far lighter.
+BLACK_GLASS = 10
+
+
+def _chunk_decoder(compressor: dict | None):
+    """A function from a chunk file's bytes to its pixels (an array, or bytes to be shaped)."""
+    if not compressor:
+        return lambda data: data
+    name = str(compressor.get("id", ""))
+    if name.startswith("imagecodecs_"):
+        try:
+            import imagecodecs
+        except Exception as error:  # noqa: BLE001
+            raise MissingReader(f"Zarr chunks in {name[12:].upper()} need imagecodecs: {INSTALL} ({error})") from None
+        decode = getattr(imagecodecs, f"{name[12:]}_decode", None)
+        codec = getattr(imagecodecs, name[12:].upper(), None)
+        if decode is None or (codec is not None and not getattr(codec, "available", True)):
+            raise MissingReader(f"this imagecodecs cannot decode {name[12:].upper()} Zarr chunks: {INSTALL}")
+        return decode
+    try:
+        import numcodecs
+
+        return numcodecs.get_codec(dict(compressor)).decode
+    except Exception as error:  # noqa: BLE001
+        raise MissingReader(f"Zarr chunks compressed with {name or 'an unknown codec'} need numcodecs: {INSTALL} ({error})") from None
+
+
+def _open_zarr_array(path: Path) -> Source:
+    """A plain Zarr v2 array (`.zarray`, no OME metadata): (y, x), (y, x, c) or (c, y, x) with up to 4 channels, one level.
+    The reader makes reduced levels as it reads (each chunk decoded and shrunk), so overviews need little memory."""
+    meta = json.loads((Path(path) / ".zarray").read_text())
+    shape, chunks = [int(v) for v in meta["shape"]], [int(v) for v in meta["chunks"]]
+    if meta.get("filters"):
+        raise MissingReader(f"{Path(path).name}: Zarr filters are not supported ({meta['filters']})")
+    if len(shape) == 2:
+        axes = "yx"
+    elif len(shape) == 3 and shape[2] <= 4:
+        axes = "yxc"
+    elif len(shape) == 3 and shape[0] <= 4:
+        axes = "cyx"
+    else:
+        raise ValueError(f"{Path(path).name}: a Zarr array of shape {shape} is not an image")
+    height, width = shape[axes.index("y")], shape[axes.index("x")]
+    levels, factor = [(width, height)], 2
+    while min(width, height) / factor >= ARRAY_MIN_LEVEL_PX:
+        levels.append((math.ceil(width / factor), math.ceil(height / factor)))
+        factor *= 2
+    pixel = None
+    attributes = Path(path) / ".zattrs"
+    if attributes.exists():
+        value = (json.loads(attributes.read_text()) or {}).get("pixel_size_um")
+        pixel = float(value) if isinstance(value, (int, float)) and value > 0 else None
+    source = Source(Path(path), width, height, levels, pixel, "zarr_array", _chunk_decoder(meta.get("compressor")))
+    dtype = np.dtype(meta["dtype"])
+    source.__dict__.update(_axes=axes, _shape=shape, _chunks=chunks, _dtype=dtype, _order=meta.get("order", "C"),
+                           _separator=meta.get("dimension_separator") or ".",
+                           _black_glass=meta.get("fill_value") == 0 and dtype == np.uint8 and axes != "yx")
+    return source
+
+
+def _array_chunk(source: Source, cy: int, cx: int) -> np.ndarray | None:
+    """One chunk as (y, x, c) pixels (cut to the array's edge); None when it is not stored (empty glass)."""
+    axes, chunks, sep = source.__dict__["_axes"], source.__dict__["_chunks"], source.__dict__["_separator"]
+    key = {"yx": (cy, cx), "yxc": (cy, cx, 0), "cyx": (0, cy, cx)}[axes]
+    file = source.path.joinpath(*map(str, key)) if sep == "/" else source.path / sep.join(map(str, key))
+    try:
+        data = file.read_bytes()
+    except FileNotFoundError:
+        return None
+    array = source._handle(data)
+    if not isinstance(array, np.ndarray) or array.ndim == 1:  # raw or byte-compressed (zlib, blosc …): shape the bytes
+        raw = array.tobytes() if isinstance(array, np.ndarray) else bytes(array)
+        array = np.frombuffer(raw, dtype=source.__dict__["_dtype"]).reshape(chunks, order=source.__dict__["_order"])
+    if axes == "cyx" and array.ndim == 3 and array.shape[0] <= 4 < array.shape[-1]:
+        array = np.moveaxis(array, 0, -1)
+    return array
+
+
+def _read_zarr_array(source: Source, x: int, y: int, width: int, height: int, level: int) -> np.ndarray:
+    down = 2 ** level
+    out_w, out_h = max(1, round(width / down)), max(1, round(height / down))
+    out = np.full((out_h, out_w, 3), 255, np.uint8)  # chunks that are not stored are empty glass
+    chunks = source.__dict__["_chunks"]
+    ch, cw = (chunks[1], chunks[2]) if source.__dict__["_axes"] == "cyx" else (chunks[0], chunks[1])
+    x0, y0, x1, y1 = max(0, x), max(0, y), min(source.width, x + width), min(source.height, y + height)
+    jobs = [(cy, cx) for cy in range(y0 // ch, (y1 - 1) // ch + 1) for cx in range(x0 // cw, (x1 - 1) // cw + 1)] if x1 > x0 and y1 > y0 else []
+    blank_is_black = source.__dict__["_black_glass"]
+
+    def piece(job: tuple[int, int]):
+        cy, cx = job
+        top, left = cy * ch, cx * cw
+        a0, a1, b0, b1 = max(y0, top), min(y1, top + ch), max(x0, left), min(x1, left + cw)
+        oy0, oy1 = round((a0 - y) / down), round((a1 - y) / down)
+        ox0, ox1 = round((b0 - x) / down), round((b1 - x) / down)
+        oy1, ox1 = min(out_h, max(oy1, oy0 + 1)), min(out_w, max(ox1, ox0 + 1))
+        if oy0 >= out_h or ox0 >= out_w:
+            return None
+        chunk = _array_chunk(source, cy, cx)
+        if chunk is None:
+            return None
+        rgb = _pad(_rgb(chunk[a0 - top:a1 - top, b0 - left:b1 - left]), a1 - a0, b1 - b0)
+        if blank_is_black:
+            rgb = rgb.copy() if not rgb.flags.writeable else rgb
+            rgb[rgb.max(axis=2) <= BLACK_GLASS] = 255
+        if rgb.shape[:2] != (oy1 - oy0, ox1 - ox0):
+            rgb = cv2.resize(rgb, (ox1 - ox0, oy1 - oy0), interpolation=cv2.INTER_AREA if down > 1 else cv2.INTER_LINEAR)
+        return oy0, ox0, rgb
+
+    with ThreadPoolExecutor(max_workers=min(ARRAY_THREADS, max(1, len(jobs)))) as pool:
+        for found in pool.map(piece, jobs):
+            if found is not None:
+                oy0, ox0, rgb = found
+                out[oy0:oy0 + rgb.shape[0], ox0:ox0 + rgb.shape[1]] = rgb
+    return out
+
+
 # --------------------------------------------------------------------------- Bio-Formats (czi, vsi)
 
 def _open_bioformats(path: Path) -> Source:
@@ -278,7 +405,8 @@ def _read_bioformats(source: Source, x: int, y: int, width: int, height: int, le
     return _pad(_rgb(np.asarray(data.compute())), height, width)
 
 
-_READERS = {"picture": _read_picture, "openslide": _read_openslide, "tiff": _read_tiff, "zarr": _read_zarr, "bioformats": _read_bioformats}
+_READERS = {"picture": _read_picture, "openslide": _read_openslide, "tiff": _read_tiff, "zarr": _read_zarr, "zarr_array": _read_zarr_array,
+            "bioformats": _read_bioformats}
 
 
 def open_source(path: Path | str) -> Source:
@@ -286,7 +414,9 @@ def open_source(path: Path | str) -> Source:
     path = Path(path)
     suffix = path.suffix.lower()
     if is_zarr(path):
-        return _open_zarr(path)
+        if not path.exists():
+            raise FileNotFoundError(path)
+        return _open_zarr_array(path) if (path / ".zarray").exists() else _open_zarr(path)
     if not path.exists():
         raise FileNotFoundError(path)
     if suffix in PICTURES:

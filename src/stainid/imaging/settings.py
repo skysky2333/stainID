@@ -49,9 +49,13 @@ def stain_settings(project: Project) -> dict[str, dict]:
 def setting(project: Project, stain: str) -> dict:
     """The settings of one stain, with the family guessed and DAB as the colour when they are not set."""
     own = stain_settings(project).get(stain, {})
+    try:
+        vectors = chromogens.clean_vectors(own["vectors"]) if own.get("vectors") else None
+    except ValueError:  # written by hand in stainid.yaml and not readable: the standard colours (the app checks what it saves)
+        vectors = None
     return {"family": own.get("family") or family_of(stain) or "", "chromogen": chromogens.canonical(own.get("chromogen")) or "DAB",
             "others": list(own.get("others") or []), "counterstain": own.get("counterstain") or chromogens.COUNTERSTAIN,
-            "vectors": own.get("vectors") or None, **({"antibody": own["antibody"]} if own.get("antibody") else {})}
+            "vectors": vectors or None, **({"antibody": own["antibody"]} if own.get("antibody") else {})}
 
 
 def analysis_stain(project: Project, stain: str) -> str:

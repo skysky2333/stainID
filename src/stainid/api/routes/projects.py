@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from stainid import disk_cache
 from stainid.api import registry, state
 from stainid.imageset import package
 from stainid.project import CONFIG_NAME, DEFAULTS, KINDS, Project, load_project, save_project
@@ -55,7 +56,9 @@ def known() -> list[registry.Entry]:
     """The registry, plus the projects open in this server and the one it was started with (`--project`)."""
     start = Path(os.environ.get("STAINID_PROJECT", "."))
     extra = [s.root for s in state.open_states() if s.project.is_configured] + ([start] if (start / CONFIG_NAME).exists() else [])
-    return registry.entries(extra)
+    entries = registry.entries(extra)
+    disk_cache.know(*(e.path for e in entries if e.exists))  # a drive low on space takes from every project on it
+    return entries
 
 
 def _entry(project_id: str) -> registry.Entry:

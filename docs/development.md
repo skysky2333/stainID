@@ -100,9 +100,17 @@ made again from those does not belong in `data/cache/`.
 
 The limit is per project (`cache_limit_gb` in `stainid.yaml`, set in Settings → Advanced → *Space for pictures the app
 makes*), else the server's `stainid serve --cache-limit SIZE` (which steps started by that server inherit through
-`$STAINID_CACHE_LIMIT`), else 100 GB. It is per project rather than per server because each project's caches sit next
-to its data, often on different drives, and every process that writes them (servers and steps) can enforce it from
-the project alone. Files used or written in the last 10 minutes are never deleted.
+`$STAINID_CACHE_LIMIT`), else 100 GB; a project made from a dataset package starts with 20 GB. It is per project
+rather than per server because each project's caches sit next to its data, often on different drives, and every
+process that writes them (servers and steps) can enforce it from the project alone. Files used or written in the last
+10 minutes are never deleted.
+
+The drive comes before the limits: several projects on one drive may together be allowed more than it holds. Every
+drive keeps a floor of free space (`stainid serve --cache-min-free`, inherited as `$STAINID_CACHE_MIN_FREE`: `50G`,
+`10%`, or by default `50G or 10%`, the smaller of the two). When a drive has less, `disk_cache.free_space` (run by the
+background thread every 15 s, and at once when a writer sees the drive low) deletes the least recently used cache
+files of every project on that drive the process knows of (the server tells it every project on its list,
+`disk_cache.know`), across projects, until the drive is back above the floor. Settings shows the drive's free space.
 
 ## Architecture
 

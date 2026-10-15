@@ -1,13 +1,22 @@
 import { useState } from 'react'
-import type { ImagesOverview, StainFamily, StainSetting } from '../api'
+import type { ImagesOverview, StainFamily, StainSetting, StainVectors } from '../api'
 import { api, apiUrl, enc } from '../api'
 import { ErrorNote, withError } from '../components'
 import { Advanced, plural, SavedNote } from './parts'
 
-type Draft = Record<string, { family: StainFamily; chromogen: string; others: string[] }>
+type Draft = Record<string, { family: StainFamily; chromogen: string; others: string[]; counterstain: string; vectors: StainVectors; antibody: string }>
 
+// Everything the card saves, including what it only shows (measured colours, counterstain, antibody), so saving keeps them.
 const draftOf = (stains: StainSetting[]): Draft =>
-  Object.fromEntries(stains.map((s) => [s.stain, { family: s.family || '', chromogen: s.chromogen || 'DAB', others: s.others ?? [] }]))
+  Object.fromEntries(stains.map((s) => [s.stain, { family: s.family || '', chromogen: s.chromogen || 'DAB', others: s.others ?? [],
+    counterstain: s.counterstain || 'hematoxylin', vectors: s.vectors ?? {}, antibody: s.antibody ?? '' }]))
+const EMPTY = { family: '' as StainFamily, chromogen: 'DAB', others: [], counterstain: 'hematoxylin', vectors: {}, antibody: '' }
+
+/** The colour a stain vector stands for: a pixel with a moderate amount (0.6 optical density) of that stain alone. */
+const swatch = (od: number[]) => {
+  const norm = Math.hypot(...od) || 1
+  return `rgb(${od.map((v) => Math.round(255 * 10 ** (-0.6 * v / norm))).join(', ')})`
+}
 
 /** How the images were stained and scanned: what each stain is (which of stainID's models reads it), the colour it was
 developed in (and a second colour on the same slide), and the pixel size. Rescaling is under Advanced. */
@@ -41,7 +50,7 @@ export default function ImagingCard({ data, onSaved }: { data: ImagesOverview; o
         an image in another colour than brown is turned into brown-on-blue before it is analysed, so the models read it as they read DAB.</p>
       <div className="imaging-stains">
         {stains.map((s) => {
-          const own = draft[s.stain] ?? { family: '', chromogen: 'DAB', others: [] }
+          const own = draft[s.stain] ?? EMPTY
           const image = sample(s.stain)
           return (
             <div key={s.stain} className="imaging-stain">
@@ -80,13 +89,15 @@ export default function ImagingCard({ data, onSaved }: { data: ImagesOverview; o
         <input type="text" inputMode="decimal" value={pixel} placeholder="read from each file" onChange={(e) => { setPixel(e.target.value); setSaved(false) }} /></label>
       <p className="small muted">Leave it empty when the files or the image list say it. The models work at {data.imaging.analysis_pixel_size_um} µm per pixel; other
         images are enlarged or reduced to that.</p>
-      <Advanced hint="when images are rescaled">
+      <Advanced hint={Object.values(draft).some((d) => Object.keys(d.vectors).length) ? "when images are rescaled, measured stain colours" : "when images are rescaled"}>
         <div className="radio-list small">
           <label><input type="radio" checked={rescale === 'on_import'} onChange={() => { setRescale('on_import'); setSaved(false) }} /> Convert each image once, when the
             images are prepared, and keep the result among the app's pictures (faster; takes disk space, given back when the space for pictures runs out)</label>
           <label><input type="radio" checked={rescale === 'on_the_fly'} onChange={() => { setRescale('on_the_fly'); setSaved(false) }} /> Convert each time an image is read
             (no extra disk space; slower; the choice for whole slides)</label>
         </div>
+        <MeasuredColours stains={stains.map((s) => s.stain)} draft={draft} colour={colour}
+          onStandard={(stain) => set(stain, { vectors: {} })} />
         <p className="small muted">Own stain colours (measured from an area of pure stain) can be given as <code>vectors</code> under <code>imaging.stains</code> in
           stainid.yaml. After changing anything here, run <b>Prepare images</b> again (Run → Run everything does it).</p>
       </Advanced>
@@ -96,6 +107,33 @@ export default function ImagingCard({ data, onSaved }: { data: ImagesOverview; o
         <button className="btn" disabled={busy || !dirty} onClick={save}>{busy ? 'Saving…' : 'Save'}</button>
       </div>
       <ErrorNote error={error} />
+    </div>
+  )
+}
+
+/** The stain colours measured on the dataset's own slides (from its package, or given in stainid.yaml): stainID unmixes
+the images with them instead of the standard colours. Each stain can go back to the standard colours (kept on Save). */
+function MeasuredColours({ stains, draft, colour, onStandard }: {
+  stains: string[]; draft: Draft; colour: (id: string) => string; onStandard: (stain: string) => void
+}) {
+  const measured = stains.filter((s) => Object.keys(draft[s]?.vectors ?? {}).length)
+  if (!measured.length) return null
+  return (
+    <div className="measured-colours">
+      <p className="small secondary">Stain colours measured on these slides. Each image is unmixed with them rather than with the standard
+        colours, so a second colour on the slide does not leak into the stain analysed.</p>
+      {measured.map((stain) => (
+        <div key={stain} className="measured-colours-stain small">
+          <b>{stain}</b>
+          {Object.entries(draft[stain].vectors).map(([chromogen, od]) => (
+            <span key={chromogen} className="measured-colour" title={`Optical density (red, green, blue): ${od.join(', ')}`}>
+              <span className="measured-swatch" style={{ background: swatch(od) }} aria-hidden="true" />
+              {colour(chromogen)} <code>{od.map((v) => v.toFixed(3)).join(', ')}</code>
+            </span>
+          ))}
+          <button className="link-btn small" onClick={() => onStandard(stain)}>Use the standard colours</button>
+        </div>
+      ))}
     </div>
   )
 }

@@ -25,7 +25,9 @@ dependencies = [
 [project.optional-dependencies]
 # Whole-slide reading: Bio-Formats (TMA slides, .vsi/.czi), OpenSlide (.svs/.ndpi/.mrxs/tiled .tif, whole-slide projects)
 # and Zarr (OME-Zarr). aicsimageio pins zarr < 2.16, which needs numcodecs < 0.16 (later ones dropped cbuffer_sizes).
-slides = ["aicsimageio>=4.14", "bioformats_jar", "openslide-python>=1.4", "openslide-bin>=4.0", "zarr>=2.13,<2.16", "numcodecs>=0.12,<0.16"]
+# imagecodecs decodes the chunks of plain Zarr arrays (e.g. JPEG-XR in the Tangle-Tracer slides) without zarr.
+slides = ["aicsimageio>=4.14", "bioformats_jar", "openslide-python>=1.4", "openslide-bin>=4.0", "zarr>=2.13,<2.16", "numcodecs>=0.12,<0.16",
+          "imagecodecs>=2023.1.23"]
 deep = ["torch>=2.8", "torchvision>=0.23", "cellpose==4.2.1", "segment-anything>=1.0", "transformers>=4.57"]
 tangle-tracer = ["ultralytics==8.0.199"]
 app = ["fastapi>=0.115", "uvicorn[standard]>=0.30", "python-multipart>=0.0.9", "openpyxl>=3.1"]

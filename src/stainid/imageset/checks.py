@@ -6,6 +6,7 @@ from collections import Counter
 from pathlib import Path
 
 from stainid import cache
+from stainid.imageset.package import dataset_files
 from stainid.imageset.table import read_images, resolve
 from stainid.imaging.settings import FAMILIES, analysis_stain
 from stainid.imaging.sources import available
@@ -21,12 +22,38 @@ def _missing_files(project: Project, rows: list[dict]) -> list[str]:
                       lambda: [p for p in paths if not Path(p).exists()])
 
 
+def dataset_issues(project: Project) -> list[dict]:
+    """How much of the study's dataset package is downloaded: newly downloaded images to add, and those not there yet."""
+    files = dataset_files(project)
+    if not files:
+        return []
+    thing = "slides" if files["kind"] == "slides" else "images"
+    look = [_fix("Look for new files", "add_dataset_files")]
+    out = []
+    if files["new"]:
+        out.append(_issue("dataset_new_files", "warning", f"{files['new']:,} newly downloaded {thing} of the dataset are not in the study yet",
+                          "Add them to the image list; then run the steps again (Run → Run everything) to analyse them.", fixes=look))
+    absent = files["listed"] - files["present"]
+    if absent:
+        out.append(_issue("dataset_not_downloaded", "note", f"Downloaded so far: {files['present']:,} of {files['listed']:,} {thing} of the dataset",
+                          f"The study uses the {files['present']:,} that are. {absent:,} are listed in the dataset package but not downloaded yet"
+                          + (f" ({files['missing']:,} of them have a path, but the file is not there)" if files["missing"] else "")
+                          + ". When more are downloaded, look for new files to add them.", fixes=look))
+    return out
+
+
 def image_issues(project: Project) -> list[dict]:
     rows = read_images(project)
     if not rows:
+        files = dataset_files(project)
+        if files:
+            thing = "slides" if files["kind"] == "slides" else "images"
+            return [_issue("no_images", "problem", f"None of the dataset's {files['listed']:,} {thing} are downloaded yet",
+                           "Download some of them (the dataset's README says how), then look for new files.",
+                           fixes=[_fix("Look for new files", "add_dataset_files")])]
         return [_issue("no_images", "problem", "No images yet", "Add the images of the study on the Images screen.",
                        fixes=[_fix("Go to the Images screen", "goto", screen="images")])]
-    issues = []
+    issues = dataset_issues(project)
     goto = [_fix("Go to the Images screen", "goto", screen="images")]
     no_donor = [r["image_id"] or r["path"] for r in rows if not r.get("donor_id")]
     if no_donor:

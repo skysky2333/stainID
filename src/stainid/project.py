@@ -58,7 +58,8 @@ DEFAULTS: dict = {
     # The dataset package a project was made from (id, title, licence, citation, package folder); {} for your own data.
     "dataset": {},
     # Space the pictures the app makes for viewing (data/cache/) may take, in GB; the least recently used are deleted
-    # beyond it and made again when needed (`stainid.disk_cache`). null: the server's --cache-limit, else 100 GB.
+    # beyond it and made again when needed (`stainid.disk_cache`). null: the server's --cache-limit, else 100 GB (a
+    # project made from a dataset package starts with 20). A drive low on space takes from every project on it first.
     "cache_limit_gb": None,
     "inputs": {
         "image_list": "data/images.csv",

@@ -14,8 +14,10 @@ interface CacheUsage {
   kinds: { kind: string; label: string; bytes: number; files: number }[]
   counted: boolean
   busy: 'clearing' | null
-  last_cleanup: { when: number; files: number; bytes: number } | null
+  last_cleanup: { when: number; files: number; bytes: number; reason: 'limit' | 'space' } | null
   in_use_minutes: number
+  // the drive the study is on: its free space, and the floor every study's pictures on it keep free together
+  drive: { free_bytes: number; total_bytes: number; min_free_bytes: number; min_free_setting: string } | null
 }
 
 const GB = 1e9
@@ -41,7 +43,22 @@ export function CacheSpace() {
   )
 }
 
-function CacheSpaceCard({ data, onChanged, onClearing }: { data: CacheUsage; onChanged: () => void; onClearing: () => void }) {
+/** The drive's free space, and the floor below which the pictures of every study on it give way. */
+function DriveSpace({ drive }: { drive: NonNullable<CacheUsage['drive']> }) {
+  const low = drive.free_bytes < drive.min_free_bytes
+  return (
+    <div className="cache-space-drive">
+      <p className="small"><b>{bytes(drive.free_bytes)}</b> <span className="secondary">free on this drive, of {bytes(drive.total_bytes)}</span></p>
+      {low
+        ? <p className="small level-warning">The drive has less free space than the {bytes(drive.min_free_bytes)} it keeps: the pictures looked at least
+            recently, of every study on this drive, are being deleted until it has.</p>
+        : <p className="muted small">Whenever the drive’s free space falls below {bytes(drive.min_free_bytes)}, the pictures looked at least recently are
+            deleted, from every study on this drive, whatever space each study may take.</p>}
+    </div>
+  )
+}
+
+function CacheSpaceCard({ data, onChanged, onClearing }:{ data: CacheUsage; onChanged: () => void; onClearing: () => void }) {
   const [own, setOwn] = useState(data.limit_gb !== null)
   const [value, setValue] = useState(String(data.limit_gb ?? Math.round(data.default_bytes / GB)))
   const [error, setError] = useState<string | null>(null)
@@ -75,8 +92,10 @@ function CacheSpaceCard({ data, onChanged, onClearing }: { data: CacheUsage; onC
       </div>
       <Progress done={Math.round(share * 1000)} total={1000} />
       {data.last_cleanup && (
-        <p className="muted small">Last cleaned up {timeAgo(data.last_cleanup.when)}: {data.last_cleanup.files.toLocaleString()} deleted ({bytes(data.last_cleanup.bytes)}).</p>
+        <p className="muted small">Last cleaned up {timeAgo(data.last_cleanup.when)}: {data.last_cleanup.files.toLocaleString()} deleted ({bytes(data.last_cleanup.bytes)})
+          {data.last_cleanup.reason === 'space' ? ', because the drive was low on space' : ''}.</p>
       )}
+      {data.drive && <DriveSpace drive={data.drive} />}
 
       <fieldset className="radio-list cache-space-limit">
         <legend>Space they may take</legend>
@@ -107,7 +126,8 @@ function CacheSpaceCard({ data, onChanged, onClearing }: { data: CacheUsage; onC
         </div>
       )}
       <p className="muted small">Also settable in <code>stainid.yaml</code> (<code>cache_limit_gb</code>); the server’s default with{' '}
-        <code>stainid serve --cache-limit 100G</code>. The pictures are in <code>data/cache/</code>.</p>
+        <code>stainid serve --cache-limit 100G</code>, and the free space every drive keeps with <code>--cache-min-free</code>
+        {data.drive ? <> (now <code>{data.drive.min_free_setting}</code>)</> : null}. The pictures are in <code>data/cache/</code>.</p>
 
       {confirm && (
         <ConfirmDialog title="Delete all pictures made for viewing?" confirm="Clear all" danger onClose={() => setConfirm(false)} onConfirm={clear}>

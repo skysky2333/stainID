@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import type { ImageRow, ImagesOverview } from '../api'
+import type { DatasetFiles as DatasetFileCounts, ImageRow, ImagesOverview } from '../api'
 import { api } from '../api'
-import { ErrorNote, FilePicker, PathLine, withError } from '../components'
+import { ErrorNote, FilePicker, PathLine, Progress, withError } from '../components'
 import { useFetch } from '../hooks'
 import ImagingCard from './ImagingCard'
 import { Advanced, Found, plural, ScreenData, ScreenFoot, UploadButton } from './parts'
@@ -18,7 +18,8 @@ export default function ImagesScreen(props: ScreenProps) {
 }
 
 function Images({ next, nextLabel, onChanged, data, reload }: ScreenProps & { data: ImagesOverview; reload: () => void }) {
-  const [adding, setAdding] = useState(data.total === 0)
+  const files = data.dataset_files
+  const [adding, setAdding] = useState(data.total === 0 && !files)
   const thing = data.kind === 'slides' ? 'slide' : 'image'
   const changed = () => { reload(); onChanged() }
   const unknown = data.stains.filter((s) => s.images > 0 && !s.analysed_as && s.family !== 'ignore')
@@ -37,8 +38,9 @@ function Images({ next, nextLabel, onChanged, data, reload }: ScreenProps & { da
           )}
         </Found>
       )}
-      {adding ? <AddImages data={data} onSaved={() => { setAdding(false); changed() }} onCancel={data.total ? () => setAdding(false) : undefined} />
-        : <ImageList data={data} onChanged={changed} onAdd={() => setAdding(true)} />}
+      {files && <DatasetFiles files={files} onAdded={changed} onAddOther={data.total || adding ? undefined : () => setAdding(true)} />}
+      {adding ?<AddImages data={data} onSaved={() => { setAdding(false); changed() }} onCancel={data.total || files ? () => setAdding(false) : undefined} />
+        : data.total > 0 && <ImageList data={data} onChanged={changed} onAdd={() => setAdding(true)} />}
       {data.total > 0 && <ImagingCard data={data} onSaved={changed} />}
       <Advanced hint="image list file, readers">
         <PathLine path={data.path} exists={data.total > 0} label="Image list" />
@@ -52,7 +54,48 @@ function Images({ next, nextLabel, onChanged, data, reload }: ScreenProps & { da
   )
 }
 
-function AddImages({ data, onSaved, onCancel }: { data: ImagesOverview; onSaved: () => void; onCancel?: () => void }) {
+/** A study made from a dataset package that is downloaded bit by bit: how much of it is here, and Look for new files,
+which adds the images downloaded since. Hidden once every image of the package is in the study. */
+function DatasetFiles({ files, onAdded, onAddOther }: { files: DatasetFileCounts; onAdded: () => void; onAddOther?: () => void }) {
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const thing = files.kind === 'slides' ? 'slide' : 'image'
+  if (files.in_study >= files.listed && !message) return null
+  const look = () => withError(async () => {
+    setBusy(true); setMessage('')
+    try {
+      const result = await api.post<{ added: number }>('/api/setup/images/look-for-new', {})
+      setMessage(result.added ? `${plural(result.added, `new ${thing}`)} added to the study. Run the steps again (Run → Run everything) to analyse them.`
+        : 'No new files yet: nothing more of the dataset has been downloaded.')
+      if (result.added) onAdded()
+    } finally { setBusy(false) }
+  }, setError)
+  const absent = files.listed - files.present
+  return (
+    <div className="card dataset-files">
+      <div className="row card-head">
+        <h3>Downloaded so far: {files.present.toLocaleString()} of {plural(files.listed, thing)}</h3><span className="spacer" />
+        <button className="btn small" disabled={busy} onClick={look}>
+          {busy ? 'Looking…' : files.new ? `Add ${plural(files.new, `new ${thing}`)}` : 'Look for new files'}</button>
+      </div>
+      <Progress done={files.present} total={files.listed} />
+      <p className="small secondary">
+        {!files.present ? `None of the dataset's ${thing}s are downloaded yet${files.missing ? ` (${files.missing.toLocaleString()} have a path, but the file is not there)` : ''}. `
+          : <>The study uses the {plural(files.in_study, thing)} in it.{' '}
+            {absent > 0 && <>The other {plural(absent, thing)} {absent === 1 ? 'is' : 'are'} listed in the dataset package but not downloaded
+              yet{files.missing ? ` (${files.missing.toLocaleString()} of them have a path, but the file is not there)` : ''}. </>}</>}
+        {files.new > 0 ? `${plural(files.new, thing)} downloaded since the study was made ${files.new === 1 ? 'is' : 'are'} not in it yet.`
+          : 'When more are downloaded, look for new files to add them.'}
+      </p>
+      {message && <p className="small" role="status">{message}</p>}
+      {onAddOther && <button className="link-btn small" onClick={onAddOther}>Or add {thing}s from another folder…</button>}
+      <ErrorNote error={error} />
+    </div>
+  )
+}
+
+function AddImages({ data, onSaved, onCancel }:{ data: ImagesOverview; onSaved: () => void; onCancel?: () => void }) {
   const [picking, setPicking] = useState(false)
   const [found, setFound] = useState<ImageRow[] | null>(null)
   const [source, setSource] = useState('')

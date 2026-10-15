@@ -171,6 +171,7 @@ def open_project(path: Path | str) -> ProjectState:
             registry.remember(state.root)
             if new:
                 disk_cache.watch(state.root)
+                disk_cache.know(*registry.recent_projects())  # a drive low on space takes from every project on it
                 threading.Thread(target=_warm_up, args=(state.project,), daemon=True).start()
         return state
 

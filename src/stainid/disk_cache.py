@@ -3,7 +3,7 @@
 Every such file lives under `<project>/data/cache/<kind>/` (`KINDS`: core zoom pyramids, thumbnails, field pictures,
 overlays, outlines, label crops …) and can be made again from the project's data at any time. When a project's caches
 together grow past its limit (`limit_bytes`: the project's `cache_limit_gb` setting, else the server's `--cache-limit`,
-else 100 GB), the files used least recently are deleted until they are under `LOW_WATER` of it; whatever asks for one
+else 100 GB; a project made from a dataset package starts with 20 GB), the files used least recently are deleted until they are under `LOW_WATER` of it; whatever asks for one
 again later makes it again (and shows its usual "preparing" state meanwhile).
 
 Only files under `data/cache/` are ever deleted. Study data and results are never caches, even when they are pictures:
@@ -28,20 +28,29 @@ bookkeeping existed, or by code that forgot to record them, are counted too): th
 "last use". Several servers and step processes may share a project: SQLite keeps the index consistent, and one cleanup
 at a time runs per project (a lock file). A file used in the last `IN_USE_SECONDS` (by any process: notes reach the
 index well within that time) or written in that time is never deleted, so pictures open on someone's screen stay.
+
+The drive comes first: many projects on one drive could together be allowed more than it holds. Whenever the free space
+of a drive falls below its floor (`min_free_bytes`: `stainid serve --cache-min-free`, by default 50 GB or 10 % of the
+drive, whichever is smaller), the caches stop growing: the files used least recently, across every project on that
+drive this process knows (`know`: the server tells it every project on its list), are deleted until the free space is
+back above the floor (by `1 / LOW_WATER`), whatever each project's own limit. Writers look at the free space every few
+seconds (`FREE_CHECK_SECONDS`) and wake the cleanup at once when it is low.
 """
 from __future__ import annotations
 
 import atexit
 import fcntl
+import heapq
 import logging
 import os
 import re
+import shutil
 import sqlite3
 import stat as statmod
 import threading
 import time
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 import yaml
@@ -55,6 +64,9 @@ DEFAULT_LIMIT = 100 * GB
 LIMIT_ENV = "STAINID_CACHE_LIMIT"  # the server's default (`stainid serve --cache-limit`), inherited by its steps
 SETTING = "cache_limit_gb"  # the project's own limit, in stainid.yaml (null: the server's default)
 LOW_WATER = 0.9  # a cleanup goes down to this fraction of the limit
+MIN_FREE_ENV = "STAINID_CACHE_MIN_FREE"  # `stainid serve --cache-min-free`: "50G", "10%" or "50G or 10%" (the smaller)
+DEFAULT_MIN_FREE = "50G or 10%"
+FREE_CHECK_SECONDS = 5.0  # a writer looks at the drive's free space at most this often
 IN_USE_SECONDS = 600.0  # files used or written this recently are never deleted
 CLEAR_IN_USE_SECONDS = 60.0  # ... by "Clear all"
 FLUSH_SECONDS = 15.0
@@ -152,6 +164,7 @@ def wrote(*paths: Path | str) -> None:
     for p in paths:
         _WROTE[os.fspath(p)] = now
     _start()
+    _look_at_space(paths)
 
 
 def write(target: Path | str, data: bytes) -> None:
@@ -162,6 +175,23 @@ def write(target: Path | str, data: bytes) -> None:
     temporary.write_bytes(data)
     os.replace(temporary, target)
     wrote(target)
+
+
+_FREE_LOOKED: dict[str, float] = {}  # folder -> when a writer last looked at its drive's free space
+
+
+def _look_at_space(paths) -> None:
+    """Wake the cleanup at once when a drive just written to is below its floor (looked at every few seconds)."""
+    now = time.monotonic()
+    for p in paths:
+        folder = os.path.dirname(os.fspath(p))
+        if now - _FREE_LOOKED.get(folder, -FREE_CHECK_SECONDS) < FREE_CHECK_SECONDS:
+            continue
+        _FREE_LOOKED[folder] = now
+        space = drive_space(folder)
+        if space and space["free_bytes"] < space["min_free_bytes"]:
+            _WAKE.set()
+            return
 
 
 # ---------------------------------------------------------------- the limit
@@ -204,6 +234,73 @@ def limit_bytes(project_root: Path | str) -> int:
     """How much space this project's caches may take."""
     setting = _setting(Path(project_root))
     return int(setting * GB) if setting else server_default()
+
+
+# ---------------------------------------------------------------- the drive's free space
+
+def parse_min_free(text: str) -> list[tuple[str, float]]:
+    """'50G', '10%' or '50G or 10%' (also '50G,10%'): the floors, as ("bytes", n) or ("share", fraction)."""
+    parts = [p.strip() for p in re.split(r",|\bor\b", str(text)) if p.strip()]
+    if not parts:
+        raise ValueError(f"not a free-space floor: {text!r} (for example 50G, 10% or '50G or 10%')")
+    out = []
+    for part in parts:
+        if part.endswith("%"):
+            try:
+                share = float(part[:-1]) / 100
+            except ValueError:
+                raise ValueError(f"not a percentage: {part!r}") from None
+            if not 0 < share < 1:
+                raise ValueError("the percentage must be above 0 and below 100")
+            out.append(("share", share))
+        else:
+            out.append(("bytes", float(parse_size(part))))
+    return out
+
+
+def min_free_setting() -> str:
+    text = os.environ.get(MIN_FREE_ENV) or DEFAULT_MIN_FREE
+    try:
+        parse_min_free(text)
+    except ValueError:
+        return DEFAULT_MIN_FREE
+    return text
+
+
+def min_free_bytes(total_bytes: int) -> int:
+    """The free space a drive of this size keeps: the smallest of the floors set (`MIN_FREE_ENV`)."""
+    return int(min(value if kind == "bytes" else value * total_bytes for kind, value in parse_min_free(min_free_setting())))
+
+
+def _existing(path: str) -> str | None:
+    while path and not os.path.exists(path):
+        parent = os.path.dirname(path)
+        if parent == path:
+            return None
+        path = parent
+    return path or None
+
+
+def drive_space(path: Path | str) -> dict | None:
+    """Free and total space of the drive a path is on, and the floor its caches keep free (None: cannot be told)."""
+    found = _existing(os.fspath(path))
+    if found is None:
+        return None
+    try:
+        space = shutil.disk_usage(found)
+    except OSError:
+        return None
+    return {"free_bytes": int(space.free), "total_bytes": int(space.total), "min_free_bytes": min_free_bytes(space.total),
+            "min_free_setting": min_free_setting()}
+
+
+_KNOWN: set[str] = set()  # cache roots this process knows of (its projects): the free-space cleanup looks at all of them
+
+
+def know(*project_roots: Path | str) -> None:
+    """Count these projects' caches in when a drive runs low on space (nothing is scanned or read now)."""
+    for root in project_roots:
+        _KNOWN.add(str(cache_root(root)))
 
 
 # ---------------------------------------------------------------- the index
@@ -322,6 +419,7 @@ def flush() -> None:
                     group = by_root.setdefault(root, ({}, {}))[slot]
                     group[relative] = max(when, group.get(relative, 0.0))
         for root, (u, w) in by_root.items():
+            _KNOWN.add(root)
             try:
                 _record(root, u, w)
                 _DIRTY.add(root)
@@ -384,6 +482,7 @@ def scan(project_root: Path | str) -> None:
 def watch(project_root: Path | str) -> None:
     """Keep this project's index up to date from this process (a server): scan it soon, and every hour."""
     root = str(cache_root(project_root))
+    _KNOWN.add(root)
     if root not in _WATCHED:
         _WATCHED.add(root)
         _start()
@@ -466,33 +565,78 @@ def evict(project_root: Path | str, target: int, keep_seconds: float = IN_USE_SE
     with _cleaning(root) as allowed:
         if not allowed:
             return {"files": 0, "bytes": 0, "skipped": True}
-        now = time.time()
+        total = _total(root)
+        done = _drop(((root, *u) for u in _units(root)), lambda freed: total - freed <= target, keep_seconds, "limit")
+        files, freed = done.get(root, (0, 0))
+        return {"files": files, "bytes": freed, "skipped": False}
+
+
+def _units(root: str) -> list[tuple[str, int, float]]:
+    """(unit, size, last used) of a cache root, least recently used first."""
+    with _index(root) as db:
+        return db.execute("SELECT unit, sum(size), max(used) FROM files GROUP BY unit ORDER BY max(used)").fetchall()
+
+
+def _drop(candidates, enough, keep_seconds: float, reason: str) -> dict[str, tuple[int, int]]:
+    """Delete units (root, unit, size, last used), in the order given, until `enough(bytes freed)`; stop at the first one
+    used in the last `keep_seconds`. The caller holds the cleaning lock of every root. Returns {root: (files, bytes)}."""
+    now = time.time()
+    freed = 0
+    done: dict[str, tuple[int, int]] = {}
+    pending: dict[str, list[str]] = {}
+    for root, name, size, last in candidates:
+        if enough(freed) or last > now - keep_seconds:
+            break
         with _index(root) as db:
-            total = int(db.execute("SELECT coalesce(sum(size), 0) FROM files").fetchone()[0])
-            units = db.execute("SELECT unit, sum(size), max(used) FROM files GROUP BY unit ORDER BY max(used)").fetchall()
-        files = freed = 0
-        done: list[str] = []
-        for name, size, last in units:
-            if total <= target or last > now - keep_seconds:
-                break
-            with _index(root) as db:
-                members = [p for (p,) in db.execute("SELECT path FROM files WHERE unit = ?", (name,))]
-            if any(_newer(root, p, now - keep_seconds) for p in members):
-                continue  # made again just now (by a process whose note is not in yet)
-            for p in members:
-                files += _remove(root, p)
-            done += members
-            total -= size
-            freed += size
-            if len(done) >= 500:
-                _forget(root, done)
-                done = []
-        _forget(root, done)
+            members = [p for (p,) in db.execute("SELECT path FROM files WHERE unit = ?", (name,))]
+        if any(_newer(root, p, now - keep_seconds) for p in members):
+            continue  # made again just now (by a process whose note is not in yet)
+        files = sum(_remove(root, p) for p in members)
+        before = done.get(root, (0, 0))
+        done[root] = (before[0] + files, before[1] + size)
+        freed += size
+        pending.setdefault(root, []).extend(members)
+        if len(pending[root]) >= 500:
+            _forget(root, pending.pop(root))
+    for root, members in pending.items():
+        _forget(root, members)
+    for root, (files, bytes_) in done.items():
         if files:
             with _index(root) as db:
-                _set_meta(db, "cleaned", f"{now} {files} {freed}")
-            log.info("deleted %d cache files (%.1f GB) in %s", files, freed / GB, root)
-        return {"files": files, "bytes": freed, "skipped": False}
+                _set_meta(db, "cleaned", f"{now} {files} {bytes_} {reason}")
+            log.info("deleted %d cache files (%.1f GB) in %s (%s)", files, bytes_ / GB, root,
+                     "the drive was low on space" if reason == "space" else "over its limit")
+    return done
+
+
+def free_space() -> list[dict]:
+    """Keep every drive's floor of free space: where a drive has less, delete the least recently used cache files of all
+    the projects on it this process knows, until it is back above the floor (by `1 / LOW_WATER`). Returns what was
+    deleted per drive."""
+    drives: dict[int, list[str]] = {}
+    for root in sorted(_KNOWN | _WATCHED):
+        if root in _BUSY or not os.path.isfile(os.path.join(root, INDEX_NAME)):
+            continue
+        try:
+            drives.setdefault(os.stat(root).st_dev, []).append(root)
+        except OSError:
+            continue
+    out = []
+    for roots in drives.values():
+        space = drive_space(roots[0])
+        if space is None or space["free_bytes"] >= space["min_free_bytes"]:
+            continue
+        need = int(space["min_free_bytes"] / LOW_WATER) - space["free_bytes"]
+        with ExitStack() as stack:
+            allowed = [r for r in roots if stack.enter_context(_cleaning(r))]
+            merged = heapq.merge(*[[(r, *u) for u in _units(r)] for r in allowed], key=lambda c: c[3])
+            done = _drop(merged, lambda freed: freed >= need, IN_USE_SECONDS, "space")
+        freed = sum(b for _, b in done.values())
+        if freed < need:
+            log.warning("the drive of %s has %.1f GB free, below its floor of %.1f GB, and its caches cannot give back more than "
+                        "%.1f GB now", roots[0], space["free_bytes"] / GB, space["min_free_bytes"] / GB, freed / GB)
+        out.append({"roots": roots, "needed": need, "files": sum(f for f, _ in done.values()), "bytes": freed})
+    return out
 
 
 def _newer(root: str, relative: str, since: float) -> bool:
@@ -565,13 +709,14 @@ def usage(project_root: Path | str) -> dict:
     setting = _setting(Path(project_root))
     last = None
     if cleaned:
-        when, files, freed = cleaned.split()
-        last = {"when": float(when), "files": int(files), "bytes": int(freed)}
+        when, files, freed, *reason = cleaned.split()
+        last = {"when": float(when), "files": int(files), "bytes": int(freed), "reason": reason[0] if reason else "limit"}
+    _KNOWN.add(root)
     return {"used_bytes": sum(k[1] for k in kinds), "files": sum(k[2] for k in kinds), "limit_bytes": limit_bytes(project_root),
             "limit_gb": setting, "default_bytes": server_default(), "low_water": LOW_WATER,
             "kinds": [{"kind": k, "label": kind_label(k), "bytes": b, "files": n} for k, b, n in kinds],
             "counted": scanned is not None, "busy": _BUSY.get(root), "last_cleanup": last,
-            "in_use_minutes": round(IN_USE_SECONDS / 60)}
+            "in_use_minutes": round(IN_USE_SECONDS / 60), "drive": drive_space(root)}
 
 
 # ---------------------------------------------------------------- the background thread
@@ -610,6 +755,10 @@ def tick() -> None:
             enforce(Path(root).parent.parent)
         except (OSError, sqlite3.Error) as error:
             log.warning("could not clean up the caches in %s: %s", root, error)
+    try:
+        free_space()
+    except (OSError, sqlite3.Error) as error:
+        log.warning("could not make space on the drive: %s", error)
 
 
 def _loop() -> None:

@@ -77,34 +77,46 @@ export function FromPackage({ info, onClose }: { info: ProjectsInfo; onClose: ()
   )
 }
 
+/** How much of the dataset is downloaded, and what that means for the new study. */
+function DownloadedNote({ files, thing }: { files: PackagePreview['files']; thing: string }) {
+  if (files.present === files.listed) return <li>All {plural(files.listed, thing)} are downloaded.</li>
+  if (!files.present) return <li><b>None of the {plural(files.listed, thing)} are downloaded yet.</b> The study can be made now; once some are downloaded,
+    Set up → Images → <i>Look for new files</i> adds them.</li>
+  return <li><b>Downloaded so far: {files.present.toLocaleString()} of {plural(files.listed, thing)}.</b> The study starts with these; when more are
+    downloaded, Set up → Images → <i>Look for new files</i> adds them.</li>
+}
+
 function PackageSummary({ preview, families, onFamily, classMap, onClass }: {
   preview: PackagePreview; families: Record<string, StainFamily>; onFamily: (stain: string, family: StainFamily) => void
   classMap: Record<string, string>; onClass: (label: string, value: string) => void
 }) {
   const raters = Object.entries(preview.raters)
-  const missingFiles = preview.files_checked - preview.files_found
+  const files = preview.files
+  const thing = preview.kind === 'slides' ? 'slide' : 'image'
   const unknown = preview.stains.filter((s) => !(families[s.stain] ?? s.family))
   const unmapped = Object.keys(preview.labels).filter((l) => l && !classMap[l])
   const classes = [...new Set(Object.values(preview.classes).flat())]
   return (
     <>
-      <Found tone={missingFiles || unknown.length ? 'warn' : 'good'}>
-        <b>{preview.title}</b> — {KIND_WORDS[preview.kind]}: {plural(preview.images, preview.kind === 'slides' ? 'slide' : 'image')} from {plural(preview.donors, 'donor')}
+      <Found tone={!files.present || unknown.length ? 'warn' : 'good'}>
+        <b>{preview.title}</b> — {KIND_WORDS[preview.kind]}: {plural(preview.images, thing)} from {plural(preview.donors, 'donor')}
         {preview.annotations > 0 && <>, {plural(preview.annotations, 'label')} by {raters.length === 1 ? raters[0][0] : plural(raters.length, 'rater')}</>}
         {preview.pixel_size_um && <> · {preview.pixel_size_um} µm per pixel</>}
         <ul className="found-notes">
+          <DownloadedNote files={files} thing={thing} />
           {preview.licence && <li>Licence: {preview.licence}</li>}
           {preview.citation && <li>Please cite: {preview.citation}</li>}
-          {missingFiles > 0 && <li>{missingFiles} of the first {preview.files_checked} image files are not where the package says (is the drive connected?)</li>}
           {raters.length > 1 && <li>Each rater's labels become a labelling session of their own{preview.raters.consensus ? '' : ', and stainID adds their consensus (what most of them marked)'}.</li>}
         </ul>
       </Found>
       <div className="field">The stains and what stainID reads them as
         <div className="table-wrap"><table className="compact small">
-          <thead><tr><th>Stain</th><th>Colour</th><th className="num">Images</th><th>Read as</th></tr></thead>
+          <thead><tr><th>Stain</th><th>Colour</th><th className="num">{files.present < files.listed ? 'Downloaded' : thing === 'slide' ? 'Slides' : 'Images'}</th><th>Read as</th></tr></thead>
           <tbody>{preview.stains.map((s) => (
             <tr key={s.stain}><td>{s.stain}{s.antibody && s.antibody !== s.stain ? ` (${s.antibody})` : ''}</td>
-              <td>{s.chromogen}{s.others.length ? ` + ${s.others.join(', ')} (left out)` : ''}</td><td className="num">{s.images.toLocaleString()}</td>
+              <td>{s.chromogen}{s.others.length ? ` + ${s.others.join(', ')} (left out)` : ''}
+                {Object.keys(s.vectors).length > 0 && <span className="muted" title="The package gives the stain colours measured on its own slides; stainID unmixes with them"> · measured colours</span>}</td>
+              <td className="num">{files.present < files.listed ? `${s.present.toLocaleString()} of ${s.images.toLocaleString()}` : s.images.toLocaleString()}</td>
               <td><select value={families[s.stain] ?? s.family} aria-label={`What ${s.stain} is`} onChange={(e) => onFamily(s.stain, e.target.value as StainFamily)}>
                 <option value="">choose…</option>
                 {Object.entries(preview.families).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
@@ -112,6 +124,16 @@ function PackageSummary({ preview, families, onFamily, classMap, onClass }: {
           ))}</tbody>
         </table></div>
       </div>
+      {files.missing > 0 && (
+        <Advanced title="Files not found" hint={`${plural(files.missing, thing)} with a path but no file there`}>
+          <p className="small secondary">The package names these files, but they are not there: not downloaded yet, moved, or on a drive that is not
+            connected. The study starts without them; Look for new files on the Images screen adds them once they are there.</p>
+          <ul className="small found-notes dataset-missing">{files.missing_examples.map((p) => <li key={p}><code>{p}</code></li>)}
+            {files.missing > files.missing_examples.length && <li className="muted">… and {plural(files.missing - files.missing_examples.length, 'more')}</li>}</ul>
+        </Advanced>
+      )}
+      <p className="small muted">The pictures stainID makes for viewing this study may take up to {preview.cache_limit_gb} GB of disk space (change it
+        later in Settings); fewer are kept whenever the drive runs low.</p>
       {Object.keys(preview.labels).length > 0 && (
         <Advanced title="What the labels mean" hint={unmapped.length ? `${plural(unmapped.length, "label")} without a stainID class` : `${plural(Object.keys(preview.labels).length, "label")}, mapped by the package`}>
           <p className="small secondary">Each label of the dataset is one of stainID's classes, or left out. The package says most of this; change it here, or later on
