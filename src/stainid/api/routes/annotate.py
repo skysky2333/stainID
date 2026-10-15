@@ -16,12 +16,15 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
-from stainid.api import pyramid, render
+from stainid import cache
+from stainid.api import label_crops, pyramid, render
 from stainid.api.routes.images import OVERLAYS
 from stainid.api.session import annotator, annotator_name, is_admin, require_admin
 from stainid.api.state import get_state
-from stainid.labels import overview, pool, readiness, sessions, store
-from stainid.labels.tasks import CLASSES, CROP_UM, FIELD_TAGS, INSTRUCTIONS, NEGATIVE, STAINS, positive
+from stainid.labels import frames, overview, pool, readiness, sessions, store
+from stainid.labels import objects as label_objects
+from stainid.labels.overview import UNTYPED
+from stainid.labels.tasks import CLASSES, CROP_UM, FIELD_TAGS, INSTRUCTIONS, NEGATIVE, SKIP, STAINS, positive
 
 router = APIRouter(tags=["labels"])
 BUSY_SECONDS = 15 * 60
@@ -31,6 +34,7 @@ _BUSY_LOCK = threading.Lock()
 admin = [Depends(require_admin)]
 FIELD_FACTS = ("core_id", "core_label", "tma", "region", "disease_group")
 BOX = ("x_px", "y_px", "width_px", "height_px")
+SPLIT = "people disagree"  # an object people labelled differently, as many for one class as for another
 
 
 def root() -> Path:
@@ -179,36 +183,137 @@ def label_sets(stain: str) -> list[dict]:
     return sessions.label_sets(store.current(root()), stain, _titles())
 
 
-@router.get("/labels/sessions/{name}/labels", dependencies=admin)
-def session_labels(name: str, request: Request, stain: str = "", value: str = "", tile: str = "", offset: int = 0, limit: int = 24) -> dict:
-    """What one session (or the reference labels) holds: counts per class and person, and its fields with every
-    labelled object (positions in field-picture pixels), filtered by class or field, a page of fields at a time."""
+OBJECTS_PAGE = 60
+
+
+def _session_objects(name: str, labels: pd.DataFrame, stain: str) -> pd.DataFrame:
+    """The labelled objects of one session and stain (`labels.objects.labelled`), kept until a label or pool changes."""
+    state = get_state()
+    mine = labels[sessions.session_of(labels) == name]
+    return cache.memo(("session objects", str(state.root), name, stain), [store.log_path(root()), pool.folder(state.project, stain)],
+                      lambda: label_objects.labelled(state.project, state.tiles, mine, stain), folders=True)
+
+
+def vocabulary_of(stain: str) -> list[str]:
+    """Every class a label of this stain can show, in a fixed order (the class's colour in the labels view): the
+    stain's positive classes, the untyped positive of earlier label sets, the others, and objects people split on."""
+    classes = CLASSES[stain]
+    untyped = [UNTYPED[k] for k in UNTYPED if positive(stain, k) and k not in classes]
+    return [*(c for c in classes if positive(stain, c)), *untyped, *(c for c in classes if not positive(stain, c)), SPLIT]
+
+
+def _display(value: str) -> str:
+    """A class as the labels view names it: split objects and the untyped positives of earlier label sets in words."""
+    return SPLIT if value == "" else UNTYPED.get(value, value)
+
+
+def ai_verdict(stain: str, value: str, ai: str | None) -> str | None:
+    """How the AI's call compares with the label: "agrees", "type" (both positive, another type), "disagrees", or None
+    (no AI call there, or the label is "unsure" or split)."""
+    if ai is None or value in SKIP:
+        return None
+    if positive(stain, value) != positive(stain, ai):
+        return "disagrees"
+    return "agrees" if value == ai or not positive(stain, value) or value in UNTYPED or ai in UNTYPED else "type"
+
+
+def _place(state, tile_id: str, kind: str | None, facts: dict[str, dict]) -> dict:
+    if kind == frames.FIELD:
+        return {k: facts.get(tile_id, {}).get(k) for k in FIELD_FACTS}
+    if kind == frames.CORE:  # from the core's own row, else from one of its tiles
+        rows = [t[t.core_id == tile_id].iloc[0].to_dict() for t in (state.core_images, state.tiles) if not t.empty and (t.core_id == tile_id).any()]
+        return {k: next((_text(r.get(k)) for r in rows if _text(r.get(k)) is not None), None) for k in FIELD_FACTS}
+    return {}
+
+
+def _outline(state, spot: label_crops.Spot, outlines: pd.DataFrame, size: int) -> tuple[list | None, str | None]:
+    """The object's outline in crop pixels: one a person drew, else the AI's mask outline."""
+    near = outlines[(outlines.tile_id == spot.tile_id) & (np.hypot(outlines.x.astype(float) - spot.x, outlines.y.astype(float) - spot.y) <= pool.MATCH_PX)]
+    if len(near) and isinstance(near.points.iloc[-1], list):
+        x0, y0 = round(spot.x) - size // 2, round(spot.y) - size // 2
+        return [[float(px) - x0, float(py) - y0] for px, py in near.points.iloc[-1]], "person"
+    try:
+        found = label_crops.outline(state, spot)
+    except (OSError, ValueError, KeyError):
+        found = None
+    return (found, "AI") if found else (None, None)
+
+
+@router.get("/labels/sessions/{name}/objects", dependencies=admin)
+def session_objects(name: str, request: Request, stain: str = "", values: str = "", tile: str = "", person: str = "", ai: str = "",
+                    offset: int = 0, limit: int = OBJECTS_PAGE) -> dict:
+    """The labelled objects of one session (or of the reference labels), each as the crop the model sees around it: what
+    people said, the AI's call, the object's outline or size, where it is, and whether its crop is ready (crops that
+    need their core image decoded are queued; ask again). Filtered by classes (comma-separated), field or core,
+    person and how the AI compares; a page at a time. Positions are in each label's own frame (`labels.frames`)."""
     reference = name == sessions.REFERENCE
     meta = {"title": sessions.REFERENCE_TITLE, "stain": ""} if reference else session_meta(name, request)
+    state = get_state()
     labels = store.current(root())
-    mine = labels[(sessions.session_of(labels) == name) & (labels.task == "class")]
-    stains = sorted(set(mine.stain))
+    classes_of = labels[(sessions.session_of(labels) == name) & (labels.task == "class")]
+    stains = sorted(set(classes_of.stain))
     stain = stain or meta.get("stain") or (stains[0] if stains else "")
-    mine = mine[mine.stain == stain]
-    classes = {str(k): int(v) for k, v in mine.value.value_counts().items()}
-    people = {str(k): int(v) for k, v in mine.source.value_counts().items()}
-    if value:
-        mine = mine[mine.value == value]
+    if stain not in STAINS:
+        return {"name": name, "title": meta.get("title", name), "reference": reference, "stain": stain, "stains": stains, "vocabulary": [],
+                "classes": {}, "people": {}, "ai": {}, "objects": [], "total": 0, "all": 0, "crop": None, "preparing": None}
+    found = _session_objects(name, labels, stain)
+    verdicts = [ai_verdict(stain, v, a) for v, a in zip(found.value, found.ai_value)] if len(found) else []
+    found = found.assign(verdict=verdicts, shown=found.value.map(_display)) if len(found) else found.assign(verdict=[], shown=[])
+    classes = {str(k): int(v) for k, v in found.shown.value_counts().items()}
+    vocabulary = [*vocabulary_of(stain), *sorted(set(classes) - set(vocabulary_of(stain)))]
+    people = {str(k): int(v) for k, v in pd.Series([s for ss in found.sources for s in ss]).value_counts().items()} if len(found) else {}
+    ai_counts = {k: int(v) for k, v in found.verdict.fillna("unknown").value_counts().items()}
+    chosen = found
+    if values:
+        chosen = chosen[chosen.shown.isin(set(values.split(",")))]
     if tile:
-        mine = mine[mine.tile_id.str.contains(tile, case=False, regex=False)]
-    order = sorted(set(mine.tile_id))
-    page = order[max(0, offset): max(0, offset) + max(1, min(limit, 96))]
-    facts = _field_facts(page)
-    context = get_state().project.context_px
-    fields = []
-    for tile_id in page:
-        info = facts.get(tile_id)
-        group = mine[mine.tile_id == tile_id]
-        objects = [{"x": float(r.x), "y": float(r.y), "value": r.value, "source": r.source} for r in group.itertuples()]
-        offset_xy = [info["x_px"] - max(0, info["x_px"] - context), info["y_px"] - max(0, info["y_px"] - context)] if info else None
-        fields.append({"tile_id": tile_id, **(info or {}), "picture": info is not None, "offset": offset_xy, "objects": objects})
-    return {"name": name, "title": meta.get("title", name), "reference": reference, "stain": stain, "stains": stains, "classes": classes,
-            "people": people, "fields": fields, "total_fields": len(order), "objects": int(len(mine))}
+        chosen = chosen[chosen.tile_id.str.contains(tile, case=False, regex=False)]
+    if person:
+        chosen = chosen[chosen.sources.apply(lambda ss: person in ss)]
+    if ai:
+        chosen = chosen[chosen.verdict.fillna("unknown").isin(set(ai.split(",")))]
+    page = chosen.iloc[max(0, offset): max(0, offset) + max(1, min(limit, 120))]
+    size = label_crops.size_px(state, stain)
+    facts = _field_facts(sorted(set(page.tile_id)))
+    outlines = labels[(labels.task == "outline") & (labels.stain == stain) & (sessions.session_of(labels) == name)]
+    outlines = frames.in_field_frame(outlines, state.tiles, state.project.context_px)
+    items, waiting = [], []
+    for r in page.itertuples():
+        spot = label_crops.Spot(stain, r.tile_id, float(r.x), float(r.y))
+        kind = label_crops.frame(state, r.tile_id, stain)
+        crop = label_crops.status(state, spot) if kind else {"state": "missing"}
+        if crop["state"] in ("waiting", "preparing"):
+            waiting.append((label_crops.core_of(state, spot) or ("",))[0])
+        points, drawn_by = _outline(state, spot, outlines, size) if kind else (None, None)
+        on_core = label_crops.core_of(state, spot) if kind else None
+        items.append({"tile_id": r.tile_id, "x": float(r.x), "y": float(r.y), "frame": kind, "value": r.shown,
+                      "labels": [{**label, "value": _display(label["value"])} for label in r.labels],
+                      "time": r.time, "ai_value": r.ai_value, "ai_probability": r.ai_probability, "ai": r.verdict,
+                      "radius_px": None if r.radius_px is None or pd.isna(r.radius_px) else round(float(r.radius_px), 1),
+                      "outline": points, "outline_by": drawn_by, "crop": crop, **_place(state, r.tile_id, kind, facts),
+                      "core_x": round(on_core[1]) if on_core else None, "core_y": round(on_core[2]) if on_core else None})
+    preparing = {"objects": len(waiting), "cores": len(set(waiting)),
+                 "ahead": max([i["crop"].get("ahead", 0) for i in items if i["crop"]["state"] == "waiting"], default=0)} if waiting else None
+    return {"name": name, "title": meta.get("title", name), "reference": reference, "stain": stain, "stains": stains, "vocabulary": vocabulary,
+            "classes": classes, "people": people, "ai": ai_counts, "objects": items, "total": int(len(chosen)), "all": int(len(found)),
+            "crop": {"size_px": size, "um": CROP_UM[stain], "pixel_um": state.project.pixel_size_um}, "preparing": preparing}
+
+
+@router.get("/labels/crops/{stain}/{tile_id}.jpg", dependencies=admin)
+def label_crop(stain: str, tile_id: str, x: float, y: float) -> FileResponse:
+    """The crop around one labelled object (positions as `session_objects` gives them); 409 while its core image is
+    still being read."""
+    if stain not in STAINS:
+        raise HTTPException(404, f"unknown stain {stain}")
+    state = get_state()
+    spot = label_crops.Spot(stain, tile_id, x, y)
+    try:
+        return FileResponse(label_crops.get(state, spot), headers={"Cache-Control": "private, max-age=86400"})
+    except label_crops.NotReady as error:
+        label_crops.status(state, spot)
+        raise HTTPException(409, str(error)) from error
+    except (KeyError, FileNotFoundError) as error:
+        raise HTTPException(404, str(error).strip("'")) from error
 
 
 @router.get("/labels/share", dependencies=admin)

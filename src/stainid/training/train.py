@@ -19,10 +19,11 @@ from sklearn.metrics import precision_score, recall_score, roc_auc_score
 from sklearn.model_selection import LeaveOneGroupOut, StratifiedGroupKFold
 from sklearn.pipeline import make_pipeline
 
-from stainid.labels import pool, store
+from stainid.labels import frames, pool, store
 from stainid.labels import sessions as label_sessions
 from stainid.labels.tasks import MODEL_KEY
 from stainid.project import Project, save_project
+from stainid.sampling.tiles import known_tiles
 from stainid.stains.amyloid.model import MORPHOTYPE_MINIMUM_DIAMETER_UM, morphotype_threshold
 
 MINIMUM_PER_CLASS = 10
@@ -36,7 +37,8 @@ def forest():
 def labelled(project: Project, stain: str, sessions: list[str] | None = None) -> tuple[pd.DataFrame, list[str]]:
     """Consensus-labelled objects with their candidate features (one row per object), from the labels of these
     sessions (`labels.sessions.in_sessions`; all labels when None)."""
-    truth = store.consensus(label_sessions.in_sessions(store.current(project.output("reviews")), sessions), stain)
+    labels = frames.in_field_frame(store.current(project.output("reviews")), known_tiles(project), project.context_px)
+    truth = store.consensus(label_sessions.in_sessions(labels, sessions), stain)
     truth = truth[truth.positive.notna()]
     names = pool.feature_names(project, stain)
     rows = []

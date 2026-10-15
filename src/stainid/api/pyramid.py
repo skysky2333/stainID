@@ -234,6 +234,25 @@ def tile(state: ProjectState, core_id: str, stain: str, level: int, col: int, ro
         return handle.read(length)
 
 
+def region(state: ProjectState, core_id: str, stain: str, x0: int, y0: int, width: int, height: int) -> np.ndarray | None:
+    """Full-resolution pixels (BGR) of a box of a core image, read from the few pyramid tiles it touches (white beyond
+    the image); None when the core has no up-to-date pyramid."""
+    index = _index(state, core_id, stain)
+    if index is None:
+        return None
+    level = index["levels"][0]
+    out = np.full((height, width, 3), 255, np.uint8)
+    for row in range(max(0, y0 // TILE), min(level["rows"], (y0 + height - 1) // TILE + 1)):
+        for col in range(max(0, x0 // TILE), min(level["cols"], (x0 + width - 1) // TILE + 1)):
+            part = cv2.imdecode(np.frombuffer(tile(state, core_id, stain, 0, col, row), np.uint8), cv2.IMREAD_COLOR)
+            tx, ty = col * TILE, row * TILE
+            ax0, ay0 = max(x0, tx), max(y0, ty)
+            ax1, ay1 = min(x0 + width, tx + part.shape[1]), min(y0 + height, ty + part.shape[0])
+            if ax1 > ax0 and ay1 > ay0:
+                out[ay0 - y0:ay1 - y0, ax0 - x0:ax1 - x0] = part[ay0 - ty:ay1 - ty, ax0 - tx:ax1 - tx]
+    return out
+
+
 _DAB_TILES: OrderedDict[tuple, bytes] = OrderedDict()
 _DAB_BYTES = 24 * 2**20  # memory kept for rendered DAB tiles
 
