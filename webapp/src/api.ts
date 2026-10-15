@@ -32,6 +32,8 @@ export interface ProjectInfo {
   groups: Group[]
   paths: Record<string, Record<string, PathInfo>>
   recent: string[]
+  kind?: ProjectKind
+  kind_label?: string
 }
 export interface StepOption { key: string; label: string; kind: 'number' | 'text' | 'select' | 'stains' | 'bool'; default: unknown; help: string; choices: string[]; advanced: boolean }
 export interface ResourceInfo {
@@ -63,17 +65,18 @@ export type ProjectState = 'not_set_up' | 'set_up' | 'running' | 'results' | 'mi
 export interface ProjectEntry {
   id: string; name: string; path: string; last_opened: number | null; in_projects_dir: boolean; exists: boolean
   status: { state: ProjectState; text: string; running: string[] }
+  kind?: ProjectKind; kind_label?: string
 }
 export interface ProjectsInfo {
   projects: ProjectEntry[]; default: string | null; projects_dir: string; projects_dir_from: '' | 'setting' | 'command line'
-  copyable: Record<string, string>
+  copyable: Record<string, string>; kinds?: Record<ProjectKind, string>
 }
 
 /* the guided setup (/api/setup) */
 export type ScreenState = 'done' | 'todo' | 'attention' | 'warning' | 'optional' | 'running'
 export interface SetupScreen { id: string; title: string; state: ScreenState; summary: string }
 export interface Estimate { seconds: number; steps: { id: string; seconds: number }[]; device: string; slides: number; cores: number; tiles: number; text: string; slowest: string }
-export interface SetupOverview { screens: SetupScreen[]; set_up: boolean; estimate: Estimate; remaining: { id: string; title: string }[] }
+export interface SetupOverview { screens: SetupScreen[]; set_up: boolean; estimate: Estimate; remaining: { id: string; title: string }[]; kind?: ProjectKind }
 export interface GridReport {
   rows?: number; columns?: number; grid_source?: string; score?: number; rmse_preview_px?: number; cores_on_grid?: number; positions?: number
   positions_with_tissue?: number; tried?: { rows: number; columns: number; score: number | null }[]; error?: string; checked?: boolean; time?: number
@@ -159,6 +162,7 @@ export interface SessionInfo {
   fields?: number; fields_covered?: number; fields_prepared?: number; labellers: Labeller[]; labelling_now: number
   pictures?: QueuePictures  // quick-check queues
   subtypes?: boolean  // people are asked for the type of objects (sessions made before this choice: yes)
+  read_only?: boolean; imported?: { dataset: string; rater: string }  // labels imported from a dataset package
 }
 export interface Labeller { person: string; fields_done: number; labels: number; changed: number; confirmed: number; outlines: number; tags: number; last_active: number }
 export interface LabelsOverview { stains: StainOverview[]; sessions: SessionInfo[]; reference: ReferenceLabels | null }
@@ -338,3 +342,37 @@ export interface ClassGroup { id: string; name: string; role: ClassRole; colour:
 /** Every stain's classes (as used, and as built in) and how long a type may follow a class key. */
 export interface ClassSettings { stains: Record<string, Vocabulary>; builtin: Record<string, Vocabulary>; subtype_wait_s: number }
 export const classExample = (stain: string, file: string) => apiUrl(`/api/annotate/class-examples/${enc(stain)}/${enc(file)}`)
+/* ---- project kinds: image sets, whole slides, dataset packages, scoring on imported labels ---- */
+export type ProjectKind = 'tma' | 'images' | 'slides'
+export type StainFamily = 'amyloid' | 'tau' | 'neun' | 'ignore' | ''
+export interface ImageRow { image_id: string; path: string; stain: string; donor_id: string; region: string; [column: string]: string }
+export interface StainSetting {
+  stain: string; images: number; family: StainFamily; chromogen: string; others: string[]; analysed_as: string; set: boolean; guess: string
+}
+export interface ImagesOverview {
+  kind: ProjectKind; kind_label: string; total: number; rows: ImageRow[]; donors: number; stains: StainSetting[]; problems: string[]
+  families: Record<string, string>; chromogens: { id: string; label: string }[]
+  imaging: { native_pixel_size_um: number | null; rescale: 'on_import' | 'on_the_fly'; analysis_pixel_size_um: number }
+  pixel_sizes: Record<string, number>; readers: Record<string, boolean>; path: string
+  dataset: { id?: string; title?: string; licence?: string; citation?: string; package?: string }
+}
+export interface PackageStain { stain: string; antibody: string; chromogen: string; chromogen_written: string; counterstain: string; others: string[]; family: StainFamily; images: number }
+export interface PackagePreview {
+  folder: string; id: string; title: string; kind: ProjectKind; licence: string; citation: string; source: string | string[]; doi: string
+  sites: string | string[]; notes: string; images: number; donors: number; donor_rows: number; pixel_size_um: number | null; stains: PackageStain[]
+  annotations: number; raters: Record<string, number>; annotation_kinds: Record<string, number>; labels: Record<string, number>
+  class_map: Record<string, string>; classes: Record<string, string[]>; families: Record<string, string>; files_found: number; files_checked: number
+  splits: Record<string, number>
+}
+export interface ScoreRow {
+  stain: string; rater: string; kind: 'objects' | 'image'; class: string; images: number; marks: number; found: number; missed: number
+  ai_objects: number; ai_unmarked: number; precision: number | null; recall: number | null; f1: number | null; auc: number | null; iou_recall: number | null
+}
+export interface RaterAgreement { stain: string; rater: string; other: string; shared_images: number; object_f1: number | null; image_kappa: number | null }
+export interface Scores { time: number; dataset: string; rows: ScoreRow[]; agreement: RaterAgreement[]; models: Record<string, string>; summary: string[] }
+export interface ImportedLabels {
+  dataset: { id: string; title: string; licence: string; citation: string; doi: string; package: string } | null
+  class_map?: Record<string, string>; labels?: Record<string, number>; classes?: Record<string, string[]>
+  import?: { annotations: number; raters: string[]; consensus: boolean; sessions: string[]; notes: string[]; by_rater: Record<string, number> } | null
+  placed?: Record<string, number>; scores?: Scores | null
+}

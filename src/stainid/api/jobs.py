@@ -22,7 +22,7 @@ from pathlib import Path
 
 from stainid.jobs import ACTIVE, APP, COMMAND_LINE, JOB_ENV, Job, JobStore, alive, new_id, stop
 from stainid.project import ENVIRONMENT_KEYS, load_project
-from stainid.workflows.steps import BY_ID, RESOURCES, STEPS, resource_info, to_argv, wait_reason
+from stainid.workflows.steps import BY_ID, RESOURCES, maker_of, resource_info, to_argv, wait_reason
 
 RESCAN_SECONDS = 3.0
 ELSEWHERE_SECONDS = 10.0
@@ -247,7 +247,7 @@ class JobManager:
         missing = [r for r in step.needs if not resource_info(project, r)["exists"]]
         if not missing:
             return ""
-        makers = {r: next((s.title for s in STEPS if r in s.produces), "") for r in missing}
+        makers = {r: getattr(maker_of(project, r), "title", "") for r in missing}
         return "Not started: missing " + "; ".join(f"{RESOURCES[r].label}" + (f" (made by “{m}”)" if m else "") for r, m in makers.items())
 
     def _schedule(self) -> None:

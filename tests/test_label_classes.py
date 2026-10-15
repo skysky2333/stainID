@@ -111,6 +111,25 @@ def test_types_follow_the_people_who_gave_one():
     assert (found.loc[9.0, "value"], found.loc[9.0, "subtype"], found.loc[9.0, "positive"]) == ("tau+ neuron", "", True)
 
 
+def test_dataset_class_maps_may_name_types(tmp_path):
+    """A dataset package's class map may target a type ("plaque/compact"): its labels are stored as identity and type,
+    and the scores take the AI's "compact plaque" as the same type."""
+    from stainid.imageset import annotations, package, scoring
+    from stainid.project import load_project
+
+    choices = package.class_choices()
+    assert {"plaque", "plaque/compact", "CAA", "intraneuronal"} <= set(choices["amyloid"]) and "tau+ neuron/pretangle" in choices["tau"]
+    assert "unsure" not in choices["neun"]
+    frame = pd.DataFrame([{"kind": "point", "x": 5.0, "y": 6.0, "tile_id": "T", "stain": "6E10", "class": "plaque/compact"},
+                          {"kind": "point", "x": 9.0, "y": 6.0, "tile_id": "T", "stain": "AT8", "class": "tau+ neuron/pretangle"},
+                          {"kind": "point", "x": 9.0, "y": 9.0, "tile_id": "T", "stain": "6E10", "class": "vascular"}])
+    records = annotations._label_records(load_project(tmp_path), frame, "import: x", "import-x")
+    assert [(r["value"], r["subtype"]) for r in records] == [("plaque", "compact"), ("tau+ neuron", "pretangle"), ("CAA", None)]
+    assert scoring._kind("6E10", "plaque/compact") == scoring._kind("6E10", "compact plaque") == "plaque/compact"
+    assert scoring._same_class("plaque/compact", "compact plaque", "6E10") and not scoring._same_class("plaque/compact", "diffuse plaque", "6E10")
+    assert scoring._same_class("plaque", "diffuse plaque", "6E10")  # no type marked: any plaque
+
+
 # ---------- the keys ----------
 
 

@@ -76,6 +76,7 @@ KINDS: dict[str, str] = {
     "object_crops": "Pictures of labelled objects",
     "slide_pictures": "Scan pictures",
     "core_tiles": "Zoomable core pictures (older format)",
+    "images": "Images at the analysis scale (image sets)",
 }
 _KIND = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 _MARKER = f"{os.sep}data{os.sep}cache{os.sep}"

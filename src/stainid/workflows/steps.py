@@ -71,6 +71,7 @@ class Step:
     uses: tuple[str, ...] = ()
     writes: tuple[str, ...] = ()
     waits_for_uses: bool = True  # False: start while a step that makes a `uses` input runs (takes what is there already)
+    kinds: tuple[str, ...] = ("tma", "images", "slides")  # the project kinds the step belongs to (`stainid.project.KINDS`)
 
     def reads(self) -> set[str]:
         return set(self.needs) | set(self.uses)
@@ -114,6 +115,20 @@ def _whole_core_status(project: Project) -> dict:
     tiles = _rows(project.input("whole_core_manifest"), TILE_COLUMNS)
     cores = {(r["core_id"], r["stain"]) for r in tiles}
     return _state(len(tiles), len(tiles), "tiles", f"{len(cores)} core images") if tiles else _state(0, 0, "tiles")
+
+
+def _images_status(project: Project) -> dict:
+    """Prepare images: done when every image of the image list that is analysed (its stain has a model family and it has
+    a donor) is in the core image table, and the list has not changed since."""
+    from stainid.imageset.table import read_images
+    from stainid.imaging.settings import analysis_stain
+
+    wanted = [r for r in read_images(project) if r.get("donor_id") and analysis_stain(project, r.get("stain", ""))]
+    made = project.input("whole_core_manifest")
+    done = {r["image_id"] for r in _rows(project.input("core_images"), ("image_id",))} if made.exists() else set()
+    listed = project.input("image_list")
+    outdated = made.exists() and listed.exists() and listed.stat().st_mtime > made.stat().st_mtime
+    return _state(sum(r.get("image_id") in done for r in wanted), len(wanted), "images", outdated=outdated)
 
 
 def _column_filled(column: str) -> Callable[[Project], bool]:
@@ -247,6 +262,11 @@ RESOURCES = {r.id: r for r in (
              format="A folder with one whole-slide scan per TMA and stain, for example:\n  TMA 1 NeuN.vsi (+ its _TMA 1 NeuN_ folder)\n  TMA 1 AT8.vsi\n"
                     "  TMA 2 6E10.svs\nOlympus .vsi, Aperio .svs, Hamamatsu .ndpi, Leica .scn, Zeiss .czi and pyramidal .tif all work. "
                     "Putting the TMA number and the stain in each file name lets stainID fill in the slides table for you."),
+    Resource("image_list", "Image list", "Every image (or whole slide) of the study, with its donor and stain.", lambda p: p.input("image_list"),
+             setting="inputs.image_list",
+             format="A CSV table with one row per image: path (where the file is), stain (as your lab calls it, e.g. 4G8 or PHF-1), "
+                    "donor_id, and optionally image_id, region, slide_id, site, batch, pixel_size_um, disease_group and split. "
+                    "Set up → Images makes it for you from a folder."),
     Resource("slides_table", "Slides table", "Which scan is which TMA and stain.", lambda p: p.input("slides_table")),
     Resource("core_manifest", "Core table", "One row per core position on each slide: where it is, which donor it belongs to, its QC.",
              lambda p: p.input("core_manifest")),
@@ -300,7 +320,7 @@ DEVICE = Option("device", "Processor", "select", GPU, "mps = Apple GPU (Apple-si
 STEPS = (
     Step("slides", "1 · Set up", "Register slides", "Tell stainID which scan is which TMA and stain.",
          "Pick the folder with your whole-slide scans. stainID lists them and guesses the TMA number and stain from each file name; "
-         "check the guesses and fix any that are wrong, then save.", ("slides_dir",), ("slides_table",), None, status=_slides_status),
+         "check the guesses and fix any that are wrong, then save.", ("slides_dir",), ("slides_table",), None, status=_slides_status, kinds=("tma",)),
     Step("dearray", "1 · Set up", "Find cores", "Locate every core on each slide by fitting the TMA grid.",
          "Reads a small preview of each slide, fits the grid of cores and re-centres each core on its tissue. A slide without its own "
          "rows and columns in the slides table gets the grid size that fits best (the size in Settings unless another fits clearly "
@@ -311,31 +331,43 @@ STEPS = (
          (Option("redo", "Redo all slides", "bool", False, "Fit the grid again on slides that were already done.", advanced=True),
           Option("slide", "Only these slides", "text", "", "File names of slides to find again, separated by commas (the others are left as they are).",
                  advanced=True)),
-         heavy=True, view="/setup/cores", duration="about 1 minute per slide", status=_dearray_status, writes=("core_manifest", "slides_table")),
+         heavy=True, view="/setup/cores", duration="about 1 minute per slide", status=_dearray_status, writes=("core_manifest", "slides_table"),
+         kinds=("tma",)),
     Step("layout", "1 · Set up", "Attach TMA map", "Say which donor, region and group sits at each core position.",
          "Upload a spreadsheet (CSV) with one row per core position: tma, core_label (e.g. B-2), donor_id, region and disease_group. "
          "Leave donor_id empty for orientation or control cores. Download the template to start.",
          ("core_manifest", "tma_layout"), ("core_groups",), ("layout",), status=_manifest_status("core_role", "core positions"),
-         writes=("core_manifest",)),
+         writes=("core_manifest",), kinds=("tma",)),
     Step("export", "1 · Set up", "Export cores", "Cut every core out of the slide at full resolution.",
          "Writes one PNG per core and stain. Finished cores are skipped, so this can be stopped and restarted.",
          ("core_manifest",), ("core_images",), ("export",),
          (Option("workers", "Parallel writers", "number", 2, "How many images are written at once.", advanced=True),
           Option("overwrite", "Export again", "bool", False, "Re-export cores that already exist.", advanced=True)),
          heavy=True, view="/cohort", duration="about 1–2 minutes per slide",
-         status=_manifest_status("export_status", only=lambda r: r.get("core_role") == "biological"), writes=("core_manifest",)),
+         status=_manifest_status("export_status", only=lambda r: r.get("core_role") == "biological"), writes=("core_manifest",),
+         kinds=("tma",)),
     Step("qc", "1 · Set up", "Check core quality", "Measure tissue coverage, fragments and focus of every core.",
          "Flags cores that are mostly empty, torn or out of focus so they can be reviewed. Only tissue and focus are measured, never the stain.",
          ("core_images",), ("core_quality", "core_qc_images"), ("qc",),
          (Option("workers", "Parallel workers", "number", 2, advanced=True), Option("overwrite", "Measure again", "bool", False, advanced=True)),
          heavy=True, view="/cohort", duration="a few seconds per core",
-         status=_manifest_status("tissue_status", only=lambda r: r.get("export_status") == "complete"), writes=("core_manifest",)),
+         status=_manifest_status("tissue_status", only=lambda r: r.get("export_status") == "complete"), writes=("core_manifest",),
+         kinds=("tma",)),
     Step("tiles", "1 · Set up", "Cut cores into tiles", "Cover each core's tissue with ~560 µm tiles; detection looks at every one.",
          "Lays a grid of square tiles over each core image and keeps every square that holds tissue, including the narrower squares at the "
          "image edges, so detection covers the whole core without overlap.", ("core_groups", "core_quality"), ("tiles",), ("tiles",),
          (Option("tile_size", "Tile size (pixels)", "number", 2048, "Side of each square tile; 2048 px is about 560 µm at 0.27 µm/px.",
                  advanced=True),),
-         heavy=True, view="/cohort", duration="a few seconds per core", status=_whole_core_status),
+         heavy=True, view="/cohort", duration="a few seconds per core", status=_whole_core_status, kinds=("tma",)),
+    Step("images", "1 · Set up", "Prepare images", "Bring every image to the models' scale and colours and cut it into tiles.",
+         "Reads every image of the image list where it lies (nothing is copied): images at another pixel size are enlarged or "
+         "reduced to the analysis scale, stains in another colour are turned into brown-on-blue, whole slides are split into "
+         "regions of tissue; then every image (or region) is cut into ~560 µm tiles, and the labels of a dataset package are "
+         "placed on them. Run it again after changing the image list or the imaging settings.",
+         ("image_list",), ("tiles",), ("images",),
+         (Option("tile_size", "Tile size (pixels)", "number", 2048, "Largest side of a tile; 2048 px is about 560 µm at 0.27 µm/px. Smaller "
+                 "images are one tile each.", advanced=True),),
+         heavy=True, view="/setup/images", duration="a few seconds per image", status=_images_status, kinds=("images", "slides")),
     Step("calibrate", "1 · Set up", "Calibrate stain thresholds", "Find the brown-stain (DAB) cut-off for every slide.",
          "Pools tissue pixels from every tile of every core of a slide and sets one threshold per slide, blind to diagnosis. Everything "
          "downstream is measured relative to it, so slides stained a little darker or lighter stay comparable. Slides that already have a "
@@ -437,16 +469,26 @@ def wait_reason(earlier: Step, later: Step, running_from: str = "") -> str:
     return f"Waits for {which} to finish (both write: {RESOURCES[sorted(shared)[0]].label})" if shared else ""
 
 
-def depends_on(step: Step) -> list[str]:
+def steps_for(project: Project) -> tuple[Step, ...]:
+    """The steps of this project's kind (a TMA study finds and exports cores; image sets and whole slides prepare images)."""
+    return tuple(s for s in STEPS if project.kind in s.kinds)
+
+
+def depends_on(step: Step, steps: tuple[Step, ...] = STEPS) -> list[str]:
     """Steps that make what this step needs or uses: the arrows of the pipeline map."""
-    return [s.id for s in STEPS if s.id != step.id and set(s.produces) & step.reads()]
+    return [s.id for s in steps if s.id != step.id and set(s.produces) & step.reads()]
+
+
+def maker_of(project: Project, resource_id: str) -> Step | None:
+    """The step of this project's kind that makes a resource."""
+    return next((s for s in steps_for(project) if resource_id in s.produces), None)
 
 
 def resource_info(project: Project, resource_id: str) -> dict:
     resource = RESOURCES[resource_id]
     path = resource.path(project)
     exists = resource.ready(project) if resource.ready else _has_content(path)
-    maker = next((s for s in STEPS if resource_id in s.produces), None) if not resource.download else None
+    maker = maker_of(project, resource_id) if not resource.download else None
     return {"id": resource.id, "label": resource.label, "description": resource.description, "path": project.relative(path), "exists": exists,
             "made_by": {"id": maker.id, "title": maker.title} if maker else None, "download": resource.download,
             "template": resource.template, "setting": resource.setting, "format": resource.format}
@@ -454,13 +496,14 @@ def resource_info(project: Project, resource_id: str) -> dict:
 
 def describe(project: Project) -> list[dict]:
     out = []
-    for step in STEPS:
-        info = {k: v for k, v in asdict(step).items() if k != "status"}
+    steps = steps_for(project)
+    for step in steps:
+        info = {k: v for k, v in asdict(step).items() if k not in ("status", "kinds")}
         info["options"] = [asdict(o) for o in step.options]
         info["needs"] = [resource_info(project, r) for r in step.needs]
         info["uses"] = [resource_info(project, r) for r in step.uses]
         info["produces"] = [resource_info(project, r) for r in step.produces]
-        info["after"] = depends_on(step)
+        info["after"] = depends_on(step, steps)
         info["progress"] = step.status(project)
         out.append(info)
     return out

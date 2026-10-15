@@ -12,7 +12,7 @@ const fixKey = (fix: Fix) => fix.label + JSON.stringify(fix.args)
 
 export default function ChecksScreen(props: ScreenProps) {
   const issues = useFetch<Issue[]>('/api/setup/checks')
-  return <ScreenData state={issues} label="Comparing the maps, the donor table and the slides…">{(list) => <Checks {...props} list={list} reload={issues.reload} />}</ScreenData>
+  return <ScreenData state={issues} label="Comparing what was set up…">{(list) => <Checks {...props} list={list} reload={issues.reload} />}</ScreenData>
 }
 
 function Checks({ next, back, nextLabel, go, onChanged, list, reload }: ScreenProps & { list: Issue[]; reload: () => void }) {

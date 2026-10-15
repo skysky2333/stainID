@@ -12,6 +12,7 @@ from functools import cached_property
 import numpy as np
 from PIL import Image
 
+from stainid.imaging.core_images import open_image
 from stainid.imaging.tissue import fold_mask, linear_artifact_mask
 from stainid.pipelines.cohort_v1 import context_crop
 from stainid.project import Project
@@ -49,7 +50,7 @@ class FieldLoader:
 
     def load(self, tile: dict[str, str]) -> Field:
         x, y = int(tile["x_px"]), int(tile["y_px"])
-        with Image.open(self.project.root / tile["image_path"]) as image:
+        with open_image(self.project.root / tile["image_path"]) as image:
             rgb, inner = context_crop(image, x, y, int(tile["width_px"]), int(tile["height_px"]), self.project.context_px)
         manual = rasterize_core_exclusions(self.manual.get(tile["image_path"], []), x - inner[1].start, y - inner[0].start, rgb.shape[:2])
         pixel_size = float(np.sqrt(float(tile["pixel_width_um"]) * float(tile["pixel_height_um"])))

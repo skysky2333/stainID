@@ -131,7 +131,7 @@ LEGACY: dict[str, dict[str, tuple[str, str]]] = {
     "AT8": {"tau+ neuron: tangle": ("tau+ neuron", "mature tangle"), "tau+ neuron: pretangle": ("tau+ neuron", "pretangle"),
             "not a tau+ neuron": ("not tau", ""), "tau+ neuron (type not recorded)": ("tau+ neuron", "")},
     "6E10": {"compact plaque": ("plaque", "compact"), "diffuse plaque": ("plaque", "diffuse"), "small plaque": ("plaque", "small"),
-             "plaque (type not recorded)": ("plaque", "")},
+             "plaque (type not recorded)": ("plaque", ""), "vascular": ("CAA", "")},
     "NeuN": {},
 }
 _SPLIT = re.compile(r"\s*[/:]\s*")  # "identity / subtype", "identity/subtype", "identity: subtype"

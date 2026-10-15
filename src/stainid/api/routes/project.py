@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from stainid.api import registry
 from stainid.api.state import CURRENT, get_state, open_project, reload_project, use_project
 from stainid.api.util import records
-from stainid.project import DEFAULTS, LEGACY_INPUTS, Project, save_project
+from stainid.project import DEFAULTS, KINDS, LEGACY_INPUTS, Project, save_project
 from stainid.slides.layout import REQUIRED_COLUMNS, read_layout
 from stainid.tables import read_csv
 
@@ -68,7 +68,7 @@ def project_info() -> dict:
     return {"name": project.name, "root": str(project.root), "configured": project.is_configured, "config": project.config,
             "defaults": DEFAULTS, "help": HELP, "pixel_size_um": project.pixel_size_um, "stains": project.stains,
             "tma_prefix": project.tma_prefix, "groups": state.groups(), "paths": _paths(project), "recent": registry.recent_projects(),
-            "id": state.id}
+            "id": state.id, "kind": project.kind, "kind_label": KINDS[project.kind]}
 
 
 @router.put("/project/config")

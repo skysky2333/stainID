@@ -74,6 +74,14 @@ def session_meta(name: str, request: Request) -> dict:
     return meta
 
 
+def writable(meta: dict) -> dict:
+    """A session people may add labels to: not one of the read-only sessions imported from a dataset package."""
+    if meta.get("read_only"):
+        raise HTTPException(403, "These labels were imported from a dataset and stay as they were; to label these fields yourself, start a new "
+                                 "labelling session on the Labels page")
+    return meta
+
+
 def field_tile(meta: dict, tile_id: str) -> dict:
     if meta["kind"] == "fields" and tile_id not in meta["fields"]:
         raise HTTPException(404, f"{tile_id} is not part of this session")
@@ -275,7 +283,7 @@ def class_groups(vocabulary: vocab.Vocabulary, shown: set[str]) -> list[dict]:
 def ai_verdict(vocabulary: vocab.Vocabulary, identity: str, subtype: str, ai: str | None) -> str | None:
     """How the AI's call compares with the label (its identity and subtype): "agrees", "type" (both positive, of
     another identity or type), "disagrees", or None (no AI call there, or the label is "unsure" or split)."""
-    if ai is None or not identity or vocabulary.role(identity) == vocab.SKIP:
+    if not vocab.text(ai) or not identity or vocabulary.role(identity) == vocab.SKIP:  # no AI call (None, or NaN in pandas 3 text columns)
         return None
     ai_identity, ai_subtype = vocabulary.resolve(ai)
     mine = vocabulary.role(identity) == vocab.POSITIVE
@@ -798,7 +806,7 @@ def field_added(name: str, tile_id: str, request: Request, person: str = Depends
 
 @router.post("/annotate/{name}/labels")
 def save(name: str, body: Marks, request: Request, person: str = Depends(annotator)) -> list[dict]:
-    meta = session_meta(name, request)
+    meta = writable(session_meta(name, request))
     for mark in body.records:
         if meta["kind"] == "fields":
             field_tile(meta, mark.tile_id)
@@ -817,7 +825,7 @@ def save(name: str, body: Marks, request: Request, person: str = Depends(annotat
 @router.post("/annotate/{name}/fields/{tile_id}/finish")
 def finish(name: str, tile_id: str, request: Request, person: str = Depends(annotator)) -> list[dict]:
     """Done with this field: every AI call (and AI outline of a positive object) the person left untouched counts as confirmed."""
-    meta = session_meta(name, request)
+    meta = writable(session_meta(name, request))
     field_tile(meta, tile_id)
     objects = field_objects(meta, tile_id)
     labels = store.current(root())
