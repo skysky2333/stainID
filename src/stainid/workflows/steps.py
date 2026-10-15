@@ -397,7 +397,9 @@ STEPS = (
     Step("train", "Models", "Train a model", "Train a new model from the labels people made.",
          "Fits the same kind of model the pipeline uses, checks it by leaving one TMA out at a time, and compares it with the current model on "
          "your labels. The new model is only used after you choose it on the Models page.",
-         ("label_store", "candidate_pool"), ("trained_models",), ("train",), (Option("stain", "Stain", "select", "AT8", choices=tuple(STAINS)),),
+         ("label_store", "candidate_pool"), ("trained_models",), ("train",), (Option("stain", "Stain", "select", "AT8", choices=tuple(STAINS)),
+          Option("session", "Sessions", "text", "", "Train only on the labels of these sessions (session IDs; reference = the imported "
+                 "reference labels). Empty: every session.", advanced=True)),
          view="/models", duration="under a minute", status=_trained_status),
 )
 BY_ID = {s.id: s for s in STEPS}

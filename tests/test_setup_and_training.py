@@ -123,3 +123,20 @@ def test_out_of_fold_never_puts_one_tma_in_training_and_testing():
     oof, scheme = out_of_fold(lambda tr, te: (seen.append((set(groups[tr]), set(groups[te]))), np.zeros(len(te)))[1], len(y), y, groups)
     assert scheme.endswith("whole TMAs per fold")
     assert all(not (train & test) for train, test in seen) and not np.isnan(oof).any()
+
+
+def test_training_uses_only_the_chosen_sessions_and_reports_them(tmp_path):
+    project = load_project(tmp_path)
+    _labelled_pool(project)  # Ann and Ben labelled outside any session: the reference labels
+    labels = store.current(project.output("reviews"))
+    cy = labels[labels.source == "Ann"].assign(source="Cy", session="round_1", time=None).drop(columns=["deleted"])
+    store.append(project.output("reviews"), cy.to_dict("records"))  # Cy labels the same objects in a session
+    sets = {s["name"]: s for s in sessions.label_sets(store.current(project.output("reviews")), "AT8", {"round_1": "Round 1"})}
+    assert list(sets) == ["round_1", sessions.REFERENCE] and sets["round_1"]["title"] == "Round 1" and sets["round_1"]["objects"] == 60
+    assert sets[sessions.REFERENCE]["people"] == ["Ann", "Ben"] and sets[sessions.REFERENCE]["labels"] == 120
+    report = json.loads((train_model(project, "AT8", ["round_1"]) / "report.json").read_text())
+    assert [s["name"] for s in report["sessions"]] == ["round_1"] and report["sources"] == {"Cy": 60}
+    everything = json.loads((train_model(project, "AT8") / "report.json").read_text())
+    assert [s["name"] for s in everything["sessions"]] == ["round_1", sessions.REFERENCE] and set(everything["sources"]) == {"Ann", "Ben", "Cy"}
+    with pytest.raises(ValueError, match="in the chosen sessions"):
+        train_model(project, "AT8", ["nobody"])

@@ -160,7 +160,54 @@ def labels_overview() -> dict:
     for name in sessions.names(root()):
         meta = sessions.meta(root(), name)
         listed.append({**{k: v for k, v in meta.items() if k != "fields"}, **session_progress(meta, labels), "link": annotate_path(name)})
-    return {"stains": stains, "sessions": listed}
+    reference = labels[sessions.session_of(labels) == sessions.REFERENCE]
+    objects = reference[reference.task == "class"]
+    summary = {"name": sessions.REFERENCE, "title": sessions.REFERENCE_TITLE, "labels": int(len(objects)),
+               "stains": {str(k): int(v) for k, v in objects.stain.value_counts().items()}, "sets": sorted(set(reference.source)),
+               "fields": int(objects.tile_id.nunique())} if len(reference) else None
+    return {"stains": stains, "sessions": listed, "reference": summary}
+
+
+def _titles() -> dict[str, str]:
+    return {name: sessions.meta(root(), name).get("title", name) for name in sessions.names(root())}
+
+
+@router.get("/labels/sets", dependencies=admin)
+def label_sets(stain: str) -> list[dict]:
+    """The sessions (and the reference labels) with object labels of this stain, to choose what a model learns from."""
+    return sessions.label_sets(store.current(root()), stain, _titles())
+
+
+@router.get("/labels/sessions/{name}/labels", dependencies=admin)
+def session_labels(name: str, request: Request, stain: str = "", value: str = "", tile: str = "", offset: int = 0, limit: int = 24) -> dict:
+    """What one session (or the reference labels) holds: counts per class and person, and its fields with every
+    labelled object (positions in field-picture pixels), filtered by class or field, a page of fields at a time."""
+    reference = name == sessions.REFERENCE
+    meta = {"title": sessions.REFERENCE_TITLE, "stain": ""} if reference else session_meta(name, request)
+    labels = store.current(root())
+    mine = labels[(sessions.session_of(labels) == name) & (labels.task == "class")]
+    stains = sorted(set(mine.stain))
+    stain = stain or meta.get("stain") or (stains[0] if stains else "")
+    mine = mine[mine.stain == stain]
+    classes = {str(k): int(v) for k, v in mine.value.value_counts().items()}
+    people = {str(k): int(v) for k, v in mine.source.value_counts().items()}
+    if value:
+        mine = mine[mine.value == value]
+    if tile:
+        mine = mine[mine.tile_id.str.contains(tile, case=False, regex=False)]
+    order = sorted(set(mine.tile_id))
+    page = order[max(0, offset): max(0, offset) + max(1, min(limit, 96))]
+    facts = _field_facts(page)
+    context = get_state().project.context_px
+    fields = []
+    for tile_id in page:
+        info = facts.get(tile_id)
+        group = mine[mine.tile_id == tile_id]
+        objects = [{"x": float(r.x), "y": float(r.y), "value": r.value, "source": r.source} for r in group.itertuples()]
+        offset_xy = [info["x_px"] - max(0, info["x_px"] - context), info["y_px"] - max(0, info["y_px"] - context)] if info else None
+        fields.append({"tile_id": tile_id, **(info or {}), "picture": info is not None, "offset": offset_xy, "objects": objects})
+    return {"name": name, "title": meta.get("title", name), "reference": reference, "stain": stain, "stains": stains, "classes": classes,
+            "people": people, "fields": fields, "total_fields": len(order), "objects": int(len(mine))}
 
 
 @router.get("/labels/share", dependencies=admin)
@@ -194,7 +241,7 @@ def annotate_path(session: str = "") -> str:
 def free_name(title: str, stain: str, kind: str) -> str:
     """A session name made from its title (or stain and kind) that no session uses yet."""
     base = re.sub(r"[^a-z0-9]+", "_", (title or f"{stain} {'review' if kind == 'fields' else 'queue'}").lower()).strip("_")[:40] or "session"
-    taken = set(sessions.names(root())) | {p.name.rsplit("-", 2)[0] for p in (root() / sessions.FOLDER / ".deleted").glob("*")}
+    taken = set(sessions.names(root())) | {p.name.rsplit("-", 2)[0] for p in (root() / sessions.FOLDER / ".deleted").glob("*")} | {sessions.REFERENCE}
     return next(name for name in (base if i == 1 else f"{base}_{i}" for i in range(1, 10_000)) if name not in taken)
 
 
@@ -234,6 +281,8 @@ def create_session(body: NewSession) -> dict:
         body.name = free_name(body.title, body.stain, body.kind)
     if not re.fullmatch(r"[A-Za-z0-9_\-]+", body.name):
         raise HTTPException(400, "name may contain letters, digits, - and _ only")
+    if body.name == sessions.REFERENCE:
+        raise HTTPException(400, f"{sessions.REFERENCE} is the name of the imported reference labels; choose another name")
     fields: list[str] = []
     if body.kind == "fields":
         fields = _known_fields(body.stain, body.tile_ids) if body.tile_ids else _pick(body.stain, body.n_fields, len(sessions.names(root())))

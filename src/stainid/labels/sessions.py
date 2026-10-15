@@ -6,6 +6,12 @@ A session is `sessions/<name>/meta.json`; its labels go into the shared label st
 - `queue`: one object at a time, chosen by a rule (where the AI is unsure, where people or the AI disagree, objects
   with one label so far, or at random) from the fields whose candidate pool is prepared. The rule is applied anew for
   every item, so the queue follows new data and new labels.
+
+A field is one square tile of a core (about 560 µm, 2048 pixels), shown to people as one picture.
+
+Every label belongs to a session. Labels with no session (the label sets imported from before labelling sessions
+existed, `source` "import: <set>") form one read-only pseudo-session, `REFERENCE`. Models can be trained on any
+combination of sessions (`in_sessions`).
 """
 from __future__ import annotations
 
@@ -27,6 +33,35 @@ FIELD_TOOLS = ("class", "point", "outline", "tag")
 AI_VIEWS = ("full", "positions", "none")
 RULES = {"uncertain": "where the AI is unsure (probability 0.3–0.7)", "disagree": "where people disagree with each other or with the AI",
          "second": "objects one other person has labelled", "random": "any candidate"}
+
+
+REFERENCE = "reference"
+REFERENCE_TITLE = "AI reference labels"
+
+
+def session_of(labels: pd.DataFrame) -> pd.Series:
+    """The session of each label: its own, or `REFERENCE` for labels made outside sessions."""
+    named = labels.session.fillna("").astype(str) if "session" in labels else pd.Series("", index=labels.index)
+    return named.where(named != "", REFERENCE)
+
+
+def in_sessions(labels: pd.DataFrame, chosen: list[str] | None) -> pd.DataFrame:
+    """Only the labels of these sessions (all labels when `chosen` is empty or None)."""
+    return labels[session_of(labels).isin(set(chosen))] if chosen else labels
+
+
+def label_sets(labels: pd.DataFrame, stain: str, titles: dict[str, str]) -> list[dict]:
+    """Every session with object labels of this stain: how many objects of each class, from how many fields and people.
+    `titles` names the real sessions; the reference labels come last."""
+    mine = labels[(labels.stain == stain) & (labels.task == "class")]
+    groups = session_of(mine)
+    out = []
+    for name, group in mine.groupby(groups):
+        objects = group.drop_duplicates(["tile_id", "x", "y"])
+        out.append({"name": name, "title": REFERENCE_TITLE if name == REFERENCE else titles.get(name, name), "reference": name == REFERENCE,
+                    "labels": int(len(group)), "objects": int(len(objects)), "fields": int(group.tile_id.nunique()),
+                    "classes": {str(k): int(v) for k, v in group.value.value_counts().items()}, "people": sorted(set(group.source))})
+    return sorted(out, key=lambda s: (s["reference"], s["title"].lower()))
 
 
 def folder(root: Path, name: str) -> Path:

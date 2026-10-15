@@ -116,6 +116,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("train", help="train a stain model from the labels in the label store")
     p.add_argument("--stain", required=True, choices=("NeuN", "6E10", "AT8"))
+    p.add_argument("--session", action="append", help="train only on the labels of this session (repeat for several; \"reference\" = the "
+                   "imported reference labels); default: every session")
 
     p = sub.add_parser("download-models", help="download the public model weights (Cellpose-SAM, SAM, Phikon)")
     p.add_argument("--which", action="append", choices=("cellpose", "sam", "huggingface_home"))
@@ -243,7 +245,7 @@ def run(args: argparse.Namespace, project) -> None:
     elif args.command == "train":
         from stainid.training.train import train_model
 
-        train_model(project, args.stain)
+        train_model(project, args.stain, [s.strip() for v in args.session or [] for s in v.split(",") if s.strip()] or None)
 
 
 def serve(args: argparse.Namespace) -> None:
