@@ -5,31 +5,55 @@
 Double-click `Start stainID.command` (macOS) or `Start stainID.bat` (Windows), or run:
 
 ```bash
-stainid serve                              # opens http://127.0.0.1:8765 in the browser
-stainid --project path/to/study serve      # open a specific project
+stainid serve                              # opens the Projects page, http://127.0.0.1:8765
+stainid --project path/to/study serve      # opens that project
+stainid serve --projects-dir ~/Studies     # also list every project folder in ~/Studies
 stainid serve --no-browser --port 9000
 stainid serve --host 127.0.0.1             # reachable from this computer only
 stainid serve --allow-origin http://lab-pc:8080   # also answer a copy of the web app served from there (see below)
 ```
 
-The app opens the project used last, or the current folder. If that folder has no `stainid.yaml`, a welcome screen
-offers to create a new project or open an existing one. If stainID is already running, starting it again just opens the
-browser.
+The app opens on the **Projects** page (see [Projects](#projects)), or on the project given with `--project`. If
+stainID is already running, starting it again just opens the browser.
 
 **Admin password.** The app asks for the admin password; it is `admin` until you change it under *Settings → Admin
 password*. The app listens on your network (so annotators can reach the annotation pages), but everything except
 those pages needs the password, and while it is still `admin` you can only sign in on the computer running stainID.
 
 **Several people at once.** Anyone on your network can open `http://<the computer running stainID>:8765` in their
-browser. Each person signs in (or, on the annotation pages, gives a name), and everyone sees the same project, the
-same job list and the same queue: two people can press Run at the same time, and the queue orders their steps as if
-one person had pressed both.
+browser. Each person signs in (or, on the annotation pages, gives a name) and picks a project. People in the same
+project see the same job list and the same queue: two people can press Run at the same time, and the queue orders their
+steps as if one person had pressed both. People in different projects work side by side: the project is part of the
+page's address (`/p/<project>/workflow`), so switching project in one browser changes nothing for anyone else, and a
+link to a page always opens the right project. Each project keeps its own job list; heavy steps take turns across all
+projects (see [How steps run](#how-steps-run)).
+
+## Projects
+
+The **Projects** page (the start page, and *Switch project… → All projects* at the top of the sidebar) lists every study
+this server knows: the projects opened in the app before, and every folder with a `stainid.yaml` in the projects folder.
+Each shows its status (*Not set up yet*, *Set up*, *Running: …* with the steps that run, *Results ready*) and when it
+was last opened.
+
+- **New study**: a study name and where to keep it (the projects folder when one is set); stainID makes a folder with
+  the study's name there and opens the guided setup. *Start with the settings of* another study copies, as you choose,
+  its diagnostic groups, stains, models and their settings (the new study uses the same model files) and its TMA
+  layout and naming (core-name prefix, rows and columns, pixel size, how donor ids and donor-regions are written).
+  Slides, maps, donors and results are never copied.
+- **Open existing folder…**: choose a folder that holds a `stainid.yaml`.
+- **Remove from list**: takes the study off the list only. Its folder is not touched, steps still running carry on,
+  and opening the folder again brings it back.
+- **Advanced → Projects folder**: the folder whose project folders are listed (`stainid serve --projects-dir DIR` sets
+  it for one run and wins over this setting).
+
+The list is kept in `~/.stainid/app.json` (`recent`, the folders opened, most recent first; `opened`, when;
+`projects_dir`; `hidden`, folders of the projects folder removed from the list).
 
 ## A study, from start to finish
 
 | | Where | What you do |
 |---|---|---|
-| 1 | Welcome screen | Create a project: a study name and an empty folder. |
+| 1 | **Projects** | *New study*: a study name and where to keep it. |
 | 2 | **Guided setup** | Slides, cores, TMA maps, donor information and checks, in six short screens (see [The guided setup](#the-guided-setup)); it ends with *Run everything*. |
 | 3 | **Models** | Download the published models. Add the NeuN, 6E10 and AT8 models, or train them (see [Training a model](#training-a-model)). |
 | 4 | **Workflow** | Follow the steps as they run; run any step on its own with its options. |
@@ -46,7 +70,7 @@ has got, and any screen can be opened again later.
 
 | Screen | What stainID does | What you do |
 |---|---|---|
-| **Slides** | Lists the scans in the slides folder and reads the TMA number and stain from each file name (`TMA LIP-3 AT8.vsi` → TMA 3, AT8); suggests the core-name prefix (`LIP-`). New scans are marked *new*. | Check the table, correct anything it got wrong, *Save and continue*. |
+| **Slides** | Lists the scans in the slides folder, each with a small picture of the slide and its label (the overview the scan file keeps, also for `.vsi`; else the Find cores preview). Where a file name says the TMA and stain clearly (`TMA LIP-3 AT8.vsi` → TMA 3, AT8) they are filled in and marked *from the file name*; an unclear name (two stains, several numbers none of which follows the core-name prefix or the word TMA) leaves the row empty and highlighted. Suggests the core-name prefix (`LIP-`). New scans are marked *new*. | Choose each slide's **TMA** from the study's TMAs (or *New TMA…*: type it once, e.g. `LIP-12` or `12`, and it is in the list) and its **stain** from the study's stains. *Save and continue* waits until every slide has both and no TMA has the same stain twice (“2 slides still need a TMA”). |
 | **Cores** | *Find cores* fits the grid of cores on every slide. A slide without its own rows and columns gets the size that fits best (the project's size unless another fits clearly better); the size is written to the slides table. One picture per slide shows the fitted grid, with how well it fits. | *Looks right*, or *Fix*: give the slide its rows and columns, or say it lies turned (180°) or mirrored, and its cores are found again. |
 | **Map** | Reads the maps from the files you add: Excel sheets, Word tables, CSV, or cells pasted from a spreadsheet. A map is a grid like the array (rows 1, 2, … columns A, B, …); a cell names the donor and region, and usually the group and pathology (`1673 FR` / `AD` / `C:C - B:6`), on one to three lines or over three table rows per map row. Stray spaces (`17 00 FR`, `OC C`), en dashes, prefixed ids (`JOG3 FR` → `JOG_003`) and control cores (`CBLM`, `STOM`) are read through. Each map is guessed to the TMA in its name. | Check the preview grid (cells it could not read have a yellow edge; type into any cell to correct it) and save it as the map of its TMA. A map that is only a photo: *Type it in* opens an empty grid with a picture of the core at each position. |
 | **Donors** (optional) | Reads the case sheet: finds the header row by its column names and matches each column (donor id, group, age, sex, race, PMI/PMD, APOE, CERAD, Braak, TMA, diagnoses …); section rows (“CONTROL <65 (90 cases)”) give the group, a repeated header (“JOG#”) starts its own id series, “~15” and “>90” are read as numbers (kept as written beside them). Keeps the donors on the maps and on the study's TMAs. | Check the preview and *Save*. Under Advanced: change a column match, keep every donor, replace instead of update. |
@@ -76,7 +100,7 @@ project without saved maps uses the rule under *Map → Advanced* (`sample_regio
   Colours show done, partly done, running, waiting, failed and "made with an older model".
 - **All jobs** (folded): every run with its command and log.
 
-The *Register slides* step holds the slides-table editor, and *Attach TMA map* the template download and the CSV
+The *Register slides* step holds the slides-table editor (the same table as the Slides screen), and *Attach TMA map* the template download and the CSV
 upload, for those who prefer them to the guided setup.
 
 ## How steps run
@@ -85,7 +109,12 @@ Steps run in the background, started by a queue with two rules:
 
 - **Order.** A step waits while a step that makes something it needs (an arrow on the map) is still running or
   waiting. The same step with the same options never runs twice at once.
-- **Load.** At most two heavy steps (Cellpose, detection, outlines) run at the same time.
+- **Load.** At most two heavy steps (Cellpose, detection, outlines) run at the same time on the whole server, over
+  all projects (there is one GPU). A heavy step that waits for a slot says where the running ones are ("Waits for a
+  free slot: 2 heavy steps are already running, 1 in the project “Second cohort” (Find nuclei) …"). Heavy steps
+  running from the command line count too, also in projects of the list that nobody has open in the app.
+
+The order rule applies within a project; each project keeps its own job list (in its `outputs.jobs` folder).
 
 So you can press Run on several steps in a row and they start in the right order; each waiting step says what it is
 waiting for. Just before a step starts, the queue checks that everything it needs exists. If not, the step is
@@ -140,7 +169,7 @@ the sign-in as a token instead of a cookie.
 | **Labels** | Labelling progress per stain, how often people and the AI agree, the labelling sessions (create, start, stop, share the link, follow people, download) and all labels as CSV. |
 | **Models** | Every model with its status and settings, download buttons, training from all labels, and trained models compared with the current one. |
 | **Results** | The main results table (download), every other table, plots by group and region, and the meaning of every column. |
-| **Settings** | Study name, TMA layout, diagnostic groups and every file location, with a folder picker. Also opens or creates another project, changes the admin password and (folded away) chooses the server. |
+| **Settings** | Study name, TMA layout, diagnostic groups and every file location, with a folder picker. Also leads to the Projects page to open or create another project, changes the admin password and (folded away) chooses the server. |
 | **Help** | Getting started, common questions and a glossary. Words with a dotted underline show their definition on hover. |
 
 ## Labels
@@ -172,8 +201,10 @@ Other people label in their browser; everything is managed on the Labels page.
    - **Quick object queue**: one object at a time, labelled with the keyboard. The next object is chosen anew each time
      from all prepared fields: where the AI is unsure, where people disagree with each other or with the AI, objects
      one other person has labelled, or at random; each person gets objects they have not labelled, fewest labels first.
-2. **Start** it and send the link shown on the page (`http://<this computer>:8765/annotate`). People register a name
-   and can stop and continue later under the same name. Only started sessions are listed, and nothing else in stainID
+2. **Start** it and send the link shown on the page (`http://<this computer>:8765/p/<project>/annotate`: the link
+   names the project, so people label in the right study whatever others have open). People register a name
+   and can stop and continue later under the same name. Links of the previous release without a project
+   (`…:8765/annotate`) still work and open the project opened last. Only started sessions are listed, and nothing else in stainID
    is reachable without the admin password.
 3. Follow progress, the people and their changes; **+10 fields** extends a session; **Stop** closes it but keeps
    everything; **Delete** moves the session definition aside (its labels stay).

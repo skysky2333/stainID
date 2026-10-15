@@ -10,17 +10,29 @@ Have these ready:
 
 1. **The slide scans**, one file per TMA and stain (`.vsi`, `.svs`, `.ndpi`, `.czi`, `.tif` …). Copy them into the
    study's slides folder (by default `data/slides` in the project folder). Names like `TMA LIP-8 NeuN.vsi`, with the
-   TMA number and the stain in them, let stainID fill everything in by itself.
+   TMA number and the stain in them, let stainID fill the table in by itself; with other names you choose them from
+   a list.
 2. **The TMA maps**: which donor is on which core. Whatever your lab keeps them in works: an Excel sheet, a table in a
    Word document, a CSV file, or even a photo or a scan of a printed map (you type that one in).
 3. **The case spreadsheet** (optional): one row per donor with age, sex, PMI, APOE, CERAD, Braak and so on.
 
-Then open stainID and press **Add slides** on Home (for a new study: **Start the guided setup**).
+Then open stainID, pick the study on the **Projects** page (for a new study: **New study**, which opens the guided
+setup) and press **Add slides** on Home.
 
 ## 1. Slides
 
-stainID lists the scans in the slides folder and reads the TMA and stain from each file name. New scans are marked
-*new*. Look down the table: if a TMA number or stain is wrong or empty, correct it. Press **Save and continue**.
+stainID lists the scans in the slides folder, each with a small picture of the slide so you can read its label
+(click it to see it larger). New scans are marked *new*. For each scan choose its **TMA** and its **stain** from the
+lists:
+
+- where the file name says them clearly, they are already filled in and marked *from the file name*; check them;
+- highlighted rows still need a choice ("choose the TMA", "choose the stain"); when the file name holds several
+  numbers, the row says which ones;
+- a TMA the study does not have yet: choose **New TMA…**, type it (`LIP-12` or just `12`) and press **Add**; it is
+  then in the list for the other slides too.
+
+**Save and continue** becomes available once every slide has a TMA and a stain (the line beside it says how many
+still need one) and no TMA has the same stain twice.
 
 *If no scans are listed:* press *Choose another folder…* and pick the folder with the scans.
 

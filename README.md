@@ -38,10 +38,11 @@ slides. Every step is also a `stainid` command.
 2. **Start.** Double-click **`Start stainID.command`** (or `.bat`). stainID opens in your web browser; the admin
    password is `admin` until you change it in Settings. Keep the small terminal window open while you work, because
    closing it stops running steps.
-3. **Create a project** on the welcome screen: a study name and an empty folder. Settings, core images and results
-   for the study are all kept in that folder.
-4. **Follow the guided setup** (Home → *Start the guided setup*). Six short screens: the slides are matched to
-   their TMA and stain from the file names, the cores are found on each slide (the grid size too), the TMA maps and
+3. **Create a project** on the Projects page (*New study*): a study name and where to keep it. Settings, core images
+   and results for the study are all kept in its folder. The Projects page lists every study on this computer; several
+   people can work at the same time, each in their own study.
+4. **Follow the guided setup** (Home → *Start the guided setup*). Six short screens: each slide's TMA and stain
+   are chosen from lists, beside a picture of the slide's label (filled in where the file name says them clearly), the cores are found on each slide (the grid size too), the TMA maps and
    the donor sheet are read from the files your lab keeps them in, and a check says in plain words what does not fit
    together. You confirm what was found; every technical detail is under *Advanced*. *Run everything* then starts
    all the analysis steps. Adding slides later works the same way (Home → *Add slides*); see
@@ -58,7 +59,7 @@ The Help page in the app has the same guide, answers to common questions and a g
 
 | | Step | What it does | Command |
 |---|---|---|---|
-| **Slides** | Register slides | say which scan is which TMA and stain (guessed from file names) | *web app* |
+| **Slides** | Register slides | say which scan is which TMA and stain (chosen from lists; filled in where the file name says it clearly) | *web app* |
 | | Find cores | fit the TMA grid on each slide (the grid size is found when a slide has none set) | `stainid dearray` |
 | | Attach TMA map | donor, brain region and diagnostic group for each core | `stainid layout` |
 | | Export cores | native-resolution core images | `stainid export` |
@@ -89,8 +90,8 @@ All screenshots show a synthetic demo project: the tissue images, donors, labels
 | **Home**: your next step and overall progress | **Models**: download published models; train from all labels, compare, switch |
 | ![Core viewer](docs/images/viewer.jpg) | ![Labels](docs/images/labels.png) |
 | **Cohort & cores**: the whole core; click any spot for a full-resolution preview with the detections drawn on it | **Labels**: progress per stain, agreement with the AI, labelling sessions and the link to share |
-| ![Reviewing a field](docs/images/annotate.jpg) | |
-| **Reviewing a field** (at `/annotate`): the AI's calls and outlines pre-filled; people correct, add and confirm | |
+| ![Reviewing a field](docs/images/annotate.jpg) | ![Projects](docs/images/projects.png) |
+| **Reviewing a field** (at `/p/<project>/annotate`): the AI's calls and outlines pre-filled; people correct, add and confirm | **Projects**: every study with its status; new study, open a folder, switch |
 | ![Results](docs/images/results.png) | ![Settings](docs/images/settings.png) |
 | **Results**: download the main table, what every column means, plots by group | **Settings**: study layout, diagnostic groups and every file location |
 

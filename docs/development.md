@@ -31,10 +31,11 @@ React 19 + TypeScript + Vite, with no UI framework:
 | path | |
 |---|---|
 | `src/index.css` | design tokens (light / dark) |
-| `src/api.ts` | typed API client; `apiBase` / `apiUrl` decide which server it talks to |
+| `src/api.ts` | typed API client; `apiBase` / `apiUrl` decide which server it talks to; `projectId` / `scoped` add the page's project to every call |
 | `public/config.js` | optional `window.STAINID_SERVER` for a copy of the app served from somewhere else |
 | `src/hooks.ts` | `useFetch`, `useStored` |
-| `src/project.tsx` | project context: group labels / colours, TMA names |
+| `src/project.tsx` | project context: group labels / colours, TMA names; the project switcher |
+| `src/slides.tsx` | the slides-table editor shared by the guided setup and the Register slides step |
 | `src/glossary.ts` | glossary behind hover definitions and the Help page |
 | `src/components.tsx`, `src/charts.tsx` | shared pieces (help boxes, folder picker, path lines, option fields, charts) |
 | `src/pages/` | one file per page |
@@ -76,13 +77,14 @@ take its screenshots, `tools/demo/make_setup_demo.py OUT_DIR` makes a synthetic 
 ## Architecture
 
 ```
- browser: web app (webapp/, built into stainid/api/static)
-    │  JSON over HTTP, /api/...  (cookies; or a token when the app is served from another address)
+ browser: web app (webapp/, built into stainid/api/static), a project's pages at /p/<project>/...
+    │  JSON over HTTP, /api/projects/<project>/...  (cookies; or a token when the app is served from another address)
     ▼
- server: FastAPI app (stainid/api) ── reads project files for the pages; queues and starts steps (stainid/api/jobs.py)
+ server: FastAPI app (stainid/api) ── one ProjectState per open project (state.py): reads its files for the pages,
+    │                                  queues and starts its steps (jobs.py); heavy steps share one limit (SLOTS)
     │  writes / reads
     ▼
- job store: outputs.jobs/<id>.json, <id>.log, <id>.exit  (stainid/jobs)
+ job store, one per project: outputs.jobs/<id>.json, <id>.log, <id>.exit  (stainid/jobs)
     ▲                                   ▲
     │ python -m stainid.jobs.run        │ registers itself
  app jobs: `stainid <step>` subprocesses      command-line runs: `stainid <step>` typed in a terminal
@@ -105,8 +107,27 @@ take its screenshots, `tools/demo/make_setup_demo.py OUT_DIR` makes a synthetic 
   conflicting queued jobs wait (`wait_reason`). A run whose process is gone without a final record is marked
   interrupted; Stop in the app sends SIGTERM to its process group (or to the process alone when it does not lead
   one, e.g. one of several commands started by a script).
-- **Several people at once.** The server keeps no per-browser state besides the signed sign-in; every browser sees the
-  same project, job list and queue.
+- **Several projects at once.** The project is part of every address: pages live under `/p/<project>/...` (the
+  router's base, set in `main.tsx`, so links inside the app need no project) and `api.ts` sends every call of such a
+  page to `/api/projects/<project>/...`, except the server-wide `/api/session` and `/api/projects`. That is the only
+  place the client adds the project. On the server, `ProjectScope` (`stainid/api/app.py`, the outermost middleware)
+  takes `/projects/<id>` out of the path and sets `state.CURRENT` for that request, so the routes are written once and
+  call `state.get_state()`, which returns that project's `ProjectState` (one per open project, kept by id, each with
+  its own `JobManager` over its own job store). There is no current project of the server: an address without a
+  project (older web apps, old links) uses the project opened last (`state.open_project`); `state.reload_project`
+  re-reads an open project after a change without making it the last. The server never changes its working folder or
+  environment for a project; each job gets its project's model folders (`Project.environment`).
+- **Project ids and the projects list** (`stainid/api/registry.py`). A project's id is its folder name made safe for
+  addresses plus a hash of its path, so it is stable and needs no table. The list is the recent projects of
+  `~/.stainid/app.json` plus the project folders in the projects folder (`--projects-dir` / the saved setting), minus
+  those removed from the list. Its status is computed from a few file checks and the newest job records
+  (`state.project_status`).
+- **One heavy-step limit for the server.** `stainid/api/jobs.py: SLOTS` (a `HeavySlots`) is shared by every
+  `JobManager`: a queue decides what to start while holding its lock, counting the heavy steps running in every open
+  project, and (through `state.running_elsewhere`, rescanned every 10 s) heavy command-line runs in projects of the
+  list that are not open. Order rules (`wait_reason`) stay per project.
+- **Several people at once.** The server keeps no per-browser state besides the signed sign-in; every browser in a
+  project sees the same job list and queue, and the project a browser shows is only in its address.
 
 ## API
 
@@ -114,17 +135,20 @@ The server is a FastAPI app (`stainid.api`). It serves the built front end from 
 under `/api`. Everything except `/api/session` and `/api/annotate` needs the admin sign-in (`stainid/api/session.py`):
 a signed cookie, or for a web app served from another address the token that sign-in returns, sent as
 `Authorization: Bearer <token>` (or `?access_token=` on plain GETs). CORS is off unless `stainid serve --allow-origin
-URL` (or `STAINID_ALLOW_ORIGINS`) names the addresses allowed. Job records and logs are in `outputs.jobs`. The
-last-used project is remembered in `~/.stainid/app.json`.
+URL` (or `STAINID_ALLOW_ORIGINS`) names the addresses allowed. Job records and logs are in each project's
+`outputs.jobs`. The projects list is kept in `~/.stainid/app.json`.
 
-Main routes:
+Every project route below is answered for one project at `/api/projects/<id>/...` (e.g.
+`/api/projects/demo-project-024fe3/summary`), and for the project opened last at the plain `/api/...` address. Main
+routes:
 
 | Route | |
 |---|---|
-| `GET /api/project`; `PUT /api/project/config`; `POST /api/project/open`, `/api/project/create` | project settings and switching |
+| `GET /api/projects`; `POST /api/projects/open`, `/api/projects/create` (`copy_from`, `settings`); `DELETE /api/projects/{id}`; `PUT /api/projects/settings` | the projects list (server-wide) |
+| `GET /api/project`; `PUT /api/project/config` | project settings (`POST /api/project/open`, `/create`: the previous release's switch, kept) |
 | `GET /api/steps` | every step: needs / makes (with paths and existence), options, progress, latest job |
 | `GET/POST /api/jobs`; `DELETE /api/jobs/{id}`; `GET /api/jobs/{id}/log` | run, stop and follow steps |
-| `GET/PUT /api/slides`; `GET /api/grids`, `/api/grids/{name}` | slides table; core-grid check images |
+| `GET/PUT /api/slides`; `GET /api/slides/picture?path=`; `GET /api/grids`, `/api/grids/{name}` | slides table (with what came from file names, `stainid/slides/table.py: read_name`); a picture of each slide (`stainid/slides/overview.py`); core-grid check images |
 | `GET /api/templates/{tma_layout,donor_metadata}.csv`; `POST /api/upload/{kind}` | CSV templates and validated uploads |
 | `GET /api/fs`; `POST /api/reveal`; `GET /api/download` | folder picker, Show in Finder, file download (project folder only) |
 | `GET /api/summary`, `/api/calibration`, `/api/cores`, `/api/cores/{id}`, `/api/tmas/{tma}/layout` | cohort browsing |
