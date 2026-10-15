@@ -9,7 +9,7 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException, Request, Response
 from scipy.spatial import cKDTree
 
-from stainid.api import outlines, placeholders, pyramid, render
+from stainid.api import outlines, placeholders, pyramid, render, threads
 from stainid.api.state import ProjectState, get_state
 from stainid.api.util import records
 from stainid.outputs import objects
@@ -183,7 +183,8 @@ def _found(state: ProjectState, tiles: pd.DataFrame, stain: str) -> pd.DataFrame
 @router.get("/cores/{core_id}/{stain}/objects")
 def core_objects(core_id: str, stain: str) -> dict:
     """Everything detection found in one core image, in core-image pixels (as rows of `columns`), the tiles it ran on,
-    and whether the "Outline objects" step has outlined this core image (`outlines`, see `core_outlines`)."""
+    whether the "Outline objects" step has outlined this core image (`outlines`, see `core_outlines`) and, for AT8, what
+    the step measured on its neuropil threads (`threads`, see `core_threads`)."""
     state = get_state()
     tiles = _core_tiles(state, core_id, stain)
     status, done, total = _detection(state, tiles, stain)
@@ -191,7 +192,8 @@ def core_objects(core_id: str, stain: str) -> dict:
     rows = [list(r.values()) for r in records(found[OBJECT_COLUMNS])] if not found.empty else []
     boxes = tiles[["x_px", "y_px", "width_px", "height_px"]].astype(int).values.tolist() if not tiles.empty else []
     return {"status": status, "tiles_done": done, "tiles_total": total, "columns": OBJECT_COLUMNS, "rows": rows, "tiles": boxes,
-            "outlines": bool(done) and outlines.parts_path(state, core_id, stain).exists()}
+            "outlines": bool(done) and outlines.parts_path(state, core_id, stain).exists(),
+            "threads": threads.measured(state, core_id) if stain == "AT8" and done else None}
 
 
 @router.get("/cores/{core_id}/{stain}/outlines")
@@ -214,7 +216,24 @@ def core_outlines(core_id: str, stain: str, request: Request) -> Response:
                 if np.isfinite(d) and i not in taken:
                     taken.add(i)
                     rows.append([float(points[i, 0]), float(points[i, 1]), outline["area_um2"], outline["rings"]])
-    body = json.dumps({"status": "not_made" if made is None else "done", "columns": OUTLINE_COLUMNS, "rows": rows}, separators=(",", ":")).encode()
+    return _json({"status": "not_made" if made is None else "done", "columns": OUTLINE_COLUMNS, "rows": rows}, request)
+
+
+@router.get("/cores/{core_id}/{stain}/threads")
+def core_threads(core_id: str, stain: str, request: Request, prepare: bool = True) -> Response:
+    """The neuropil threads of one AT8 core image, traced again from the image exactly as the detection step traced
+    them (it keeps only their totals): rows of `columns`, each a thread piece's mean `width_um` and its `points` (flat
+    [x0, y0, x1, y1, …] in core-image pixel indices). The first request starts the tracing (a few minutes per core,
+    then cached; `prepare=false` only asks); until it is "done" the tiles traced so far are sent with `tiles_done`."""
+    if stain != "AT8":
+        raise HTTPException(404, "neuropil threads are traced on AT8 only")
+    state = get_state()
+    return _json(threads.core_threads(state, core_id, _core_tiles(state, core_id, stain), prepare), request)
+
+
+def _json(content: dict, request: Request) -> Response:
+    """JSON, gzip-compressed when it is worth it and the browser accepts it (a busy core's outlines are ~1.5 MB)."""
+    body = json.dumps(content, separators=(",", ":")).encode()
     if len(body) > GZIP_MIN_BYTES and "gzip" in request.headers.get("accept-encoding", ""):
         return Response(gzip.compress(body, 5), media_type="application/json", headers={"Content-Encoding": "gzip", "Vary": "Accept-Encoding"})
     return Response(body, media_type="application/json")

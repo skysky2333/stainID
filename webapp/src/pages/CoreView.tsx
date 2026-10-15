@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import type { CoreDetail } from '../api'
 import { apiUrl, coreThumb, enc } from '../api'
 import { ErrorNote, GroupBadge, Loaded, Loading, PageHead, Progress, fmt } from '../components'
-import type { Mark, Pyramid, ViewTarget } from '../deepzoom'
+import type { Line, Mark, Pyramid, ViewTarget } from '../deepzoom'
 import { DeepZoom } from '../deepzoom'
 import { useFetch, useStored } from '../hooks'
 import { useProject } from '../project'
@@ -15,15 +15,31 @@ interface CoreInfo extends CoreDetail {
   neighbours: { previous: string | null; next: string | null }
 }
 type PictureState = ({ ready: true } & Pyramid) | { ready: false; state: 'waiting' | 'preparing' | 'failed'; ahead?: number; error?: string; thumb_size: number | null }
-interface CoreObjects { status: 'done' | 'partial' | 'not_run'; tiles_done: number; tiles_total: number; columns: string[]; rows: (string | number | null)[][]; tiles: number[][]; outlines: boolean }
+/** What detection measured on an AT8 core's neuropil threads (all tiles). */
+interface ThreadTotals { length_mm: number; skeleton_px: number }
+interface CoreObjects {
+  status: 'done' | 'partial' | 'not_run'; tiles_done: number; tiles_total: number; columns: string[]; rows: (string | number | null)[][]
+  tiles: number[][]; outlines: boolean; threads: ThreadTotals | null
+}
 /** Segment Anything outlines: per detection (its exact x, y) the outlined area and polygons, in core-image pixels. */
 interface CoreOutlines { status: 'done' | 'not_made'; columns: string[]; rows: [number, number, number | null, number[][]][] }
+/** AT8 neuropil threads traced on the server (the first time, a few minutes; tiles done so far meanwhile): per piece its
+ *  mean width (µm) and polyline, in core-image pixels. */
+interface CoreThreads {
+  status: 'done' | 'waiting' | 'tracing' | 'failed' | 'not_run' | 'not_started'; tiles_done: number; tiles_total: number
+  pieces: number; length_mm: number; measured: ThreadTotals | null; rows: [number, number[]][]; error?: string; ahead?: number
+}
 interface Outline { area: number | null; rings: number[][] }
 interface Found { index: number; x: number; y: number; r: number; cls: string; p: number | null; area: number | null; outline?: Outline }
 
-const LAYER_DEFAULTS = { objects: true, rejected: false, outlines: false, dab: false, tiles: false }
+// exact outlines are drawn instead of circles wherever the Outline objects step has made them
+const LAYER_DEFAULTS = { objects: true, rejected: false, outlines: true, threads: false, dab: false, tiles: false }
 type Layers = typeof LAYER_DEFAULTS
 const TILE_COLOR = 'rgb(30 30 30 / 55%)'
+const THREAD_COLOR = RASTER_LAYERS.threads.color
+const TRACING = ['waiting', 'tracing']
+/** A thread's line on screen (px), by its measured width: thin, medium (1–2 µm) or thick (2 µm or more). */
+const threadLine = (widthUm: number) => (widthUm < 1 ? 1.2 : widthUm < 2 ? 1.9 : 2.8)
 
 export default function CoreView() {
   const { coreId = '' } = useParams()
@@ -73,12 +89,17 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
   const [poll, setPoll] = useState(true)
   const picture = useFetch<PictureState>(`${base}/picture`, poll ? 1500 : undefined)
   const found = useFetch<CoreObjects>(`${base}/objects`)
-  const [stored, setLayers] = useStored<Layers>('stainid.core.layers.v2', LAYER_DEFAULTS)
+  const [stored, setLayers] = useStored<Layers>('stainid.core.layers.v3', LAYER_DEFAULTS)
   const layers = { ...LAYER_DEFAULTS, ...stored }
   const outlinesMade = !!found.data?.outlines
   const [wantOutlines, setWantOutlines] = useState(false)  // fetched once asked for, kept when the layer is turned off
   useEffect(() => { if (layers.outlines) setWantOutlines(true) }, [layers.outlines])
   const shapes = useFetch<CoreOutlines>(wantOutlines && outlinesMade ? `${base}/outlines` : null)
+  const threadsMeasured = found.data?.threads ?? null
+  const [threadPoll, setThreadPoll] = useState(true)
+  const traced = useFetch<CoreThreads>(layers.threads && threadsMeasured ? `${base}/threads` : null, threadPoll ? 3000 : undefined)
+  const tracing = TRACING.includes(traced.data?.status ?? 'waiting')
+  useEffect(() => { setThreadPoll(tracing) }, [tracing])
   const [selected, setSelected] = useState<number | null>(null)
   const [target, setTarget] = useState<ViewTarget | null>(start ? { ...start, scale: 0.5, key: 0 } : null)
   const image = core.images.find((i) => i.stain === stain)
@@ -105,6 +126,8 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
     const outlined = showOutlines && !!o.outline
     return { x: o.x, y: o.y, r: o.r, color: CLASS_STYLE[o.cls]?.color ?? '#fff', rings: outlined ? o.outline!.rings : undefined, circle: !outlined }
   }), [drawn, showOutlines])
+  const lines = useMemo<Line[]>(() => (layers.threads && traced.data ? traced.data.rows.map(([width, points]) => ({ points, width: threadLine(width) })) : []),
+    [layers.threads, traced.data])
   const boxes = useMemo<Mark[]>(() => (layers.tiles ? (found.data?.tiles ?? []).map(([x, y, w, h]) => ({ x, y, w, h, color: TILE_COLOR, dashed: true })) : []),
     [layers.tiles, found.data])
   const toggle = (key: keyof Layers) => setLayers({ ...layers, [key]: !layers[key] })
@@ -122,7 +145,8 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
     <div className="core-layout">
       <div className="card core-picture">
         {ready && tileUrl ? (
-          <DeepZoom pyramid={ready} tileUrl={tileUrl} layers={layers.dab ? ['dab'] : []} marks={marks} boxes={boxes} pixelUm={image?.pixel_width_um}
+          <DeepZoom pyramid={ready} tileUrl={tileUrl} layers={layers.dab ? ['dab'] : []} marks={marks} lines={lines} lineColor={THREAD_COLOR}
+            boxes={boxes} pixelUm={image?.pixel_width_um}
             selected={pick ? drawn.indexOf(pick) : null} describe={describe} target={target}
             onPick={(i) => setSelected(i === null ? null : drawn[i].index)}
             toolbar={<span className="small muted">Scroll to zoom · drag to move · click an object for details</span>} />
@@ -133,7 +157,7 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
       <div className="core-side">
         <div className="card">
           <h3>On the picture</h3>
-          <Detections status={found.data} error={found.error} stain={stain} tma={core.tma} />
+          <Detections status={found.data} error={found.error} stain={stain} tma={core.tma} tissue={image?.tissue_status} />
           {found.data && found.data.status !== 'not_run' && (
             <>
               <label className="layer-toggle"><input type="checkbox" checked={layers.objects} onChange={() => toggle('objects')} />
@@ -151,6 +175,7 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
               )}
               <OutlinesToggle made={outlinesMade} on={layers.outlines} onToggle={() => toggle('outlines')} state={shapes}
                 count={objects.filter((o) => o.outline).length} />
+              {stain === 'AT8' && <ThreadsToggle measured={threadsMeasured} on={layers.threads} onToggle={() => toggle('threads')} state={traced} />}
             </>
           )}
           <label className="layer-toggle"><input type="checkbox" checked={layers.dab} onChange={() => toggle('dab')} />
@@ -205,7 +230,7 @@ function Preparing({ core, stain, state, error }: { core: CoreInfo; stain: strin
   )
 }
 
-/** The "Exact outlines" layer: off until asked for; while the Outline objects step has not reached this core, why not. */
+/** The "Exact outlines" layer: on wherever the outlines are made (drawn instead of circles); where they are not, why not. */
 function OutlinesToggle({ made, on, onToggle, state, count }: {
   made: boolean; on: boolean; onToggle: () => void; state: { data: CoreOutlines | null; error: string | null; reload: () => void }; count: number
 }) {
@@ -217,7 +242,8 @@ function OutlinesToggle({ made, on, onToggle, state, count }: {
         <span className="swatch outline" />Exact outlines (Segment Anything)<span className="spacer" />
         {on && ready && state.data && <span className="muted">{count.toLocaleString()}</span>}
       </label>
-      {!ready && <p className="layer-note small">Outlines not made for this core yet. See the <Link to="/workflow#masks">Outline objects</Link> step on the Run page.</p>}
+      {!ready && <p className="layer-note small">Not made for this core yet, so each object is marked with a circle. Exact outlines come from
+        the optional <Link to="/workflow#masks">Outline objects</Link> step, which has not reached this core.</p>}
       {on && ready && !state.data && !state.error && <div className="layer-toggle indent"><Loading inline label="Loading the outlines…" /></div>}
       {on && ready && state.error && <div className="layer-toggle indent wrap"><ErrorNote error={state.error} />
         <button className="btn small" onClick={state.reload}>Try again</button></div>}
@@ -225,12 +251,46 @@ function OutlinesToggle({ made, on, onToggle, state, count }: {
   )
 }
 
+/** The AT8 "Neuropil threads" layer: what detection measured, and (when turned on) the threads traced on the picture. */
+function ThreadsToggle({ measured, on, onToggle, state }: {
+  measured: ThreadTotals | null; on: boolean; onToggle: () => void; state: { data: CoreThreads | null; error: string | null; reload: () => void }
+}) {
+  const data = state.data
+  const tracing = !!data && TRACING.includes(data.status)
+  return (
+    <>
+      <label className="layer-toggle" title="Thin tau-positive threads in the neuropil, as the AI traced them; line thickness shows each thread’s width">
+        <input type="checkbox" checked={on && !!measured} disabled={!measured} onChange={onToggle} />
+        <span className="swatch" style={{ background: THREAD_COLOR }} />Neuropil threads<span className="spacer" />
+        {measured && <span className="muted" title="Total length of the threads the AI measured in this core">{lengthMm(measured.length_mm)}</span>}
+      </label>
+      {!measured && <p className="layer-note small">Threads are measured when the AI detects tau on this core; it has not finished this core yet.</p>}
+      {on && measured && !data && !state.error && <div className="layer-toggle indent"><Loading inline label="Loading the threads…" /></div>}
+      {on && tracing && (
+        <div className="layer-note small">
+          {data!.status === 'waiting' ? 'Waiting for another core’s threads to finish, then tracing this one… '
+            : `Tracing the threads on this core (first time only, a few minutes)… ${data!.tiles_done} of ${data!.tiles_total} tiles.`}
+          <Progress done={data!.tiles_done} total={data!.tiles_total} />
+        </div>
+      )}
+      {on && data?.status === 'done' && <p className="layer-note small">{data.pieces.toLocaleString()} thread pieces drawn; thicker lines are thicker threads (1 µm, 2 µm and up).</p>}
+      {on && (state.error || data?.status === 'failed') && <div className="layer-toggle indent wrap"><ErrorNote error={state.error ?? data?.error ?? 'unknown error'} />
+        <button className="btn small" onClick={state.reload}>Try again</button></div>}
+    </>
+  )
+}
+
+/** A length given in mm: in µm below 1 mm. */
+function lengthMm(mm: number) {
+  return mm >= 1 ? `${fmt(mm, 3)} mm` : `${Math.round(mm * 1000).toLocaleString()} µm`
+}
+
 /** An area in µm², with thousands separators. */
 function area(um2: number) {
   return um2 >= 100 ? Math.round(um2).toLocaleString() : fmt(um2, 3)
 }
 
-function Detections({ status, error, stain, tma }: { status: CoreObjects | null; error: string | null; stain: string; tma: string }) {
+function Detections({ status, error, stain, tma, tissue }: { status: CoreObjects | null; error: string | null; stain: string; tma: string; tissue?: string | null }) {
   const { tmaName } = useProject()
   if (error) return <ErrorNote error={error} />
   if (!status) return <Loading inline label="Loading the detections…" />
@@ -240,6 +300,15 @@ function Detections({ status, error, stain, tma }: { status: CoreObjects | null;
       <div className="note-box">
         <b>Detection is part-way through this core.</b> Showing what it has found so far ({status.tiles_done} of {status.tiles_total} tiles).
         <Progress done={status.tiles_done} total={status.tiles_total} />
+      </div>
+    )
+  }
+  if (!status.tiles_total && (tissue === 'empty' || tissue === 'sparse')) {
+    return (
+      <div className="note-box">
+        <b>Skipped: the tissue check found {tissue === 'empty' ? 'no' : 'too little'} tissue on this {stain} picture.</b> The AI only looks
+        at pictures with tissue, so nothing was detected here. If you can see tissue, the check was wrong: ask whoever runs the analysis
+        to look at this core again.
       </div>
     )
   }

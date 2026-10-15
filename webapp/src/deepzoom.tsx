@@ -7,6 +7,8 @@ export interface Pyramid { width: number; height: number; tile: number; version:
 /** Something drawn over the image, in image pixels: a circle (radius `r`) or, with `w`/`h`, a box. `rings` adds the
  *  object's exact outline (polygons as flat [x0, y0, x1, y1, …] pixel indices); `circle: false` leaves the circle out. */
 export interface Mark { x: number; y: number; r?: number; w?: number; h?: number; color: string; dashed?: boolean; rings?: number[][]; circle?: boolean }
+/** An open line over the image (a traced thread): flat [x0, y0, x1, y1, …] pixel indices, drawn `width` screen px wide. */
+export interface Line { points: number[]; width: number }
 /** Where to look: the image point to centre, and optionally the zoom (screen px per image px). Change `key` to go again. */
 export interface ViewTarget { x: number; y: number; scale?: number; key: number }
 interface View { s: number; x: number; y: number }  // s = screen px per image px; (x, y) = screen position of the image corner
@@ -30,6 +32,20 @@ function ringPath(marks: Mark[]) {
     path.closePath()
   }
   return path
+}
+
+/** Lines grouped by width, each group one path in image pixels. */
+function linePaths(lines: Line[]) {
+  const groups = new Map<number, Path2D>()
+  for (const line of lines) {
+    const width = line.width
+    if (!groups.has(width)) groups.set(width, new Path2D())
+    const path = groups.get(width)!
+    const p = line.points
+    path.moveTo(p[0] + 0.5, p[1] + 0.5)
+    for (let k = 2; k < p.length; k += 2) path.lineTo(p[k] + 0.5, p[k + 1] + 0.5)
+  }
+  return [...groups].map(([width, path]) => ({ width, path }))
 }
 
 /** Whether image point (x, y) lies inside one of the mark's outline polygons (even-odd rule). */
@@ -59,14 +75,17 @@ function visibleTiles(pyramid: Pyramid, level: number, view: View, box: { w: num
 /**
  * A whole core image to zoom (wheel, double-click, + / −, keyboard) and drag around. Only the tiles in view are
  * fetched, at the screen's resolution; the coarse picture underneath stays visible while sharper tiles arrive.
- * `marks` (detected objects, with their outlines) and `boxes` (tiles, fields) are drawn on a canvas on top; a click near
+ * `marks` (detected objects, with their outlines), `lines` (in `lineColor`, thin at any zoom) and
+ * `boxes` (tiles, fields) are drawn on a canvas on top; a click near
  * a mark or inside its outline reports its index to `onPick` (null for empty space), hovering shows `describe(index)`.
  */
-export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], boxes = [], selected = null, describe, onPick, target, pixelUm, toolbar, height = 'min(72vh, 760px)' }: {
+export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lineColor = '#fff', boxes = [], selected = null, describe, onPick, target, pixelUm, toolbar, height = 'min(72vh, 760px)' }: {
   pyramid: Pyramid
   tileUrl: (level: number, col: number, row: number, layer?: string) => string
   layers?: string[]
   marks?: Mark[]
+  lines?: Line[]
+  lineColor?: string
   boxes?: Mark[]
   selected?: number | null
   describe?: (index: number) => string
@@ -94,6 +113,7 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], boxes = []
     }
     return [...byColor].map(([color, group]) => ({ color, path: ringPath(group) }))
   }, [marks])
+  const strokes = useMemo(() => linePaths(lines ?? []), [lines])
   const ringBoxes = useMemo(() => marks.map((m) => {
     if (!m.rings?.length) return null
     const xs = m.rings.flatMap((ring) => ring.filter((_, k) => k % 2 === 0))
@@ -159,6 +179,16 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], boxes = []
       g.strokeRect(b.x * view.s + view.x, b.y * view.s + view.y, (b.w ?? 0) * view.s, (b.h ?? 0) * view.s)
     }
     g.setLineDash([])
+    if (strokes.length) {
+      g.save()
+      g.setTransform(dpr * view.s, 0, 0, dpr * view.s, dpr * view.x, dpr * view.y)
+      g.lineJoin = 'round'
+      g.lineCap = 'round'
+      g.strokeStyle = lineColor
+      g.globalAlpha = 0.9
+      for (const s of strokes) { g.lineWidth = s.width / view.s; g.stroke(s.path) }
+      g.restore()
+    }
     if (outlines.length) {
       g.save()
       g.setTransform(dpr * view.s, 0, 0, dpr * view.s, dpr * view.x, dpr * view.y)
@@ -187,7 +217,7 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], boxes = []
       g.arc(x, y, Math.max(r, 4) + (i === selected ? 3 : 0), 0, 2 * Math.PI)
       g.stroke()
     })
-  }, [view, size, marks, boxes, selected, outlines])
+  }, [view, size, marks, boxes, selected, outlines, strokes, lineColor])
 
   const local = (e: React.PointerEvent | React.MouseEvent) => {
     const rect = box.current!.getBoundingClientRect()
