@@ -4,7 +4,6 @@ import type { AiView, LabelsOverview, SessionInfo, StainOverview } from '../api'
 import { api, apiUrl, appPath } from '../api'
 import { Empty, ErrorNote, HelpBox, PageHead, Progress, fmt, withError } from '../components'
 import { useFetch } from '../hooks'
-import { useSession } from '../session'
 
 export const AI_VIEW_TEXT: Record<AiView, string> = {
   full: 'AI calls and outlines pre-filled',
@@ -79,7 +78,6 @@ function StainCard({ s, onChanged, onError }: { s: StainOverview; onChanged: () 
 }
 
 function ShareLink() {
-  const { session } = useSession()
   const share = useFetch<{ links: string[]; network: boolean }>('/api/labels/share')
   return (
     <div className="card" style={{ margin: '16px 0' }}>
@@ -93,7 +91,6 @@ function ShareLink() {
         </div>
         <p className="muted small">For people elsewhere, forward this computer's port or use a tunnel (e.g. <code>cloudflared tunnel --url http://localhost:8765</code>). On macOS, allow incoming connections for Python if asked.</p>
       </> : <p className="small">stainID only listens on this computer. Restart it with <code>stainid serve</code> (without <code>--host 127.0.0.1</code>) so others can reach the labelling pages.</p>)}
-      {session.default_password && <p className="small" style={{ color: 'var(--warning)' }}>Your admin password is still the default. Change it in Settings before sharing the link.</p>}
       <ErrorNote error={share.error} />
     </div>
   )

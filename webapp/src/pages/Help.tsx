@@ -33,7 +33,7 @@ const FAQ: [string, React.ReactNode][] = [
     until you run the step again with <b>Start over</b> (under Advanced options); then “Make results tables” again.</>],
   ['How do other people label for me?', <>On <Link to="/labels">Labels</Link>, create a session and press Start, then send people the link shown there
     (it ends in /annotate and names the study). They type their name and label in their browser; you follow their progress and download the labels on the same page.
-    Change the admin password in <Link to="/settings">Settings</Link> first: everything except the annotation pages needs it.</>],
+    Everything except the annotation pages needs the admin password (<Link to="/settings">Settings</Link>).</>],
   ['Is anything deleted?', <>No. “Start over” and uploads move old files aside with a date in their name; nothing is removed.
     “Remove from list” on the Projects page only takes a study off the list.</>],
   ['Can several people work at once?', <>Yes, in the same study or in different ones: each person picks a study on the <a href="/">Projects</a> page, and switching

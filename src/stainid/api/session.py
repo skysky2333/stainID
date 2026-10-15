@@ -1,7 +1,7 @@
 """Who is using the app: the admin (password) and annotators (a name).
 
 The admin password guards the whole app; it is `admin` until changed and is stored hashed in ~/.stainid/admin.json.
-While it is still the default, the admin may only sign in from this computer. Annotators register with a name on the
+Annotators register with a name on the
 public /annotate pages; both identities travel in signed cookies, so the server attributes every annotation.
 
 A web app served from another address (see `stainid serve --allow-origin`) cannot use this server's cookies, so signing
@@ -99,8 +99,6 @@ def session_token(admin: bool, annotator: str | None) -> str:
 
 
 def is_admin(request: Request) -> bool:
-    if default_password() and not is_local(request):
-        return False
     token = admin_token()
     return hmac.compare_digest(request.cookies.get(ADMIN_COOKIE, ""), token) or hmac.compare_digest(_token_parts(request).get("admin", ""), token)
 

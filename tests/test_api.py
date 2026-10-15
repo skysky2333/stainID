@@ -146,8 +146,9 @@ def test_admin_password_guards_the_app(client):
     visitor = TestClient(client.app)
     assert visitor.get("/api/cores").status_code == 401
     assert visitor.get("/api/session").json()["admin"] is False
-    refused = visitor.post("/api/session/admin", json={"password": "admin"})
-    assert refused.status_code == 403 and "default" in refused.json()["detail"]
+    assert visitor.post("/api/session/admin", json={"password": "wrong"}).status_code == 403
+    assert visitor.post("/api/session/admin", json={"password": "admin"}).status_code == 200  # the default works from anywhere
+    visitor.cookies.clear()
     assert client.put("/api/session/admin/password", json={"current": "admin", "new": "admin"}).status_code == 400
     assert client.put("/api/session/admin/password", json={"current": "admin", "new": "s3cret-pw"}).status_code == 200
     assert client.get("/api/cores").status_code == 200
@@ -226,7 +227,7 @@ def test_tokens_for_a_web_app_served_elsewhere(client):
     """Bearer tokens (and `access_token` on plain GETs) carry the same identities as the cookies."""
     remote = TestClient(client.app)  # another computer, without cookies
     local_token = client.post("/api/session/admin", json={"password": "admin"}).json()["token"]
-    assert remote.get("/api/session", headers={"Authorization": f"Bearer {local_token}"}).json()["admin"] is False  # default password
+    assert remote.get("/api/session", headers={"Authorization": f"Bearer {local_token}"}).json()["admin"] is True
     assert client.put("/api/session/admin/password", json={"current": "admin", "new": "s3cret-pw"}).status_code == 200
     token = remote.post("/api/session/admin", json={"password": "s3cret-pw"}).json()["token"]
     remote.cookies.clear()

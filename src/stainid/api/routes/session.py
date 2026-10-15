@@ -50,8 +50,6 @@ def unregister(request: Request, response: Response) -> dict:
 def admin_sign_in(body: Password, request: Request, response: Response) -> dict:
     if not session.check_password(body.password):
         raise HTTPException(403, "wrong password")
-    if session.default_password() and not session.is_local(request):
-        raise HTTPException(403, "the admin password is still the default; change it on the computer running stainID (Settings) before signing in from elsewhere")
     response.set_cookie(session.ADMIN_COOKIE, session.admin_token(), max_age=30 * 24 * 3600, httponly=True, samesite="lax")
     return {"admin": True, "token": session.session_token(True, session.annotator_name(request))}
 

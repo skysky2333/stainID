@@ -79,7 +79,7 @@ function AnnotatorShell() {
 
 function Shell() {
   const { info, error } = useProject()
-  const { session, reload } = useSession()
+  const { reload } = useSession()
   const [theme, setTheme] = useStored<'system' | 'light' | 'dark'>('stainid.theme', 'system')
   if (error && !info) {
     return <main className="main"><div className="card" style={{ maxWidth: 560 }}><h2>This project cannot be opened</h2><ErrorNote error={error} />
@@ -118,7 +118,6 @@ function Shell() {
         </div>
       </aside>
       <main className="main">
-        {session.default_password && <div className="instructions">The admin password is still the default (<b>admin</b>). <Link to="/settings#password">Change it in Settings</Link> before letting others on your network use stainID.</div>}
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/workflow" element={<Workflow />} />

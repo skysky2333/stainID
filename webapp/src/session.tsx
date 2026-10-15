@@ -25,7 +25,7 @@ export function AdminSignIn() {
         <div className="brand" style={{ marginBottom: 12 }}><img src="/favicon.svg" alt="" />stainID</div>
         <label className="field">Admin password<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus /></label>
         <button className="btn primary" style={{ marginTop: 12, width: '100%' }} disabled={!password}>Sign in</button>
-        {session.default_password && session.local && <p className="muted small">The password is <b>admin</b> until you change it in Settings.</p>}
+        {session.default_password && <p className="muted small">The password is <b>admin</b> until you change it in Settings.</p>}
         <p className="muted small">Here to annotate? Go to <a href={appPath('/annotate')}>the annotation page</a>.</p>
         <ErrorNote error={error} />
         <ServerSetting />

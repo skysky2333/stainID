@@ -145,7 +145,7 @@ function AdminPassword() {
     <div className="card" id="password" style={{ marginTop: 16, maxWidth: 520 }}>
       <h2>Admin password</h2>
       <p className="muted small">Everything except the annotation pages needs this password.
-        {session.default_password ? ' It is still the default (admin); until you change it, signing in only works on this computer.' : ''}</p>
+        {session.default_password ? ' It is the default (admin).' : ''}</p>
       <div className="grid" style={{ gap: 8 }}>
         <label className="field">Current password<input type="password" value={form.current} onChange={(e) => setForm({ ...form, current: e.target.value })} /></label>
         <label className="field">New password (at least 6 characters)<input type="password" value={form.new} onChange={(e) => setForm({ ...form, new: e.target.value })} /></label>
