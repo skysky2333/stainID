@@ -263,7 +263,7 @@ def _display(value: str) -> str:
 def ai_verdict(stain: str, value: str, ai: str | None) -> str | None:
     """How the AI's call compares with the label: "agrees", "type" (both positive, another type), "disagrees", or None
     (no AI call there, or the label is "unsure" or split)."""
-    if ai is None or value in SKIP:
+    if ai is None or (isinstance(ai, float) and ai != ai) or value in SKIP:  # no AI call (None, or NaN in pandas 3 text columns)
         return None
     if positive(stain, value) != positive(stain, ai):
         return "disagrees"
