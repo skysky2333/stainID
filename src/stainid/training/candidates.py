@@ -89,15 +89,24 @@ def _nuclei(loader: FieldLoader, field: Field, compute: bool) -> np.ndarray | No
     return loader.cellpose(field.rgb, cache) if compute or cache.exists() else None
 
 
-def neun_segment(loader: FieldLoader, field: Field, box: Box, threshold: float, compute_nuclei: bool = True) -> list[dict]:
+def _with_masks(rows: list[dict], layers: list[np.ndarray], which) -> tuple[list[dict], list[np.ndarray]]:
+    """Rows that name their own mask (`mask_layer`, `mask_label`: the label of the object in `layers[mask_layer]`)."""
+    for row in rows:
+        row["mask_layer"], row["mask_label"] = which(row)
+    return rows, layers
+
+
+def neun_segment(loader: FieldLoader, field: Field, box: Box, threshold: float, compute_nuclei: bool = True, masks: bool = False):
+    """The candidates in a part of the field; with `masks`, also their masks (DAB profiles, then Cellpose cells)."""
     from stainid.stains.neun.pipeline import neun_candidates
 
     tile = field.tile
     raw = _nuclei(loader, field, compute_nuclei)
     if raw is None:
         raise LookupError("this field has no cell outlines yet")
-    rows, _, _ = neun_candidates(field.rgb[box], raw[box], threshold, float(tile["pixel_width_um"]), float(tile["pixel_height_um"]), field.manual[box], tile["tile_id"])
-    return _moved(rows, box)
+    rows, profiles, cells = neun_candidates(field.rgb[box], raw[box], threshold, float(tile["pixel_width_um"]), float(tile["pixel_height_um"]), field.manual[box], tile["tile_id"])
+    rows = _moved(rows, box)
+    return _with_masks(rows, [profiles, cells], lambda r: (0 if r["source_kind"] == "dab_profile" else 1, int(r["source_label"]))) if masks else rows
 
 
 def neun_features(loader: FieldLoader, field: Field, rows: list[dict]) -> tuple[np.ndarray, list[str]]:
@@ -106,11 +115,12 @@ def neun_features(loader: FieldLoader, field: Field, rows: list[dict]) -> tuple[
     return neun_feature_matrix(field.rgb, rows, field.pixel_size_um, NEUN_CONTEXT_UM)
 
 
-def amyloid_segment(loader: FieldLoader, field: Field, box: Box, threshold: float, compute_nuclei: bool = True) -> list[dict]:
+def amyloid_segment(loader: FieldLoader, field: Field, box: Box, threshold: float, compute_nuclei: bool = True, masks: bool = False):
     from stainid.stains.amyloid.segmentation import segment_amyloid_candidates
 
-    _, objects, _, _, _ = segment_amyloid_candidates(field.rgb[box], threshold, field.pixel_size_um, field.pixel_size_um, field.exclusion[box], split_touching=True)
-    return _moved(objects, box)
+    _, objects, labels, _, _ = segment_amyloid_candidates(field.rgb[box], threshold, field.pixel_size_um, field.pixel_size_um, field.exclusion[box], split_touching=True)
+    objects = _moved(objects, box)
+    return _with_masks(objects, [labels], lambda r: (0, int(r["label"]))) if masks else objects
 
 
 def amyloid_features(loader: FieldLoader, field: Field, rows: list[dict]) -> tuple[np.ndarray, list[str]]:
@@ -121,7 +131,7 @@ def amyloid_features(loader: FieldLoader, field: Field, rows: list[dict]) -> tup
     return identity_features(field.rgb, rows, field.pixel_size_um)
 
 
-def tau_segment(loader: FieldLoader, field: Field, box: Box, threshold: float, compute_nuclei: bool = True) -> list[dict]:
+def tau_segment(loader: FieldLoader, field: Field, box: Box, threshold: float, compute_nuclei: bool = True, masks: bool = False):
     from stainid.nuclei import clean_nuclei
     from stainid.stains.tau.neurons import tau_neuron_candidates
 
@@ -129,8 +139,9 @@ def tau_segment(loader: FieldLoader, field: Field, box: Box, threshold: float, c
     if nuclei is None:
         raise LookupError("this field has no cell outlines yet")
     rgb = field.rgb[box]
-    objects, _ = tau_neuron_candidates(rgb, clean_nuclei(nuclei[box], rgb), threshold, field.pixel_size_um, field.exclusion[box])
-    return _moved(objects, box)
+    objects, labels = tau_neuron_candidates(rgb, clean_nuclei(nuclei[box], rgb), threshold, field.pixel_size_um, field.exclusion[box])
+    objects = _moved(objects, box)
+    return _with_masks(objects, [labels], lambda r: (0, int(r["label"]))) if masks else objects
 
 
 def tau_features(loader: FieldLoader, field: Field, rows: list[dict]) -> tuple[np.ndarray, list[str]]:
@@ -161,6 +172,14 @@ def extract(stain: str, loader: FieldLoader, field: Field) -> tuple[list[dict], 
         return [], np.zeros((0, 0)), []
     matrix, names = FEATURES[stain](loader, field, rows)
     return rows, matrix, names
+
+
+def segment_with_masks(stain: str, loader: FieldLoader, field: Field) -> tuple[list[dict], list[np.ndarray]]:
+    """Every candidate of the whole field (context margin included, unlike `extract`) with its mask, as the detection step
+    segments them: rows carry `mask_layer` / `mask_label` into the returned label images (field pixels)."""
+    keep = _candidate_class(stain)
+    rows, layers = SEGMENT[stain](loader, field, _whole(field), field.threshold, masks=True)
+    return [r for r in rows if keep(r)], layers
 
 
 def neun(loader: FieldLoader, field: Field) -> tuple[list[dict], np.ndarray, list[str]]:

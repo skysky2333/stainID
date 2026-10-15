@@ -8,6 +8,7 @@ import { AI_VIEW_FOR_LABELLERS } from '../labelling'
 import { FieldThumb } from '../labels/fields'
 import { QuickCheck } from '../labels/quickcheck'
 import { Register, useSession } from '../session'
+import { OutlineWorkspace } from '../segcheck/OutlineWorkspace'
 import type { ImagePoint } from '../viewer'
 import { RASTER_LAYERS, ZoomViewer } from '../viewer'
 
@@ -41,6 +42,7 @@ export default function AnnotatePage() {
   if (detail.error) return <SessionProblem error={detail.error} retry={detail.reload} />
   if (!detail.data) return <Loading label="Opening the session…" />
   if (detail.data.meta.kind === 'queue') return <QuickCheck detail={detail.data} />
+  if (detail.data.meta.kind === 'outline' && tile) return <OutlineWorkspace key={tile} detail={detail.data} reload={detail.reload} tile={tile} />
   return tile ? <Workspace key={tile} detail={detail.data} reload={detail.reload} tile={tile} /> : <SessionOverview detail={detail.data} reload={detail.reload} />
 }
 

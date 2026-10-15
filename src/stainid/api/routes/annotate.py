@@ -21,7 +21,7 @@ from stainid.api import label_crops, pyramid, queue_pictures, render
 from stainid.api.routes.images import OVERLAYS
 from stainid.api.session import annotator, annotator_name, is_admin, require_admin
 from stainid.api.state import get_state
-from stainid.labels import added, frames, overview, pool, readiness, sessions, store
+from stainid.labels import added, frames, outline, overview, pool, readiness, sessions, store
 from stainid.labels import objects as label_objects
 from stainid.labels.overview import UNTYPED
 from stainid.labels.tasks import CLASSES, CROP_UM, FIELD_TAGS, INSTRUCTIONS, NEGATIVE, SKIP, STAINS, positive
@@ -70,9 +70,19 @@ def session_meta(name: str, request: Request) -> dict:
 
 
 def field_tile(meta: dict, tile_id: str) -> dict:
-    if meta["kind"] == "fields" and tile_id not in meta["fields"]:
+    if meta["kind"] != "queue" and tile_id not in meta["fields"]:
         raise HTTPException(404, f"{tile_id} is not part of this session")
     return get_state().tile(tile_id)
+
+
+def finished_fields(meta: dict, labels: pd.DataFrame) -> dict[str, set[str]]:
+    """Who finished each field of a session: marked it complete (outline sessions) or pressed Finished (reviews)."""
+    return outline.finished(labels, meta["name"]) if meta["kind"] == outline.KIND else store.reviewed_fields(labels, meta["stain"])
+
+
+def ready_fields(meta: dict) -> set[str]:
+    """The fields people can open: outline sessions need only the picture, reviews their candidates found."""
+    return set(meta["fields"]) if meta["kind"] == outline.KIND else pool.prepared(get_state().project, meta["stain"])
 
 
 def field_objects(meta: dict, tile_id: str) -> pd.DataFrame:
@@ -85,10 +95,10 @@ def field_objects(meta: dict, tile_id: str) -> pd.DataFrame:
 def labellers(meta: dict, labels: pd.DataFrame) -> list[dict]:
     """Everyone who has labelled in this session: how far they are and when they last saved something."""
     mine = labels[labels.session == meta["name"]]
-    reviewed = store.reviewed_fields(labels, meta["stain"])
+    reviewed = finished_fields(meta, labels)
     out = []
     for person, group in mine.groupby("source"):
-        classes = group.task == "class"
+        classes = group.task.isin(("class", "object"))
         confirmed = group.confirmed.astype(bool)
         last = pd.to_numeric(group.time, errors="coerce").max()
         out.append({"person": person, "fields_done": sum(person in reviewed.get(t, set()) for t in meta.get("fields", [])),
@@ -102,12 +112,12 @@ def session_progress(meta: dict, labels: pd.DataFrame) -> dict:
     mine = labels[labels.session == meta["name"]]
     people = labellers(meta, labels)
     now = {p for open_by in busy(meta["name"]).values() for p in open_by}
-    progress = {"people": len(people), "labels": int((mine.task == "class").sum()), "labellers": people,
+    progress = {"people": len(people), "labels": int(mine.task.isin(("class", "object")).sum()), "labellers": people,
                 "labelling_now": sum(time.time() - p["last_active"] < BUSY_SECONDS or p["person"] in now for p in people)}
-    if meta["kind"] == "fields":
-        reviewed = store.reviewed_fields(labels, meta["stain"])
+    if meta["kind"] != "queue":
+        reviewed = finished_fields(meta, labels)
         covered = sum(len(reviewed.get(t, set())) >= meta["per_field"] for t in meta["fields"])
-        prepared = len(pool.prepared(get_state().project, meta["stain"]) & set(meta["fields"]))
+        prepared = len(ready_fields(meta) & set(meta["fields"]))
         progress |= {"fields": len(meta["fields"]), "fields_covered": covered, "fields_prepared": prepared}
     else:
         progress |= {"pictures": queue_pictures.prepare(get_state(), meta, pool.all_objects(get_state().project, meta["stain"]), labels)}
@@ -183,6 +193,7 @@ class NewSession(BaseModel):
     tile_ids: list[str] | None = None
     instructions: str = ""
     open: bool = False
+    tmas: list[str] | None = None  # outline sessions: the TMAs fields are drawn from (default: `outline.default_tmas`)
 
 
 class Opening(BaseModel):
@@ -455,6 +466,10 @@ def create_session(body: NewSession) -> dict:
         raise HTTPException(400, "name may contain letters, digits, - and _ only")
     if body.name == sessions.REFERENCE:
         raise HTTPException(400, f"{sessions.REFERENCE} is the name of the imported reference labels; choose another name")
+    if body.kind == outline.KIND:
+        from stainid.api.routes.outline import create_outline_session
+
+        return create_outline_session(body)
     fields: list[str] = []
     if body.kind == "fields":
         fields = _known_fields(body.stain, body.tile_ids) if body.tile_ids else _pick(body.stain, body.n_fields, len(sessions.names(root())))
@@ -483,6 +498,10 @@ def set_open(name: str, body: Opening, request: Request) -> dict:
 def add_fields(name: str, body: MoreFields, request: Request) -> dict:
     """More fields for a session: these exact ones (`tile_ids`), or `n` that stainID picks."""
     meta = session_meta(name, request)
+    if meta["kind"] == outline.KIND:
+        from stainid.api.routes.outline import add_outline_fields
+
+        return add_outline_fields(meta, body.n, body.tile_ids)
     if meta["kind"] != "fields":
         prepare_job(meta["stain"], body.n)
         return meta
@@ -519,8 +538,8 @@ def session_fields(name: str, request: Request) -> list[dict]:
     """Every field of a session with where it stands (see `sessions.field_states`) and where it is."""
     meta = session_meta(name, request)
     labels = store.current(root())
-    states = sessions.field_states(meta, store.reviewed_fields(labels, meta["stain"]), sessions.labelled_by(labels[labels.session == name], meta["stain"]),
-                                   pool.prepared(get_state().project, meta["stain"]), busy(name))
+    working = outline.started(labels, name) if meta["kind"] == outline.KIND else sessions.labelled_by(labels[labels.session == name], meta["stain"])
+    states = sessions.field_states(meta, finished_fields(meta, labels), working, ready_fields(meta), busy(name))
     facts = _field_facts(meta["fields"])
     return [{**facts.get(s["tile_id"], {}), **s} for s in states]
 
@@ -642,10 +661,10 @@ def list_open(request: Request, person: str | None = Depends(viewer)) -> list[di
         meta = sessions.meta(root(), name)
         if not meta["open"] and not is_admin(request):
             continue
-        reviewed = store.reviewed_fields(labels, meta["stain"])
+        reviewed = finished_fields(meta, labels)
         done = sum(person in reviewed.get(t, set()) for t in meta["fields"]) if person else 0
         out.append({**{k: meta.get(k) for k in ("name", "title", "stain", "kind", "open", "instructions")}, "fields": len(meta["fields"]), "done_by_me": done,
-                    "my_labels": int(((labels.session == name) & (labels.source == person) & (labels.task == "class")).sum()),
+                    "my_labels": int(((labels.session == name) & (labels.source == person) & labels.task.isin(("class", "object"))).sum()),
                     "link": annotate_path(name)})
     return out
 
@@ -654,12 +673,13 @@ def list_open(request: Request, person: str | None = Depends(viewer)) -> list[di
 def session_detail(name: str, request: Request, person: str | None = Depends(viewer)) -> dict:
     meta = session_meta(name, request)
     labels = store.current(root())
-    reviewed = store.reviewed_fields(labels, meta["stain"])
-    prepared = pool.prepared(get_state().project, meta["stain"])
+    reviewed = finished_fields(meta, labels)
+    prepared = ready_fields(meta)
     open_now = busy(name)
     fields = [{"tile_id": t, "done_by_me": bool(person) and person in reviewed.get(t, set()), "annotators_done": len(reviewed.get(t, set())),
                "open_by_others": len(open_now.get(t, set()) - {person}), "prepared": t in prepared} for t in meta["fields"]]
-    return {"meta": {**meta, "classes": CLASSES[meta["stain"]], "tags": FIELD_TAGS, "class_instructions": INSTRUCTIONS[meta["stain"]]},
+    classes = outline.classes(meta["stain"]) if meta["kind"] == outline.KIND else CLASSES[meta["stain"]]
+    return {"meta": {**meta, "classes": classes, "tags": FIELD_TAGS, "class_instructions": INSTRUCTIONS[meta["stain"]]},
             "fields": fields, "annotator": person}
 
 
@@ -671,10 +691,10 @@ def next_item(name: str, request: Request, person: str = Depends(annotator), cou
     meta = session_meta(name, request)
     labels = store.current(root())
     state = get_state()
-    if meta["kind"] == "fields":
-        prepared = pool.prepared(state.project, meta["stain"])
+    if meta["kind"] != "queue":
+        prepared = ready_fields(meta)
         ready = {**meta, "fields": [t for t in meta["fields"] if t in prepared]}
-        return {"tile_id": sessions.next_field(ready, store.reviewed_fields(labels, meta["stain"]), person, busy(name)),
+        return {"tile_id": sessions.next_field(ready, finished_fields(meta, labels), person, busy(name)),
                 "waiting": len(meta["fields"]) - len(ready["fields"])}
     objects = pool.all_objects(state.project, meta["stain"])
     held = (state.id, name)
@@ -747,7 +767,7 @@ def field_added(name: str, tile_id: str, request: Request, person: str = Depends
 def save(name: str, body: Marks, request: Request, person: str = Depends(annotator)) -> list[dict]:
     meta = session_meta(name, request)
     for mark in body.records:
-        if meta["kind"] == "fields":
+        if meta["kind"] != "queue":
             field_tile(meta, mark.tile_id)
             busy(name, mark.tile_id, person)
     saved = store.append(root(), [_clean(meta, mark, person) for mark in body.records])

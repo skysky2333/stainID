@@ -119,6 +119,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--session", action="append", help="train only on the labels of this session (repeat for several; \"reference\" = the "
                    "imported reference labels); default: every session")
 
+    p = sub.add_parser("score-segmentation", help="segmentation check: how well detection finds and outlines the objects people outlined")
+    p.add_argument("--stain", default="all", choices=("all", "NeuN", "6E10", "AT8"))
+    p.add_argument("--session", default="", help="only these outline sessions (session IDs, comma-separated); default: every one")
+    p.add_argument("--proposals-only", action="store_true", help="only find the candidates of the check's fields (no scores)")
+    p.add_argument("--redo", action="store_true", help="find the candidates of every field again")
+
     p = sub.add_parser("download-models", help="download the public model weights (Cellpose-SAM, SAM, Phikon)")
     p.add_argument("--which", action="append", choices=("cellpose", "sam", "huggingface_home"))
 
@@ -241,6 +247,10 @@ def run(args: argparse.Namespace, project) -> None:
         from stainid.labels.prepare import run
 
         run(project, args.action, args.stain, args.fields, args.session, args.seed)
+    elif args.command == "score-segmentation":
+        from stainid.segmentation.report import run as score_segmentation
+
+        score_segmentation(project, args.stain, args.session, args.proposals_only, args.redo)
     elif args.command == "download-models":
         from stainid.workflows.downloads import download_models
 

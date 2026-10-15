@@ -46,4 +46,7 @@ export const GLOSSARY: Record<string, string> = {
   blinded: 'Diagnosis, donor and the model’s answer are hidden while you label, so they cannot influence you.',
   job: 'A step running in the background. You can keep using the app; progress and logs appear on the Run page.',
   shard: 'A part of a long run. Splitting into parts lets several processes (or computers) share the work.',
+  /* segmentation check */
+  IoU: 'Intersection over union: how well two outlines of one object agree — the area they share divided by the area they cover together (1 = identical).',
+  'segmentation check': 'People outline every object in a few fields, blind to the AI; the AI’s candidates and counted objects are compared with them.',
 }

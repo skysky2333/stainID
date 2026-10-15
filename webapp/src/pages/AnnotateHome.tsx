@@ -28,13 +28,13 @@ export default function AnnotateHome() {
 
 function SessionCard({ s }: { s: OpenSession }) {
   const started = s.done_by_me > 0 || s.my_labels > 0
-  const finished = s.kind === 'fields' && s.fields > 0 && s.done_by_me >= s.fields
+  const finished = s.kind !== 'queue' && s.fields > 0 && s.done_by_me >= s.fields
   return (
     <div className="card annotate-session">
       <h2 style={{ margin: 0 }}>{s.title}</h2>
       <p className="muted small" style={{ margin: '4px 0 10px' }}>{s.stain} · {KIND_TEXT[s.kind]}</p>
       {s.instructions && <p className="small secondary">{s.instructions}</p>}
-      {s.kind === 'fields' ? <>
+      {s.kind !== 'queue' ? <>
         <Progress done={s.done_by_me} total={s.fields} />
         <p className="small secondary">{finished ? 'You have finished every field — thank you!' : `${s.done_by_me} of ${s.fields} fields finished by you`}</p>
       </> : <p className="small secondary">{s.my_labels ? `${s.my_labels.toLocaleString()} objects labelled by you` : 'Pick what each object is with one key press.'}</p>}

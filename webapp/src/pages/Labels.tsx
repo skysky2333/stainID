@@ -93,7 +93,7 @@ function ReferenceRow({ r }: { r: ReferenceLabels }) {
 }
 
 function sessionState(s: SessionInfo): { text: string; className: string } {
-  if (s.kind === 'fields' && s.fields && (s.fields_covered ?? 0) >= s.fields) return { text: 'Done', className: 'status-done' }
+  if (s.kind !== 'queue' && s.fields && (s.fields_covered ?? 0) >= s.fields) return { text: 'Done', className: 'status-done' }
   return s.open ? { text: 'Open', className: 'status-running' } : { text: 'Closed', className: '' }
 }
 
@@ -117,7 +117,7 @@ function SessionRow({ s, link, onChanged }: { s: SessionInfo; link: string; onCh
         </div>
         <div className="muted small">{s.stain} · {KIND_TEXT[s.kind]}{s.kind === 'fields' && s.per_field > 1 ? ` · ${s.per_field} people per field` : ''}</div>
         <SessionProgress s={s} />
-        <People people={s.labellers} fields={s.kind === 'fields' ? s.fields ?? 0 : null} />
+        <People people={s.labellers} fields={s.kind !== 'queue' ? s.fields ?? 0 : null} />
       </div>
       <div className="session-actions">
         {s.open && <CopyButton text={link} />}
@@ -132,7 +132,7 @@ function SessionRow({ s, link, onChanged }: { s: SessionInfo; link: string; onCh
 }
 
 function SessionProgress({ s }: { s: SessionInfo }) {
-  if (s.kind !== 'fields') {
+  if (s.kind === 'queue') {
     const pictures = s.pictures
     return <div className="small secondary session-progress">{s.labels.toLocaleString()} objects labelled so far · open-ended
       {pictures && pictures.ready < pictures.total && <span className="muted"> · pictures ready: {pictures.ready.toLocaleString()} of {pictures.total.toLocaleString()}</span>}</div>
@@ -186,14 +186,14 @@ function SessionMore({ s, onChanged, onError }: { s: SessionInfo; onChanged: () 
         <button className="btn small danger-outline" onClick={() => setConfirm('delete')}>Delete session</button>
       </div>
       {s.instructions && <p className="small secondary"><b>Note for labellers:</b> {s.instructions}</p>}
-      {s.kind === 'fields' && <SessionFields s={s} onChanged={onChanged} />}
+      {s.kind !== 'queue' && <SessionFields s={s} onChanged={onChanged} />}
       {examining && <SessionLabelsView name={s.name} title={s.title} onClose={() => setExamining(false)} />}
       <Advanced hint="settings and per-person counts">
         <table className="compact"><tbody>
           <tr><td className="secondary">Session ID</td><td><code>{s.name}</code></td></tr>
           <tr><td className="secondary">Created</td><td>{timeAgo(s.created)}</td></tr>
           <tr><td className="secondary">What people see of the AI</td><td>{AI_VIEW_TEXT[s.ai_view]}</td></tr>
-          {s.kind === 'fields' ? <>
+          {s.kind !== 'queue' ? <>
             <tr><td className="secondary">Tasks</td><td>{s.tools.map((t) => TOOL_TEXT[t] ?? t).join(' · ')}</td></tr>
             <tr><td className="secondary">People per field</td><td>{s.per_field}</td></tr>
           </> : <tr><td className="secondary">Which objects</td><td>{defaults.data?.rules[s.rule] ?? s.rule}</td></tr>}
@@ -316,7 +316,8 @@ function StainDetails({ s, onChanged }: { s: StainOverview; onChanged: () => voi
 
 /* ---------- new session ---------- */
 
-type Kind = 'fields' | 'queue'
+type Kind = 'fields' | 'queue' | 'outline'
+const OUTLINE_PICK_TEXT = 'Ready fields from TMAs 1–7 (change on Models), spread over TMAs, groups, regions and sparse, medium and dense staining; fields nobody has labelled first.'
 
 function NewSession({ stains, onClose, onCreated }: { stains: string[]; onClose: () => void; onCreated: (s: SessionInfo) => void }) {
   const defaults = useFetch<Defaults>('/api/labels/defaults')
@@ -327,12 +328,13 @@ function NewSession({ stains, onClose, onCreated }: { stains: string[]; onClose:
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => setForm((f) => ({ ...f, [key]: value }))
-  const placeholder = `${form.stain} ${form.kind === 'fields' ? 'review' : 'quick check'} – ${new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`
+  const placeholder = form.kind === 'outline' ? `Segmentation check – ${form.stain}`
+    : `${form.stain} ${form.kind === 'fields' ? 'review' : 'quick check'} – ${new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`
   const pasted = form.tile_ids.split(/[\s,]+/).filter(Boolean)
   const ids = mode === 'pick' ? chosen : pasted
   const create = async () => {
     setBusy(true)
-    const body = { ...form, title: form.title.trim() || placeholder, tile_ids: form.kind === 'fields' && ids.length ? ids : null,
+    const body = { ...form, title: form.title.trim() || placeholder, tile_ids: form.kind !== 'queue' && ids.length ? ids : null,
       tools: form.kind === 'queue' ? ['class'] : form.tools }
     const created = await withError(() => api.post<SessionInfo>('/api/labels/sessions', body), setError)
     setBusy(false)
@@ -340,11 +342,11 @@ function NewSession({ stains, onClose, onCreated }: { stains: string[]; onClose:
   }
   const choice = (kind: Kind, title: string, text: string) => (
     <label className={`choice-card${form.kind === kind ? ' chosen' : ''}`}>
-      <input type="radio" name="kind" checked={form.kind === kind} onChange={() => set('kind', kind)} />
+      <input type="radio" name="kind" checked={form.kind === kind} onChange={() => setForm((f) => ({ ...f, kind, n_fields: kind === 'outline' ? 40 : f.n_fields === 40 ? 20 : f.n_fields }))} />
       <span><b>{title}</b><span className="small secondary">{text}</span></span>
     </label>
   )
-  const nothingChosen = form.kind === 'fields' && mode === 'pick' && !chosen.length
+  const nothingChosen = form.kind !== 'queue' && mode === 'pick' && !chosen.length
   return (
     <Modal title="New labelling session" onClose={onClose} wide>
       <div className="new-session">
@@ -358,13 +360,14 @@ function NewSession({ stains, onClose, onCreated }: { stains: string[]; onClose:
           <div className="choice-grid">
             {choice('fields', 'Check whole fields (recommended)', 'People see a whole field with the AI’s calls filled in, correct the wrong ones and add what it missed. Gives complete labels for every object.')}
             {choice('queue', 'Quick check, one object at a time', 'People see one object and pick what it is with a key press. Fast; aims at the objects the AI is unsure about.')}
+            {choice('outline', 'Outline every object (segmentation check)', 'People outline every object in whole fields without seeing the AI, to measure how well detection finds and outlines objects. Scored on Models.')}
           </div>
         </fieldset>
-        {form.kind === 'fields' && <FieldChoice stain={form.stain} mode={mode} n={form.n_fields} chosen={chosen} onMode={setMode}
-          onN={(n) => set('n_fields', n)} onChosen={setChosen} />}
+        {form.kind !== 'queue' && <FieldChoice stain={form.stain} mode={mode} n={form.n_fields} chosen={chosen} onMode={setMode}
+          onN={(n) => set('n_fields', n)} onChosen={setChosen} autoText={form.kind === 'outline' ? OUTLINE_PICK_TEXT : undefined} />}
         <label className="field">Title people see<input type="text" value={form.title} placeholder={placeholder} onChange={(e) => set('title', e.target.value)} /></label>
         <label className="field">Note for labellers (optional)<textarea rows={2} value={form.instructions} placeholder="e.g. Count only neurons with a visible nucleus." onChange={(e) => set('instructions', e.target.value)} /></label>
-        {defaults.data && <p className="muted small" style={{ margin: 0 }}>People choose between: {defaults.data.classes[form.stain]?.join(' · ')}.</p>}
+        {defaults.data && form.kind !== 'outline' && <p className="muted small" style={{ margin: 0 }}>People choose between: {defaults.data.classes[form.stain]?.join(' · ')}.</p>}
         <label className="layer-toggle"><input type="checkbox" checked={form.open} onChange={(e) => set('open', e.target.checked)} />Open to labellers right away</label>
         <Advanced hint="session ID, people per field, what people see of the AI, tasks, field IDs">
           <div className="row" style={{ alignItems: 'flex-end' }}>
@@ -372,8 +375,8 @@ function NewSession({ stains, onClose, onCreated }: { stains: string[]; onClose:
               onChange={(e) => set('name', e.target.value.replace(/[^A-Za-z0-9_-]/g, '_'))} /></label>
             {form.kind === 'fields' && <label className="field">People per field<input type="number" min={1} value={form.per_field} style={{ width: 80 }}
               onChange={(e) => set('per_field', Math.max(1, Number(e.target.value)))} /></label>}
-            <label className="field">What people see of the AI<select value={form.ai_view} onChange={(e) => set('ai_view', e.target.value as AiView)}>
-              {(defaults.data?.ai_views ?? ['full', 'positions', 'none'] as AiView[]).map((v) => <option key={v} value={v}>{AI_VIEW_TEXT[v]}</option>)}</select></label>
+            {form.kind !== 'outline' && <label className="field">What people see of the AI<select value={form.ai_view} onChange={(e) => set('ai_view', e.target.value as AiView)}>
+              {(defaults.data?.ai_views ?? ['full', 'positions', 'none'] as AiView[]).map((v) => <option key={v} value={v}>{AI_VIEW_TEXT[v]}</option>)}</select></label>}
             {form.kind === 'queue' && <label className="field">Which objects<select value={form.rule} onChange={(e) => set('rule', e.target.value)}>
               {Object.entries(defaults.data?.rules ?? { uncertain: 'where the AI is unsure' }).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label>}
           </div>
@@ -394,7 +397,7 @@ function NewSession({ stains, onClose, onCreated }: { stains: string[]; onClose:
           {nothingChosen && <span className="small muted">Click squares on the cores above to choose fields.</span>}
           <button className="btn" onClick={onClose}>Cancel</button>
           <button className="btn primary" disabled={busy || nothingChosen || (form.kind === 'fields' && !form.tools.length)} onClick={create}>
-            {busy ? 'Creating…' : form.kind === 'fields' && mode === 'pick' && chosen.length ? `Create session with ${chosen.length} field${chosen.length === 1 ? '' : 's'}` : 'Create session'}</button>
+            {busy ? 'Creating…' : form.kind !== 'queue' && mode === 'pick' && chosen.length ? `Create session with ${chosen.length} field${chosen.length === 1 ? '' : 's'}` : 'Create session'}</button>
         </div>
       </div>
     </Modal>

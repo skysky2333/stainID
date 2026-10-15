@@ -132,9 +132,10 @@ function PickerCard({ core, stain, selected, onToggle }: { core: PickerCore; sta
 }
 
 /** How the fields of a session are chosen: stainID picks them, or the admin does, in the picker. */
-export function FieldChoice({ stain, mode, n, chosen, onMode, onN, onChosen }: {
+export function FieldChoice({ stain, mode, n, chosen, onMode, onN, onChosen, autoText }: {
   stain: string; mode: 'auto' | 'pick'; n: number; chosen: string[]
   onMode: (mode: 'auto' | 'pick') => void; onN: (n: number) => void; onChosen: (ids: string[]) => void
+  autoText?: string  // how stainID chooses, when not as for reviews
 }) {
   return (
     <fieldset className="field field-choice"><legend>Which fields?</legend>
@@ -142,8 +143,8 @@ export function FieldChoice({ stain, mode, n, chosen, onMode, onN, onChosen }: {
       <div className="choice-grid">
         <label className={`choice-card${mode === 'auto' ? ' chosen' : ''}`}>
           <input type="radio" name="field-mode" checked={mode === 'auto'} onChange={() => onMode('auto')} />
-          <span><b>Let stainID choose (recommended)</b><span className="small secondary">Fields nobody has labelled yet, spread over TMAs and groups,
-            from cores that are ready for labelling.</span>
+          <span><b>Let stainID choose (recommended)</b><span className="small secondary">{autoText ?? `Fields nobody has labelled yet, spread over TMAs and groups,
+            from cores that are ready for labelling.`}</span>
             {mode === 'auto' && <label className="field inline-number">How many fields
               <input type="number" min={1} max={500} value={n} style={{ width: 90 }} onChange={(e) => onN(Math.max(1, Number(e.target.value)))} /></label>}</span>
         </label>

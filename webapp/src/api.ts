@@ -152,14 +152,14 @@ export interface Detection {
 export interface AddedObjects { objects: number; measured: number; could_not_be_measured: number; waiting: number }
 export interface AddedState { x: number; y: number; state: 'proposed' | 'measured' | 'could_not_be_measured' | 'measuring'; reason: string }
 export interface SessionInfo {
-  name: string; title: string; stain: string; kind: 'fields' | 'queue'; tools: string[]; ai_view: AiView; per_field: number; rule: string
+  name: string; title: string; stain: string; kind: 'fields' | 'queue' | 'outline'; tools: string[]; ai_view: AiView; per_field: number; rule: string
   instructions: string; created: number; open: boolean; people: number; labels: number
   fields?: number; fields_covered?: number; fields_prepared?: number; labellers: Labeller[]; labelling_now: number
   pictures?: QueuePictures  // quick-check queues
 }
 export interface Labeller { person: string; fields_done: number; labels: number; changed: number; confirmed: number; outlines: number; tags: number; last_active: number }
 export interface LabelsOverview { stains: StainOverview[]; sessions: SessionInfo[]; reference: ReferenceLabels | null }
-export interface OpenSession { name: string; title: string; stain: string; kind: 'fields' | 'queue'; open: boolean; instructions: string; fields: number; done_by_me: number; my_labels: number }
+export interface OpenSession { name: string; title: string; stain: string; kind: 'fields' | 'queue' | 'outline'; open: boolean; instructions: string; fields: number; done_by_me: number; my_labels: number }
 export interface SessionField { tile_id: string; done_by_me: boolean; annotators_done: number; open_by_others: number; prepared: boolean }
 export interface SessionDetail {
   meta: SessionInfo & { fields: string[]; classes: string[]; tags: string[]; class_instructions: string }

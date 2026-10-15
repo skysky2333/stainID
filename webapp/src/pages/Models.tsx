@@ -7,6 +7,7 @@ import { useFetch } from '../hooks'
 import { ConfirmDialog, DetectionLine, QualityBadge, QualityLine, objectsOf, quality } from '../labelling'
 import { useProject } from '../project'
 import { Advanced } from '../setup/parts'
+import { SegmentationCheck } from '../segcheck/SegmentationCheck'
 
 const TITLES: Record<string, string> = {
   neun: 'NeuN model', amyloid: '6E10 model', tau: 'AT8 model', cellpose: 'Cellpose-SAM', sam: 'Segment Anything',
@@ -70,6 +71,8 @@ export default function Models() {
             ))}
           </div>
           <ErrorNote error={trained.error} />
+          <h2 className="stage-title">Segmentation</h2>
+          <SegmentationCheck />
           <h2 className="stage-title">Published models</h2>
           <PublishedModels models={list.filter((m) => m.source !== 'train')} job={download} onChanged={() => { jobs.reload(); models.reload() }} />
         </>}

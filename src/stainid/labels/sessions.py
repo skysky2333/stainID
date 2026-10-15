@@ -7,6 +7,7 @@ A session is `sessions/<name>/meta.json`; its labels go into the shared label st
   with one label so far, or at random) from the fields whose candidate pool is prepared. The page asks for the next
   few objects at a time; those are held for that person for a while (`Reservations`), so people labelling at once get
   different objects. The rule is applied anew on every ask, so the queue follows new data and new labels.
+- `outline`: outline every object of whole fields, blind to the AI, to measure segmentation (`labels.outline`).
 
 A field is one square tile of a core (about 560 µm, 2048 pixels), shown to people as one picture.
 
@@ -30,7 +31,7 @@ from stainid.labels.tasks import positive
 from stainid.tables import write_text_atomic
 
 FOLDER = "sessions"
-KINDS = ("fields", "queue")
+KINDS = ("fields", "queue", "outline")
 FIELD_TOOLS = ("class", "point", "outline", "tag")
 AI_VIEWS = ("full", "positions", "none")
 RULES = {"uncertain": "where the AI is unsure (probability 0.3–0.7)", "disagree": "where people disagree with each other or with the AI",

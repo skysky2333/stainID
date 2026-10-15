@@ -957,3 +957,35 @@ tr.significant-row td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 .cache-space-limit { display: grid; gap: 6px; }
 .cache-space-limit label { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .cache-space-kinds td.num, .cache-space-kinds th.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ---------- segmentation check (outline sessions, Models card) ---------- */
+.sam-pending { animation: sam-pulse 1s ease-in-out infinite; }
+@keyframes sam-pulse { 50% { stroke-opacity: 0.2; } }
+.segcheck { display: flex; flex-direction: column; gap: 10px; }
+.segcheck-stains { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.segcheck-stain { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-1); min-width: 0; }
+.segcheck-stain h3 { margin: 0; }
+.segcheck-numbers { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.segcheck-numbers > div { display: flex; flex-direction: column; gap: 2px; }
+.segcheck-numbers b { font-size: 22px; font-weight: 650; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.outcome-bar { display: flex; height: 12px; border-radius: 6px; overflow: hidden; background: var(--border); }
+.outcome-bar > span { display: block; height: 100%; }
+.outcome-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px; color: var(--text-secondary); }
+.outcome-legend .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+.outcome-counted { background: var(--good); }
+.outcome-rejected { background: var(--series-4); }
+.outcome-poor-outline { background: var(--series-7); }
+.outcome-split { background: var(--series-2); }
+.outcome-merged { background: var(--series-5); }
+.outcome-missed { background: var(--critical); }
+.segcheck-details { margin-bottom: 18px; }
+.segcheck-details h3 { margin: 6px 0; }
+.segcheck-table th { white-space: nowrap; }
+.iou-histogram { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 4px; margin: 8px 0; }
+.iou-bin { display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 11px; width: 34px; }
+.iou-bars { display: flex; align-items: flex-end; gap: 2px; height: 70px; width: 100%; justify-content: center; }
+.iou-bars > span { width: 12px; border-radius: 2px 2px 0 0; min-height: 1px; }
+.iou-histogram .outcome-legend { flex-basis: 100%; }
+.iou-proposal { background: var(--series-1); }
+.iou-detection { background: var(--series-3); }
+@media (max-width: 700px) { .segcheck-numbers { grid-template-columns: 1fr; } }

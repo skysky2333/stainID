@@ -227,6 +227,15 @@ def _label_counts(reviews: Path) -> str:
     return " · ".join(f"{s}: {int(c.get(True, 0))} positive / {int(c.get(False, 0))} negative labels" for s, c in counts.items() if len(c))
 
 
+def _segmentation_status(project: Project) -> dict:
+    report = project.output("tables") / "segmentation_benchmark" / "report.json"
+    if not report.exists():
+        return _state(0, 1, "report", "Set up the check under Models: people outline every object in a few fields")
+    stains = json.loads(report.read_text()).get("stains", [])
+    scored = sum(s.get("fields_scored", 0) for s in stains)
+    return _state(1, 1, "report", f"{scored} fields scored")
+
+
 def _has_content(path: Path) -> bool:
     """A file, or a folder with something in it (kept until the folder changes: output folders hold thousands)."""
     def look() -> bool:
@@ -288,6 +297,8 @@ RESOURCES = {r.id: r for r in (
     Resource("candidate_pool", "Candidate objects", "The objects of each prepared field, with their measurements and the AI's call.",
              lambda p: p.output("reviews") / "pool"),
     Resource("trained_models", "Trained models", "Models you trained, with their accuracy reports.", lambda p: p.output("trained_models")),
+    Resource("segmentation_check", "Segmentation check", "How well detection finds and outlines the objects people outlined, and the "
+             "candidates of the check's fields.", lambda p: p.output("tables") / "segmentation_benchmark"),
 )}
 
 SHARD = (Option("shard_index", "Part", "number", 0, "Split a long run over several processes: this process runs part N …", advanced=True),
@@ -401,6 +412,18 @@ STEPS = (
           Option("session", "Sessions", "text", "", "Train only on the labels of these sessions (session IDs; reference = the imported "
                  "reference labels). Empty: every session.", advanced=True)),
          view="/models", duration="under a minute", status=_trained_status),
+    Step("score_segmentation", "Models", "Check segmentation", "Measure how well detection finds and outlines objects.",
+         "Compares the objects people outlined in the segmentation check (an “Outline every object” session) with every candidate the "
+         "detection step proposes and with the objects it counts: how many are found, never proposed, cut into pieces or merged, and how "
+         "well the outlines fit. Finds the candidates of the check's fields first where that has not been done (10–30 s per field).",
+         ("label_store",), ("segmentation_check",), ("score-segmentation",),
+         (Option("stain", "Stain", "select", "all", choices=("all", *STAINS)),
+          Option("session", "Sessions", "text", "", "Only these outline sessions (session IDs). Empty: every one.", advanced=True),
+          Option("proposals_only", "Only find the candidates", "bool", False, "Find the candidates of the check's fields, without scoring.", advanced=True),
+          Option("redo", "Find the candidates again", "bool", False, "Find the candidates of every field again (after the detection's "
+                 "segmentation changed).", advanced=True)),
+         view="/models", duration="seconds; 10–30 s per field the first time", status=_segmentation_status,
+         uses=("field_results", "neun_results", "mask_results", "nuclei", "model_cellpose"), waits_for_uses=False),
 )
 BY_ID = {s.id: s for s in STEPS}
 
