@@ -108,10 +108,11 @@ function StainCheck({ stain, checks, scores, onSetUp }: { stain: string; checks:
       <Progress done={complete} total={fields} />
       <div className="small secondary">{complete.toLocaleString()} of {fields.toLocaleString()} fields outlined completely
         {checks.some((c) => !c.open) && <span className="muted"> · closed to labellers (open it on Labels)</span>}</div>
-      {scores && scores.objects > 0 ? <Scores s={scores} words={words} /> : (
-        <p className="small muted">{complete ? 'Press Score now to compare the complete fields with what the AI found.'
-          : `Scores appear once people have outlined fields completely. Send them the link on the Labels page.`}</p>
-      )}
+      {scores && scores.objects > 0 ? <Scores s={scores} words={words} />
+        : scores && scores.fields_scored > 0 ? <p className="small secondary">The {scores.fields_scored} fields outlined so far hold no {words}; the AI counted
+          {' '}{(scores.counted ?? 0).toLocaleString()} there{scores.counted ? ', all wrong' : ''}.</p>
+        : <p className="small muted">{complete ? 'Press Score now to compare the complete fields with what the AI found.'
+          : 'Scores appear once people have outlined fields completely. Send them the link on the Labels page.'}</p>}
     </div>
   )
 }
@@ -154,17 +155,20 @@ function Details({ data }: { data: CheckOverview }) {
   const { tmaName } = useProject()
   return (
     <Advanced hint="all figures by TMA, group, density and size; IoU 0.5 and 0.3; the files">
-      {report ? [...report.stains, ...(report.imported ?? [])].filter((s) => s.objects > 0).map((s) => (
+      {report ? [...report.stains, ...(report.imported ?? [])].filter((s) => s.fields_scored > 0).map((s) => (
         <div key={'title' in s ? `${s.title}` : s.stain} className="segcheck-details">
           <h3>{'title' in s ? `${s.title} (${s.stain})` : s.stain}</h3>
-          <FigureTable rows={[{ key: 'All fields', fields: s.fields_scored, ...(s as Required<StainScores>) }]} first="" />
-          <FigureTable rows={s.by_tma.map((g) => ({ ...g, key: data.tma_study ? tmaName(g.key) : g.key }))} first={data.tma_study ? 'TMA' : 'Batch'} />
-          <FigureTable rows={s.by_group} first="Group" />
-          <FigureTable rows={s.by_density} first="Stain density" />
-          <SizeTable bins={s.by_size} />
-          <IouHistogram proposal={s.proposal_iou_histogram} detection={s.detection_iou_histogram} />
-          <p className="muted small">Median outline fit of proposed objects: IoU {fmt(s.proposal_iou_median, 2)}, boundary IoU {fmt(s.boundary_iou_median, 2)}
-            {s.outline_iou_median != null && <>; counted objects’ Segment Anything outlines: IoU {fmt(s.outline_iou_median, 2)}</>}.
+          <FigureTable sections={[
+            ['', [{ key: 'All fields', fields: s.fields_scored, ...(s as Required<StainScores>) }]],
+            ...(s.objects ? [
+              [data.tma_study ? 'By TMA' : 'By batch', s.by_tma.map((g) => ({ ...g, key: data.tma_study ? tmaName(g.key) : g.key }))],
+              ['By group', s.by_group], ['By stain density', s.by_density]] as [string, CheckGroup[]][] : [])]} />
+          {s.objects > 0 && <>
+            <SizeTable bins={s.by_size} />
+            <IouHistogram proposal={s.proposal_iou_histogram} detection={s.detection_iou_histogram} />
+          </>}
+          <p className="muted small">{s.objects > 0 && <>Median outline fit of proposed objects: IoU {fmt(s.proposal_iou_median, 2)}, boundary IoU {fmt(s.boundary_iou_median, 2)}
+            {s.outline_iou_median != null && <>; counted objects’ Segment Anything outlines: IoU {fmt(s.outline_iou_median, 2)}</>}.</>}
             {s.not_found_again > 0 && <> {s.not_found_again} counted objects matched no candidate found again (the candidates may be out of date: run the check with
               “Find the candidates again”).</>}
             {' '}Labelled by {s.people.join(', ')}.</p>
@@ -183,21 +187,28 @@ function Details({ data }: { data: CheckOverview }) {
   )
 }
 
-function FigureTable({ rows, first }: { rows: CheckGroup[]; first: string }) {
-  if (!rows.length || (first && rows.length < 2 && first !== 'TMA' && first !== 'Batch')) return null
+/** Every figure in one table: all fields, then a section per grouping (sections with a single row are left out). */
+function FigureTable({ sections }: { sections: [string, CheckGroup[]][] }) {
+  const columns = 7 + OUTCOMES.length - 1
   return (
     <div className="table-scroll">
       <table className="compact segcheck-table">
-        <thead><tr><th>{first}</th><th className="num">Fields</th><th className="num">Objects</th><th className="num">Proposed</th><th className="num">Found and counted</th>
-          <th className="num">Right</th><th className="num">At IoU 0.3: proposed · counted · right</th>
-          {OUTCOMES.slice(2).map((k) => <th key={k.key} className="num">{k.label}</th>)}<th className="num">Counted</th></tr></thead>
-        <tbody>{rows.map((r) => (
-          <tr key={r.key}><td>{r.key}</td><td className="num">{r.fields}</td><td className="num">{r.objects.toLocaleString()}</td>
-            <td className="num">{percent(r.proposal_recall)}</td><td className="num">{percent(r.detection_recall)}</td><td className="num">{percent(r.detection_precision)}</td>
-            <td className="num">{percent(r.proposal_recall_low)} · {percent(r.detection_recall_low)} · {percent(r.detection_precision_low)}</td>
-            {OUTCOMES.slice(2).map((k) => <td key={k.key} className="num">{(r.outcomes?.[k.key] ?? 0).toLocaleString()}</td>)}
-            <td className="num">{r.counted.toLocaleString()}</td></tr>
-        ))}</tbody>
+        <thead><tr><th /><th className="num">Fields</th><th className="num">Objects</th><th className="num" title="proposed with a fitting outline">Proposed</th>
+          <th className="num">Found and counted</th><th className="num" title="of what the AI counted">Right</th>
+          <th className="num" title="proposed · found and counted · right, at IoU 0.3">At IoU 0.3</th>
+          {OUTCOMES.slice(1).map((k) => <th key={k.key} className="num" title={k.hint}>{k.label}</th>)}<th className="num">AI counted</th></tr></thead>
+        {sections.filter(([title, rows]) => rows.length && (!title || rows.length > 1)).map(([title, rows]) => (
+          <tbody key={title || 'all'}>
+            {title && <tr className="section-row"><th colSpan={columns}>{title}</th></tr>}
+            {rows.map((r) => (
+              <tr key={r.key}><td>{r.key}</td><td className="num">{r.fields}</td><td className="num">{r.objects.toLocaleString()}</td>
+                <td className="num">{percent(r.proposal_recall)}</td><td className="num">{percent(r.detection_recall)}</td><td className="num">{percent(r.detection_precision)}</td>
+                <td className="num">{percent(r.proposal_recall_low)} · {percent(r.detection_recall_low)} · {percent(r.detection_precision_low)}</td>
+                {OUTCOMES.slice(1).map((k) => <td key={k.key} className="num">{(r.outcomes?.[k.key] ?? 0).toLocaleString()}</td>)}
+                <td className="num">{r.counted.toLocaleString()}</td></tr>
+            ))}
+          </tbody>
+        ))}
       </table>
     </div>
   )

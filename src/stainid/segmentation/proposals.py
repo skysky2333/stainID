@@ -102,8 +102,10 @@ def detections(project: Project, tile: dict, core_tiles: pd.DataFrame, size: tup
     x0, y0 = crop_origin(tile, project.context_px)
     dx = found.tile_id.map(lambda t: origins[t][0] - x0)
     dy = found.tile_id.map(lambda t: origins[t][1] - y0)
-    return pd.DataFrame({"x": found.x.astype(float) + dx, "y": found.y.astype(float) + dy, "radius_px": found.radius_px.astype(float),
-                         "tile_id": found.tile_id}).reset_index(drop=True)
+    moved = pd.DataFrame({"x": found.x.astype(float) + dx, "y": found.y.astype(float) + dy, "radius_px": found.radius_px.astype(float),
+                          "tile_id": found.tile_id})
+    seen = moved.x.between(0, size[1], inclusive="left") & moved.y.between(0, size[0], inclusive="left")  # only those in this picture
+    return moved[seen].reset_index(drop=True)
 
 
 def counted(saved: dict, found: pd.DataFrame) -> tuple[list[int], pd.DataFrame]:

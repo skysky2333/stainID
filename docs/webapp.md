@@ -225,6 +225,38 @@ were imported once with `stainid labels import`, each as its own source (`import
 unchanged. Every label belongs to a session; the imported ones (no session) together form the read-only pseudo-session
 *AI reference labels* (`reference`), which the Labels page lists and lets you look inside like any other session.
 
+### The segmentation check
+
+A model's scores (AUC, precision, recall) are measured on the candidates the detection step proposed, so they cannot see
+objects that were never proposed, or that its segmentation cut into pieces or merged with a neighbour. The segmentation
+check measures that end to end:
+
+1. **Set it up** on *Models → How well does detection outline objects?* (or *New labelling session → Outline every
+   object*): one session per stain, "Segmentation check – <stain>", about 40 ready fields chosen from TMAs 1–7 (in an
+   image set: every batch; *Advanced* lets you choose), spread over TMA × diagnosis group × region and over sparse,
+   medium and dense staining (thirds of the AI's objects per mm² of tissue), fields nobody has labelled first. Its
+   fields' candidates are found in the background (`stainid score-segmentation --proposals-only`, 10–30 s per field).
+2. **People outline every object** of the stain's classes whose middle lies in the field's yellow square, without
+   seeing the AI: *click to outline* (Segment Anything on the server's CPU: Tab tries another size, Shift+click adds a
+   spot that belongs to the object, right-click one that does not), *draw by hand* (D), drag corners, 1–9 for the
+   class ("unsure" is left out of the scores), Delete, Esc. *Compare with the AI* (R) shows what the AI counted and
+   every candidate it considered, off by default. *Mark field complete* asks to confirm that nothing is left; only
+   complete fields are scored. These outlines are kept apart from the class labels models train on (tasks `object`
+   and `complete` in the label store).
+3. **Score now** (`stainid score-segmentation`) matches every outlined object one to one with (a) every candidate:
+   *proposed*, and (b) the candidates the model counted: *found and counted*, and *right* (precision), at IoU ≥ 0.5 and
+   0.3. An object that is not found is *never proposed* (no candidate overlaps it), *merged with a neighbour* (the
+   candidate covering it covers another outlined object too), *cut into pieces* (two or more candidates each cover part
+   of it) or has a *poor outline*; a well-outlined proposal the model did not count is *proposed, not counted*. The
+   card shows this per stain in words; *Advanced* has the figures by TMA, group, density third and object size, the
+   outline fit (IoU, boundary IoU, and the Segment Anything outlines of counted objects) and the files.
+
+Results go to `data/analysis/segmentation_benchmark/`: `proposals/<stain>/<field>.npz` (the candidates and their masks,
+found with the detection step's own segmentation, because whole-core detection keeps only the counted 6E10 and AT8
+objects), `report.json`, `objects.csv` (one row per outlined object), `detections.csv` (one row per counted object) and
+`fields.csv`. In projects made from a dataset package, the raters who drew polygons are scored the same way, each on
+its own (`imported` in the report).
+
 ## Training a model
 
 *Train a model* (`stainid train --stain X [--session NAME ...]`) uses the labelled objects of that stain from the sessions

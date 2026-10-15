@@ -114,6 +114,7 @@ TILE = "LIP-1_B-2_6E10_S01"
 ORIGIN = 172  # the field's picture starts at (300 - 128, 300 - 128) in the core image
 PLAQUES = [(250, 250), (450, 250), (250, 450), (450, 450)]  # field pixels; the first two are counted by the pipeline
 FAINT = (560, 360)  # a real plaque too faint for the segmentation
+STRAY = (600, 150)  # counted by an older segmentation: no candidate there now, nothing outlined
 
 
 @pytest.fixture()
@@ -137,7 +138,7 @@ def client(synthetic_project, monkeypatch):
     parts = synthetic_project / "data/analysis/cohort_v3/parts/LIP-1_B-2_6E10_objects.csv"
     common = pd.read_csv(parts, dtype=str).iloc[0].to_dict()
     pd.DataFrame([{**common, "centroid_x_px": x, "centroid_y_px": y, "plaque_class": "compact", "plaque_probability": 0.9, "plaque_area_um2": 380.0,
-                   "dense_core_fraction": 0.3, "equivalent_diameter_um": 22.0} for x, y in PLAQUES[:2]]).to_csv(parts, index=False)
+                   "dense_core_fraction": 0.3, "equivalent_diameter_um": 22.0} for x, y in [*PLAQUES[:2], STRAY]]).to_csv(parts, index=False)
     state.reset()
     model = state.get_state().project.model("amyloid")
     model.parent.mkdir(parents=True, exist_ok=True)
@@ -181,7 +182,7 @@ def test_outline_session_from_set_up_to_scores(client):
     assert ann.post(f"/api/annotate/{name}/outline/{TILE}/segment", json={"points": [[250, 250, 1]]}).status_code == 409  # no SAM weights
     assert len(ann.get(f"/api/annotate/{name}/outline/{TILE}").json()["objects"]) == 6
     reference = ann.get(f"/api/annotate/{name}/outline/{TILE}/reference").json()
-    assert [(c["x"], c["y"]) for c in reference["counted"]] == [(250, 250), (450, 250)] and reference["candidates"] is None
+    assert [(c["x"], c["y"]) for c in reference["counted"]] == [(250, 250), (450, 250), STRAY] and reference["candidates"] is None
 
     ann.post(f"/api/annotate/{name}/outline/{TILE}/complete", json={"complete": True})
     assert ann.get(f"/api/annotate/{name}").json()["fields"][0]["done_by_me"]
@@ -199,7 +200,8 @@ def test_outline_session_from_set_up_to_scores(client):
     scores = report.run(project, "6E10")["stains"][0]
     assert scores["objects"] == 5 and scores["fields_scored"] == 1 and scores["people"] == ["Ann"]
     assert scores["outcomes"] == {"counted": 2, "rejected": 2, "missed": 1, "merged": 0, "split": 0, "poor outline": 0}
-    assert scores["proposal_recall"] == 0.8 and scores["detection_recall"] == 0.4 and scores["detection_precision"] == 1.0
+    assert scores["proposal_recall"] == 0.8 and scores["detection_recall"] == 0.4 and scores["detection_precision"] == pytest.approx(2 / 3, abs=1e-3)
+    assert scores["counted_outcomes"]["nothing there"] == 1 and scores["not_found_again"] == 1
     assert scores["by_tma"][0]["key"] == "1" and scores["by_density"][0]["objects"] == 5
     assert sum(b["objects"] for b in scores["by_size"]) == 5 and 0.6 < scores["proposal_iou_median"] < 0.8  # the segmentation grows each plaque a little
     assert "never proposed" in report.plain(scores)
@@ -238,3 +240,13 @@ def test_polygons_imported_from_a_dataset_are_scored_per_rater(tmp_path):
     assert rater["rater"] == "expert1" and rater["objects"] == 4 and rater["fields_scored"] == 2
     assert rater["outcomes"]["missed"] == 0 and sum(rater["outcomes"].values()) == 4  # every plaque is proposed in some form
     assert rater["counted"] == 2 and "Synthetic boxes: expert1" in report.plain(rater)
+
+
+def test_a_field_without_objects_still_counts_what_the_ai_counted_there():
+    from stainid.segmentation import report
+
+    objects = pd.DataFrame(columns=report.OBJECT_COLUMNS)
+    counted = pd.DataFrame([{"tile_id": "f", "tma": "1", "outcome": "nothing there", "right_at_low_iou": False}] * 2)
+    figures = report.summarize(objects, counted)
+    assert figures["objects"] == 0 and figures["detection_recall"] is None and figures["detection_precision"] == 0.0
+    assert figures["counted_outcomes"]["nothing there"] == 2

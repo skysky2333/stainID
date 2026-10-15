@@ -317,7 +317,7 @@ function StainDetails({ s, onChanged }: { s: StainOverview; onChanged: () => voi
 /* ---------- new session ---------- */
 
 type Kind = 'fields' | 'queue' | 'outline'
-const OUTLINE_PICK_TEXT = 'Ready fields from TMAs 1–7 (change on Models), spread over TMAs, groups, regions and sparse, medium and dense staining; fields nobody has labelled first.'
+const OUTLINE_PICK_TEXT = 'Ready fields (of TMAs 1–7 in a TMA study; others can be chosen on Models), spread over TMAs, groups, regions and sparse, medium and dense staining; fields nobody has labelled first.'
 
 function NewSession({ stains, onClose, onCreated }: { stains: string[]; onClose: () => void; onCreated: (s: SessionInfo) => void }) {
   const defaults = useFetch<Defaults>('/api/labels/defaults')

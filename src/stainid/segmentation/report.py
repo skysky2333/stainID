@@ -35,6 +35,12 @@ from stainid.tables import write_records, write_text_atomic
 SIZE_BINS = {"NeuN": (0, 10, 15, 20), "6E10": (0, 15, 30, 60), "AT8": (0, 10, 15, 20)}
 FACTS = ("core_id", "tma", "disease_group", "region")
 WORDS = {"NeuN": "neurons", "6E10": "plaques", "AT8": "tau+ neurons"}
+SOURCE = ["source", "stain", "session", "person", "density", "tile_id", *FACTS]
+OBJECT_COLUMNS = [*SOURCE, "x", "y", "class", "counted_in_scores", "area_um2", "diameter_um", "proposal_iou", "proposal_outcome",
+                  "proposal_found_at_low_iou", "split_into", "boundary_iou", "detection_iou", "detection_outcome", "detection_found_at_low_iou",
+                  "outline_iou", "outcome"]
+COUNTED_COLUMNS = [*SOURCE, "x", "y", "area_um2", "made_again", "outcome", "right_at_low_iou"]
+FIELD_COLUMNS = [*SOURCE, "objects", "counted_right", "proposed", "counted", "counted_wrong", "candidates", "counted_not_found_again"]
 
 
 def report_path(project: Project):
@@ -131,7 +137,7 @@ def _truths(rows: pd.DataFrame, shape: tuple[int, int]) -> list[scoring.Truth]:
 def _disk_layer(shape: tuple[int, int], found: pd.DataFrame) -> np.ndarray:
     import cv2
 
-    layer = np.zeros(shape, np.uint32)
+    layer = np.zeros(shape, np.int32)  # cv2 draws into int32, not uint32
     for i, row in enumerate(found.itertuples(), start=1):
         cv2.circle(layer, (int(round(row.x)), int(round(row.y))), max(1, int(round(row.radius_px))), i, -1)
     return layer
@@ -150,7 +156,7 @@ def score_field(project: Project, tile: dict, core_tiles: pd.DataFrame, rows: pd
     chosen, unexplained = proposals.counted(saved, found)
     keys = list(zip(saved["layer"].astype(int).tolist(), saved["label"].astype(int).tolist()))
     if len(unexplained):
-        layers = np.concatenate([layers.astype(np.uint32), _disk_layer(shape, unexplained)[None]])
+        layers = np.concatenate([layers.astype(np.int64), _disk_layer(shape, unexplained)[None].astype(np.int64)])
         extra = [(len(layers) - 1, i) for i in range(1, len(unexplained) + 1)]
     else:
         extra = []
@@ -196,7 +202,7 @@ def score_field(project: Project, tile: dict, core_tiles: pd.DataFrame, rows: pd
                "proposed": sum(o["proposal_outcome"] == "found" for o in inside), "counted": len(counted_rows),
                "counted_wrong": sum(r["outcome"] not in ("right", "unsure") for r in counted_rows),
                "candidates": int(sum(scoring.inside_box(float(cx), float(cy), box) for cx, cy in zip(saved["x"], saved["y"]))),
-               "counted_not_found_again": int(len(unexplained))}
+               "counted_not_found_again": int((unexplained.tile_id == tile["tile_id"]).sum())}  # neighbours segment margin objects whole
     return objects, counted_rows, summary
 
 
@@ -289,11 +295,12 @@ def _score_fields(project: Project, truth: Truth, tiles: dict, analysis: pd.Data
             entry["not_found_again"] += field["counted_not_found_again"]
 
 
-def _figures(stain: str, entry: dict, objects: pd.DataFrame, counted: pd.DataFrame) -> dict:
-    scored = bool(len(objects))
-    levels = [lv for lv in (*outline.LEVELS, "unknown") if scored and (objects.density == lv).any()]
-    return {**{k: v for k, v in entry.items() if k != "people"}, "people": sorted(entry["people"]),
-            "fields_scored": int(objects.tile_id.nunique()) if scored else 0,
+def _figures(stain: str, entry: dict, objects: pd.DataFrame, counted: pd.DataFrame, fields: pd.DataFrame) -> dict:
+    """The report of one stain (or one imported rater). Fields without any object count too: what the AI counted there
+    is wrong."""
+    scored = int(fields.tile_id.nunique())
+    levels = [lv for lv in (*outline.LEVELS, "unknown") if (fields.density == lv).any()]
+    return {**{k: v for k, v in entry.items() if k != "people"}, "people": sorted(entry["people"]), "fields_scored": scored,
             **(summarize(objects, counted) if scored else {"objects": 0}),
             "by_tma": _by(objects, counted, "tma") if scored else [],
             "by_group": _by(objects, counted, "disease_group") if scored else [],
@@ -304,13 +311,15 @@ def _figures(stain: str, entry: dict, objects: pd.DataFrame, counted: pd.DataFra
 
 
 def _part(frame: pd.DataFrame, **match) -> pd.DataFrame:
-    """The rows of `frame` with these values (an empty frame with the columns used later when there are none)."""
-    if frame.empty:
-        return pd.DataFrame(columns=["source", "stain", "session", "counted_in_scores", "outcome", "tile_id", "density"])
+    """The rows of `frame` with these values."""
     keep = np.ones(len(frame), bool)
     for column, value in match.items():
         keep &= (frame[column] == value).to_numpy()
     return frame[keep]
+
+
+def _frame(rows: list[dict], columns: list[str]) -> pd.DataFrame:
+    return pd.DataFrame(rows) if rows else pd.DataFrame(columns=columns)
 
 
 def score(project: Project, truths: list[Truth], failed: list[str] | None = None) -> dict:
@@ -329,11 +338,10 @@ def score(project: Project, truths: list[Truth], failed: list[str] | None = None
         _score_fields(project, truth, tiles, analysis, entry, rows)
         if truth.imported:
             raters.append((meta, entry))
-    objects, counted = pd.DataFrame(rows["objects"]), pd.DataFrame(rows["counted"])
-    out = [_figures(stain, stains[stain], _part(objects, source="check", stain=stain), _part(counted, source="check", stain=stain))
-           for stain in STAINS if stain in stains]
+    objects, counted, fields = (_frame(rows[k], c) for k, c in (("objects", OBJECT_COLUMNS), ("counted", COUNTED_COLUMNS), ("fields", FIELD_COLUMNS)))
+    out = [_figures(stain, stains[stain], *(_part(f, source="check", stain=stain) for f in (objects, counted, fields))) for stain in STAINS if stain in stains]
     imported = [{"title": meta.get("title", meta["name"]), "dataset": meta["imported"].get("dataset", ""), "rater": meta["imported"].get("rater", ""),
-                 **_figures(meta["stain"], entry, _part(objects, session=meta["name"]), _part(counted, session=meta["name"]))}
+                 **_figures(meta["stain"], entry, *(_part(f, session=meta["name"]) for f in (objects, counted, fields)))}
                 for meta, entry in raters if entry["fields_complete"]]
     report = {"made": time.time(), "iou": scoring.IOU, "iou_low": scoring.IOU_LOW, "stains": out, "imported": imported, "failed": failed or [],
               "rules": {"overlap_of_object": scoring.OVERLAP_OF_OBJECT, "overlap_of_candidate": scoring.OVERLAP_OF_CANDIDATE,
@@ -350,8 +358,12 @@ def score(project: Project, truths: list[Truth], failed: list[str] | None = None
 def plain(stain_report: dict) -> str:
     """The report of one stain in a sentence or two."""
     n = stain_report.get("objects", 0)
+    name = stain_report.get("title", stain_report["stain"])
+    if not stain_report.get("fields_scored"):
+        return f"{name}: no field is outlined completely yet."
     if not n:
-        return f"{stain_report.get('title', stain_report['stain'])}: no field is outlined completely yet."
+        return (f"{name}: {stain_report['fields_scored']} fields outlined, with no object in them; the AI counted "
+                f"{stain_report.get('counted', 0)} objects there.")
     words = WORDS.get(stain_report["stain"], "objects")
     o = stain_report["outcomes"]
     pct = lambda v: "—" if v is None else f"{100 * v:.0f}%"  # noqa: E731

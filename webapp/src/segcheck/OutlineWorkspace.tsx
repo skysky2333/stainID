@@ -19,6 +19,7 @@ const UNSURE_COLOR = '#e2e8f0'
 const REFERENCE_COLOR = '#22d3ee'
 const BOX_COLOR = '#ffd21f'
 const MAX_HANDLES = 240
+const MIN_HANDLE_SPACING = 9  // screen pixels between corners: closer, and the corners are only dragged after zooming in
 
 type Tool = 'click' | 'draw'
 /** The clicks behind an object outlined in this visit, and the sizes Segment Anything offered for them. */
@@ -33,6 +34,13 @@ function area(points: number[][]) {
   let sum = 0
   for (let i = 0, j = points.length - 1; i < points.length; j = i++) sum += points[j][0] * points[i][1] - points[i][0] * points[j][1]
   return Math.abs(sum) / 2
+}
+
+/** The mean distance between neighbouring corners of a polygon (image pixels). */
+function spacing(points: number[][]) {
+  let sum = 0
+  for (let i = 0, j = points.length - 1; i < points.length; j = i++) sum += Math.hypot(points[i][0] - points[j][0], points[i][1] - points[j][1])
+  return sum / Math.max(1, points.length)
 }
 
 function centre(points: number[][]) {
@@ -275,7 +283,7 @@ function Outliner({ detail, reload, tile, field }: { detail: SessionDetail; relo
           <ZoomViewer src={apiUrl(`/api/annotate/${name}/fields/${enc(tile)}/image.jpg`)}
             title={<span className="row"><span className="muted small">{tile}</span>{complete && <span className="badge status-done">complete</span>}</span>}
             cursor={complete ? 'default' : 'crosshair'} onClick={click} onMove={move}>
-            {(_zoom, size, unit) => <>
+            {(_zoom, size, rawUnit) => { const unit = Number.isFinite(rawUnit) && rawUnit > 0 ? rawUnit : 1; return <>
               <path d={`M0 0H${size.w}V${size.h}H0Z M${box.x} ${box.y}v${box.height}h${box.width}v${-box.height}Z`} fill="#000" fillOpacity={0.28} fillRule="evenodd" />
               <rect x={box.x} y={box.y} width={box.width} height={box.height} fill="none" stroke={BOX_COLOR} strokeWidth={2 * unit} strokeDasharray={`${12 * unit} ${8 * unit}`} />
               {showCandidates && reference.data?.candidates?.map((ring, i) => (
@@ -294,7 +302,7 @@ function Outliner({ detail, reload, tile, field }: { detail: SessionDetail; relo
               ))}
               {editing && <>
                 <polygon points={svgPoints(editing)} fill={color(chosen!.value)} fillOpacity={0.25} stroke="#fff" strokeWidth={2.5 * unit} />
-                {editing.length <= MAX_HANDLES && !complete && editing.map((p, i) => (
+                {editing.length <= MAX_HANDLES && !complete && spacing(editing) / unit >= MIN_HANDLE_SPACING && editing.map((p, i) => (
                   <circle key={i} cx={p[0]} cy={p[1]} r={3.5 * unit} fill="#fff" stroke="#000" strokeWidth={0.8 * unit} style={{ cursor: 'move' }}
                     onMouseDown={(e) => { e.stopPropagation(); setDragging({ index: i, points: editing }) }} />
                 ))}
@@ -305,7 +313,7 @@ function Outliner({ detail, reload, tile, field }: { detail: SessionDetail; relo
                 <polyline points={svgPoints([...draft, ...(hover ? [hover] : [])])} fill="none" stroke={color(label)} strokeWidth={2 * unit} />
                 {draft.map((p, i) => <circle key={i} cx={p[0]} cy={p[1]} r={(i === 0 ? 6 : 3.5) * unit} fill={i === 0 ? '#fff' : color(label)} stroke="#000" strokeWidth={unit} />)}
               </>}
-            </>}
+            </> }}
           </ZoomViewer>
           <OutlineKeys classes={classes.length} sam={samReady} />
         </div>

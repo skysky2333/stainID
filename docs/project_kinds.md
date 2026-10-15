@@ -140,6 +140,11 @@ recorded), `not a plaque`, `vascular` (CAA), `artifact or unclear`; tau `tau+ ne
 
 ## Scoring the models on imported labels
 
+Raters who drew **polygons** are also scored by the segmentation check (*Models → How well does detection outline
+objects?*, `stainid score-segmentation`; see docs/webapp.md): their outlines are matched with every candidate the
+detection step proposes and with the objects it counts, by IoU, on the fields where all of a rater's marks are
+polygons. That shows objects never proposed, cut into pieces or merged, which the matching below cannot.
+
 On the Models page, *Score the models on these labels* (or `stainid score`) compares the AI's published detections with
 every rater and with the consensus, per stain, and saves `scores.json` and `scores.csv` next to the imported labels:
 

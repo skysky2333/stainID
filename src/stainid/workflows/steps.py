@@ -448,14 +448,14 @@ STEPS = (
          "Compares the objects people outlined in the segmentation check (an “Outline every object” session) with every candidate the "
          "detection step proposes and with the objects it counts: how many are found, never proposed, cut into pieces or merged, and how "
          "well the outlines fit. Finds the candidates of the check's fields first where that has not been done (10–30 s per field).",
-         ("label_store",), ("segmentation_check",), ("score-segmentation",),
+         ("tiles", "calibration"), ("segmentation_check",), ("score-segmentation",),
          (Option("stain", "Stain", "select", "all", choices=("all", *STAINS)),
           Option("session", "Sessions", "text", "", "Only these outline sessions (session IDs). Empty: every one.", advanced=True),
           Option("proposals_only", "Only find the candidates", "bool", False, "Find the candidates of the check's fields, without scoring.", advanced=True),
           Option("redo", "Find the candidates again", "bool", False, "Find the candidates of every field again (after the detection's "
                  "segmentation changed).", advanced=True)),
          view="/models", duration="seconds; 10–30 s per field the first time", status=_segmentation_status,
-         uses=("field_results", "neun_results", "mask_results", "nuclei", "model_cellpose"), waits_for_uses=False),
+         uses=("label_store", "field_results", "neun_results", "mask_results", "nuclei", "model_cellpose"), waits_for_uses=False),
 )
 BY_ID = {s.id: s for s in STEPS}
 
