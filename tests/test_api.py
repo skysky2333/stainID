@@ -200,6 +200,26 @@ def test_field_review_prefills_ai_and_confirms_on_finish(prepared):
     assert ".deleted" in client.delete("/api/labels/sessions/plaques_together").json()["moved_to"]
 
 
+def test_session_named_from_title_opened_at_once_and_shows_who_labels(prepared):
+    client = prepared
+    first = client.post("/api/labels/sessions", json={"title": "Plaques: round 1", "stain": "6E10", "tile_ids": [TILE], "open": True}).json()
+    assert first["name"] == "plaques_round_1" and first["open"] is True
+    second = client.post("/api/labels/sessions", json={"stain": "6E10", "kind": "queue", "tools": ["class"], "tile_ids": None}).json()
+    assert second["name"] == "6e10_queue" and second["open"] is False
+    client.delete("/api/labels/sessions/plaques_round_1")
+    assert client.post("/api/labels/sessions", json={"title": "Plaques: round 1", "stain": "6E10", "tile_ids": [TILE]}).json()["name"] == "plaques_round_1_2"
+
+    client.post("/api/labels/sessions/plaques_round_1_2/open", json={"open": True})
+    ann = TestClient(client.app)
+    ann.post("/api/session/annotator", json={"name": "Ann"})
+    assert ann.get("/api/annotate").json()[0]["instructions"] == ""
+    ann.post(f"/api/annotate/plaques_round_1_2/fields/{TILE}/finish")
+    listed = {s["name"]: s for s in client.get("/api/labels/overview").json()["sessions"]}
+    ann_row = listed["plaques_round_1_2"]["labellers"][0]
+    assert ann_row["person"] == "Ann" and ann_row["fields_done"] == 1 and ann_row["confirmed"] == 12
+    assert listed["plaques_round_1_2"]["labelling_now"] == 1 and listed["6e10_queue"]["labellers"] == []
+
+
 def test_blind_queue_hides_ai_and_serves_crops(prepared):
     client = prepared
     new_session(client, name="q", kind="queue", rule="random", ai_view="positions", tools=["class"], tile_ids=None)

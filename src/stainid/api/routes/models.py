@@ -50,7 +50,9 @@ def describe_bundle(path: str, mtime: float) -> dict:
     return info
 
 
-def _size(path: Path) -> int:
+@lru_cache(maxsize=32)
+def _size(path: Path, mtime: float) -> int:
+    """Bytes in a model file or folder (a folder is walked once per change of its modification time)."""
     return path.stat().st_size if path.is_file() else sum(p.stat().st_size for p in path.rglob("*") if p.is_file())
 
 
@@ -62,7 +64,7 @@ def models() -> list[dict]:
         path = project.model(key)
         entry = {"key": key, "role": role, "path": project.relative(path), "exists": path.exists(), "source": SOURCE[key], "stain": STAIN.get(key)}
         if path.exists():
-            entry |= {"size_mb": round(_size(path) / 1e6, 1), "modified": time.strftime("%Y-%m-%d", time.localtime(path.stat().st_mtime))}
+            entry |= {"size_mb": round(_size(path, path.stat().st_mtime) / 1e6, 1), "modified": time.strftime("%Y-%m-%d", time.localtime(path.stat().st_mtime))}
             if path.suffix == ".joblib":
                 entry["bundle"] = describe_bundle(str(path), path.stat().st_mtime)
         out.append(entry)

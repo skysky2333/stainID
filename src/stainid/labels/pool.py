@@ -159,15 +159,24 @@ def nearest(pool: pd.DataFrame, x: float, y: float, tolerance: float = MATCH_PX)
 _ALL: dict[tuple[str, str], tuple[tuple, pd.DataFrame]] = {}
 
 
+def _files(project: Project, stain: str) -> list[Path]:
+    return sorted(folder(project, stain).glob("*.csv")) if folder(project, stain).exists() else []
+
+
+def signature(project: Project, stain: str) -> tuple:
+    """Changes whenever a pool file of this stain is added or rewritten."""
+    return tuple((f.name, f.stat().st_mtime_ns) for f in _files(project, stain))
+
+
 def all_objects(project: Project, stain: str) -> pd.DataFrame:
     """Every pool object of a stain (position, size, AI call), reloaded only when a pool file changes."""
-    files = sorted(folder(project, stain).glob("*.csv")) if folder(project, stain).exists() else []
-    signature = tuple((f.name, f.stat().st_mtime_ns) for f in files)
+    files = _files(project, stain)
+    stamp = tuple((f.name, f.stat().st_mtime_ns) for f in files)
     cache_key = (str(project.root), stain)
-    if cache_key in _ALL and _ALL[cache_key][0] == signature:
+    if cache_key in _ALL and _ALL[cache_key][0] == stamp:
         return _ALL[cache_key][1]
     columns = ["x", "y", "radius_px", "ai_value", "ai_probability", "tma", "complete"]
     frames = [pd.read_csv(f, usecols=lambda c: c in columns, dtype={"tma": str}).assign(tile_id=f.stem) for f in files]
     frame = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=[*columns, "tile_id"])
-    _ALL[cache_key] = (signature, frame)
+    _ALL[cache_key] = (stamp, frame)
     return frame

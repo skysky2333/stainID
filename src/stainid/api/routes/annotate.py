@@ -74,16 +74,34 @@ def field_objects(meta: dict, tile_id: str) -> pd.DataFrame:
     return objects
 
 
+def labellers(meta: dict, labels: pd.DataFrame) -> list[dict]:
+    """Everyone who has labelled in this session: how far they are and when they last saved something."""
+    mine = labels[labels.session == meta["name"]]
+    reviewed = store.reviewed_fields(labels, meta["stain"])
+    out = []
+    for person, group in mine.groupby("source"):
+        classes = group.task == "class"
+        confirmed = group.confirmed.astype(bool)
+        last = pd.to_numeric(group.time, errors="coerce").max()
+        out.append({"person": person, "fields_done": sum(person in reviewed.get(t, set()) for t in meta.get("fields", [])),
+                    "labels": int(classes.sum()), "changed": int((classes & ~confirmed).sum()), "confirmed": int((classes & confirmed).sum()),
+                    "outlines": int((group.task == "outline").sum()), "tags": int((group.task == "tag").sum()),
+                    "last_active": float(last) if pd.notna(last) else 0.0})
+    return sorted(out, key=lambda p: -p["last_active"])
+
+
 def session_progress(meta: dict, labels: pd.DataFrame) -> dict:
     mine = labels[labels.session == meta["name"]]
-    people = sorted(set(mine.source))
+    people = labellers(meta, labels)
+    now = {p for open_by in busy(meta["name"]).values() for p in open_by}
+    progress = {"people": len(people), "labels": int((mine.task == "class").sum()), "labellers": people,
+                "labelling_now": sum(time.time() - p["last_active"] < BUSY_SECONDS or p["person"] in now for p in people)}
     if meta["kind"] == "fields":
         reviewed = store.reviewed_fields(labels, meta["stain"])
         covered = sum(len(reviewed.get(t, set())) >= meta["per_field"] for t in meta["fields"])
         prepared = len(pool.prepared(get_state().project, meta["stain"]) & set(meta["fields"]))
-        return {"fields": len(meta["fields"]), "fields_covered": covered, "fields_prepared": prepared, "people": len(people),
-                "labels": int((mine.task == "class").sum())}
-    return {"people": len(people), "labels": int((mine.task == "class").sum())}
+        progress |= {"fields": len(meta["fields"]), "fields_covered": covered, "fields_prepared": prepared}
+    return progress
 
 
 def prepare_job(stain: str, fields: int = 0, session: str = "") -> None:
@@ -93,7 +111,7 @@ def prepare_job(stain: str, fields: int = 0, session: str = "") -> None:
 # ---------- admin ----------
 
 class NewSession(BaseModel):
-    name: str
+    name: str = ""
     title: str = ""
     stain: str
     kind: str = "fields"
@@ -104,6 +122,7 @@ class NewSession(BaseModel):
     n_fields: int = 20
     tile_ids: list[str] | None = None
     instructions: str = ""
+    open: bool = False
 
 
 class Opening(BaseModel):
@@ -129,7 +148,7 @@ def defaults() -> dict:
 def labels_overview() -> dict:
     state = get_state()
     labels = store.current(root())
-    stains = [overview.stain_overview(state.project, s, labels, state.tiles) for s in STAINS if s in set(state.tiles.stain)]
+    stains = [overview.cached_stain_overview(state.project, s, root(), state.tiles) for s in STAINS if s in set(state.tiles.stain)]
     listed = []
     for name in sessions.names(root()):
         meta = sessions.meta(root(), name)
@@ -152,8 +171,17 @@ def annotate_path(session: str = "") -> str:
     return f"/p/{get_state().id}/annotate" + (f"/{session}" if session else "")
 
 
+def free_name(title: str, stain: str, kind: str) -> str:
+    """A session name made from its title (or stain and kind) that no session uses yet."""
+    base = re.sub(r"[^a-z0-9]+", "_", (title or f"{stain} {'review' if kind == 'fields' else 'queue'}").lower()).strip("_")[:40] or "session"
+    taken = set(sessions.names(root())) | {p.name.rsplit("-", 2)[0] for p in (root() / sessions.FOLDER / ".deleted").glob("*")}
+    return next(name for name in (base if i == 1 else f"{base}_{i}" for i in range(1, 10_000)) if name not in taken)
+
+
 @router.post("/labels/sessions", dependencies=admin)
 def create_session(body: NewSession) -> dict:
+    if not body.name:
+        body.name = free_name(body.title, body.stain, body.kind)
     if not re.fullmatch(r"[A-Za-z0-9_\-]+", body.name):
         raise HTTPException(400, "name may contain letters, digits, - and _ only")
     state = get_state()
@@ -179,7 +207,7 @@ def create_session(body: NewSession) -> dict:
     except ValueError as error:
         raise HTTPException(400, str(error))
     prepare_job(body.stain, 0 if fields else body.n_fields, body.name if fields else "")
-    return meta
+    return sessions.update(root(), body.name, open=True) if body.open else meta
 
 
 @router.post("/labels/sessions/{name}/open", dependencies=admin)
@@ -217,17 +245,7 @@ def prepare(body: Prepare) -> dict:
 
 @router.get("/labels/sessions/{name}/people", dependencies=admin)
 def session_people(name: str, request: Request) -> list[dict]:
-    meta = session_meta(name, request)
-    labels = store.current(root())
-    mine = labels[labels.session == name]
-    reviewed = store.reviewed_fields(labels, meta["stain"])
-    out = []
-    for person, group in mine.groupby("source"):
-        out.append({"person": person, "fields_done": sum(person in reviewed.get(t, set()) for t in meta.get("fields", [])),
-                    "changed": int(((group.task == "class") & ~group.confirmed.astype(bool)).sum()),
-                    "confirmed": int(((group.task == "class") & group.confirmed.astype(bool)).sum()),
-                    "outlines": int((group.task == "outline").sum()), "tags": int((group.task == "tag").sum())})
-    return out
+    return labellers(session_meta(name, request), store.current(root()))
 
 
 @router.get("/labels/export.csv", dependencies=admin)
@@ -268,7 +286,7 @@ def list_open(request: Request, person: str | None = Depends(viewer)) -> list[di
             continue
         reviewed = store.reviewed_fields(labels, meta["stain"])
         done = sum(person in reviewed.get(t, set()) for t in meta["fields"]) if person else 0
-        out.append({**{k: meta[k] for k in ("name", "title", "stain", "kind", "open")}, "fields": len(meta["fields"]), "done_by_me": done,
+        out.append({**{k: meta.get(k) for k in ("name", "title", "stain", "kind", "open", "instructions")}, "fields": len(meta["fields"]), "done_by_me": done,
                     "my_labels": int(((labels.session == name) & (labels.source == person) & (labels.task == "class")).sum()),
                     "link": annotate_path(name)})
     return out
