@@ -1,6 +1,7 @@
 """Labels: the admin's overview and session management (/api/labels) and the public annotation pages (/api/annotate)."""
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import socket
@@ -215,11 +216,24 @@ def share(request: Request) -> dict:
     """Addresses at which other computers on the network reach this project's annotation pages."""
     port = request.url.port or 80
     host = socket.gethostname()
-    addresses = sorted({a[4][0] for a in socket.getaddrinfo(host, None, socket.AF_INET)} - {"127.0.0.1"})
-    links = [f"http://{a}:{port}{annotate_path()}" for a in [*addresses, host]]
+    links = [f"http://{a}:{port}{annotate_path()}" for a in [*local_addresses(host), host]]
+    opened = request.headers.get("host", "")  # the address this page was opened at, when other computers can use it too
+    if opened and opened.split(":")[0] not in ("localhost", "") and not opened.startswith("127.") and not public_address(request):
+        links = [f"http://{opened}{annotate_path()}"] + [link for link in links if not link.startswith(f"http://{opened}/")]
     public = public_address(request)
     return {"links": ([f"{public}{annotate_path()}"] if public else []) + links,
             "network": bool(public) or os.environ.get("STAINID_HOST", "0.0.0.0") != "127.0.0.1"}
+
+
+def local_addresses(host: str) -> list[str]:
+    """This computer's network addresses (not 127.x: 127.0.1.1 is what many Linux computers call themselves)."""
+    found = set()
+    with contextlib.suppress(OSError):
+        found |= {info[4][0] for info in socket.getaddrinfo(host, None, socket.AF_INET)}
+    with contextlib.suppress(OSError), socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        probe.connect(("192.0.2.1", 9))  # picks the address of the default route; no packet is sent
+        found.add(probe.getsockname()[0])
+    return sorted(a for a in found if not a.startswith("127."))
 
 
 def public_address(request: Request) -> str:
