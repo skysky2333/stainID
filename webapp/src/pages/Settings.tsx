@@ -1,130 +1,221 @@
 import { useEffect, useState } from 'react'
-import type { Group, ProjectConfig } from '../api'
+import type { Group, ProjectConfig, ProjectInfo } from '../api'
 import { api } from '../api'
-import { ErrorNote, FilePicker, HelpBox, PageHead, PathLine, withError } from '../components'
+import { ErrorNote, FilePicker, HelpBox, Loading, PageHead, PathLine, withError } from '../components'
+import type { Theme } from '../hooks'
+import { useTheme } from '../hooks'
 import { useProject } from '../project'
 import { ServerChoice, useSession } from '../session'
+import { Advanced } from '../setup/parts'
 
-const SECTION_TEXT: Record<string, [string, string]> = {
-  inputs: ['Study files', 'Tables stainID reads or makes during set-up. You rarely need to change these.'],
-  models: ['Model files', 'Where each model is stored. The Models page can download or train them.'],
-  outputs: ['Result folders', 'Where each step writes its results.'],
+type PathSection = 'inputs' | 'models' | 'outputs'
+const PATH_SECTIONS: [PathSection, string, string][] = [
+  ['inputs', 'Study files', 'Tables stainID reads or makes during set-up.'],
+  ['models', 'Model files', 'Where each model is stored. The Models page can download or train them.'],
+  ['outputs', 'Result folders', 'Where each step writes its results.'],
+]
+const COLOURS = [1, 2, 3, 4, 5, 6, 7, 8]
+/** The settings this page edits (stainid.yaml may hold others; they are kept as they are). */
+const EDITED = ['name', 'pixel_size_um', 'field_context_px', 'tma', 'groups', 'analysis', 'inputs', 'models', 'outputs'] as const
+
+const edited = (config: ProjectConfig) => Object.fromEntries(EDITED.map((key) => [key, config[key]]))
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
+
+/** What is wrong with the settings, in plain words (empty when they can be saved). */
+function problems(config: ProjectConfig): string[] {
+  const out = []
+  if (!config.name.trim()) out.push('The study needs a name.')
+  const codes = config.groups.map((g) => g.code.trim())
+  if (codes.some((c) => !c)) out.push('Every diagnostic group needs its code from the TMA map.')
+  if (new Set(codes).size !== codes.length) out.push('Two diagnostic groups have the same code.')
+  if (!(config.tma.rows >= 1 && config.tma.columns >= 1)) out.push('A TMA needs at least one row and one column.')
+  if (!(config.pixel_size_um > 0)) out.push('The pixel size must be above 0.')
+  return out
 }
 
 export default function Settings() {
-  const { info, reload } = useProject()
-  const { session } = useSession()
-  const [config, setConfig] = useState<ProjectConfig | null>(null)
-  const [picking, setPicking] = useState<{ section: string; key: string } | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [saved, setSaved] = useState(false)
-  useEffect(() => { if (info) setConfig(structuredClone(info.config)) }, [info])
-  if (!info || !config) return null
+  const { info } = useProject()
+  return (
+    <>
+      <PageHead title="Settings" subtitle="How this study is set up, the admin password, and how the app looks.">
+        <a className="btn" href="/">Open another project…</a>
+      </PageHead>
+      <HelpBox id="settings">
+        Most studies only need the study name and the diagnostic groups; the TMA layout is usually filled in by the guided setup.
+        Everything else has sensible defaults inside the project folder and is under Advanced. Nothing changes until you press <b>Save settings</b>.
+      </HelpBox>
+      {info ? <StudySettings info={info} /> : <Loading label="Loading the settings…" />}
+      <div className="grid grid-2 settings-more">
+        <AdminPassword />
+        <Appearance />
+      </div>
+      <Advanced title="Server and other computers" hint="which stainID server this page uses">
+        <ServerSettings />
+      </Advanced>
+    </>
+  )
+}
 
-  const update = (next: ProjectConfig) => { setSaved(false); setConfig(next) }
-  const setPath = (section: 'inputs' | 'models' | 'outputs', key: string, value: string) => update({ ...config, [section]: { ...config[section], [key]: value } })
-  const setGroup = (i: number, group: Group) => update({ ...config, groups: config.groups.map((g, j) => (j === i ? group : g)) })
-  const save = () => withError(async () => {
-    const { name, pixel_size_um, field_context_px, tma, groups, analysis, inputs, models, outputs } = config
-    await api.put('/api/project/config', { changes: { name, pixel_size_um, field_context_px, tma, groups, analysis, inputs, models, outputs } })
-    setSaved(true)
-    reload()
-  }, setError)
+function StudySettings({ info }: { info: ProjectInfo }) {
+  const { reload } = useProject()
+  const [config, setConfig] = useState<ProjectConfig>(() => structuredClone(info.config))
+  const [picking, setPicking] = useState<{ section: PathSection; key: string } | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [state, setState] = useState<'idle' | 'saving' | 'saved'>('idle')
+  const [base, setBase] = useState(info.config)
+  useEffect(() => {  // the settings were saved (here, or by someone else): take them, unless this page has unsaved edits
+    if (info.config === base) return
+    setConfig((current) => (same(edited(current), edited(base)) ? structuredClone(info.config) : current))
+    setBase(info.config)
+  }, [info.config, base])
+  const dirty = !same(edited(config), edited(info.config))
+  useEffect(() => {
+    if (!dirty) return
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault()
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [dirty])
+
+  const update = (next: ProjectConfig) => { setState('idle'); setConfig(next) }
+  const setPath = (section: PathSection, key: string, value: string) => update({ ...config, [section]: { ...config[section], [key]: value } })
+  const issues = problems(config)
+  const redo = [
+    !same(config.tma, info.config.tma) && 'the TMA layout',
+    config.analysis.tiles !== info.config.analysis.tiles && 'where objects are detected',
+  ].filter(Boolean)
+  const save = async () => {
+    setState('saving')
+    const done = await withError(() => api.put('/api/project/config', { changes: edited(config) }), setError)
+    setState(done ? 'saved' : 'idle')
+    if (done) reload()
+  }
 
   return (
     <>
-      <PageHead title="Settings" subtitle={<>Saved in <code>{info.root}/stainid.yaml</code>. Paths are relative to the project folder.</>}>
-        <a className="btn" href="/">Open or create another project…</a>
-      </PageHead>
-      <HelpBox id="settings">
-        Most studies only need the first two boxes: the study name, how the TMA slides are laid out, and the diagnostic groups used in the TMA map.
-        Everything else has sensible defaults inside the project folder.
-      </HelpBox>
-
       <div className="grid grid-2">
-        <div className="card">
+        <div className="card settings-card">
           <h2>Study</h2>
           <label className="field">Study name<input type="text" value={config.name} onChange={(e) => update({ ...config, name: e.target.value })} /></label>
           <p className="muted small">{info.help.name}</p>
-          <h2 style={{ marginTop: 16 }}>TMA layout</h2>
-          <div className="row">
-            <label className="field">Core name prefix<input type="text" value={config.tma.prefix} style={{ width: 90 }} onChange={(e) => update({ ...config, tma: { ...config.tma, prefix: e.target.value } })} /></label>
-            <label className="field">Rows<input type="number" value={config.tma.rows} style={{ width: 70 }} onChange={(e) => update({ ...config, tma: { ...config.tma, rows: Number(e.target.value) } })} /></label>
-            <label className="field">Columns<input type="number" value={config.tma.columns} style={{ width: 70 }} onChange={(e) => update({ ...config, tma: { ...config.tma, columns: Number(e.target.value) } })} /></label>
-            <label className="field">Pixel size (µm)<input type="number" step="0.0001" value={config.pixel_size_um} style={{ width: 100 }} onChange={(e) => update({ ...config, pixel_size_um: Number(e.target.value) })} /></label>
-          </div>
-          <p className="muted small">Cores are named <code>{config.tma.prefix}3_B-2</code> (TMA 3, column B, row 2). {info.help['tma.rows']} {info.help['tma.columns']}
-            {' '}Set these before <i>Find cores</i> and <i>Choose analysis fields</i>; changing them later needs those steps (and everything after) to be run again.</p>
-          <h2 style={{ marginTop: 16 }}>Analysis</h2>
-          <label className="field">Detect objects in
-            <select value={config.analysis.tiles} onChange={(e) => update({ ...config, analysis: { tiles: e.target.value } })}>
-              <option value="whole_core">whole cores (every tile of tissue)</option>
-              <option value="sampled_fields">the sampled fields only</option>
-            </select></label>
-          <p className="muted small">The sampled fields are always used for labelling, training and testing the models. Whole cores give the most complete
-            results but take about ten times longer; changing this needs the detection steps to be run again with Start over.</p>
+          <GroupsEditor groups={config.groups} help={info.help.groups} onChange={(groups) => update({ ...config, groups })} />
         </div>
-
-        <div className="card">
-          <h2>Diagnostic groups</h2>
-          <p className="muted small">{info.help.groups} Codes must match the <code>disease_group</code> column of your TMA map.</p>
-          <table>
-            <thead><tr><th>Code in TMA map</th><th>Shown as</th><th>Colour</th><th /></tr></thead>
-            <tbody>{config.groups.map((g, i) => (
-              <tr key={i}>
-                <td><input type="text" value={g.code} style={{ width: 90 }} onChange={(e) => setGroup(i, { ...g, code: e.target.value })} /></td>
-                <td><input type="text" value={g.label} style={{ width: 130 }} onChange={(e) => setGroup(i, { ...g, label: e.target.value })} /></td>
-                <td><select value={g.color ?? i + 1} onChange={(e) => setGroup(i, { ...g, color: Number(e.target.value) })}>
-                  {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => <option key={n} value={n}>colour {n}</option>)}</select>
-                  <span className="swatch" style={{ background: `var(--series-${g.color ?? i + 1})`, marginLeft: 6 }} /></td>
-                <td className="row">
-                  <button className="btn small" disabled={i === 0} onClick={() => { const g2 = [...config.groups]; [g2[i - 1], g2[i]] = [g2[i], g2[i - 1]]; update({ ...config, groups: g2 }) }}>↑</button>
-                  <button className="btn small" onClick={() => update({ ...config, groups: config.groups.filter((_, j) => j !== i) })}>Remove</button>
-                </td>
-              </tr>
-            ))}</tbody>
-          </table>
-          <button className="btn small" style={{ marginTop: 8 }} onClick={() => update({ ...config, groups: [...config.groups, { code: '', label: '' }] })}>Add group</button>
-          {!config.groups.length && <p className="muted small">No groups set: codes from the TMA map are shown as they are.</p>}
-        </div>
+        <TmaSettings config={config} info={info} onChange={update} />
       </div>
 
-      {(['inputs', 'models', 'outputs'] as const).map((section) => (
-        <details key={section} className="card settings-section" open={section === 'inputs'}>
-          <summary><h2 style={{ display: 'inline' }}>{SECTION_TEXT[section][0]}</h2> <span className="muted small">{SECTION_TEXT[section][1]}</span></summary>
-          <table>
-            <tbody>{Object.entries(config[section]).map(([key, value]) => (
-              <tr key={key}>
-                <td style={{ width: 220 }}><b>{key.replaceAll('_', ' ')}</b><div className="muted small wrap">{info.paths[section]?.[key]?.help}</div></td>
-                <td><input type="text" value={value} style={{ width: '100%' }} onChange={(e) => setPath(section, key, e.target.value)} /></td>
-                <td style={{ width: 90 }}><button className="btn small" onClick={() => setPicking({ section, key })}>Choose…</button></td>
-                <td style={{ width: 260 }}>{info.paths[section]?.[key] && <PathLine path={info.paths[section][key].path} exists={info.paths[section][key].exists} />}</td>
-              </tr>
-            ))}</tbody>
-          </table>
-        </details>
-      ))}
+      <Advanced title="More study settings" hint="scan pixel size, field margin, file locations">
+        <div className="row">
+          <label className="field">Pixel size (µm per pixel)<input type="number" step="0.0001" min="0" value={config.pixel_size_um} style={{ width: 120 }}
+            onChange={(e) => update({ ...config, pixel_size_um: Number(e.target.value) })} /></label>
+          <label className="field">Field margin (pixels)<input type="number" min="0" value={config.field_context_px} style={{ width: 120 }}
+            onChange={(e) => update({ ...config, field_context_px: Number(e.target.value) })} /></label>
+        </div>
+        <p className="muted small" style={{ margin: 0 }}>{info.help.pixel_size_um} {info.help.field_context_px}</p>
+        {PATH_SECTIONS.map(([section, title, text]) => (
+          <section key={section} className="settings-paths">
+            <h3>{title}</h3>
+            <p className="muted small">{text} Paths are relative to the project folder, <code>{info.root}</code>.</p>
+            <div className="table-wrap" style={{ maxHeight: 'none' }}>
+              <table>
+                <tbody>{Object.entries(config[section]).map(([key, value]) => {
+                  const where = info.paths[section]?.[key]
+                  return (
+                    <tr key={key}>
+                      <td className="wrap" style={{ width: '28%' }}><b>{key.replaceAll('_', ' ')}</b>{where?.help && <div className="muted small">{where.help}</div>}</td>
+                      <td><input type="text" value={value} style={{ width: '100%', minWidth: 160 }} aria-label={key.replaceAll('_', ' ')} onChange={(e) => setPath(section, key, e.target.value)} /></td>
+                      <td style={{ width: 90 }}><button className="btn small" onClick={() => setPicking({ section, key })}>Choose…</button></td>
+                      <td className="settings-exists">{where && <PathLine path={where.path} exists={where.exists} />}</td>
+                    </tr>
+                  )
+                })}</tbody>
+              </table>
+            </div>
+          </section>
+        ))}
+      </Advanced>
 
-      <div className="save-bar">
-        <button className="btn primary" onClick={save}>Save settings</button>
-        {saved && <span className="status-finished small">Saved.</span>}
-        <ErrorNote error={error} />
+      <div className={`save-bar${dirty ? ' dirty' : ''}`} role="status" aria-live="polite">
+        <button className="btn primary" onClick={save} disabled={!dirty || issues.length > 0 || state === 'saving'}>{state === 'saving' ? 'Saving…' : 'Save settings'}</button>
+        {dirty && <button className="btn" onClick={() => update(structuredClone(info.config))} disabled={state === 'saving'}>Undo changes</button>}
+        <span className="small">
+          {issues.length ? <span className="level-warning">{issues.join(' ')}</span>
+            : dirty ? <span className="secondary">You have unsaved changes.{redo.length ? ` Changing ${redo.join(' and ')} means the steps that use it must run again (Run page, Start over).` : ''}</span>
+              : state === 'saved' ? <span className="status-finished">✓ Saved to stainid.yaml.</span>
+                : <span className="muted">No unsaved changes.</span>}
+        </span>
       </div>
-      <AdminPassword />
-      <details className="card settings-section" style={{ marginTop: 16 }}>
-        <summary><h2 style={{ display: 'inline' }}>Server</h2> <span className="muted small">Which stainID server this page uses, and using the app from other computers.</span></summary>
-        <ServerChoice />
-        <p className="muted small">Web apps served from other addresses that this server answers:{' '}
-          {session.allowed_origins?.length ? session.allowed_origins.map((o) => <code key={o}>{o} </code>) : 'none'}
-          {' '}(set with <code>stainid serve --allow-origin URL</code> or <code>STAINID_ALLOW_ORIGINS</code>). People on your network can also
-          simply open this server's address in their browser: each signs in, and several can run steps at the same time.</p>
-      </details>
+      <ErrorNote error={error} />
       {picking && (
-        <FilePicker title={`Choose ${picking.key.replaceAll('_', ' ')}`} pickFiles={/\.(csv|json|joblib|pth)$/.test(config[picking.section as 'inputs'][picking.key])}
+        <FilePicker title={`Choose ${picking.key.replaceAll('_', ' ')}`} pickFiles={/\.(csv|json|joblib|pth)$/.test(config[picking.section][picking.key])}
           start={info.paths[picking.section]?.[picking.key]?.path ? `${info.root}/${info.paths[picking.section][picking.key].path}` : undefined}
-          onClose={() => setPicking(null)} onPick={(path) => { setPath(picking.section as 'inputs', picking.key, path); setPicking(null) }} />
+          onClose={() => setPicking(null)} onPick={(path) => { setPath(picking.section, picking.key, path); setPicking(null) }} />
       )}
     </>
+  )
+}
+
+/** The diagnostic groups: the code used in the TMA map, the name shown, the colour in plots, and their order. */
+function GroupsEditor({ groups, help, onChange }: { groups: Group[]; help: string; onChange: (groups: Group[]) => void }) {
+  const set = (i: number, group: Group) => onChange(groups.map((g, j) => (j === i ? group : g)))
+  const move = (i: number, by: number) => { const next = [...groups]; [next[i], next[i + by]] = [next[i + by], next[i]]; onChange(next) }
+  return (
+    <>
+      <h2 style={{ marginTop: 18 }}>Diagnostic groups</h2>
+      <p className="muted small">{help} Codes must match the <code>disease_group</code> column of the TMA map. Plots use this order and these colours.</p>
+      {groups.length > 0 && (
+        <table className="groups-table">
+          <thead><tr><th>Code in TMA map</th><th>Shown as</th><th>Colour</th><th><span className="sr-only">Order</span></th></tr></thead>
+          <tbody>{groups.map((g, i) => {
+            const colour = g.color ?? i + 1
+            return (
+              <tr key={i}>
+                <td><input type="text" value={g.code} style={{ width: 90 }} aria-label="Code in TMA map" onChange={(e) => set(i, { ...g, code: e.target.value })} /></td>
+                <td><input type="text" value={g.label} style={{ width: 130 }} aria-label="Shown as" onChange={(e) => set(i, { ...g, label: e.target.value })} /></td>
+                <td>
+                  <div className="colour-choice" role="radiogroup" aria-label={`Colour of ${g.label || g.code || 'this group'}`}>
+                    {COLOURS.map((n) => (
+                      <button key={n} role="radio" aria-checked={colour === n} aria-label={`colour ${n}`} className={colour === n ? 'chosen' : ''}
+                        style={{ background: `var(--series-${n})` }} onClick={() => set(i, { ...g, color: n })} />
+                    ))}
+                  </div>
+                </td>
+                <td><div className="row" style={{ flexWrap: 'nowrap', gap: 6 }}>
+                  <button className="btn small" disabled={i === 0} aria-label="Move up" title="Move up" onClick={() => move(i, -1)}>↑</button>
+                  <button className="btn small" disabled={i === groups.length - 1} aria-label="Move down" title="Move down" onClick={() => move(i, 1)}>↓</button>
+                  <button className="link-btn small" onClick={() => onChange(groups.filter((_, j) => j !== i))}>Remove</button>
+                </div></td>
+              </tr>
+            )
+          })}</tbody>
+        </table>
+      )}
+      {!groups.length && <p className="muted small">No groups yet: the codes in the TMA map are shown as they are.</p>}
+      <button className="btn small" style={{ marginTop: 8 }} onClick={() => onChange([...groups, { code: '', label: '' }])}>Add a group</button>
+    </>
+  )
+}
+
+function TmaSettings({ config, info, onChange }: { config: ProjectConfig; info: ProjectInfo; onChange: (config: ProjectConfig) => void }) {
+  const tma = (change: Partial<ProjectConfig['tma']>) => onChange({ ...config, tma: { ...config.tma, ...change } })
+  return (
+    <div className="card settings-card">
+      <h2>TMA slides</h2>
+      <div className="row">
+        <label className="field">Core name prefix<input type="text" value={config.tma.prefix} style={{ width: 90 }} onChange={(e) => tma({ prefix: e.target.value })} /></label>
+        <label className="field">Rows<input type="number" min="1" value={config.tma.rows} style={{ width: 70 }} onChange={(e) => tma({ rows: Number(e.target.value) })} /></label>
+        <label className="field">Columns<input type="number" min="1" value={config.tma.columns} style={{ width: 70 }} onChange={(e) => tma({ columns: Number(e.target.value) })} /></label>
+      </div>
+      <p className="muted small">Cores are named like <code>{config.tma.prefix}3_B-2</code>: TMA 3, column B, row 2. {info.help['tma.rows']} {info.help['tma.columns']}
+        {' '}Set these before finding the cores; changing them later means finding the cores and the steps after it must run again.</p>
+      <h2 style={{ marginTop: 18 }}>Where objects are detected</h2>
+      <fieldset className="radio-list">
+        <legend className="sr-only">Where objects are detected</legend>
+        <label><input type="radio" name="tiles" checked={config.analysis.tiles === 'whole_core'} onChange={() => onChange({ ...config, analysis: { tiles: 'whole_core' } })} />
+          <span><b>Whole cores</b><span className="muted small"> — every tile of tissue. The most complete results; about ten times slower.</span></span></label>
+        <label><input type="radio" name="tiles" checked={config.analysis.tiles === 'sampled_fields'} onChange={() => onChange({ ...config, analysis: { tiles: 'sampled_fields' } })} />
+          <span><b>Sampled fields only</b><span className="muted small"> — a few fields per core. Much faster.</span></span></label>
+      </fieldset>
+      <p className="muted small">Labelling, training and testing the models always use the sampled fields. Changing this needs the detection steps to run again with Start over.</p>
+    </div>
   )
 }
 
@@ -133,30 +224,64 @@ function AdminPassword() {
   const [form, setForm] = useState({ current: '', new: '', repeat: '' })
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const mismatch = form.repeat !== '' && form.new !== form.repeat
   const change = async () => {
     setSaved(false)
+    setSaving(true)
     if (await withError(() => api.put('/api/session/admin/password', { current: form.current, new: form.new }), setError)) {
       setSaved(true)
       setForm({ current: '', new: '', repeat: '' })
       reload()
     }
+    setSaving(false)
   }
   return (
-    <div className="card" id="password" style={{ marginTop: 16, maxWidth: 520 }}>
+    <form className="card" id="password" onSubmit={(e) => { e.preventDefault(); change() }}>
       <h2>Admin password</h2>
-      <p className="muted small">Everything except the annotation pages needs this password.
-        {session.default_password ? ' It is the default (admin).' : ''}</p>
+      <p className="muted small">Everything except the annotation pages needs this password, on this computer and on others.
+        {session.default_password ? ' It is still the default, admin.' : ''}</p>
       <div className="grid" style={{ gap: 8 }}>
-        <label className="field">Current password<input type="password" value={form.current} onChange={(e) => setForm({ ...form, current: e.target.value })} /></label>
-        <label className="field">New password (at least 6 characters)<input type="password" value={form.new} onChange={(e) => setForm({ ...form, new: e.target.value })} /></label>
-        <label className="field">New password again<input type="password" value={form.repeat} onChange={(e) => setForm({ ...form, repeat: e.target.value })} /></label>
+        <label className="field">Current password<input type="password" autoComplete="current-password" value={form.current} onChange={(e) => setForm({ ...form, current: e.target.value })} /></label>
+        <label className="field">New password (at least 6 characters)<input type="password" autoComplete="new-password" value={form.new} onChange={(e) => setForm({ ...form, new: e.target.value })} /></label>
+        <label className="field">New password again<input type="password" autoComplete="new-password" value={form.repeat} onChange={(e) => setForm({ ...form, repeat: e.target.value })} /></label>
       </div>
       <div className="row" style={{ marginTop: 10 }}>
-        <button className="btn primary" disabled={!form.current || form.new.length < 6 || form.new !== form.repeat} onClick={change}>Change password</button>
-        {form.repeat && form.new !== form.repeat && <span className="muted small">The two new passwords differ.</span>}
-        {saved && <span className="status-finished small">Password changed.</span>}
+        <button className="btn" type="submit" disabled={saving || !form.current || form.new.length < 6 || form.new !== form.repeat}>{saving ? 'Changing…' : 'Change password'}</button>
+        {mismatch && <span className="level-warning small">The two new passwords differ.</span>}
+        {saved && <span className="status-finished small">✓ Password changed.</span>}
       </div>
       <ErrorNote error={error} />
+    </form>
+  )
+}
+
+function Appearance() {
+  const [theme, setTheme] = useTheme()
+  const options: [Theme, string][] = [['system', 'Same as this computer'], ['light', 'Light'], ['dark', 'Dark']]
+  return (
+    <div className="card">
+      <h2>Appearance</h2>
+      <p className="muted small">For this browser only; other people keep their own choice.</p>
+      <fieldset className="radio-list">
+        <legend className="sr-only">Colour theme</legend>
+        {options.map(([value, text]) => (
+          <label key={value}><input type="radio" name="theme" checked={theme === value} onChange={() => setTheme(value)} />{text}</label>
+        ))}
+      </fieldset>
     </div>
+  )
+}
+
+function ServerSettings() {
+  const { session } = useSession()
+  return (
+    <>
+      <ServerChoice />
+      <p className="muted small" style={{ margin: 0 }}>People on your network can simply open this server's address in their browser: each signs in, and several
+        can work at the same time. Web apps served from other addresses that this server answers:{' '}
+        {session.allowed_origins?.length ? session.allowed_origins.map((o) => <code key={o}>{o} </code>) : 'none'}
+        {' '}(set with <code>stainid serve --allow-origin URL</code> or <code>STAINID_ALLOW_ORIGINS</code>).</p>
+    </>
   )
 }

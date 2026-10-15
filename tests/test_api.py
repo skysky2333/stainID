@@ -50,6 +50,30 @@ def test_tables(client):
     assert rows["total"] == 3
 
 
+def test_results_table_measures_paging_and_changes(client, synthetic_project):
+    path = synthetic_project / "data/analysis/results_donor_region.csv"
+    frame = pd.DataFrame({"sample_region_id": [f"D{i:02d}_frontal" for i in range(30)], "donor_id": [f"D{i:02d}" for i in range(30)],
+                          "region": "frontal", "disease_group": ["AD", "Control"] * 15, "thread_mean_width_um": [i / 10 for i in range(30)],
+                          "plaque_cored_fraction": 0.5, "made_up_size_um2": 1.0})
+    frame.to_csv(path, index=False)
+    info = client.get("/api/tables/results_donor_region.csv/columns").json()
+    measures = {m["column"]: m for m in info["measures"]}
+    assert measures["thread_mean_width_um"]["label"] == "Thread width, mean" and measures["thread_mean_width_um"]["unit"] == "µm"
+    assert measures["thread_mean_width_um"]["topic"] == "tau" and measures["plaque_cored_fraction"]["label"] == "Cored plaques"
+    assert measures["made_up_size_um2"] == {**measures["made_up_size_um2"], "label": "Made up size", "unit": "µm²", "topic": "other"}
+    page = client.get("/api/tables/results_donor_region.csv/rows", params={"offset": 10, "limit": 5, "sort": "thread_mean_width_um", "desc": True}).json()
+    assert page["total"] == 30 and [r["thread_mean_width_um"] for r in page["rows"]] == [1.9, 1.8, 1.7, 1.6, 1.5]
+    found = client.get("/api/tables/results_donor_region.csv/rows", params={"q": "d07", "columns": "donor_id,thread_mean_width_um"}).json()
+    assert found["total"] == 1 and found["rows"] == [{"donor_id": "D07", "thread_mean_width_um": 0.7}]
+    frame.head(4).to_csv(path, index=False)  # a step writes the table again: the next request sees the new file
+    assert client.get("/api/tables/results_donor_region.csv/rows").json()["total"] == 4
+    listed = next(t for t in client.get("/api/tables").json() if t["name"] == "results_donor_region.csv")
+    assert listed["main"] and listed["columns"] == 7 and listed["title"] == "All measures, per donor-region"
+    (synthetic_project / "data/analysis/biology/extra").mkdir(parents=True)
+    frame.to_csv(synthetic_project / "data/analysis/biology/extra/new_table.csv", index=False)  # a table made later is listed too
+    assert "biology/extra/new_table.csv" in [t["name"] for t in client.get("/api/tables").json()]
+
+
 def test_steps_describe_needs_and_progress(client):
     steps = {s["id"]: s for s in client.get("/api/steps").json()}
     assert steps["select"]["progress"] == {"state": "done", "done": 3, "total": 3, "unit": "fields", "note": "1 cores", "outdated": False}

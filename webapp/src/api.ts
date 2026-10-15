@@ -125,7 +125,9 @@ export interface Job {
   progress: { done: number; total: number; last_line: string; error: string }
   source?: 'app' | 'command line'; pid: number | null; log_file?: string
 }
-export interface TableInfo { name: string; path: string; columns: number; size_kb: number; donor_region: boolean; contrasts: boolean; description: string; main: boolean }
+export interface TableInfo {
+  name: string; title: string; path: string; columns: number; size_kb: number; modified: number; donor_region: boolean; contrasts: boolean; description: string; main: boolean
+}
 export interface ModelInfo {
   key: string; role: string; path: string; exists: boolean; source: 'train' | 'download' | 'manual'; stain: string | null
   size_mb?: number; modified?: string; bundle?: Record<string, unknown>
