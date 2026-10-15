@@ -2,7 +2,7 @@
 data/
 workspace/
 deliveries/
-results*/
+/results*/
 stainid.yaml
 *.rsync*.log
 
