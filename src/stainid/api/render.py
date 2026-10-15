@@ -14,7 +14,6 @@ from stainid.api.state import ProjectState
 from stainid.imaging.color import rgb_to_hed
 from stainid.imaging.tissue import field_tissue_mask, fold_mask, linear_artifact_mask
 from stainid.qc.exclusions import rasterize_core_exclusions, read_manual_exclusions
-from stainid.stains.neun.audit import crop_with_padding
 from stainid.tables import read_csv
 
 Image.MAX_IMAGE_PIXELS = None
@@ -131,20 +130,3 @@ def mask_outlines(state: ProjectState, tile_id: str) -> list[dict]:
     target.write_text(json.dumps(out))
     return out
 
-
-def object_crop(state: ProjectState, stain: str, tile_id: str, x: float, y: float, half: int) -> np.ndarray:
-    """A square crop around a labelled object, wherever its image lives: an analysed field, an earlier study's pilot
-    field (annotations/fields/<id>.png) or a whole core image (labels made on core coordinates). Cached on disk."""
-    target = state.cache_dir("object_crops") / f"{tile_id}_{round(x)}_{round(y)}_{half}.jpg"
-    if target.exists():
-        return np.asarray(Image.open(target).convert("RGB"))
-    pilot = state.project.output("reviews") / "fields" / f"{tile_id}.png"
-    if (state.tiles.tile_id == tile_id).any():
-        crop = crop_with_padding(field_rgb(state, tile_id), x, y, 2 * half)
-    elif pilot.exists():
-        crop = crop_with_padding(np.asarray(Image.open(pilot).convert("RGB")), x, y, 2 * half)
-    else:
-        with pyramid.DECODE, Image.open(state.root / state.core_image(tile_id, stain)["image_path"]) as image:
-            crop = np.asarray(image.crop((int(x) - half, int(y) - half, int(x) + half, int(y) + half)).convert("RGB"))
-    Image.fromarray(crop).save(target, quality=92)
-    return crop

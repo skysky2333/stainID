@@ -84,9 +84,9 @@ def test_consensus_and_queue_rules(tmp_path):
     consensus = store.consensus(labels, "AT8").set_index("x")
     assert len(consensus) == 60 and consensus.loc[20.0, "n"] == 2
     objects = pool.all_objects(project, "AT8")
-    disputed = sessions.next_object({"stain": "AT8", "rule": "disagree"}, objects, labels, "Cy")
-    assert disputed is not None and disputed["labels_so_far"] == 2
-    assert sessions.next_object({"stain": "AT8", "rule": "random"}, objects, labels, "Ann") is None
+    disputed, left = sessions.next_objects({"stain": "AT8", "rule": "disagree"}, objects, labels, "Cy")
+    assert len(disputed) == 1 and disputed[0]["labels_so_far"] == 2 and left >= 2
+    assert sessions.next_objects({"stain": "AT8", "rule": "random"}, objects, labels, "Ann") == ([], 0)
 
 
 def test_train_report_and_activate(tmp_path):

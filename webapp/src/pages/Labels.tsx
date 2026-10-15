@@ -132,7 +132,11 @@ function SessionRow({ s, link, onChanged }: { s: SessionInfo; link: string; onCh
 }
 
 function SessionProgress({ s }: { s: SessionInfo }) {
-  if (s.kind !== 'fields') return <div className="small secondary session-progress">{s.labels.toLocaleString()} objects labelled so far · open-ended</div>
+  if (s.kind !== 'fields') {
+    const pictures = s.pictures
+    return <div className="small secondary session-progress">{s.labels.toLocaleString()} objects labelled so far · open-ended
+      {pictures && pictures.ready < pictures.total && <span className="muted"> · pictures ready: {pictures.ready.toLocaleString()} of {pictures.total.toLocaleString()}</span>}</div>
+  }
   const total = s.fields ?? 0
   const preparing = total - (s.fields_prepared ?? total)
   return (

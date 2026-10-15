@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from stainid import cache
-from stainid.api import label_crops, pyramid, render
+from stainid.api import label_crops, pyramid, queue_pictures, render
 from stainid.api.routes.images import OVERLAYS
 from stainid.api.session import annotator, annotator_name, is_admin, require_admin
 from stainid.api.state import get_state
@@ -31,6 +31,7 @@ BUSY_SECONDS = 15 * 60
 LAYERS = {"NeuN": ["dab", "exclusions"], "6E10": ["dab", "exclusions"], "AT8": ["dab", "exclusions", "threads"]}
 _BUSY: dict[tuple[str, str], dict[str, float]] = {}
 _BUSY_LOCK = threading.Lock()
+_HELD = sessions.Reservations()  # objects of queue sessions on someone's screen, kept from the others for a while
 admin = [Depends(require_admin)]
 FIELD_FACTS = ("core_id", "core_label", "tma", "region", "disease_group")
 BOX = ("x_px", "y_px", "width_px", "height_px")
@@ -108,6 +109,8 @@ def session_progress(meta: dict, labels: pd.DataFrame) -> dict:
         covered = sum(len(reviewed.get(t, set())) >= meta["per_field"] for t in meta["fields"])
         prepared = len(pool.prepared(get_state().project, meta["stain"]) & set(meta["fields"]))
         progress |= {"fields": len(meta["fields"]), "fields_covered": covered, "fields_prepared": prepared}
+    else:
+        progress |= {"pictures": queue_pictures.prepare(get_state(), meta, pool.all_objects(get_state().project, meta["stain"]), labels)}
     return progress
 
 
@@ -465,6 +468,8 @@ def create_session(body: NewSession) -> dict:
     except ValueError as error:
         raise HTTPException(400, str(error))
     prepare_job(body.stain, 0 if fields else body.n_fields, body.name if fields else "")
+    if body.kind == "queue":
+        queue_pictures.prepare(get_state(), meta, pool.all_objects(get_state().project, body.stain), store.current(root()), force=True)
     return sessions.update(root(), body.name, open=True) if body.open else meta
 
 
@@ -659,16 +664,25 @@ def session_detail(name: str, request: Request, person: str | None = Depends(vie
 
 
 @router.get("/annotate/{name}/next")
-def next_item(name: str, request: Request, person: str = Depends(annotator)) -> dict:
+def next_item(name: str, request: Request, person: str = Depends(annotator), count: int = 1) -> dict:
+    """A fields session: the next field for this person. A queue session: the next `count` objects (up to 20, the
+    page shows the first and loads the others' pictures meanwhile), held for this person for a while so others get
+    other objects; with how many the rule leaves them and how many of the queue's pictures are made."""
     meta = session_meta(name, request)
     labels = store.current(root())
+    state = get_state()
     if meta["kind"] == "fields":
-        prepared = pool.prepared(get_state().project, meta["stain"])
+        prepared = pool.prepared(state.project, meta["stain"])
         ready = {**meta, "fields": [t for t in meta["fields"] if t in prepared]}
         return {"tile_id": sessions.next_field(ready, store.reviewed_fields(labels, meta["stain"]), person, busy(name)),
                 "waiting": len(meta["fields"]) - len(ready["fields"])}
-    objects = pool.all_objects(get_state().project, meta["stain"])
-    return {"object": sessions.next_object(meta, objects, labels, person)}
+    objects = pool.all_objects(state.project, meta["stain"])
+    held = (state.id, name)
+    items, remaining = sessions.next_objects(meta, objects, labels, person, min(20, max(1, count)),
+                                             queue_pictures.ready(state, meta["stain"], objects), _HELD.held(held))
+    _HELD.hold(held, person, [i["key"] for i in items])
+    pictures = queue_pictures.prepare(state, meta, objects, labels, first=pd.DataFrame(items, columns=["tile_id", "x", "y"]))
+    return {"object": items[0] if items else None, "objects": items, "remaining": remaining, "pictures": pictures}
 
 
 @router.get("/annotate/{name}/fields/{tile_id}")
@@ -738,6 +752,9 @@ def save(name: str, body: Marks, request: Request, person: str = Depends(annotat
             busy(name, mark.tile_id, person)
     saved = store.append(root(), [_clean(meta, mark, person) for mark in body.records])
     project = get_state().project
+    if meta["kind"] == "queue":
+        answered = pd.DataFrame([r for r in saved if r["task"] == "class" and not r["deleted"]], columns=["tile_id", "x", "y"])
+        _HELD.release((get_state().id, name), person, list(sessions.object_keys(answered)))
     if any(r["task"] == "class" and not r["deleted"] and pool.nearest(pool.load_field(project, meta["stain"], r["tile_id"]), r["x"], r["y"]) is None
            for r in saved):
         measure_added_soon(project, meta["stain"])
@@ -795,10 +812,12 @@ def layer(name: str, tile_id: str, layer: str, request: Request, person: str | N
 
 
 @router.get("/annotate/{name}/object.jpg")
-def object_image(name: str, tile_id: str, x: float, y: float, request: Request, person: str | None = Depends(viewer)) -> Response:
+def object_image(name: str, tile_id: str, x: float, y: float, request: Request, person: str | None = Depends(viewer)) -> FileResponse:
+    """The picture of one queue object: made ahead (`queue_pictures`), else cut now (seconds when its core image has
+    to be read)."""
     meta = session_meta(name, request)
-    state = get_state()
-    half = int(CROP_UM[meta["stain"]] / state.project.pixel_size_um / 2)
-    crop = render.object_crop(state, meta["stain"], tile_id, x, y, half)
-    ok, encoded = cv2.imencode(".jpg", cv2.cvtColor(crop, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 92])
-    return Response(encoded.tobytes(), media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
+    try:
+        crop = queue_pictures.picture(get_state(), meta["stain"], tile_id, x, y)
+    except FileNotFoundError as error:
+        raise HTTPException(404, str(error))
+    return FileResponse(crop, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})

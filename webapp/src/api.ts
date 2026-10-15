@@ -155,6 +155,7 @@ export interface SessionInfo {
   name: string; title: string; stain: string; kind: 'fields' | 'queue'; tools: string[]; ai_view: AiView; per_field: number; rule: string
   instructions: string; created: number; open: boolean; people: number; labels: number
   fields?: number; fields_covered?: number; fields_prepared?: number; labellers: Labeller[]; labelling_now: number
+  pictures?: QueuePictures  // quick-check queues
 }
 export interface Labeller { person: string; fields_done: number; labels: number; changed: number; confirmed: number; outlines: number; tags: number; last_active: number }
 export interface LabelsOverview { stains: StainOverview[]; sessions: SessionInfo[]; reference: ReferenceLabels | null }
@@ -173,7 +174,11 @@ export interface FieldWork {
   tile_id: string; box: { x: number; y: number; width: number; height: number }; objects: FieldObjectLite[]
   outlines: { x: number; y: number; points: number[][] }[]; layers: string[]; mine: Label[]; added?: AddedState[]
 }
-export interface QueueItem { tile_id: string; x: number; y: number; radius_px: number; ai_value: string; ai_probability: number; labels_so_far: number; remaining: number }
+export interface QueueItem { tile_id: string; x: number; y: number; radius_px: number; ai_value: string; ai_probability: number; labels_so_far: number; remaining: number; key: string }
+/** Pictures of a quick-check queue made ahead, of all it may show. */
+export interface QueuePictures { ready: number; total: number }
+/** The next few objects of a quick-check queue for this person (held for them for a while), and how many are left. */
+export interface QueueNext { object: QueueItem | null; objects: QueueItem[]; remaining: number; pictures: QueuePictures }
 
 /* labelling fields (whole-core area): choosing fields, their state in a session, the labels of a session */
 export interface Blocker { reason: string; step: string; step_title: string; link: string }
