@@ -72,6 +72,18 @@ def test_the_slide_label_is_not_taken_for_a_column_of_cores():
     assert (choice.rows, choice.columns) == (3, 5)
 
 
+def test_a_size_set_by_hand_fits_as_well_as_the_same_size_found_automatically():
+    """Fix on the Cores screen with the right size must not fit worse than Find cores did: the label and the empty
+    margin beside the cores are left out of the fit for a size set by hand too."""
+    mask = np.pad(array_mask(3, 4).astype(np.uint8), ((0, 0), (0, 300)))
+    mask[30:200, -200:-40] = 1  # the slide label, right of the cores
+    auto = choose_grid(mask.astype(bool), 1.0, default=(3, 4))
+    by_hand = choose_grid(mask.astype(bool), 1.0, rows=3, columns=4, default=(3, 4))
+    assert (by_hand.rows, by_hand.columns, by_hand.source) == (3, 4, "set")
+    assert len(by_hand.fit.inlier_components) == 12
+    assert by_hand.score >= auto.score - 0.01 > 0.85
+
+
 def test_counting_rows_and_columns_ignores_crumbs():
     mask = array_mask(3, 7, debris=20, seed=3)
     assert estimate_grid(core_like(tissue_blobs(mask), mask.shape)) == (3, 7)

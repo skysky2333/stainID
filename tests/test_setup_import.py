@@ -63,6 +63,9 @@ def test_controls_empty_and_unreadable_cells():
     assert maps.parse_cell("1 9 35", GROUPS)["note"] == "No brain region in this cell"
     assert maps.parse_cell("see notes ??", GROUPS)["note"] == maps.UNREADABLE
     assert maps.parse_cell("AD", GROUPS)["note"] == "This cell has no donor"
+    stray = maps.parse_cell("1673 FR extra\nAD", GROUPS)  # a stray word is not taken silently as part of the region
+    assert stray["region"] == "frextra" and stray["note"].startswith("FREXTRA is not a brain region")
+    assert maps.parse_cell("1700 OC C\nCT", GROUPS)["note"] == ""
 
 
 def test_a_saved_cell_reads_back_the_same():

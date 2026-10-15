@@ -3,7 +3,7 @@ import type { FoundMap, MapOverview, MapTma, ParsedMap, SavedMap } from '../api'
 import { api, apiUrl } from '../api'
 import { Empty, ErrorNote, PathLine, withError } from '../components'
 import { useFetch } from '../hooks'
-import { Advanced, Found, MapGrid, MapSummaryLine, plural, ScreenData, ScreenFoot } from './parts'
+import { Advanced, Found, MapGrid, MapSummaryLine, plural, SavedNote, ScreenData, ScreenFoot, UploadButton } from './parts'
 import type { ScreenProps } from './Setup'
 
 /** A map being looked at before it is saved: from a file, pasted, or typed in. */
@@ -24,13 +24,26 @@ function Maps({ next, back, nextLabel, go, onChanged, data, reload }: ScreenProp
   const [message, setMessage] = useState('')
   const [reading, setReading] = useState(false)
   const [opening, setOpening] = useState('')
+  // the draft to bring into view (it opens below the list, often out of sight): its key and a counter to ask again
+  const [focus, setFocus] = useState({ key: '', times: 0 })
   const file = useRef<HTMLInputElement>(null)
   const tmas = data.tmas
   const missing = tmas.filter((t) => !t.saved && t.slides.length)
   const withSlides = tmas.filter((t) => t.slides.length)
-  const add = (found: FoundMap[]) => setDrafts((old) => [...old, ...found.map((m, i) => ({
-    key: `${Date.now()}-${i}`, name: m.name, source: m.source, tma: m.tma, grid: m.grid, parsed: { cells: m.cells, summary: m.summary },
-  }))])
+  const show = (key: string) => setFocus((old) => ({ key, times: old.times + 1 }))
+  const add = (found: FoundMap[]) => {
+    const stamp = Date.now()
+    setDrafts((old) => [...old, ...found.map((m, i) => ({
+      key: `${stamp}-${i}`, name: m.name, source: m.source, tma: m.tma, grid: m.grid, parsed: { cells: m.cells, summary: m.summary },
+    }))])
+    if (found.length) show(`${stamp}-0`)
+  }
+  /** Read every open draft again (after the donor id or donor-region naming changed), keeping what was typed. */
+  const reparse = () => withError(async () => {
+    const again = await Promise.all(drafts.map(async (d) => ({ key: d.key, parsed: await api.post<ParsedMap>('/api/setup/map/parse', { grid: d.grid }) })))
+    setDrafts((old) => old.map((d) => ({ ...d, parsed: again.find((a) => a.key === d.key)?.parsed ?? d.parsed })))
+  }, setError)
+  const settingsSaved = () => { reload(); reparse() }
   const readFiles = (files: FileList | null) => files && withError(async () => {
     setReading(true); setMessage('')
     try {
@@ -41,12 +54,18 @@ function Maps({ next, back, nextLabel, go, onChanged, data, reload }: ScreenProp
     add((await api.post<{ maps: FoundMap[] }>('/api/setup/map/read-text', { text, name: 'Pasted map' })).maps)
     setText(''); setPasting(false); setMessage('')
   }, setError)
+  const draftOf = (tma: string) => drafts.find((d) => d.tma === tma)
+  /** Edit / Type it in: open the TMA's map below (or bring its open draft into view, keeping what was typed there). */
   const typeIn = (tma: MapTma) => withError(async () => {
+    const open = draftOf(tma.tma)
+    if (open) { show(open.key); return }
     setOpening(tma.tma)
     try {
       const saved = await api.get<SavedMap>(`/api/setup/map/${encodeURIComponent(tma.tma)}`)
-      setDrafts((old) => [...old.filter((d) => d.tma !== tma.tma), { key: `edit-${tma.tma}-${Date.now()}`, name: `TMA ${tma.tma}`, source: saved.saved ? tma.sources.join(', ') : 'typed in',
+      const key = `edit-${tma.tma}-${Date.now()}`
+      setDrafts((old) => [...old, { key, name: `TMA ${tma.tma}`, source: saved.saved ? tma.sources.join(', ') : 'typed in',
         tma: tma.tma, grid: saved.grid, parsed: { cells: saved.cells, summary: saved.summary } }])
+      show(key)
     } finally { setOpening('') }
   }, setError)
   const saved = (draft: Draft, result: MapOverview) => {
@@ -81,7 +100,8 @@ function Maps({ next, back, nextLabel, go, onChanged, data, reload }: ScreenProp
                 {t.sources.length > 0 && <span className="muted"> · from {t.sources.join(', ')}</span>}</>
                 : <span className="status-outdated">No map yet</span>}
             </span>
-            <button className="btn small" disabled={opening === t.tma} onClick={() => typeIn(t)}>{opening === t.tma ? 'Opening…' : t.saved ? 'Edit' : 'Type it in'}</button>
+            <button className="btn small" disabled={opening === t.tma} onClick={() => typeIn(t)}
+              title={draftOf(t.tma) ? 'This map is open below' : undefined}>{opening === t.tma ? 'Opening…' : draftOf(t.tma) ? 'Open below ↓' : t.saved ? 'Edit' : 'Type it in'}</button>
           </li>
         ))}</ul>
         <div className="row" style={{ marginTop: 12 }}>
@@ -102,7 +122,8 @@ function Maps({ next, back, nextLabel, go, onChanged, data, reload }: ScreenProp
         <ErrorNote error={error} />
       </div>
 
-      {drafts.map((d) => <DraftCard key={d.key} draft={d} tmas={tmas} onChange={(changed) => setDrafts((old) => old.map((x) => (x.key === d.key ? changed : x)))}
+      {drafts.map((d) => <DraftCard key={d.key} draft={d} tmas={tmas} focus={focus.key === d.key ? focus.times : 0}
+        onChange={(changed) => setDrafts((old) => old.map((x) => (x.key === d.key ? changed : x)))}
         onCancel={() => setDrafts((old) => old.filter((x) => x.key !== d.key))} onSaved={(result) => saved(d, result)} />)}
 
       <Advanced hint="TMA map file, CSV template, donor id style">
@@ -111,28 +132,30 @@ function Maps({ next, back, nextLabel, go, onChanged, data, reload }: ScreenProp
           Saving a map here replaces that TMA's rows and keeps the others. You can also fill the whole file in Excel:</p>
         <div className="row">
           <a className="btn small" href={apiUrl('/api/templates/tma_layout.csv')}>Download template (all positions filled in)</a>
-          <label className="btn small">Upload the whole TMA map (CSV)…<input type="file" accept=".csv" hidden onChange={(e) => e.target.files?.[0] && withError(async () => {
-            await api.upload('/api/upload/tma_layout', e.target.files![0]); reload(); onChanged(); setMessage('TMA map uploaded.')
-          }, setError)} /></label>
+          <UploadButton label="Upload the whole TMA map (CSV)…" accept=".csv" onFile={async (f) => {
+            await api.upload('/api/upload/tma_layout', f); reload(); onChanged(); return 'TMA map uploaded.'
+          }} />
         </div>
-        <IdStyle overview={data} onSaved={() => { reload(); setDrafts([]) }} />
-        <SampleIdRule overview={data} onSaved={() => { reload(); setDrafts([]) }} />
+        <IdStyle overview={data} onSaved={settingsSaved} />
+        <SampleIdRule overview={data} onSaved={settingsSaved} />
       </Advanced>
       <ScreenFoot back={back} next={next} nextLabel={drafts.length ? `${nextLabel} (unsaved maps are dropped)` : nextLabel} quiet={needsAdding || drafts.length > 0} />
     </div>
   )
 }
 
-function DraftCard({ draft, tmas, onChange, onCancel, onSaved }: {
-  draft: Draft; tmas: MapTma[]; onChange: (d: Draft) => void; onCancel: () => void; onSaved: (result: MapOverview) => void
+function DraftCard({ draft, tmas, focus, onChange, onCancel, onSaved }: {
+  draft: Draft; tmas: MapTma[]; focus: number; onChange: (d: Draft) => void; onCancel: () => void; onSaved: (result: MapOverview) => void
 }) {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const card = useRef<HTMLDivElement>(null)
   const latest = useRef(draft)
   latest.current = draft
   const timer = useRef<number | undefined>(undefined)
   const target = tmas.find((t) => t.tma === draft.tma)
   useEffect(() => () => window.clearTimeout(timer.current), [])
+  useEffect(() => { if (focus) card.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }, [focus])
 
   const edit = (row: number, column: number, value: string) => {
     const grid = latest.current.grid.map((r) => [...r])
@@ -159,7 +182,7 @@ function DraftCard({ draft, tmas, onChange, onCancel, onSaved }: {
   const sizeDiffers = target && (draft.grid.length !== target.size[0] || Math.max(0, ...draft.grid.map((r) => r.length)) !== target.size[1])
 
   return (
-    <div className="card draft-card">
+    <div className="card draft-card" ref={card}>
       <div className="row">
         <h2 style={{ margin: 0 }}>{draft.name}</h2>
         {draft.source && <span className="muted small">from {draft.source}</span>}
@@ -197,7 +220,14 @@ function SampleIdRule({ overview, onSaved }: { overview: MapOverview; onSaved: (
   const [prefixed, setPrefixed] = useState(setting.prefixed_prefix ?? '')
   const [region, setRegion] = useState(setting.region ?? 'name')
   const [error, setError] = useState<string | null>(null)
-  const save = () => withError(async () => { await api.put('/api/setup/sample-ids', { plain_prefix: plain, prefixed_prefix: prefixed, region }); onSaved() }, setError)
+  const [busy, setBusy] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const changed = plain !== (setting.plain_prefix ?? '') || prefixed !== (setting.prefixed_prefix ?? '') || region !== (setting.region ?? 'name')
+  const save = () => withError(async () => {
+    setBusy(true)
+    try { await api.put('/api/setup/sample-ids', { plain_prefix: plain, prefixed_prefix: prefixed, region }); setSaved(true); onSaved() } finally { setBusy(false) }
+  }, setError)
+  const edit = (set: (value: string) => void) => (e: { target: { value: string } }) => { set(e.target.value); setSaved(false) }
   return (
     <div className="panel">
       <b className="small">How donor-regions are named (sample_region_id)</b>
@@ -208,11 +238,13 @@ function SampleIdRule({ overview, onSaved }: { overview: MapOverview; onSaved: (
           : <>— from the setting below (no saved map shows another naming yet).</>}
       </span>
       <div className="row">
-        <label className="field">Before plain donor ids (e.g. BRC_)<input type="text" value={plain} style={{ width: 90 }} onChange={(e) => setPlain(e.target.value)} /></label>
-        <label className="field">Before prefixed ids (e.g. JOG_003)<input type="text" value={prefixed} style={{ width: 90 }} onChange={(e) => setPrefixed(e.target.value)} /></label>
-        <label className="field">Region as<select value={region} onChange={(e) => setRegion(e.target.value)}><option value="name">name (frontal)</option><option value="code">code (FR)</option></select></label>
-        <button className="btn small" onClick={save}>Save</button>
+        <label className="field">Before plain donor ids (e.g. BRC_)<input type="text" value={plain} style={{ width: 90 }} onChange={edit(setPlain)} /></label>
+        <label className="field">Before prefixed ids (e.g. JOG_003)<input type="text" value={prefixed} style={{ width: 90 }} onChange={edit(setPrefixed)} /></label>
+        <label className="field">Region as<select value={region} onChange={edit(setRegion)}><option value="name">name (frontal)</option><option value="code">code (FR)</option></select></label>
+        <button className="btn small" disabled={!changed || busy} onClick={save}>{busy ? 'Saving…' : 'Save'}</button>
+        <SavedNote shown={saved && !changed} />
       </div>
+      {saved && !changed && rule.source === 'layout' && <span className="small muted">Saved for later: the maps already saved keep their naming, and new maps follow it.</span>}
       <ErrorNote error={error} />
     </div>
   )
@@ -222,17 +254,28 @@ function IdStyle({ overview, onSaved }: { overview: MapOverview; onSaved: () => 
   const [digits, setDigits] = useState(String(overview.id_style.digits ?? 4))
   const [prefixed, setPrefixed] = useState(String(overview.id_style.prefixed_digits ?? 3))
   const [error, setError] = useState<string | null>(null)
-  const save = () => withError(async () => { await api.put('/api/setup/id-style', { digits: Number(digits), prefixed_digits: Number(prefixed) }); onSaved() }, setError)
+  const [busy, setBusy] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const valid = [digits, prefixed].every((v) => /^\d$/.test(v.trim()) && Number(v) <= 8)
+  const changed = Number(digits) !== (overview.id_style.digits ?? 4) || Number(prefixed) !== (overview.id_style.prefixed_digits ?? 3)
+  const save = () => withError(async () => {
+    setBusy(true)
+    try { await api.put('/api/setup/id-style', { digits: Number(digits), prefixed_digits: Number(prefixed) }); setSaved(true); onSaved() } finally { setBusy(false) }
+  }, setError)
   return (
     <div className="panel">
       <b className="small">How donor ids are written</b>
       <span className="small secondary">The same rule is used for the maps and the donor sheet, so they match. Stray spaces, “#”, “_” and “-” in ids are ignored.</span>
       <div className="row">
-        <label className="field">Plain numbers get at least … digits (0 = as typed)<input type="number" min={0} max={8} value={digits} style={{ width: 70 }} onChange={(e) => setDigits(e.target.value)} /></label>
-        <label className="field">Numbers after a prefix get … digits<input type="number" min={0} max={8} value={prefixed} style={{ width: 70 }} onChange={(e) => setPrefixed(e.target.value)} /></label>
-        <button className="btn small" onClick={save}>Save</button>
+        <label className="field">Plain numbers get at least … digits (0 = as typed)<input type="number" min={0} max={8} value={digits} style={{ width: 70 }}
+          onChange={(e) => { setDigits(e.target.value); setSaved(false) }} /></label>
+        <label className="field">Numbers after a prefix get … digits<input type="number" min={0} max={8} value={prefixed} style={{ width: 70 }}
+          onChange={(e) => { setPrefixed(e.target.value); setSaved(false) }} /></label>
+        <button className="btn small" disabled={!changed || !valid || busy} onClick={save}>{busy ? 'Saving…' : 'Save'}</button>
+        <SavedNote shown={saved && !changed} />
       </div>
-      <span className="small muted">Now: 698 → {Number(digits) ? '698'.padStart(Number(digits), '0') : '698'}, JOG3 → JOG_{'3'.padStart(Number(prefixed) || 1, '0')}</span>
+      <span className="small muted">{valid ? <>{changed ? 'After saving' : 'Now'}: 698 → {Number(digits) ? '698'.padStart(Number(digits), '0') : '698'}, JOG3 → JOG_{'3'.padStart(Number(prefixed) || 1, '0')}.
+        Maps already saved keep their ids; maps and donor sheets read from now on follow it.</> : <span className="cell-note">Give a number of digits from 0 to 8.</span>}</span>
       <ErrorNote error={error} />
     </div>
   )

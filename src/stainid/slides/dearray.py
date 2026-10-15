@@ -89,7 +89,7 @@ def find_components(mask: np.ndarray, positions: int = 30, blobs: tuple[Componen
     components = [blob for blob in (tissue_blobs(mask) if blobs is None else blobs) if minimum_area <= blob.area <= maximum_area]
     if len(components) < _at_least(0.4, positions):
         raise ValueError(f"Only {len(components)} core-sized tissue pieces were found on the slide preview; "
-                         "check the rows and columns in Settings and that the scan shows the whole TMA")
+                         "check that the scan shows the whole TMA and the slide's rows and columns (Fix on the Cores screen of Set up)")
     return tuple(components)
 
 
@@ -181,7 +181,8 @@ def fit_grid(
             selected[(row, column)] = component
 
     if len(selected) < _at_least(0.4, positions):
-        raise ValueError(f"Only {len(selected)} cores could be matched to a {rows} x {columns} grid; check the rows and columns in Settings")
+        raise ValueError(f"Only {len(selected)} cores could be matched to a {rows} x {columns} grid; "
+                         "check the slide's rows and columns (Fix on the Cores screen of Set up)")
 
     assigned_rows = np.array([position[0] for position in selected], dtype=float)
     assigned_columns = np.array([position[1] for position in selected], dtype=float)
@@ -224,7 +225,7 @@ def fit_grid(
     if len(inlier_components) < _at_least(0.33, positions) or rmse > 0.12 * minimum_pitch:
         raise ValueError(
             f"The {rows} x {columns} grid does not fit this slide well ({len(inlier_components)} cores fit, "
-            f"error {rmse:.1f} preview pixels); check the rows and columns in Settings"
+            f"error {rmse:.1f} preview pixels); check the slide's rows and columns (Fix on the Cores screen of Set up)"
         )
     return GridFit(
         origin=origin,
@@ -314,24 +315,10 @@ def _moved(fit: GridFit, dx: float, dy: float) -> GridFit:
                    shift(fit.inlier_components), fit.rmse, fit.strict_threshold)
 
 
-def choose_grid(
-    mask: np.ndarray,
-    strict_threshold: float,
-    rows: int | None = None,
-    columns: int | None = None,
-    default: tuple[int, int] = (5, 6),
-) -> GridChoice:
-    """The slide's grid: the given rows and columns when both are set, otherwise the best-fitting size among the project
-    default and the sizes around the number of core rows and columns counted on the slide (2-12 each). Sizes are also
-    fitted on the part of the slide the cores occupy, so wide empty margins do not push the fit to a wrong size."""
-    blobs = tissue_blobs(mask)
-    cores = core_like(blobs, mask.shape)
-    if rows and columns:
-        fit = fit_grid(mask, rows, columns, strict_threshold, blobs)
-        return GridChoice(rows, columns, fit, grid_score(fit, rows, columns, len(cores)), "set")
-    rows_seen, columns_seen = estimate_grid(cores)
-    candidates = {(r, c) for r in (rows_seen - 1, rows_seen, rows_seen + 1) for c in (columns_seen - 1, columns_seen, columns_seen + 1)}
-    candidates = sorted(s for s in candidates | {default} if s[0] in GRID_SIZES and s[1] in GRID_SIZES)
+def _fit_sizes(mask: np.ndarray, blobs: tuple[Component, ...], cores: tuple[Component, ...], strict_threshold: float,
+               sizes: list[tuple[int, int]], default: tuple[int, int]) -> dict[tuple[int, int], tuple[GridFit, float]]:
+    """The best fit and its score for each size that fits at all. Each size is fitted on the part of the slide the cores
+    occupy; the project's size (`default`) also on the whole slide, which wins unless the part fits clearly better."""
     window = tissue_window(cores, mask.shape)
     views = [(mask, blobs, 0, 0, {})]  # (mask, its blobs, offset x, offset y, axis fits)
     if window and window != (0, 0, mask.shape[1], mask.shape[0]):
@@ -339,7 +326,7 @@ def choose_grid(
         part = mask[y0:y1, x0:x1]
         views.append((part, tissue_blobs(part), x0, y0, {}))
     fits: dict[tuple[int, int], tuple[GridFit, float]] = {}
-    for size in candidates:
+    for size in sizes:
         for number, (view, view_blobs, dx, dy, axes) in enumerate(views):
             if number == 0 and size != default and len(views) > 1:
                 continue  # the whole slide is only tried for the project's size, as Find cores always did
@@ -350,6 +337,32 @@ def choose_grid(
             score = grid_score(fit, *size, len(cores))
             if size not in fits or score > fits[size][1] + (KEEP_DEFAULT_MARGIN if number else 0):
                 fits[size] = (fit, score)
+    return fits
+
+
+def choose_grid(
+    mask: np.ndarray,
+    strict_threshold: float,
+    rows: int | None = None,
+    columns: int | None = None,
+    default: tuple[int, int] = (5, 6),
+) -> GridChoice:
+    """The slide's grid: the given rows and columns when both are set, otherwise the best-fitting size among the project
+    default and the sizes around the number of core rows and columns counted on the slide (2-12 each). Sizes are also
+    fitted on the part of the slide the cores occupy, so wide empty margins (or the slide label) do not push the fit to a
+    wrong size or a wrong spacing; that holds for a size set by hand too."""
+    blobs = tissue_blobs(mask)
+    cores = core_like(blobs, mask.shape)
+    if rows and columns:
+        fits = _fit_sizes(mask, blobs, cores, strict_threshold, [(rows, columns)], (rows, columns))
+        if not fits:
+            fit = fit_grid(mask, rows, columns, strict_threshold, blobs)  # raises the fitting error in its own words
+            return GridChoice(rows, columns, fit, grid_score(fit, rows, columns, len(cores)), "set")
+        return GridChoice(rows, columns, *fits[rows, columns], "set")
+    rows_seen, columns_seen = estimate_grid(cores)
+    candidates = {(r, c) for r in (rows_seen - 1, rows_seen, rows_seen + 1) for c in (columns_seen - 1, columns_seen, columns_seen + 1)}
+    candidates = sorted(s for s in candidates | {default} if s[0] in GRID_SIZES and s[1] in GRID_SIZES)
+    fits = _fit_sizes(mask, blobs, cores, strict_threshold, candidates, default)
     tried = tuple((r, c, round(fits[r, c][1], 3) if (r, c) in fits else None) for r, c in candidates)
     if not fits:
         raise ValueError(f"No grid of 2-12 rows and columns fits this slide ({len(cores)} core-sized tissue pieces found); "

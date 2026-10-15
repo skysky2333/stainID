@@ -167,3 +167,22 @@ def test_the_guided_setup_from_slides_to_checks(client, tmp_path):
     overview = client.get("/api/setup").json()
     assert [s["id"] for s in overview["screens"]] == ["slides", "cores", "map", "donors", "checks", "run"]
     assert overview["estimate"]["seconds"] > 0 and overview["remaining"][0]["id"] == "dearray"
+
+
+def test_step_summaries_count_in_plain_words(client):
+    screens = {s["id"]: s for s in client.get("/api/setup").json()["screens"]}
+    assert screens["cores"]["summary"] == "Register slides first" and screens["map"]["summary"] == "Register slides first"
+    client.put("/api/slides", json={"rows": client.get("/api/slides").json()["rows"]})
+    screens = {s["id"]: s for s in client.get("/api/setup").json()["screens"]}
+    assert screens["slides"]["summary"] == "3 scans registered"
+    assert screens["cores"]["summary"] == "Cores found on 0 of 3 slides"
+    assert screens["map"]["summary"] == "Maps for 0 of 2 TMAs"
+    assert "0 to" not in screens["checks"]["summary"]
+    assert checks.one("Kept the row on the map's TMA for 1 donors (1 rows removed)") == "Kept the row on the map's TMA for 1 donor (1 row removed)"
+
+
+def test_the_donor_id_style_takes_0_to_8_digits(client):
+    assert client.put("/api/setup/id-style", json={"digits": 9, "prefixed_digits": 3}).status_code == 400
+    assert client.put("/api/setup/id-style", json={"digits": "x", "prefixed_digits": 3}).status_code == 400
+    assert client.put("/api/setup/id-style", json={"digits": None, "prefixed_digits": 3}).status_code == 400
+    assert client.put("/api/setup/id-style", json={"digits": 5, "prefixed_digits": 2}).json()["id_style"] == {"digits": 5, "prefixed_digits": 2}

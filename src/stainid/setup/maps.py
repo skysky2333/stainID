@@ -20,6 +20,7 @@ from pathlib import Path
 from stainid.setup.files import Table
 from stainid.setup.naming import (
     EMPTY_MARKS,
+    REGION_OF,
     REGIONS,
     Groups,
     IdStyle,
@@ -101,6 +102,8 @@ def parse_cell(text: str, groups: Groups, style: IdStyle = IdStyle()) -> dict[st
     cell.update(donor_id=donor_id(prefix + number, style), region_code=region, region=region_name(region) if region else "")
     if not region:
         cell["note"] = "No brain region in this cell"
+    elif region not in REGION_OF:  # e.g. "1673 FR extra" read as region FREXTRA: kept as written, but worth a look
+        cell["note"] = f"{region} is not a brain region stainID knows: check the spelling (it is kept as written)"
     return cell
 
 

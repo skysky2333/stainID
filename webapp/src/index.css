@@ -939,3 +939,8 @@ tr.significant-row td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 .added-note { margin: 4px 0 8px; color: var(--text-secondary); }
 .added-note.warn { border-left: 3px solid var(--warning); padding-left: 8px; }
 .detection-line { margin-top: 6px; }
+
+/* ---- guided setup QA (setupqa): upload buttons with their own result, drafts scrolled into view */
+.upload-button { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.upload-button .error-note { flex-basis: 100%; margin: 0; }
+.draft-card { scroll-margin-top: 16px; }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { SlideRow, SlidesInfo } from '../api'
 import { api } from '../api'
 import { Empty, ErrorNote, FilePicker, PathLine, withError } from '../components'
@@ -21,15 +21,17 @@ export default function SlidesScreen(props: ScreenProps) {
 function Slides({ next, nextLabel, onChanged, data, reload }: ScreenProps & { data: SlidesInfo; reload: () => void }) {
   const { info: project, reload: reloadProject } = useProject()
   const first = useMemo(() => inOrder(data.rows), [data.rows])
-  const [rows, setRows] = useState<SlideRow[]>(first)
-  const [prefix, setPrefix] = useState('')
+  // What people chose and have not saved yet, per scan. Kept apart from the scans the server lists, so looking at the
+  // folder again (or choosing it again) keeps the choices for the scans that are still there.
+  const [edits, setEdits] = useState<Record<string, Pick<SlideRow, 'tma' | 'stain'>>>({})
+  const [typedPrefix, setPrefix] = useState<string | null>(null)
   const [picking, setPicking] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  useEffect(() => {
-    setRows(first)
-    setPrefix(data.tma_prefix === 'TMA-' && data.prefix_guess ? data.prefix_guess : data.tma_prefix)
-  }, [data, first])
+  const rows = useMemo(() => first.map((r) => (edits[r.slide_path] ? { ...r, ...edits[r.slide_path] } : r)), [first, edits])
+  const setRows = (changed: SlideRow[]) => setEdits(Object.fromEntries(changed.filter((r, i) => r.tma !== first[i]?.tma || r.stain !== first[i]?.stain)
+    .map((r) => [r.slide_path, { tma: r.tma, stain: r.stain }])))
+  const prefix = typedPrefix ?? (data.tma_prefix === 'TMA-' && data.prefix_guess ? data.prefix_guess : data.tma_prefix)
   const tmas = useMemo(() => [...new Set(rows.map((r) => r.tma).filter(Boolean))].sort(byNumber), [rows])
   const stains = useMemo(() => [...new Set(rows.map((r) => r.stain).filter(Boolean))], [rows])
   const problems = slideProblems(rows, data.stains)
@@ -47,6 +49,7 @@ function Slides({ next, nextLabel, onChanged, data, reload }: ScreenProps & { da
     try {
       await api.put('/api/slides', { rows })
       if (prefix && prefix !== data.tma_prefix) { await api.put('/api/project/config', { changes: { tma: { prefix } } }); reloadProject() }
+      setEdits({}); setPrefix(null)
       onChanged()
       next?.()
     } finally { setBusy(false) }

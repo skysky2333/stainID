@@ -292,7 +292,13 @@ def save_map(tma: str, request: GridCells) -> dict:
 @router.put("/id-style")
 def id_style(style: dict) -> dict:
     project = get_state().project
-    save_project(project, {"donor_ids": {"digits": int(style.get("digits", 4)), "prefixed_digits": int(style.get("prefixed_digits", 3))}})
+    try:
+        digits = {key: int(style.get(key, default)) for key, default in (("digits", 4), ("prefixed_digits", 3))}
+    except (TypeError, ValueError):
+        raise HTTPException(400, "Give the number of digits as a whole number from 0 to 8")
+    if not all(0 <= v <= 8 for v in digits.values()):
+        raise HTTPException(400, "Give the number of digits as a whole number from 0 to 8")
+    save_project(project, {"donor_ids": digits})
     reload_project(project.root)
     return map_overview()
 

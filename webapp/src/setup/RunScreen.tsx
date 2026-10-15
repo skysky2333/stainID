@@ -79,7 +79,10 @@ function RunCard({ overview, running, busy, onRun }: { overview: SetupOverview; 
       </div>
     )
   }
-  if (running) {
+  // `remaining` leaves out the steps already running or waiting, so nothing remaining with something running means
+  // either Run everything is under way, or only optional steps (Outline objects) are running after everything has run
+  const allRun = overview.screens.find((s) => s.id === 'run')?.state === 'done'
+  if (running && !allRun) {
     return (
       <div className="card next-card">
         <h2>Running</h2>
@@ -90,7 +93,8 @@ function RunCard({ overview, running, busy, onRun }: { overview: SetupOverview; 
   return (
     <div className="card next-card done">
       <h2>Everything has run</h2>
-      <p className="secondary">The results are on the <Link to="/results">Results</Link> page; look at the detections core by core in <Link to="/cohort">Cohort &amp; cores</Link>.</p>
+      <p className="secondary">The results are on the <Link to="/results">Results</Link> page; look at the detections core by core in <Link to="/cohort">Cohort &amp; cores</Link>.
+        {running && ' An optional step is still running; its progress is below.'}</p>
     </div>
   )
 }

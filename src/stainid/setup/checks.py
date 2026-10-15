@@ -24,7 +24,7 @@ SHOW = 12  # items listed per issue; the fixes apply to all
 
 def one(text: str) -> str:
     """Counts of one read as one: "1 donors on the map are" -> "1 donor on the map is"."""
-    text = re.sub(r"\b1 donors\b", "1 donor", text)
+    text = re.sub(r"\b1 donors\b", "1 donor", text).replace("(1 rows ", "(1 row ")
     if not text.startswith("1 "):
         return text
     if not text.startswith("1 donor ") or text.startswith("1 donor ids"):

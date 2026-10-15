@@ -80,6 +80,11 @@ def estimate(project: Project, remaining: list[str]) -> dict:
             "text": f"about {duration(total)}" if total else "", "slowest": max(steps, key=lambda s: s["seconds"])["id"] if steps else ""}
 
 
+def count(n: int, thing: str) -> str:
+    """"1 slide", "3 slides"."""
+    return f"{n:,} {thing}" if n == 1 else f"{n:,} {thing}s"
+
+
 def duration(seconds: float) -> str:
     if seconds < 90:
         return "a minute"
@@ -119,17 +124,18 @@ def screens(project: Project, steps: list[dict] | None = None) -> list[dict]:
 
     return [
         entry("slides", "Slides", "todo" if not slides or new else "done",
-              f"{len(new)} new scans in the slides folder" if slides and new else f"{len(slides)} scans registered" if slides
-              else f"{len(in_folder)} scans found in the slides folder" if in_folder else "No slide scans found yet"),
+              f"{count(len(new), 'new scan')} in the slides folder" if slides and new else f"{count(len(slides), 'scan')} registered" if slides
+              else f"{count(len(in_folder), 'scan')} found in the slides folder" if in_folder else "No slide scans found yet"),
         entry("cores", "Cores", "attention" if failed else "done" if slides and len(found) == len(slides) else "todo",
-              f"No cores found on {len(failed)} slides" if failed else
-              f"Cores found on {len(found)} of {len(slides)} slides" + (f", {sum(r['checked'] for r in found)} checked" if found else "")),
+              "Register slides first" if not slides else f"No cores found on {count(len(failed), 'slide')}" if failed else
+              f"Cores found on {len(found)} of {count(len(slides), 'slide')}" + (f", {sum(r['checked'] for r in found)} checked" if found else "")),
         entry("map", "Map", "done" if slide_tmas and len(mapped) == len(slide_tmas) else "todo",
-              f"Maps for {len(mapped)} of {len(slide_tmas)} TMAs" if slide_tmas else "Register slides first"),
-        entry("donors", "Donors", "done" if donors else "optional", f"{len(donors)} donors" if donors else "Optional: age, sex and other information per donor"),
+              f"Maps for {len(mapped)} of {count(len(slide_tmas), 'TMA')}" if slide_tmas else "Register slides first"),
+        entry("donors", "Donors", "done" if donors else "optional", count(len(donors), "donor") if donors else "Optional: age, sex and other information per donor"),
         entry("checks", "Checks", "attention" if problems else "warning" if warnings else "done" if layout else "todo",
-              f"{len(problems)} to fix, {len(warnings)} to look at" if problems or warnings else "Everything fits together" if layout else "After the map"),
+              ", ".join(part for part in (f"{len(problems)} to fix" if problems else "", f"{len(warnings)} to look at" if warnings else "") if part)
+              if problems or warnings else "Everything fits together" if layout else "After the map"),
         entry("run", "Run", "done" if not remaining else "running" if any(by_id[s["id"]].get("job") and by_id[s["id"]]["job"]["status"] in ("running", "queued")
                                                                           for s in remaining) else "todo",
-              f"{len(remaining)} steps left" if remaining else "Everything has run"),
+              f"{count(len(remaining), 'step')} left" if remaining else "Everything has run"),
     ]

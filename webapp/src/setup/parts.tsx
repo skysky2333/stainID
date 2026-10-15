@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { ReactNode } from 'react'
 import type { MapCell, ScreenState } from '../api'
 import { apiUrl } from '../api'
-import { Loading } from '../components'
+import { ErrorNote, Loading, withError } from '../components'
 
 /** Everything technical on a screen (file locations, full tables, step options): folded away, never removed. What is
 inside is only built once it is first opened, so anything it loads is not loaded for people who never look. */
@@ -159,4 +159,29 @@ export function MapSummaryLine({ summary }: { summary: { positions: number; core
       {summary.unreadable > 0 && <b className="status-outdated"> · {summary.unreadable === 1 ? '1 cell needs' : `${summary.unreadable} cells need`} a look</b>}
     </span>
   )
+}
+
+/** A button that picks one file and hands it to `onFile`. The same file can be picked again (the browser only reports a
+change), and the result (`onFile`'s message) or what went wrong is shown right next to the button, not elsewhere on the page. */
+export function UploadButton({ label, accept, onFile }: { label: string; accept: string; onFile: (file: File) => Promise<string | void> }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [done, setDone] = useState('')
+  const pick = (file: File | undefined) => file && withError(async () => {
+    setBusy(true); setDone('')
+    try { setDone((await onFile(file)) || '') } finally { setBusy(false) }
+  }, setError)
+  return (
+    <span className="upload-button">
+      <label className={`btn small${busy ? ' disabled' : ''}`}>{busy ? 'Reading…' : label}
+        <input type="file" accept={accept} hidden disabled={busy} onChange={(e) => { const file = e.target.files?.[0]; e.target.value = ''; pick(file) }} /></label>
+      {done && <span className="small status-finished" role="status">{done}</span>}
+      <ErrorNote error={error} />
+    </span>
+  )
+}
+
+/** "Saved." next to a settings form's Save button, until the form is changed again. */
+export function SavedNote({ shown }: { shown: boolean }) {
+  return shown ? <span className="small status-finished" role="status">✓ Saved</span> : null
 }

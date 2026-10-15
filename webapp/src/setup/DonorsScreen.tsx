@@ -3,7 +3,7 @@ import type { DonorPreview, DonorTable, SheetTable } from '../api'
 import { api, apiUrl } from '../api'
 import { ErrorNote, Loading, PathLine, withError } from '../components'
 import { useFetch } from '../hooks'
-import { Advanced, Found, plural, ScreenData, ScreenFoot } from './parts'
+import { Advanced, Found, plural, ScreenData, ScreenFoot, UploadButton } from './parts'
 import type { ScreenProps } from './Setup'
 
 const SHOWN = ['donor_id', 'tma', 'disease_group', 'age', 'sex', 'pmd_hours', 'apoe', 'cerad', 'braak']
@@ -40,7 +40,7 @@ function Donors({ next, back, nextLabel, onChanged, table, reload }: ScreenProps
     setReading(true)
     try {
       const result = await api.upload<{ tables: SheetTable[] }>('/api/setup/donors/read', file)
-      setPreview(null); setSheets(result.tables); setMapping({}); setMessage('')
+      setPreview(null); setSheets(result.tables); setMapping({}); setMessage(''); setKeep('study'); setMode('update')
       setSheet(result.tables.reduce((best, t, i) => (t.rows.length > result.tables[best].rows.length ? i : best), 0))
     } finally { setReading(false) }
   }, setError)
@@ -52,7 +52,8 @@ function Donors({ next, back, nextLabel, onChanged, table, reload }: ScreenProps
       setSheets([]); setPreview(null); reload(); onChanged()
     } finally { setBusy(false) }
   }, setError)
-  const cancel = () => { setSheets([]); setPreview(null); setError(null) }
+  // the choices made for one sheet (which donors to keep, replace or update) never carry over to the next one
+  const cancel = () => { setSheets([]); setPreview(null); setError(null); setMapping({}); setKeep('study'); setMode('update') }
   const fields = preview?.fields ?? table.fields
   const fieldName = (field: string) => field === 'skip' ? 'leave out' : field === '' ? 'keep as it is' : fields[field] ?? field
   const shown = preview ? SHOWN.filter((c) => preview.table_columns.includes(c)) : []
@@ -104,7 +105,7 @@ function Donors({ next, back, nextLabel, onChanged, table, reload }: ScreenProps
               </>
             )}
             <div className="row" style={{ marginTop: 10 }}>
-              <button className="btn primary" disabled={!preview?.kept || busy} onClick={save}>{busy ? 'Saving…' : preview ? `Save ${plural(preview.kept, 'donor')}` : 'Save'}</button>
+              <button className="btn primary" disabled={!preview?.kept || busy} onClick={save}>{busy ? 'Saving…' : preview ? `Save ${plural(preview.kept, 'donor')}${mode === 'replace' && table.count ? ' (replaces the donor table)' : ''}` : 'Save'}</button>
               <button className="btn" onClick={cancel}>Cancel</button>
             </div>
           </>
@@ -143,9 +144,9 @@ function Donors({ next, back, nextLabel, onChanged, table, reload }: ScreenProps
         {table.columns.length > 0 && <p className="small secondary">Columns now: <code>{table.columns.join(', ')}</code></p>}
         <p className="small secondary">Required columns: <code>donor_id</code>, <code>disease_group</code>; anything else (age, sex, APOE, PMI …) is used by your own statistics.
           A filled-in CSV can also be uploaded directly: <a href={apiUrl('/api/templates/donor_metadata.csv')}>template</a>.</p>
-        <div><label className="btn small">Upload donor table (CSV)…<input type="file" accept=".csv" hidden onChange={(e) => e.target.files?.[0] && withError(async () => {
-          await api.upload('/api/upload/donor_metadata', e.target.files![0]); reload(); onChanged(); setMessage('Donor table uploaded.')
-        }, setError)} /></label></div>
+        <div className="row"><UploadButton label="Upload donor table (CSV)…" accept=".csv" onFile={async (f) => {
+          await api.upload('/api/upload/donor_metadata', f); reload(); onChanged(); return 'Donor table uploaded.'
+        }} /></div>
       </Advanced>
       <ScreenFoot back={back} next={next} nextLabel={table.count || looking ? nextLabel : 'Skip this step'} quiet={looking || !table.count} />
     </div>

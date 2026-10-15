@@ -137,6 +137,7 @@ function SlideCard({ slide, info, running, onChanged }: { slide: SlideReport; in
     await api.put('/api/setup/cores/grid', automatic ? { slide_path: slide.slide_path, orientation } : { slide_path: slide.slide_path, rows: Number(rows), columns: Number(columns), orientation })
     setFixing(false)
   })
+  const sizeOk = [rows, columns].every((v) => /^\d+$/.test(v.trim()) && Number(v) >= 1 && Number(v) <= 26)
   const size = slide.rows ? `${slide.rows} × ${slide.columns}` : report.rows ? `${report.rows} × ${report.columns}` : ''
   const picture = (width: number) => apiUrl(`/api/grids/${encodeURIComponent(slide.image)}?t=${report.time ?? ''}${width ? `&width=${width}` : ''}`)
 
@@ -179,9 +180,10 @@ function SlideCard({ slide, info, running, onChanged }: { slide: SlideReport; in
               {Object.entries(info.orientations).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label>
           </div>
           <div className="row">
-            <button className="btn small outline-accent" disabled={busy || !Number(rows) || !Number(columns)} onClick={() => findAgain(false)}>{busy ? 'Starting…' : 'Find the cores again'}</button>
+            <button className="btn small outline-accent" disabled={busy || !sizeOk} onClick={() => findAgain(false)}>{busy ? 'Starting…' : 'Find the cores again'}</button>
             <button className="link-btn small" disabled={busy} onClick={() => findAgain(true)}>Find the size automatically</button>
           </div>
+          {!sizeOk && <span className="small cell-note">Give the rows and the columns as whole numbers from 1 to 26.</span>}
         </div>
       )}
       <ErrorNote error={error} />
