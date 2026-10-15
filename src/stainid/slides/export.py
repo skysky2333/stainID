@@ -5,10 +5,12 @@ from collections import defaultdict
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
+import cv2
 import numpy as np
 from aicsimageio.readers.bioformats_reader import BioFile
 from PIL import Image
 
+from stainid.imaging import thumbnails
 from stainid.qc.core_qc import QC_FIELDS
 
 EXPORT_FIELDS = [
@@ -131,11 +133,15 @@ def source_geometry(
     return source, padding
 
 
-def write_png(rgb: np.ndarray, path: Path) -> None:
+def write_png(rgb: np.ndarray, path: Path, thumb: Path | None = None) -> None:
+    """Save a core image, and its thumbnail base to `thumb` while the core is in memory (after the image, so that the
+    thumbnail is newer than it: the app would make it again from the 300 MB image otherwise)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".tmp.png")
     Image.fromarray(rgb).save(temporary, format="PNG", compress_level=3)
     temporary.replace(path)
+    if thumb is not None:
+        thumbnails.write_base(thumb, cv2.cvtColor(thumbnails.shrink(rgb, thumbnails.THUMB_BASE), cv2.COLOR_RGB2BGR))
 
 
 def validate_png(path: Path, expected_size: tuple[int, int]) -> None:
@@ -218,7 +224,10 @@ def export_cores(
     overwrite: bool = False,
     write_workers: int = 2,
     tma_prefix: str = "TMA-",
+    thumbs: Path | None = None,
 ) -> None:
+    """Cut the cores out of their slides into `cores/<TMA>/<core>/<stain>.png` beside the manifest; with `thumbs` (a
+    folder), each newly cut core's thumbnail base is written there too (see `stainid.imaging.thumbnails`)."""
     if write_workers < 1:
         raise ValueError("write_workers must be at least 1")
     fields, rows = read_manifest(manifest_path)
@@ -312,9 +321,11 @@ def export_cores(
                     )
                 else:
                     rgb, source, padding = read_core(biofile, x, y, width, height)
+                    core_id = f"{tma_prefix}{row['tma']}_{row['core_label']}"  # as in the core image table
+                    thumb = thumbnails.base_path(thumbs, core_id, row["stain"]) if thumbs is not None else None
                     pending.append(
                         (
-                            executor.submit(write_png, rgb, output_path),
+                            executor.submit(write_png, rgb, output_path, thumb),
                             index,
                             row,
                             output_path,

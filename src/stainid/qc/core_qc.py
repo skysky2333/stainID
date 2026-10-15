@@ -34,6 +34,12 @@ QC_FIELDS = [
     "focus_review_required",
     "review_required",
 ]
+# What the quality pictures have drawn on them (BGR, hard-edged lines): exact colours, so that the plain core picture
+# can be recovered from a quality picture (see `stainid.imaging.thumbnails.without_outlines`).
+FOOTPRINT_COLOUR = (0, 180, 255)  # where the core should be (orange circle)
+TISSUE_COLOUR = (0, 160, 0)  # the tissue found (green outline)
+LOW_FOCUS_COLOUR = (0, 0, 255)  # tiles out of focus (red boxes)
+OUTLINE_COLOURS = (FOOTPRINT_COLOUR, TISSUE_COLOUR, LOW_FOCUS_COLOUR)
 
 
 @dataclass(frozen=True)
@@ -158,15 +164,15 @@ def write_overlay(
         cv2.RETR_EXTERNAL,
         cv2.CHAIN_APPROX_SIMPLE,
     )
-    cv2.drawContours(overlay, footprint_contours, -1, (0, 180, 255), 2)
-    cv2.drawContours(overlay, tissue_contours, -1, (0, 160, 0), 2)
+    cv2.drawContours(overlay, footprint_contours, -1, FOOTPRINT_COLOUR, 2)
+    cv2.drawContours(overlay, tissue_contours, -1, TISSUE_COLOUR, 2)
     for tile in focus_tiles:
         if tile.low_focus:
             cv2.rectangle(
                 overlay,
                 (tile.x, tile.y),
                 (tile.x + tile.width - 1, tile.y + tile.height - 1),
-                (0, 0, 255),
+                LOW_FOCUS_COLOUR,
                 3,
             )
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -805,3 +805,10 @@ th.num .col-head { justify-items: end; }
   .step-mini { width: 100%; }
   .jobs-table th:nth-child(4), .jobs-table td:nth-child(4) { display: none; }
 }
+
+/* cores grid pictures (thumbs agent): a blurred stand-in at once, the thumbnail fades in over it */
+.core-cell .core-cell-standin, .core-cell .core-cell-pic { position: absolute; inset: 0; }
+.core-cell .core-cell-standin { filter: blur(4px); transform: scale(1.04); }
+.core-cell .core-cell-pic { opacity: 0; transition: opacity 0.3s ease-out; }
+.core-cell .core-cell-pic.loaded { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .core-cell .core-cell-pic { transition: none; } }
