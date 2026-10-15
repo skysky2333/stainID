@@ -20,37 +20,43 @@ Colour deconvolution uses the Ruifrok–Johnston H-E-DAB matrix (`stainid.imagin
 
 QuPath alternatives for grid placement and export are in `tools/qupath/`.
 
-## 2. Field selection — `stainid select`
+## 2. Tiles — `stainid tiles`
 
-For every stain-core, candidate windows are scored on a preview for tissue and focus only
-(never stain intensity). The requested number of fields (default 8) is chosen to be spatially
-spread across the core. The first `--primary` fields (default 4) form the sampled fields
-(`inputs.tile_manifest`), which are labelled to train and test the models; the full set
-(`inputs.field_manifest`) is kept for sampling-stability checks.
+Writes the core image table (`inputs.core_images`, one row per core and stain) and cuts every
+core image into a grid of 2048 px squares (about 560 µm), keeping every square that holds at least
+10 % tissue, including the narrower squares at the right and bottom image edges, so the whole core
+is covered without overlap (`inputs.whole_core_manifest`). Tiles are named `…_W<row><column>`.
+Every analysis runs on all tiles of every core; `stainid summarize` pools them per core and
+donor-region. The study aggregation (`stainid.analysis.aggregation`) keeps a `sampling_extent`
+column: `whole_core`, and `whole_core_interior` (tiles at least half tissue; the rim sensitivity
+analysis, since rim tiles carry about twice the AT8-positive fraction of interior tiles) and, when
+tiles are classed as grey or white matter, `whole_core_grey`.
 
-**Whole cores — `stainid tiles`.** Cuts every core image into the same 2048 px grid (about
-560 µm), keeping every square that holds at least 10 % tissue, including the narrower squares at
-the right and bottom image edges, so the whole core is covered without overlap
-(`inputs.whole_core_manifest`). Squares that are sampled fields keep their names (`…_S01`); the
-others are `…_W<row><column>`. Detection runs on these tiles when `analysis.tiles` is
-`whole_core` (the default; Settings → Analysis), or on the sampled fields only when it is
-`sampled_fields`. `stainid summarize` pools every analysed tile of a core. The study aggregation
-(`stainid.analysis.aggregation`) writes one row per sampling extent: `primary_four` and
-`extended_eight` (the first sampled fields, which keep their names in the whole-core grid) and, for
-whole cores, `whole_core` and `whole_core_interior` (tiles at least half tissue; the rim
-sensitivity analysis, since rim tiles carry about twice the AT8-positive fraction of interior tiles).
+Projects analysed before whole-core analysis also have sampled-field tables
+(`inputs.field_manifest`, `inputs.tile_manifest`). Nothing makes them any more; where they exist,
+the squares that were sampled fields keep their names (`…_S01`) in the tile grid and the tables are
+read only so that earlier labels, labelling sessions and training sets still find their fields
+(`stainid.sampling.tiles`). An older `analysis.tiles: sampled_fields` setting is ignored.
+
+**Labelling fields.** A field shown to people for labelling is one full-size tile that is at least
+half tissue. New sessions draw fields only from cores that are ready (core picture exported, slide
+calibrated, detection run on the core, the stain's model chosen; see `stainid.labels.readiness`);
+the Labels page shows any other core with what is missing and the step that makes it.
 
 ## 3. Slide calibration — `stainid calibrate`
 
-One DAB threshold per slide (TMA × stain), computed from tissue pixels pooled across all cores
-of that slide and blind to diagnosis:
+One DAB threshold per slide (TMA × stain), computed from tissue pixels pooled across every tile of
+every core of that slide (every 64th tissue pixel of each tile) and blind to diagnosis:
 
 ```
 threshold = max(Otsu(pooled DAB OD), median + 6 × MAD, 0.01 OD)
 ```
 
 Every downstream rule is expressed relative to this threshold, so staining-intensity differences
-between slides do not change what counts as positive.
+between slides do not change what counts as positive. Slides that already have a threshold keep it
+(`--redo` works it out again). Earlier projects calibrated from the first sampled field of each core;
+on this cohort the whole-core thresholds were within about 1 % of those on the newer slides and
+0.86–1.12 times them on the older ones, and existing thresholds are kept as they are.
 
 ## 4. Exclusions
 

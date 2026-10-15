@@ -181,7 +181,9 @@ them but is not a label. An object's label is what most people said; ties stay u
 append-only file, `outputs.reviews/labels/labels.jsonl` (one line per saved label with who, what, where and when;
 edits and deletions keep the history), and *Download all labels (CSV)* exports them.
 
-The **Labels** page shows, per stain: how many analysed fields have been fully reviewed, how many objects carry labels
+A **field** is one tile of a core (a square about 560 µm across) shown to people as one picture.
+
+The **Labels** page shows, per stain: how many fields have been fully reviewed, how many objects carry labels
 and of which class, objects people added that the AI missed, outlines people drew or corrected, how often people agree
 with each other, and how often the AI agrees with people (precision and recall). Labels the current model was trained
 on are included in the last figure, which therefore flatters the model; the cross-validated figures on Models are the
@@ -192,7 +194,9 @@ fair estimate.
 Other people label in their browser; everything is managed on the Labels page.
 
 1. **Create a session**: the stain, then either
-   - **Review whole fields**: fields nobody has reviewed yet, spread over TMAs and groups in shuffled order (or a list
+   - **Review whole fields**: fields that stainID picks (nobody has reviewed them yet, spread over TMAs and groups, in
+     shuffled order) or that you click on the cores yourself in the field picker (filtered by TMA, region, group or core;
+     cores that are not ready for labelling, for example not yet detected, are greyed out with the step to run first; or a list
      of field IDs), and how many people should review each field (1 shares them out; 2 or more gives repeat reviews
      for agreement). People see the field with the AI's calls and outlines pre-filled: dashed circles are the AI's call,
      solid ones their own decision. They change the class of wrong objects, add objects the AI missed, drag the corners
@@ -206,7 +210,9 @@ Other people label in their browser; everything is managed on the Labels page.
    and can stop and continue later under the same name. Links of the previous release without a project
    (`…:8765/annotate`) still work and open the project opened last. Only started sessions are listed, and nothing else in stainID
    is reachable without the admin password.
-3. Follow progress, the people and their changes; **+10 fields** extends a session; **Stop** closes it but keeps
+3. Follow progress field by field (not started, in progress, done, by whom), the people and their changes; **Add fields**
+   extends a session and **Remove** takes a field out (its labels stay); **Look at the labels** shows every labelled object
+   on its field; **Stop** closes it but keeps
    everything; **Delete** moves the session definition aside (its labels stay).
 
 Fields have to be **prepared** before people can label them: the *Prepare fields for labelling* step (`stainid labels
@@ -215,11 +221,14 @@ prepare`) finds every candidate exactly as the detection step does and stores it
 
 Labels made before the label store (training sets, the CNN-outlier adjudication and the white-matter field review)
 were imported once with `stainid labels import`, each as its own source (`import: <name>`); the original folders are
-unchanged.
+unchanged. Every label belongs to a session; the imported ones (no session) together form the read-only pseudo-session
+*AI reference labels* (`reference`), which the Labels page lists and lets you look inside like any other session.
 
 ## Training a model
 
-*Train a model* (`stainid train --stain X`) uses every labelled object of that stain in the label store:
+*Train a model* (`stainid train --stain X [--session NAME ...]`) uses the labelled objects of that stain from the sessions
+you choose (on the Models page; every session by default, `reference` = the imported labels). The report of each model
+records the sessions it learned from:
 
 - **Labels.** Each object's majority label, positive or negative; "unsure" and ties are skipped. Labels on positions no
   candidate covers (objects people added) cannot train the classifier. It needs at least 10 positive and 10 negative

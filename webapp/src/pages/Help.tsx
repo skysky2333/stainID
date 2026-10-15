@@ -12,8 +12,11 @@ const FAQ: [string, ReactNode][] = [
     scans, finds their cores and reads their maps; then <b>Run everything</b> analyses them. The study's other slides are left as they are.</>],
   ['The circles for the cores are in the wrong places.', <>Open the <Link to="/setup/cores">Cores</Link> screen of Set up and press <b>Fix</b> under that slide:
     enter its rows and columns, or say that it lies turned or mirrored, and its cores are found again.</>],
-  ['How long does a full study take?', <>Setting up (finding and exporting the cores) takes about an hour for 20 slides. Detection is the slow part: roughly a minute per field
-    and stain on a laptop, so a few hours to a day for a large study. Everything can be stopped and continued later.</>],
+  ['How long does a full study take?', <>Setting up (finding and exporting the cores) takes about an hour for 20 slides. Detection is the slow part, because it looks at
+    every tile of every core (a core holds 15–40 tiles): a few seconds per tile with an NVIDIA GPU, a minute or more on a laptop, so a few hours to a few days
+    for a large study. Everything can be stopped and continued later.</>],
+  ['Is the whole core measured?', <>Yes. Each core is cut into square tiles of about 560 µm and every tile that holds tissue is analysed, so every
+    measure covers the whole core. Open a core on <Link to="/cohort">Cores</Link> and switch on the tile grid to see them.</>],
   ['What runs when? Why does a step say “Waiting”?', <>You can start several steps at once; stainID runs them in the right order.
     A step waits while a step it needs is still running or waiting, and at most two heavy steps (Cellpose, detection, outlines) run at the same
     time so the computer stays usable. The <Link to="/workflow">Run</Link> page shows what is running now, how far it has got, roughly how long

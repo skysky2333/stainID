@@ -8,7 +8,7 @@ import { CommandLineTag, ErrorNote, Progress, StatusBadge, withError } from './c
 /** The three stages of the analysis, as the server names them, and the words the app shows for them. */
 export const MAIN_STAGES = ['1 · Set up', '2 · Detect', '3 · Results']
 export const STAGE: Record<string, { name: string; about: string }> = {
-  '1 · Set up': { name: 'Set up', about: 'Slides, cores, TMA maps, analysis fields and stain thresholds' },
+  '1 · Set up': { name: 'Set up', about: 'Slides, cores, TMA maps, tiles and stain thresholds' },
   '2 · Detect': { name: 'Run', about: 'Nuclei, neurons, plaques and tau found in every tile' },
   '3 · Results': { name: 'Results', about: 'One table row per donor and brain region' },
 }

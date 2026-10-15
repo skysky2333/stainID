@@ -16,7 +16,7 @@ const PATH_SECTIONS: [PathSection, string, string][] = [
 ]
 const COLOURS = [1, 2, 3, 4, 5, 6, 7, 8]
 /** The settings this page edits (stainid.yaml may hold others; they are kept as they are). */
-const EDITED = ['name', 'pixel_size_um', 'field_context_px', 'tma', 'groups', 'analysis', 'inputs', 'models', 'outputs'] as const
+const EDITED = ['name', 'pixel_size_um', 'field_context_px', 'tma', 'groups', 'inputs', 'models', 'outputs'] as const
 
 const edited = (config: ProjectConfig) => Object.fromEntries(EDITED.map((key) => [key, config[key]]))
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
@@ -81,7 +81,6 @@ function StudySettings({ info }: { info: ProjectInfo }) {
   const issues = problems(config)
   const redo = [
     !same(config.tma, info.config.tma) && 'the TMA layout',
-    config.analysis.tiles !== info.config.analysis.tiles && 'where objects are detected',
   ].filter(Boolean)
   const save = async () => {
     setState('saving')
@@ -102,11 +101,11 @@ function StudySettings({ info }: { info: ProjectInfo }) {
         <TmaSettings config={config} info={info} onChange={update} />
       </div>
 
-      <Advanced title="More study settings" hint="scan pixel size, field margin, file locations">
+      <Advanced title="More study settings" hint="scan pixel size, tile margin, file locations">
         <div className="row">
           <label className="field">Pixel size (µm per pixel)<input type="number" step="0.0001" min="0" value={config.pixel_size_um} style={{ width: 120 }}
             onChange={(e) => update({ ...config, pixel_size_um: Number(e.target.value) })} /></label>
-          <label className="field">Field margin (pixels)<input type="number" min="0" value={config.field_context_px} style={{ width: 120 }}
+          <label className="field">Tile margin (pixels)<input type="number" min="0" value={config.field_context_px} style={{ width: 120 }}
             onChange={(e) => update({ ...config, field_context_px: Number(e.target.value) })} /></label>
         </div>
         <p className="muted small" style={{ margin: 0 }}>{info.help.pixel_size_um} {info.help.field_context_px}</p>
@@ -116,7 +115,7 @@ function StudySettings({ info }: { info: ProjectInfo }) {
             <p className="muted small">{text} Paths are relative to the project folder, <code>{info.root}</code>.</p>
             <div className="table-wrap" style={{ maxHeight: 'none' }}>
               <table>
-                <tbody>{Object.entries(config[section]).map(([key, value]) => {
+                <tbody>{Object.entries(config[section]).filter(([key]) => !info.paths[section] || key in info.paths[section]).map(([key, value]) => {
                   const where = info.paths[section]?.[key]
                   return (
                     <tr key={key}>
@@ -206,15 +205,6 @@ function TmaSettings({ config, info, onChange }: { config: ProjectConfig; info: 
       </div>
       <p className="muted small">Cores are named like <code>{config.tma.prefix}3_B-2</code>: TMA 3, column B, row 2. {info.help['tma.rows']} {info.help['tma.columns']}
         {' '}Set these before finding the cores; changing them later means finding the cores and the steps after it must run again.</p>
-      <h2 style={{ marginTop: 18 }}>Where objects are detected</h2>
-      <fieldset className="radio-list">
-        <legend className="sr-only">Where objects are detected</legend>
-        <label><input type="radio" name="tiles" checked={config.analysis.tiles === 'whole_core'} onChange={() => onChange({ ...config, analysis: { tiles: 'whole_core' } })} />
-          <span><b>Whole cores</b><span className="muted small"> — every tile of tissue. The most complete results; about ten times slower.</span></span></label>
-        <label><input type="radio" name="tiles" checked={config.analysis.tiles === 'sampled_fields'} onChange={() => onChange({ ...config, analysis: { tiles: 'sampled_fields' } })} />
-          <span><b>Sampled fields only</b><span className="muted small"> — a few fields per core. Much faster.</span></span></label>
-      </fieldset>
-      <p className="muted small">Labelling, training and testing the models always use the sampled fields. Changing this needs the detection steps to run again with Start over.</p>
     </div>
   )
 }

@@ -24,7 +24,7 @@ export default function Cohort() {
       <HelpBox id="cohort">
         Pick a TMA and a stain to see all its cores as they sit on the slide; the coloured frame is the diagnostic group. Click a core to open it:
         you can zoom in down to single cells, and switch on what the AI detected (neurons, plaques, tau tangles), the stained area and the
-        sampled fields. A <DetectionMark detection="not_run" /> marks a core the AI has not looked at yet, <DetectionMark detection="partial" /> one it is part-way through.
+        tile grid. A <DetectionMark detection="not_run" /> marks a core the AI has not looked at yet, <DetectionMark detection="partial" /> one it is part-way through.
       </HelpBox>
       <Loaded state={cohort} label="Loading the TMAs…">
         {(data) => data.tmas.length ? <CohortGrid info={data} /> : (
