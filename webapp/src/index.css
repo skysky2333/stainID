@@ -598,7 +598,7 @@ button.core-cell:focus-visible { outline: 2px solid var(--accent); outline-offse
 .core-side .advanced { margin: 0; }
 @media (max-width: 1180px) {
   .core-layout { grid-template-columns: minmax(0, 1fr); }
-  .core-side { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  .core-side { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); align-items: start; }
 }
 .core-picture { padding: 12px; }
 .layer-toggle.indent { padding-left: 22px; color: var(--text-secondary); }

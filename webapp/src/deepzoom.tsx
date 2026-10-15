@@ -15,6 +15,7 @@ interface View { s: number; x: number; y: number }  // s = screen px per image p
 interface TileRef { level: number; col: number; row: number }
 
 const MAX_SCALE = 4
+const FAR_SCALE = 0.25  // below this zoom lines are drawn as faint hairlines
 const NICE_UM = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000]
 
 /** The coarsest level that still gives at least one image pixel per device pixel. */
@@ -34,18 +35,24 @@ function ringPath(marks: Mark[]) {
   return path
 }
 
-/** Lines grouped by width, each group one path in image pixels. */
+const LINE_CELL = 1024  // lines are grouped in squares of this many image px, so only the squares in view are drawn
+
+/** Lines grouped by width and by the square their first point lies in: one path (image pixels) and its bounds each. */
 function linePaths(lines: Line[]) {
-  const groups = new Map<number, Path2D>()
+  const groups = new Map<string, { width: number; path: Path2D; x0: number; y0: number; x1: number; y1: number }>()
   for (const line of lines) {
-    const width = line.width
-    if (!groups.has(width)) groups.set(width, new Path2D())
-    const path = groups.get(width)!
     const p = line.points
-    path.moveTo(p[0] + 0.5, p[1] + 0.5)
-    for (let k = 2; k < p.length; k += 2) path.lineTo(p[k] + 0.5, p[k + 1] + 0.5)
+    const key = `${line.width}|${Math.floor(p[0] / LINE_CELL)}|${Math.floor(p[1] / LINE_CELL)}`
+    if (!groups.has(key)) groups.set(key, { width: line.width, path: new Path2D(), x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity })
+    const group = groups.get(key)!
+    group.path.moveTo(p[0] + 0.5, p[1] + 0.5)
+    for (let k = 0; k < p.length; k += 2) {
+      if (k) group.path.lineTo(p[k] + 0.5, p[k + 1] + 0.5)
+      group.x0 = Math.min(group.x0, p[k]); group.x1 = Math.max(group.x1, p[k] + 1)
+      group.y0 = Math.min(group.y0, p[k + 1]); group.y1 = Math.max(group.y1, p[k + 1] + 1)
+    }
   }
-  return [...groups].map(([width, path]) => ({ width, path }))
+  return [...groups.values()]
 }
 
 /** Whether image point (x, y) lies inside one of the mark's outline polygons (even-odd rule). */
@@ -75,7 +82,7 @@ function visibleTiles(pyramid: Pyramid, level: number, view: View, box: { w: num
 /**
  * A whole core image to zoom (wheel, double-click, + / −, keyboard) and drag around. Only the tiles in view are
  * fetched, at the screen's resolution; the coarse picture underneath stays visible while sharper tiles arrive.
- * `marks` (detected objects, with their outlines), `lines` (in `lineColor`, thin at any zoom) and
+ * `marks` (detected objects, with their outlines), `lines` (in `lineColor`, thin at any zoom, faint when far out) and
  * `boxes` (tiles, fields) are drawn on a canvas on top; a click near
  * a mark or inside its outline reports its index to `onPick` (null for empty space), hovering shows `describe(index)`.
  */
@@ -185,8 +192,14 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
       g.lineJoin = 'round'
       g.lineCap = 'round'
       g.strokeStyle = lineColor
-      g.globalAlpha = 0.9
-      for (const s of strokes) { g.lineWidth = s.width / view.s; g.stroke(s.path) }
+      const far = view.s < FAR_SCALE  // zoomed far out: hairlines, faint, so the picture and objects stay visible
+      g.globalAlpha = far ? 0.4 : 0.9
+      const [vx0, vy0, vx1, vy1] = [-view.x / view.s, -view.y / view.s, (size.w - view.x) / view.s, (size.h - view.y) / view.s]
+      for (const s of strokes) {
+        if (s.x1 < vx0 || s.y1 < vy0 || s.x0 > vx1 || s.y0 > vy1) continue
+        g.lineWidth = (far ? Math.min(0.8, s.width) : s.width) / view.s
+        g.stroke(s.path)
+      }
       g.restore()
     }
     if (outlines.length) {
