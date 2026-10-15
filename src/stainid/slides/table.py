@@ -4,6 +4,7 @@ cores, which then writes the size it chose with `grid_source` = auto) and `orien
 rotate_180 / flip_left_right / flip_top_bottom when the slide lies turned or mirrored on the scan)."""
 from __future__ import annotations
 
+import os
 import re
 from collections import Counter
 from dataclasses import dataclass
@@ -17,7 +18,10 @@ GRID_COLUMNS = ["rows", "columns", "grid_source", "orientation"]  # optional per
 
 
 def find_slides(folder: Path) -> list[Path]:
-    return sorted(p for p in Path(folder).iterdir() if p.suffix.lower() in SLIDE_SUFFIXES and not p.name.startswith(".")) if Path(folder).is_dir() else []
+    """The scans in a folder, as clean paths: a folder set as `../scans` gives `/.../scans/x.vsi`, the form the slides
+    table keeps, so a scan already registered is not taken for a new one."""
+    folder = Path(os.path.normpath(folder))
+    return sorted(p for p in folder.iterdir() if p.suffix.lower() in SLIDE_SUFFIXES and not p.name.startswith(".")) if folder.is_dir() else []
 
 
 @dataclass(frozen=True)

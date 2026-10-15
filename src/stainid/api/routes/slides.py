@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 
 import cv2
@@ -94,9 +95,23 @@ def grids() -> list[str]:
     return sorted(p.name for p in folder.glob("*.jpg")) if folder.exists() else []
 
 
+@lru_cache(maxsize=64)
+def _smaller(path: str, mtime: float, width: int) -> bytes:
+    image = cv2.imread(path, cv2.IMREAD_COLOR)
+    if image is None:
+        raise HTTPException(404, "this picture cannot be read")
+    if image.shape[1] > width:
+        image = cv2.resize(image, (width, round(image.shape[0] * width / image.shape[1])), interpolation=cv2.INTER_AREA)
+    return cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 85])[1].tobytes()
+
+
 @router.get("/grids/{name}")
-def grid_image(name: str) -> FileResponse:
+def grid_image(name: str, width: int = 0) -> Response:
+    """A Find cores picture; with `width` a smaller copy (the full pictures are several MB each)."""
     path = get_state().project.output("qc") / "grids" / Path(name).name
     if not path.exists():
         raise HTTPException(404, name)
-    return FileResponse(path)
+    if not width:
+        return FileResponse(path)
+    picture = _smaller(str(path), path.stat().st_mtime, max(160, min(width, 2400)))
+    return Response(picture, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})

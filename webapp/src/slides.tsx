@@ -45,9 +45,9 @@ export function SlideTable({ info, rows, prefix, onChange }: { info: SlidesInfo;
   const addTma = (i: number, tma: string) => { if (!added.includes(tma)) setAdded([...added, tma]); edit(i, { tma }) }
 
   return (
-    <div className="table-wrap slide-table" style={{ maxHeight: 520 }}>
+    <div className="table-wrap slide-table">
       <table>
-        <thead><tr><th style={{ width: 222 }}>Slide</th><th>Scan</th><th style={{ width: 190 }}>TMA</th><th style={{ width: 170 }}>Stain</th><th style={{ width: 50 }} /></tr></thead>
+        <thead><tr><th>Slide</th><th className="slide-choice">TMA</th><th className="slide-choice">Stain</th></tr></thead>
         <tbody>{rows.map((r, i) => {
           const first = guessed[r.slide_path]
           const fromName = { tma: Boolean(first?.from_name?.tma && first.tma === r.tma), stain: Boolean(first?.from_name?.stain && first.stain === r.stain) }
@@ -55,9 +55,11 @@ export function SlideTable({ info, rows, prefix, onChange }: { info: SlidesInfo;
           const twice = problems.twice.some((x) => x.tma === r.tma && x.stain === r.stain)
           return (
             <tr key={r.slide_path} className={!r.tma || !info.stains.includes(r.stain) || twice ? 'row-attention' : ''}>
-              <td><SlidePicture path={r.slide_path} /></td>
-              <td title={r.slide_path}><span className="scan-name">{fileName(r.slide_path)}</span>
-                {twice && <div className="small cell-note">{label(r.tma)} has more than one {r.stain} slide</div>}</td>
+              <td>
+                <SlidePicture path={r.slide_path} />
+                <div className="scan-name small" title={r.slide_path}>{fileName(r.slide_path)}{r.new && info.saved && <> <span className="badge status-running">new</span></>}</div>
+                {twice && <div className="small cell-note">{label(r.tma)} has more than one {r.stain} slide</div>}
+              </td>
               <td>
                 <TmaChoice value={r.tma} tmas={tmas} inName={inName} label={label} prefix={prefix} name={fileName(r.slide_path)}
                   onChoose={(tma) => edit(i, { tma })} onAdd={(tma) => addTma(i, tma)} />
@@ -72,7 +74,6 @@ export function SlideTable({ info, rows, prefix, onChange }: { info: SlidesInfo;
                 {fromName.stain ? <div className="from-name">from the file name</div>
                   : !info.stains.includes(r.stain) && <div className="small cell-note">{first?.options?.stain.length ? `the file name has ${first.options.stain.join(' and ')}` : 'choose the stain'}</div>}
               </td>
-              <td>{r.new && info.saved && <span className="badge status-running">new</span>}</td>
             </tr>
           )
         })}</tbody>
@@ -111,10 +112,12 @@ function TmaChoice({ value, tmas, inName, label, prefix, name, onChoose, onAdd }
 /** A small picture of the slide (its label and cores) when the scan file keeps one, to recognise it by its label. */
 function SlidePicture({ path }: { path: string }) {
   const [missing, setMissing] = useState(false)
+  const [loaded, setLoaded] = useState(false)
   if (missing) return <span className="slide-thumb empty muted small" title="This scan keeps no picture that can be shown quickly">no picture</span>
   return (
-    <a href={slidePicture(path, 800)} target="_blank" rel="noreferrer" title="Open the picture larger">
-      <img className="slide-thumb" src={slidePicture(path, 440)} alt={`Slide ${fileName(path)}`} loading="lazy" onError={() => setMissing(true)} />
+    <a href={slidePicture(path, 800)} target="_blank" rel="noreferrer" title="Open the picture larger" className="slide-thumb-link">
+      <img className={`slide-thumb${loaded ? '' : ' waiting'}`} src={slidePicture(path, 400)} alt={`Slide ${fileName(path)}`} loading="lazy"
+        onLoad={() => setLoaded(true)} onError={() => setMissing(true)} />
     </a>
   )
 }

@@ -130,3 +130,24 @@ def test_slides_api_offers_the_known_tmas_and_marks_guesses(client, tmp_path):
     picture = client.get("/api/slides/picture", params={"path": unclear["slide_path"], "size": 120})
     assert picture.status_code == 200 and picture.headers["content-type"] == "image/jpeg"
     assert client.get("/api/slides/picture", params={"path": str(tmp_path / "stainid.yaml")}).status_code == 404
+
+
+def test_a_slides_folder_given_with_dots_still_finds_the_registered_scans(tmp_path):
+    scans = tmp_path / "scans"
+    (tmp_path / "project").mkdir()
+    scans.mkdir()
+    (scans / "TMA LIP-1 AT8.vsi").touch()
+    table = tmp_path / "slides.csv"
+    save_slides(table, [{"slide_path": str(scans / "TMA LIP-1 AT8.vsi"), "tma": "1", "stain": "AT8"}], STAINS)
+    rows = slide_rows(tmp_path / "project" / ".." / "scans", table, STAINS, "LIP-")
+    assert [r["new"] for r in rows] == [False] and rows[0]["slide_path"] == str(scans / "TMA LIP-1 AT8.vsi")
+
+
+def test_find_cores_pictures_come_smaller_on_request(client, tmp_path):
+    grids = tmp_path / "data" / "qc" / "grids"
+    grids.mkdir(parents=True)
+    cv2.imwrite(str(grids / "TMA_LIP-8_AT8.jpg"), np.full((1000, 2000, 3), 180, np.uint8))
+    small = client.get("/api/grids/TMA_LIP-8_AT8.jpg", params={"width": 400})
+    assert small.status_code == 200 and cv2.imdecode(np.frombuffer(small.content, np.uint8), cv2.IMREAD_COLOR).shape == (200, 400, 3)
+    assert client.get("/api/grids/TMA_LIP-8_AT8.jpg").content == (grids / "TMA_LIP-8_AT8.jpg").read_bytes()
+    assert client.get("/api/grids/nothing.jpg", params={"width": 400}).status_code == 404

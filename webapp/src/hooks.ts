@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api'
 
 export function useFetch<T>(url: string | null, refreshMs?: number) {
@@ -19,9 +19,12 @@ export function useFetch<T>(url: string | null, refreshMs?: number) {
     return () => { active = false }
   }, [url, tick])
 
+  // a poll waits while the previous request is still on its way, so a slow endpoint is not asked again and again
+  const inFlight = useRef(false)
+  inFlight.current = loading
   useEffect(() => {
     if (!refreshMs) return
-    const timer = setInterval(reload, refreshMs)
+    const timer = setInterval(() => { if (!inFlight.current) reload() }, refreshMs)
     return () => clearInterval(timer)
   }, [refreshMs, reload])
 

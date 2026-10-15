@@ -2,13 +2,16 @@ import { useState } from 'react'
 import type { ReactNode } from 'react'
 import type { MapCell, ScreenState } from '../api'
 import { apiUrl } from '../api'
+import { Loading } from '../components'
 
-/** Everything technical on a screen (file locations, full tables, step options): folded away, never removed. */
+/** Everything technical on a screen (file locations, full tables, step options): folded away, never removed. What is
+inside is only built once it is first opened, so anything it loads is not loaded for people who never look. */
 export function Advanced({ children, title = 'Advanced', hint }: { children: ReactNode; title?: string; hint?: string }) {
+  const [opened, setOpened] = useState(false)
   return (
-    <details className="advanced">
+    <details className="advanced" onToggle={(e) => { if (e.currentTarget.open) setOpened(true) }}>
       <summary><span>{title}</span>{hint && <span className="muted small"> · {hint}</span>}</summary>
-      <div className="advanced-body">{children}</div>
+      <div className="advanced-body">{opened && children}</div>
     </details>
   )
 }
@@ -24,15 +27,39 @@ export function Found({ children, tone = 'good' }: { children: ReactNode; tone?:
   return <div className={`found found-${tone}`}>{children}</div>
 }
 
-export function ScreenFoot({ back, next, nextLabel, busy, disabled, extra }: {
-  back?: () => void; next?: () => void; nextLabel?: string; busy?: boolean; disabled?: boolean; extra?: ReactNode
+/** Shows `children(data)` once a screen's data is in; a loading line before that, and the error in plain words with
+"Try again" if it failed. Later reloads keep the old data on screen. */
+export function ScreenData<T>({ state, label, children }: {
+  state: { data: T | null; error: string | null; reload: () => void }; label?: ReactNode; children: (data: T) => ReactNode
+}) {
+  if (state.data !== null && state.data !== undefined) return <>{children(state.data)}</>
+  if (state.error) return <Problem text={`This could not be loaded: ${plainError(state.error)}`} onRetry={state.reload} />
+  return <Loading label={label} />
+}
+
+/** An API error without its status code. */
+export const plainError = (error: string) => error.replace(/^\d{3}: /, '')
+
+/** An error in plain words, with a "Try again" button when it can be retried. */
+export function Problem({ text, onRetry }: { text: string; onRetry?: () => void }) {
+  return (
+    <div className="error-note problem-note" role="alert">
+      <span>{text}</span>{onRetry && <button className="btn small" onClick={onRetry}>Try again</button>}
+    </div>
+  )
+}
+
+/** Back and Next at the foot of a screen. Next is the filled button unless the screen has its own main action to do
+first (`quiet`). */
+export function ScreenFoot({ back, next, nextLabel, busy, disabled, extra, quiet = false }: {
+  back?: () => void; next?: () => void; nextLabel?: string; busy?: boolean; disabled?: boolean; extra?: ReactNode; quiet?: boolean
 }) {
   return (
     <div className="screen-foot">
-      {back && <button className="btn" onClick={back}>Back</button>}
+      {back && <button className="btn" onClick={back}>← Back</button>}
       <span className="spacer" />
       {extra}
-      {next && <button className="btn primary" disabled={busy || disabled} onClick={next}>{busy ? 'Saving…' : nextLabel ?? 'Next'}</button>}
+      {next && <button className={`btn${quiet ? '' : ' primary'}`} disabled={busy || disabled} onClick={next}>{busy ? 'Saving…' : nextLabel ?? 'Next'} →</button>}
     </div>
   )
 }
@@ -69,7 +96,7 @@ export function MapGrid({ grid, cells, onEdit, thumbs, positions }: {
   const onSlide = positions ? new Set(positions) : null
   return (
     <div className="map-grid-wrap">
-      <div className="map-grid" style={{ gridTemplateColumns: `28px repeat(${width}, minmax(120px, 1fr))` }}>
+      <div className="map-grid" style={{ gridTemplateColumns: `28px repeat(${width}, minmax(104px, 1fr))` }}>
         <span />
         {Array.from({ length: width }, (_, c) => <span key={c} className="map-axis">{letter(c)}</span>)}
         {grid.map((row, r) => (
