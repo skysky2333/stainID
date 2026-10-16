@@ -7,9 +7,12 @@
 - Round 2, "Fix the field" (kind `fields`): whole fields with every candidate and the AI's outlines; people add what was
   missed, fix outlines and may change any call (recorded exactly like a round-1 decision on that candidate).
 
-Both read and write the same decisions (`labels.decisions`): a candidate decided in either round, in any session, is done
-for everyone once `labels_needed` people decided it. Candidates and fields handed to someone are held for them for a short
-while (`sessions.Reservations`), renewed while their page is open, so people working at once get different ones.
+Both write the same decisions (`labels.decisions`, keyed by candidate id). The unit people claim is a tile (field), in
+both rounds: opening one holds it for that person (`sessions.Reservations`, renewed while their page is open), so the
+others are handed other tiles meanwhile; once someone saves it as finished (a `done` label: `value` CALLS in round 1, ""
+in round 2) it is done for that round, and once `labels_needed` people (default 1) finished it nobody else is handed it.
+Round 1 walks the objects of one tile after the other. Nothing reaches the label log until the person saves the tile:
+all its answers at once (`routes.rounds.save_tile`).
 
 A round session's meta holds `source: "candidates"`, `round` (1 or 2), `scope` (the tiles it draws from), `level` (how
 generous: the lowest proposal level shown, `candidate_store.at_level`; None = every candidate) and `labels_needed`.
@@ -35,7 +38,8 @@ RULE = "informative"
 NEAR = 0.15  # how close to the decision threshold a score is "near" it
 LEVELS = {"all": None, "0.5": 0.5, "0.75": 0.75, "1": 1.0, "1.5": 1.5}  # how generous: lowest proposal level shown (× the slide threshold)
 DEFAULT_OBJECTS = 500
-FIELD_HOLD_SECONDS = 90.0
+TILE_HOLD_SECONDS = 90.0  # a tile stays someone's this long after their page last asked (every few seconds while open)
+CALLS = "calls"  # the `value` of the `done` label that finishes a tile of round 1 (round 2's has none)
 
 
 def is_round(meta: dict) -> bool:
@@ -53,6 +57,15 @@ def needed(meta: dict) -> int:
 def level(meta: dict) -> float | None:
     value = meta.get("level")
     return None if value is None else float(value)
+
+
+def done_kind(meta: dict) -> str:
+    """The `value` of the `done` label that finishes a tile of this round (`store.reviewed_fields`)."""
+    return CALLS if round_of(meta) == 1 else ""
+
+
+def done_id(meta: dict, tile_id: str) -> str:
+    return f"done:{CALLS}:{tile_id}" if round_of(meta) == 1 else f"done:{tile_id}"
 
 
 # ---------- ordering ----------
@@ -142,49 +155,49 @@ def items(project: Project, meta: dict, tiles: pd.DataFrame) -> pd.DataFrame:
     return cache.memo(("round items frame", str(target), meta["stain"]), [target, candidate_store.folder(project, meta["stain"])], make, folders=True)
 
 
-def open_for(frame: pd.DataFrame, decided: State, person: str, needs: int, held: dict[str, set[str]]) -> pd.Series:
-    """Which of these candidates this person may be handed: not answered by them, not decided, and not held by others
-    who would decide it."""
-    ids = frame.candidate_id
-    answered = ids.map(lambda c: person in decided.answered.get(c, ()))
-    taken = ids.map(lambda c: decided.count(c) + len(held.get(c, set()) - {person}))
-    return ~answered & (taken < needs)
+def tiles_of(frame: pd.DataFrame) -> list[str]:
+    """The tiles of a round-1 session's candidates, in the order its most informative candidate on each comes."""
+    return list(dict.fromkeys(frame.tile_id)) if len(frame) else []
 
 
-def serve(meta: dict, frame: pd.DataFrame, decided: State, person: str, held: dict[str, set[str]], count: int,
-          ready: pd.Series | None = None) -> tuple[pd.DataFrame, int]:
-    """The next `count` candidates for this person, and how many are left for them: those already handed to them first
-    (still on their page), then those whose picture is made, in the session's order."""
+def open_items(frame: pd.DataFrame, finished: dict[str, set[str]], needs: int) -> pd.DataFrame:
+    """A round-1 session's candidates on tiles that still need people (whose pictures are worth making)."""
     if frame.empty:
-        return frame, 0
-    free = open_for(frame, decided, person, needed(meta), held)
-    left = frame[free].assign(ready=True if ready is None else ready[free].to_numpy(bool))
-    left = left.assign(handed=left.candidate_id.map(lambda c: person in held.get(c, set())))
-    ordered = left.sort_values(["handed", "ready", "order"], ascending=[False, False, True], kind="stable")
-    return ordered.head(max(1, count)), int(len(left))
+        return frame
+    return frame[[len(finished.get(t, set())) < needs for t in frame.tile_id]]
 
 
-def gone(keys: list[str], decided: State, person: str, needs: int, held: dict[str, set[str]]) -> list[str]:
-    """Of the candidates on someone's page, those that are no longer theirs to answer: decided by others meanwhile (or
-    taken by others while their hold had run out)."""
-    out = []
-    for key in keys:
-        others = held.get(key, set()) - {person}
-        if person in decided.answered.get(key, ()) or decided.done(key, needs) or (others and decided.count(key) + len(others) >= needs):
-            out.append(key)
-    return out
+# ---------- tiles: who is handed which, and how far a session is (both rounds) ----------
+
+def next_tile(tiles: list[str], finished: dict[str, set[str]], person: str, held: dict[str, set[str]], needs: int,
+              ready: set[str] | None = None, skip: set[str] | None = None, prefer: set[str] | None = None) -> tuple[str | None, int]:
+    """The next tile for this person and how many tiles still to do are others' now: one they hold already (their work
+    in progress), else the first tile (of those `prefer`red first, e.g. with their pictures made) that still needs people
+    and that others are not on. A tile someone else is editing, or that enough people finished, is not handed out
+    again; `skip` are tiles this person put aside for now."""
+    skip = skip or set()
+    todo = [t for t in tiles if (ready is None or t in ready) and person not in finished.get(t, set()) and len(finished.get(t, set())) < needs]
+    mine = [t for t in todo if person in held.get(t, set()) and t not in skip]
+    if mine:
+        return mine[0], 0
+    free = [t for t in todo if len(finished.get(t, set())) + len(held.get(t, set()) - {person}) < needs]
+    pick = [t for t in free if t not in skip]
+    if prefer is not None:
+        pick = sorted(pick, key=lambda t: t not in prefer)  # stable: the session's order among each
+    return (pick[0] if pick else None), len(todo) - len(free)
 
 
-def progress(meta: dict, frame: pd.DataFrame, decided: State) -> dict:
-    """How far a round-1 session is: candidates decided (by anyone, in any round) of all, and by whom."""
-    ids = list(frame.candidate_id) if len(frame) else []
-    needs = needed(meta)
-    done = [c for c in ids if decided.done(c, needs)]
+def progress(tiles: list[str], finished: dict[str, set[str]], held: dict[str, set[str]], needs: int) -> dict:
+    """How far a round session is, in tiles (live): done (enough people finished it), in progress (someone has it open
+    or finished it and more people are needed), left (nobody on it yet), and how many tiles each person finished."""
+    done = [t for t in tiles if len(finished.get(t, set())) >= needs]
+    working = [t for t in tiles if t not in set(done) and (finished.get(t) or held.get(t))]
     people: dict[str, int] = {}
-    for c in ids:
-        for person in decided.by(c):
+    for t in tiles:
+        for person in finished.get(t, set()):
             people[person] = people.get(person, 0) + 1
-    return {"total": len(ids), "decided": len(done), "people": [{"person": p, "decided": n} for p, n in sorted(people.items(), key=lambda kv: -kv[1])]}
+    return {"total": len(tiles), "decided": len(done), "open_now": len(working), "left": len(tiles) - len(done) - len(working),
+            "people": [{"person": p, "decided": n} for p, n in sorted(people.items(), key=lambda kv: (-kv[1], kv[0]))]}
 
 
 # ---------- round 2: fields ----------
@@ -192,15 +205,3 @@ def progress(meta: dict, frame: pd.DataFrame, decided: State) -> dict:
 def field_states(meta: dict, reviewed: dict[str, set[str]], working: dict[str, set[str]], held: dict[str, set[str]], ready: set[str]) -> list[dict]:
     """Where each field of a round-2 session stands (as `sessions.field_states`); `open_by` are the people holding it now."""
     return sessions.field_states({**meta, "per_field": needed(meta)}, reviewed, working, ready, held)
-
-
-def next_field(meta: dict, reviewed: dict[str, set[str]], person: str, held: dict[str, set[str]], ready: set[str]) -> tuple[str | None, int]:
-    """The next field for this person and how many fields others are on: one they hold already, else the first field
-    that still needs people and that others are not on (fields others hold are not handed out twice)."""
-    needs = needed(meta)
-    todo = [t for t in meta["fields"] if t in ready and person not in reviewed.get(t, set()) and len(reviewed.get(t, set())) < needs]
-    mine = [t for t in todo if person in held.get(t, set())]
-    if mine:
-        return mine[0], 0
-    free = [t for t in todo if len(reviewed.get(t, set())) + len(held.get(t, set()) - {person}) < needs]
-    return (free[0] if free else None), len(todo) - len(free)

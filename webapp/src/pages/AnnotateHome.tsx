@@ -41,7 +41,7 @@ function SessionCard({ s }: { s: OpenSession }) {
       {progress ? <>
         <Progress done={progress.decided} total={progress.total} />
         <p className="small secondary">{finished ? 'Everything here has been checked — thank you!'
-          : `${progress.decided.toLocaleString()} of ${progress.total.toLocaleString()} ${s.round === 1 ? 'objects' : 'fields'} done by everyone${s.my_labels ? ` · ${s.my_labels.toLocaleString()} answers by you` : ''}`}</p>
+          : `${progress.decided.toLocaleString()} of ${progress.total.toLocaleString()} fields done by everyone${s.my_labels ? ` · ${s.my_labels.toLocaleString()} answers by you` : ''}`}</p>
         <p className="small muted" style={{ marginTop: 0 }}>{s.round === 1 ? ROUND_TEXT[1] : ROUND_TEXT[2]}</p>
       </> : s.kind !== 'queue' ? <>
         <Progress done={s.done_by_me} total={s.fields} />

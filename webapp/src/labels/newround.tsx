@@ -77,7 +77,7 @@ export function NewRoundSession({ stains, onClose, onCreated, onOlder }: {
               </label>
             ))}
           </div>
-          <p className="small muted" style={{ margin: '6px 0 0' }}>Both rounds share one set of answers: an object someone checked leaves everyone’s list at once.</p>
+          <p className="small muted" style={{ margin: '6px 0 0' }}>People work one field at a time: a field someone is on, or has finished, is not handed to anyone else. Both rounds share one set of answers.</p>
         </fieldset>
         <Loaded state={scope} label="Looking at which cores are ready…">
           {(s) => <>
@@ -113,12 +113,12 @@ export function NewRoundSession({ stains, onClose, onCreated, onOlder }: {
         </Loaded>
         <label className="field">Title people see<input type="text" value={title} placeholder={placeholder} onChange={(e) => setTitle(e.target.value)} /></label>
         <label className="layer-toggle"><input type="checkbox" checked={open} onChange={(e) => setOpen(e.target.checked)} />Open to labellers right away</label>
-        <Advanced hint="how generous, people per object, session ID, note, types, older kinds of session">
+        <Advanced hint="how generous, people per field, session ID, note, types, older kinds of session">
           <label className="field">How generous (which candidates are shown)
             <select value={level} onChange={(e) => setLevel(e.target.value)}>
               {Object.keys(scope.data?.levels ?? LEVEL_TEXT).map((k) => <option key={k} value={k}>{LEVEL_TEXT[k] ?? k}</option>)}</select></label>
           <div className="row" style={{ alignItems: 'flex-end' }}>
-            <label className="field">People who must decide each {round === 1 ? 'object' : 'field'}<input type="number" min={1} max={9} value={needed} style={{ width: 80 }}
+            <label className="field">People who must finish each field<input type="number" min={1} max={9} value={needed} style={{ width: 80 }}
               onChange={(e) => setNeeded(Math.max(1, Number(e.target.value)))} /></label>
             <label className="field">Session ID (in links and files)<input type="text" value={name} placeholder="made from the title"
               onChange={(e) => setName(e.target.value.replace(/[^A-Za-z0-9_-]/g, '_'))} /></label>

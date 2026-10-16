@@ -778,13 +778,14 @@ def asks_subtypes(meta: dict) -> bool:
 
 
 @router.get("/annotate/{name}/next")
-def next_item(name: str, request: Request, person: str = Depends(annotator), count: int = 1) -> dict:
+def next_item(name: str, request: Request, person: str = Depends(annotator), count: int = 1, skip: str = "") -> dict:
     """A fields session: the next field for this person. A queue session: the next `count` objects (up to 20, the
     page shows the first and loads the others' pictures meanwhile), held for this person for a while so others get
-    other objects; with how many the rule leaves them and how many of the queue's pictures are made."""
+    other objects; with how many the rule leaves them and how many of the queue's pictures are made. An annotation
+    round: the next tile for this person (round 1 with its candidates); `skip` puts the tile they are on aside."""
     meta = session_meta(name, request)
     if rounds.is_round(meta):
-        return _rounds().next_objects(meta, person, count) if meta["kind"] == "queue" else _rounds().next_field(meta, person)
+        return _rounds().next_tile_objects(meta, person, skip) if meta["kind"] == "queue" else _rounds().next_field(meta, person, skip)
     labels = store.current(root())
     state = get_state()
     if meta["kind"] != "queue":
@@ -879,7 +880,7 @@ def field_added(name: str, tile_id: str, request: Request, person: str = Depends
 def save(name: str, body: Marks, request: Request, person: str = Depends(annotator)) -> list[dict]:
     meta = writable(session_meta(name, request))
     if rounds.is_round(meta):
-        return _rounds().save(meta, body.records, person)
+        raise HTTPException(400, f"an annotation round saves a field at a time: POST /api/annotate/{name}/tiles/<tile_id>/save")
     for mark in body.records:
         if meta["kind"] != "queue":
             field_tile(meta, mark.tile_id)
@@ -900,7 +901,7 @@ def finish(name: str, tile_id: str, request: Request, person: str = Depends(anno
     """Done with this field: every AI call (and AI outline of a positive object) the person left untouched counts as confirmed."""
     meta = writable(session_meta(name, request))
     if rounds.is_round(meta):
-        return _rounds().finish(meta, tile_id, person)
+        return _rounds().save_tile(meta, tile_id, [], True, person)["saved"]
     field_tile(meta, tile_id)
     objects = field_objects(meta, tile_id)
     labels = store.current(root())
