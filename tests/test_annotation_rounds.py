@@ -1,7 +1,8 @@
 """The two annotation rounds over the v2 candidate store: the store as the contract writes it, the most informative
-candidates first, one shared decision store keyed by candidate id (old labels matched by position), and two people at
-once: what one decides leaves the other's page, fields are handed out once, and a field finished in round 2 counts as
-decided for round 1."""
+candidates first, one shared decision store keyed by candidate id (old labels matched by position), and the tile as the
+unit people claim: a tile someone is on, or that enough people finished, is handed to nobody else; nothing reaches the
+label log until a person saves a tile, and then all of it at once ("Save" keeps the tile, "Save and continue" finishes
+it)."""
 from __future__ import annotations
 
 import json
@@ -46,19 +47,19 @@ def test_most_informative_first():
     assert len(candidate_store.at_level(frame.assign(proposal_threshold=[0.5, 1, 1.5, np.nan, 0.75, 1, 1]), 1.0)) == 5
 
 
-def test_holds_and_labels_needed_decide_who_is_handed_what():
-    frame = pd.DataFrame({"candidate_id": list("abcde"), "order": range(5), "tile_id": "T", "x": 1.0, "y": 1.0})
-    state = decisions._state_of(pd.DataFrame([
-        {"candidate": "a", "source": "Ben", "identity": "plaque", "subtype": "", "role": "positive", "time": 1.0, "session": "s", "confirmed": True},
-        {"candidate": "b", "source": "Cy", "identity": "unsure", "subtype": "", "role": "skip", "time": 2.0, "session": "s", "confirmed": False}]))
-    one = {"labels_needed": 1}
-    chosen, left = rounds.serve(one, frame, state, "Ann", {"c": {"Ben"}}, 5)
-    assert list(chosen.candidate_id) == ["b", "d", "e"] and left == 3  # a decided, c held by Ben; b only "unsure"
-    chosen, _ = rounds.serve(one, frame, state, "Cy", {}, 5)
-    assert "b" not in set(chosen.candidate_id)  # Cy answered b
-    chosen, _ = rounds.serve({"labels_needed": 2}, frame, state, "Ann", {"c": {"Ben"}}, 5)
-    assert list(chosen.candidate_id) == ["a", "b", "c", "d", "e"]  # two people needed: a and c stay open for a second one
-    assert rounds.gone(["a", "b", "c", "d"], state, "Ann", 1, {"c": {"Ben"}}) == ["a", "c"]
+def test_a_tile_is_handed_to_one_person_at_a_time_until_enough_finished_it():
+    tiles = ["t1", "t2", "t3"]
+    one = {"t1": {"Ben"}}  # Ben finished t1
+    assert rounds.next_tile(tiles, one, "Ann", {"t2": {"Cy"}}, 1) == ("t3", 1)  # t1 done, t2 on Cy's screen
+    assert rounds.next_tile(tiles, one, "Ann", {"t2": {"Cy"}, "t3": {"Ann"}}, 1) == ("t3", 0)  # her tile in progress first
+    assert rounds.next_tile(tiles, one, "Ann", {"t2": {"Cy"}, "t3": {"Ann"}}, 1, skip={"t3"}) == (None, 1)  # put aside: nothing else free
+    assert rounds.next_tile(tiles, one, "Ann", {}, 2) == ("t1", 0)  # two people needed: t1 still needs one more
+    assert rounds.next_tile(tiles, one, "Ben", {}, 2) == ("t2", 0)  # but not Ben again
+    assert rounds.next_tile(tiles, {}, "Ann", {}, 1, prefer={"t3"}) == ("t3", 0)  # pictures made first
+    assert rounds.next_tile(tiles, {}, "Ann", {}, 1, ready={"t2"}) == ("t2", 0)
+    assert rounds.progress(tiles, one, {"t2": {"Cy"}}, 1) == {"total": 3, "decided": 1, "open_now": 1, "left": 1,
+                                                             "people": [{"person": "Ben", "decided": 1}]}
+    assert rounds.progress(tiles, one, {}, 2)["open_now"] == 1  # finished by one of two: in progress
 
 
 pytest.importorskip("fastapi")
@@ -106,7 +107,24 @@ def _ids(rows) -> list[str]:
     return [r["candidate_id"] for r in rows]
 
 
-def test_round_one_two_people_at_once(rounds_project):
+def _person(admin, name):
+    person = TestClient(admin.app)
+    person.post("/api/session/annotator", json={"name": name})
+    return person
+
+
+def _log_lines() -> int:
+    from stainid.labels import store
+
+    path = store.log_path(state.get_state().project.output("reviews"))
+    return len(path.read_text().splitlines()) if path.exists() else 0
+
+
+def _save(client, name, tile, records, submit=False):
+    return client.post(f"/api/annotate/{name}/tiles/{tile}/save", json={"records": records, "submit": submit})
+
+
+def test_round_one_hands_out_tiles_and_saves_a_tile_at_once(rounds_project):
     admin, (ann, ben), rows = rounds_project
     scope = admin.get("/api/labels/rounds/scope?stain=6E10").json()
     assert scope["cores_ready"] == 1 and scope["fields_ready"] == 2
@@ -116,81 +134,108 @@ def test_round_one_two_people_at_once(rounds_project):
     assert meta["kind"] == "queue" and meta["objects"] == 7 and meta["source"] == "candidates"
     name = meta["name"]
     detail = ann.get(f"/api/annotate/{name}").json()["meta"]
-    assert detail["round"] == 1 and detail["progress"] == {"total": 7, "decided": 0, "people": []} and detail["remove_class"] == "not a plaque"
+    assert detail["round"] == 1 and detail["remove_class"] == "not a plaque"
+    assert detail["progress"] == {"total": 2, "decided": 0, "open_now": 0, "left": 2, "people": []}  # counted in tiles
 
-    first = ann.get(f"/api/annotate/{name}/next?count=3").json()
-    assert [o["ai_probability"] for o in first["objects"]] == [0.55, 0.6, 0.45]  # nearest the threshold (0.55) first
+    first = ann.get(f"/api/annotate/{name}/next").json()
+    assert first["tile_id"] == TILE and first["tiles_left"] == 2  # the tile of the most informative candidate first
+    assert [o["ai_probability"] for o in first["objects"]] == [0.55, 0.45, 0.2, 0.05, 0.9, 0.97]  # all of it, most informative first
     item = first["objects"][0]
-    assert item["ai_value"] == "plaque" and item["ai_subtype"] == "compact" and len(item["masks"]) == 1 and len(item["masks"][0]) == 3
-    others = ben.get(f"/api/annotate/{name}/next?count=3").json()["objects"]
-    assert not set(_ids(first["objects"])) & set(_ids(others))  # held for Ann
+    assert item["ai_value"] == "plaque" and item["ai_subtype"] == "compact" and len(item["masks"]) == 1 and item["mine"] is None
+    other = ben.get(f"/api/annotate/{name}/next").json()
+    assert other["tile_id"] == OTHER and len(other["objects"]) == 1  # the tile Ann is on is skipped
+    cy = _person(admin, "Cy")
+    assert cy.get(f"/api/annotate/{name}/next").json()["tile_id"] is None  # both tiles are being edited
+    live = ann.post(f"/api/annotate/{name}/live", json={"tile_id": TILE}).json()
+    assert live["progress"]["open_now"] == 2 and live["open_by"] == [] and live["done_by"] == []
+    assert _log_lines() == 0  # opening, being handed and the heartbeat save nothing
 
-    saved = ann.post(f"/api/annotate/{name}/labels", json={"records": [{"task": "class", "candidate": item["candidate_id"], "keep": True, "mask": 0}]})
+    ids = _ids(first["objects"])
+    saved = _save(ann, name, TILE, [{"task": "class", "candidate": ids[0], "keep": True, "mask": 0},
+                                     {"task": "class", "candidate": ids[1], "value": "CAA"},
+                                     {"task": "outline", "candidate": ids[1], "value": "edited", "points": [[1, 2], [30, 2], [30, 40]]}])
     assert saved.status_code == 200, saved.text
-    decision, outline = saved.json()
-    assert decision["value"] == "plaque" and decision["subtype"] == "compact" and decision["confirmed"] and decision["candidate"] == item["candidate_id"]
+    decision, outline, caa, edited = saved.json()["saved"]
+    assert decision["value"] == "plaque" and decision["subtype"] == "compact" and decision["confirmed"] and decision["candidate"] == ids[0]
     assert decision["tile_id"] == TILE and decision["x"] == pytest.approx(460 - 172) and outline["task"] == "outline" and outline["confirmed"]
-    second = first["objects"][2]
-    ann.post(f"/api/annotate/{name}/labels", json={"records": [{"task": "class", "candidate": second["candidate_id"], "value": "CAA"}]})
+    assert edited["x"] == pytest.approx(520 - 172)
+    assert saved.json()["progress"]["decided"] == 0  # "Save" keeps the tile open: it is not finished
 
-    # Ben decides one of the objects on Ann's page from round 2: it leaves her page at her next look
+    again = ann.get(f"/api/annotate/{name}/next").json()  # a reload: her tile, with what she saved
+    assert again["tile_id"] == TILE
+    mine = {o["candidate_id"]: o["mine"] for o in again["objects"]}
+    assert mine[ids[0]]["keep"] and mine[ids[0]]["mask"] == 0 and mine[ids[1]]["identity"] == "CAA" and len(mine[ids[1]]["outline"]) == 3
+    assert mine[ids[2]] is None
+
+    before = _log_lines()
+    early = _save(ann, name, TILE, [{"task": "class", "candidate": ids[2], "value": "not a plaque"}], submit=True)
+    assert early.status_code == 400 and "3 objects" in early.text and _log_lines() == before  # all of a tile, or nothing
+    wrong = _save(ann, name, TILE, [{"task": "class", "candidate": ids[2], "value": "not a plaque"}, {"task": "class", "candidate": ids[3], "value": "no such class"}])
+    assert wrong.status_code == 400 and _log_lines() == before
+    elsewhere = _save(ann, name, TILE, [{"task": "class", "candidate": other["objects"][0]["candidate_id"], "value": "CAA"}])
+    assert elsewhere.status_code == 400 and _log_lines() == before
+    assert ann.post(f"/api/annotate/{name}/labels", json={"records": [{"task": "class", "candidate": ids[2], "value": "CAA"}]}).status_code == 400
+
+    done = _save(ann, name, TILE, [{"task": "class", "candidate": c, "keep": True} for c in ids[2:]], submit=True)
+    assert done.status_code == 200, done.text
+    assert done.json()["saved"][-1]["task"] == "done" and done.json()["saved"][-1]["value"] == "calls"
+    assert done.json()["progress"] == {"total": 2, "decided": 1, "open_now": 1, "left": 0, "people": [{"person": "Ann", "decided": 1}]}
+    assert ann.get(f"/api/annotate/{name}/next").json()["tile_id"] is None  # her tile is done, Ben has the other
+    assert cy.get(f"/api/annotate/{name}/next").json()["tile_id"] is None  # a finished tile is skipped too
+
+    put_aside = ben.get(f"/api/annotate/{name}/next?skip={OTHER}").json()
+    assert put_aside["tile_id"] is None  # nothing else for Ben; the tile he put aside is free again
+    assert cy.get(f"/api/annotate/{name}/next").json()["tile_id"] == OTHER
+
     fix = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "tile_ids": [TILE, OTHER], "open": True}).json()
-    third = first["objects"][1]  # on the other field
-    flipped = ben.post(f"/api/annotate/{fix['name']}/labels", json={"records": [{"task": "class", "candidate": third["candidate_id"], "value": "not a plaque"}]})
-    assert flipped.status_code == 200, flipped.text
-    live = ann.post(f"/api/annotate/{name}/live", json={"keys": _ids(first["objects"])}).json()
-    assert set(live["gone"]) == set(_ids(first["objects"]))  # two answered by her, one decided by Ben
-    assert live["progress"]["decided"] == 3 and {p["person"] for p in live["progress"]["people"]} == {"Ann", "Ben"}
-    assert not set(_ids(ben.get(f"/api/annotate/{name}/next?count=10").json()["objects"])) & set(_ids(first["objects"]))
-
-    edited = ann.post(f"/api/annotate/{name}/labels", json={"records": [  # a precise edit of an outline, then the answer without a mask
-        {"task": "outline", "candidate": second["candidate_id"], "value": "edited", "points": [[1, 2], [30, 2], [30, 40]]}]})
-    assert edited.status_code == 200 and edited.json()[0]["x"] == pytest.approx(520 - 172)
-    removed = ann.post(f"/api/annotate/{name}/labels", json={"records": [{"task": "class", "candidate": first["objects"][0]["candidate_id"],
-                                                                           "value": "not a plaque", "mask": 0}]}).json()
-    assert len(removed) == 1  # "not an object" keeps no mask
-    assert ann.post(f"/api/annotate/{name}/labels", json={"records": [{"task": "tag", "tile_id": TILE, "value": "fold or tear"}]}).status_code == 400
-    undo = ann.post(f"/api/annotate/{name}/labels", json={"records": [{"task": "class", "candidate": second["candidate_id"], "deleted": True}]})
-    assert undo.status_code == 200
-    assert ann.post(f"/api/annotate/{name}/live", json={"keys": []}).json()["progress"]["decided"] == 2
-    assert admin.get("/api/labels/overview").json()["sessions"][0]["round_progress"]["total"] in (7, 2)
+    assert ann.get(f"/api/annotate/{fix['name']}/next").json()["tile_id"] == TILE  # finished in round 1, still to do in round 2
+    overview = admin.get("/api/labels/overview").json()
+    assert next(s for s in overview["sessions"] if s["name"] == name)["round_progress"]["decided"] == 1
 
 
-def test_round_two_fields_are_handed_out_once_and_finishing_decides_their_candidates(rounds_project):
+def test_round_two_fields_are_claimed_and_saved_as_a_whole(rounds_project):
     admin, (ann, ben), rows = rounds_project
     meta = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "n_fields": 2, "open": True}).json()
     name = meta["name"]
     assert sorted(meta["fields"]) == sorted([TILE, OTHER])
     a = ann.get(f"/api/annotate/{name}/next").json()["tile_id"]
     b = ben.get(f"/api/annotate/{name}/next").json()
-    assert a and b["tile_id"] and a != b["tile_id"]  # field reservations: one field each
+    assert a and b["tile_id"] and a != b["tile_id"]  # one field each
     assert ann.get(f"/api/annotate/{name}/next").json()["tile_id"] == a  # still hers
-    third = TestClient(admin.app)
-    third.post("/api/session/annotator", json={"name": "Cy"})
-    assert third.get(f"/api/annotate/{name}/next").json() == {"tile_id": None, "waiting": 0, "taken": 2}
+    cy = _person(admin, "Cy")
+    assert cy.get(f"/api/annotate/{name}/next").json() == {"tile_id": None, "waiting": 0, "taken": 2}
 
     field = ann.get(f"/api/annotate/{name}/fields/{TILE}").json()
     own = [o for o in field["objects"] if o["own"]]
-    assert len(own) == 6 and all(o["masks"] for o in own) and field["checked"] == {}
+    assert len(own) == 6 and all(o["masks"] for o in own) and field["checked"] == {} and field["mine"] == []
     target = own[0]
-    ben.post(f"/api/annotate/{name}/labels", json={"records": [{"task": "class", "candidate": target["candidate_id"], "value": "CAA"}]})
+    flipped = _save(ben, name, TILE, [{"task": "class", "candidate": target["candidate_id"], "value": "CAA"}])  # Ben opened it by its link
+    assert flipped.status_code == 200, flipped.text
     live = ann.post(f"/api/annotate/{name}/live", json={"tile_id": TILE}).json()
     assert live["checked"][target["candidate_id"]]["by"] == ["Ben"] and live["checked"][target["candidate_id"]]["identity"] == "CAA"
-    assert live["open_by"] == ["Ben"]  # he just changed a call here
+    assert live["open_by"] == ["Ben"]  # he saved here: the field is his too now
 
-    added = ann.post(f"/api/annotate/{name}/labels", json={"records": [
-        {"task": "class", "tile_id": TILE, "x": 50, "y": 60, "value": "plaque"},
-        {"task": "outline", "tile_id": TILE, "x": 50, "y": 60, "points": [[45, 55], [55, 55], [55, 65]]}]})
-    assert added.status_code == 200, added.text
-    done = ann.post(f"/api/annotate/{name}/fields/{TILE}/finish", json={}).json()
+    before = _log_lines()
+    saved = _save(ann, name, TILE, [{"task": "class", "x": 50, "y": 60, "value": "plaque"},
+                                     {"task": "outline", "x": 50, "y": 60, "points": [[45, 55], [55, 55], [55, 65]]},
+                                     {"task": "tag", "value": "fold or tear"}])
+    assert saved.status_code == 200, saved.text
+    assert _log_lines() == before + 3 and all(r["tile_id"] == TILE for r in saved.json()["saved"])
+    states = {f["tile_id"]: f["state"] for f in admin.get(f"/api/labels/sessions/{name}/fields").json()}
+    assert states[TILE] == "in_progress"  # "Save" is not finishing
+
+    done = _save(ann, name, TILE, [{"task": "tag", "value": "fold or tear", "deleted": True}], submit=True).json()["saved"]
     confirmed = [r for r in done if r["task"] == "class"]
     assert len(confirmed) == 5 and all(r["confirmed"] and r["candidate"] for r in confirmed)  # Ben's one is his
-    outlines = [r for r in done if r["task"] == "outline"]
-    assert len(outlines) == 2  # the AI’s outlines of the objects that stay plaques (Ben made one CAA)
+    assert len([r for r in done if r["task"] == "outline"]) == 2  # the AI's outlines of the objects that stay plaques (Ben made one CAA)
+    assert done[-1]["id"] == f"done:{TILE}" and done[0]["deleted"]
+    states = {f["tile_id"]: f["state"] for f in admin.get(f"/api/labels/sessions/{name}/fields").json()}
+    assert states[TILE] == "done"
+    assert cy.get(f"/api/annotate/{name}/next").json()["tile_id"] is None  # the finished field is skipped, the other is Ben's
     check = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 1, "n_objects": 0, "tile_ids": [TILE], "open": True})
     assert check.status_code == 400  # every candidate of the field is decided: nothing left to check
-    fields = admin.get(f"/api/labels/sessions/{name}/fields").json()
-    assert {f["tile_id"]: f["state"] for f in fields}[TILE] == "done"
+    assert ann.post(f"/api/annotate/{name}/fields/{OTHER}/finish", json={}).status_code == 200  # the older finish: a save with nothing changed
+    assert ann.post(f"/api/annotate/{name}/live", json={}).json()["progress"]["decided"] == 2
 
 
 def test_old_labels_count_by_position_and_training_reads_the_store(rounds_project):
@@ -229,6 +274,8 @@ def test_a_store_can_be_made_from_the_pool_for_trying_the_rounds(rounds_project)
     assert json.loads((candidate_store.folder(project, "6E10") / ".from_pool.json").read_text())["cores"] == written
 
 
+
+
 def test_the_tutorial_practises_on_a_real_field_and_keeps_nothing(rounds_project):
     from stainid.labels import store
 
@@ -239,14 +286,17 @@ def test_the_tutorial_practises_on_a_real_field_and_keeps_nothing(rounds_project
     assert detail["meta"]["round"] == 2 and detail["fields"][0]["tile_id"] == TILE
     field = ann.get(f"/api/annotate/practice-2-6E10/fields/{TILE}").json()
     target = next(o for o in field["objects"] if o["own"])
-    saved = ann.post("/api/annotate/practice-2-6E10/labels", json={"records": [{"task": "class", "candidate": target["candidate_id"], "value": "CAA"}]})
-    assert saved.status_code == 200 and saved.json()[0]["value"] == "CAA"
-    assert ann.post(f"/api/annotate/practice-2-6E10/fields/{TILE}/finish", json={}).status_code == 200
-    objects = ann.get("/api/annotate/practice-1-6E10/next?count=3").json()["objects"]
-    assert len(objects) == 3
-    ann.post("/api/annotate/practice-1-6E10/labels", json={"records": [{"task": "class", "candidate": objects[0]["candidate_id"], "keep": True}]})
+    saved = _save(ann, "practice-2-6E10", TILE, [{"task": "class", "candidate": target["candidate_id"], "value": "CAA"}])
+    assert saved.status_code == 200 and saved.json()["saved"][0]["value"] == "CAA"
+    finished = _save(ann, "practice-2-6E10", TILE, [], submit=True)
+    assert finished.status_code == 200 and finished.json()["saved"][-1]["task"] == "done"
+    tile = ann.get("/api/annotate/practice-1-6E10/next").json()
+    assert tile["tile_id"] == TILE and len(tile["objects"]) == 6
+    first_id = tile["objects"][0]["candidate_id"]
+    assert _save(ann, "practice-1-6E10", TILE, [{"task": "class", "candidate": first_id, "keep": True}], submit=True).status_code == 200
     assert store.current(state.get_state().project.output("reviews")).empty  # nothing of the practice is kept
-    assert ann.get("/api/annotate/practice-1-6E10/next?count=3").json()["objects"][0]["key"] == objects[0]["key"]  # nor held or decided
+    again = ann.get("/api/annotate/practice-1-6E10/next").json()
+    assert again["tile_id"] == TILE and again["objects"][0]["mine"] is None  # nor held or finished
     assert ann.post("/api/session/tutorial", json={"done": True}).json() == {"done": True}
     assert ann.get("/api/session/tutorial").json()["done"] is True
     assert ann.get("/api/annotate").json() == []  # practice sessions are not listed

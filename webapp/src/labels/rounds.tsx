@@ -1,7 +1,9 @@
-/* Pieces shared by the two annotation rounds (labels/checkcalls.tsx, labels/fixfield.tsx): the words, the live progress
-   (polled from the server, so what others decide shows within seconds), and switching between the Segment Anything
-   masks of an object (smaller / bigger, no waiting). */
-import { useEffect, useRef, useState } from 'react'
+/* Pieces shared by the two annotation rounds (labels/checkcalls.tsx, labels/fixfield.tsx): the words, the heartbeat
+   (polled from the server: the field on the page stays this person's, and the live progress in fields), switching
+   between the Segment Anything masks of an object (smaller / bigger, no waiting), and unsaved changes: both pages keep
+   every change on the page until the person presses Save (a draft in this browser survives a reload, never sent before),
+   ask before leaving with unsaved changes, and save a field's changes all at once. */
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { RoundLive, RoundProgress } from '../api'
 import { api } from '../api'
 import { Progress } from '../components'
@@ -11,13 +13,13 @@ import { ClassKeyHint, classColour, useClassKeys } from './classes'
 
 export const ROUND_TITLE: Record<1 | 2, string> = { 1: 'Check the AI’s calls', 2: 'Fix the field' }
 export const ROUND_TEXT: Record<1 | 2, string> = {
-  1: 'One object at a time with the AI’s call and outline: keep it, change it, or say it is not an object.',
+  1: 'One field at a time, object by object, with the AI’s call and outline: keep it, change it, or say it is not an object.',
   2: 'Whole fields with every object the AI considered: add what it missed, fix outlines, change any call.',
 }
 /** What someone does on a round page, as the tutorial follows it. */
 export type RoundEvent = 'hover' | 'class' | 'subtype' | 'unsure' | 'remove' | 'undo' | 'mask' | 'add' | 'added' | 'precise-in' | 'precise-edit'
-  | 'precise-out' | 'finish' | 'keep'
-export const LIVE_MS = 3000  // how often a round page asks what others decided meanwhile
+  | 'precise-out' | 'save' | 'finish' | 'keep'
+export const LIVE_MS = 3000  // how often a round page renews its hold on the field and asks for the progress
 export const TIER_TEXT: Record<number, string> = {
   0: 'Shown because the AI is unsure about it (its score is near the cut-off).',
   1: 'Shown because the AI rejected it although it looks strong.',
@@ -49,17 +51,98 @@ export function useLive(session: string, body: Record<string, unknown> | null, o
   return failed
 }
 
-/** "312 of 500 checked · Ann 120 · Ben 80", with a bar; `unit` names what is counted. */
-export function RoundProgressLine({ progress, unit, me }: { progress: RoundProgress | null; unit: string; me?: string | null }) {
+/** "3 of 12 fields done · 2 in progress · 7 left · you 2 · Ben 1", with a bar: everyone's work, live. */
+export function RoundProgressLine({ progress, me }: { progress: RoundProgress | null; me?: string | null }) {
   if (!progress) return null
   const others = progress.people.slice(0, 4)
+  const open = progress.open_now ?? 0
   return (
     <div className="round-progress">
-      <span className="small secondary"><b>{progress.decided.toLocaleString()}</b> of {progress.total.toLocaleString()} {unit} done
+      <span className="small secondary"><b>{progress.decided.toLocaleString()}</b> of {progress.total.toLocaleString()} field{progress.total === 1 ? '' : 's'} done
+        {open > 0 && <> · {open.toLocaleString()} in progress</>}
+        {progress.left != null && progress.left > 0 && <> · {progress.left.toLocaleString()} left</>}
         {others.length > 0 && <span className="muted"> · {others.map((p) => `${p.person === me ? 'you' : p.person} ${p.decided.toLocaleString()}`).join(' · ')}</span>}</span>
       <Progress done={progress.decided} total={progress.total} />
     </div>
   )
+}
+
+/* ---------- unsaved changes ---------- */
+
+/** Where a page keeps one person's unsaved changes on one field in this browser (so a reload or a crash loses nothing). */
+export const draftKey = (person: string | null | undefined, session: string, tile: string) => `stainid.draft.${person ?? ''}.${session}.${tile}`
+
+export function readDraft<T>(key: string): T | null {
+  try {
+    const raw = localStorage.getItem(key)
+    return raw ? (JSON.parse(raw) as T) : null
+  } catch {
+    return null
+  }
+}
+
+/** Keeps (or with null, forgets) a draft; never sent anywhere. */
+export function writeDraft(key: string, value: unknown) {
+  try {
+    if (value == null) localStorage.removeItem(key)
+    else localStorage.setItem(key, JSON.stringify(value))
+  } catch { /* storage unavailable: the changes stay on the page only */ }
+}
+
+export const changesText = (n: number) => `${n.toLocaleString()} unsaved change${n === 1 ? '' : 's'}`
+const leaveText = (n: number) => `You have ${changesText(n)} on this field.\n\nLeave without saving? They stay in this browser and come back when you open this field again, but nobody else sees them until you press Save.`
+
+/** Asks before leaving while there are unsaved changes: closing or reloading the tab, or following a link of the app.
+ *  Returns `mayLeave()` for leaving by a button (true when there is nothing to lose or the person agrees). */
+export function useLeaveGuard(unsaved: number) {
+  useEffect(() => {
+    if (!unsaved) return
+    const unload = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = '' }
+    const click = (e: MouseEvent) => {
+      const link = (e.target as HTMLElement | null)?.closest?.('a[href]') as HTMLAnchorElement | null
+      if (!link || link.target === '_blank' || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+      if (!window.confirm(leaveText(unsaved))) { e.preventDefault(); e.stopPropagation() }
+    }
+    window.addEventListener('beforeunload', unload)
+    document.addEventListener('click', click, true)
+    return () => { window.removeEventListener('beforeunload', unload); document.removeEventListener('click', click, true) }
+  }, [unsaved])
+  return useCallback(() => !unsaved || window.confirm(leaveText(unsaved)), [unsaved])
+}
+
+/** Ctrl+S (⌘S) saves, Ctrl+Enter (⌘Enter) saves and goes on to the next field. */
+export function useSaveKeys(onSave: () => void, onContinue: () => void) {
+  const latest = useRef({ onSave, onContinue })
+  latest.current = { onSave, onContinue }
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.repeat) return
+      if (e.key.toLowerCase() === 's') { e.preventDefault(); latest.current.onSave() }
+      else if (e.key === 'Enter') { e.preventDefault(); latest.current.onContinue() }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+}
+
+/** "3 unsaved changes" (marked), "Saving…" or "All changes saved". */
+export function SaveState({ unsaved, saving }: { unsaved: number; saving: boolean }) {
+  return (
+    <span className={`small save-state${unsaved && !saving ? ' unsaved' : ' muted'}`} aria-live="polite" data-unsaved={unsaved}>
+      {saving ? 'Saving…' : unsaved ? <><span className="unsaved-dot" aria-hidden="true" />{changesText(unsaved)}</> : 'All changes saved'}
+    </span>
+  )
+}
+
+/** The two save buttons of a field: Save (stays) and Save and continue (finishes the field; the filled button unless
+ *  another action is the page's main one). */
+export function SaveButtons({ unsaved, saving, onSave, onContinue, canContinue, continueTitle, primary = true }: {
+  unsaved: number; saving: boolean; onSave: () => void; onContinue: () => void; canContinue: boolean; continueTitle: string; primary?: boolean
+}) {
+  return <>
+    <button className="btn" onClick={onSave} disabled={saving || !unsaved} title="Save your changes and stay on this field (Ctrl+S)">Save</button>
+    <button className={`btn${primary ? ' primary big' : ''}`} onClick={onContinue} disabled={saving || !canContinue} title={continueTitle}>Save and continue →</button>
+  </>
 }
 
 /** The bigger / smaller switch between an object's masks: the size shown, and Tab / Shift+Tab. */
@@ -205,9 +288,11 @@ export function KeyLegend({ round, vocabulary, keys, typesAsked, waitMs, sam }: 
       <span><span className="kbd">Del</span> not an object</span>
       <span><span className="kbd">Tab</span> / <span className="kbd">⇧ Tab</span> bigger / smaller outline</span>
       {sam && <span><span className="kbd">Space</span> precise edit</span>}
-      <span><span className="kbd">Z</span> undo</span>
+      <span><span className="kbd">Z</span> undo (unsaved changes)</span>
       {round === 2 && sam && <span>Click empty tissue: add a missed object</span>}
       <span><span className="kbd">Esc</span> cancel</span>
+      <span><span className="kbd">Ctrl S</span> save</span>
+      <span><span className="kbd">Ctrl Enter</span> save and continue</span>
     </div>
   )
 }

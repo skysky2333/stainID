@@ -109,7 +109,7 @@ function SessionOverview({ detail, reload }: { detail: SessionDetail; reload: ()
       {meta.instructions && <div className="instructions">{meta.instructions}</div>}
       {(meta as Partial<RoundDetail>).round === 2 && <div className="card annotate-progress-card">
         <div className="row"><b>Round 2 · {ROUND_TITLE[2]}</b><span className="spacer" /><span className="small muted">everyone’s work, live</span></div>
-        <RoundProgressLine progress={(meta as Partial<RoundDetail>).progress ?? null} unit="fields" me={detail.annotator} />
+        <RoundProgressLine progress={(meta as Partial<RoundDetail>).progress ?? null} me={detail.annotator} />
       </div>}
       <div className="card annotate-progress-card">
         <div className="row"><b>{done} of {fields.length} fields finished by you</b><span className="spacer" />

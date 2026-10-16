@@ -17,7 +17,7 @@ import pandas as pd
 from stainid import cache
 from stainid.api import label_crops, pyramid
 from stainid.api.state import ProjectState
-from stainid.labels import decisions, frames, pool, rounds, sessions, store
+from stainid.labels import frames, pool, rounds, sessions, store
 
 AHEAD, NOW = 2, 0  # priorities on the picture queue: made ahead; someone is about to see it
 EVERY = 10.0  # seconds between two looks for missing pictures of the same session
@@ -47,12 +47,12 @@ def _cores(state: ProjectState, stain: str, objects: pd.DataFrame) -> pd.Series:
 
 
 def round_wanted(state: ProjectState, meta: dict) -> pd.DataFrame:
-    """The candidates of a "Check the AI's calls" session nobody has decided yet (`labels.rounds`)."""
+    """The candidates of a "Check the AI's calls" session on tiles that still need people (`labels.rounds`)."""
     frame = rounds.items(state.project, meta, state.tiles)
     if frame.empty:
         return frame.assign(key=[])
-    decided = decisions.state(state.project, meta["stain"], state.tiles)
-    frame = frame[[not decided.done(c, rounds.needed(meta)) for c in frame.candidate_id]]
+    finished = store.reviewed_fields(store.current(_reviews(state)), meta["stain"], rounds.CALLS)
+    frame = rounds.open_items(frame, finished, rounds.needed(meta))
     return frame.assign(key=sessions.object_keys(frame)) if len(frame) else frame.assign(key=[])
 
 

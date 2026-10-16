@@ -1119,3 +1119,17 @@ tr.significant-row td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 .class-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .class-legend li { display: flex; align-items: center; gap: 6px; }
 .class-legend .look-swatch:not(.look-removed):not(.look-unsure):not(.look-new) { opacity: 0.85; }
+
+/* ---------- annotation rounds: a field at a time, nothing saved until Save (labels/rounds.tsx, checkcalls.tsx, fixfield.tsx) ---------- */
+.save-state.unsaved { color: var(--warning); font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
+.unsaved-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warning); flex: none; }
+.round-object .unsaved-mark { fill: var(--series-2); stroke: #000; }
+.round-restored, .field-others { margin: 0 0 10px; }
+.round-answer { margin: -4px 0 10px; }
+.round-answer.unsaved b { color: var(--warning); }
+.tile-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 0 0 10px; }
+.tile-strip-dots { display: flex; flex-wrap: wrap; gap: 4px; }
+.tile-dot { width: 14px; height: 14px; padding: 0; border-radius: 50%; border: 2px solid var(--border); background: var(--surface-2); cursor: pointer; }
+.tile-dot.saved { background: var(--good); border-color: var(--good); }
+.tile-dot.unsaved { background: var(--warning); border-color: var(--warning); }
+.tile-dot.now { outline: 2px solid var(--accent); outline-offset: 2px; }

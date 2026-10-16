@@ -23,15 +23,17 @@ function stepsFor(typed: boolean): Step[] {
     { round: 2, title: 'Say which type', text: 'Some classes have types. Press the class number and, within a second, a type number (1, 2, …). Or press a type’s letter key.', done: ['subtype'] },
     { round: 2, title: 'Not sure?', text: 'Point at an object you cannot decide and press 0 (unsure). It is left out of training.', done: ['unsure'] },
     { round: 2, title: 'Not an object', text: 'Point at something that is not an object and press Delete. It turns dotted grey — it stays visible, nothing is hidden.', done: ['remove'] },
-    { round: 2, title: 'Undo', text: 'Pressed the wrong key? Press Z to undo your last change.', done: ['undo'] },
+    { round: 2, title: 'Undo', text: 'Pressed the wrong key? Press Z to undo your last change. Z takes back changes you have not saved yet.', done: ['undo'] },
     { round: 2, title: 'Bigger or smaller outline', text: 'Point at an object and press Tab for a bigger outline, Shift+Tab for a smaller one. Each object has three sizes ready, so it changes at once.', done: ['mask'] },
     { round: 2, title: 'Add a missed object', text: 'Click on tissue where the AI missed an object: its outline appears (dotted, “new”). Then press its class number to keep it.', done: ['added'] },
     { round: 2, title: 'Precise editing', text: 'For an outline that no size fits: point at the object and press Space. Everything else is locked.', done: ['precise-in'] },
     { round: 2, title: 'Fix it spot by spot', text: 'Right-click a spot to include it, left-click one to leave it out, or drag one of the white dots.', done: ['precise-edit'] },
-    { round: 2, title: 'Save the edit', text: 'Press Space again to save the outline (Esc would cancel it).', done: ['precise-out'] },
-    { round: 2, title: 'Finish the field', text: 'When the field looks right, press “Finished — next field”. Everything you left as it is counts as checked by you.', done: ['finish'] },
-    { round: 1, title: 'One object at a time', text: 'The other kind of session shows one object at a time. If the AI is right, press Enter to keep its call.', done: ['keep'] },
+    { round: 2, title: 'Keep the edit', text: 'Press Space again to keep the outline (Esc would cancel it).', done: ['precise-out'] },
+    { round: 2, title: 'Save your work', text: 'Nothing you do is saved yet: the count at the top says how many unsaved changes you have, and a small orange dot marks each object you changed. Press Save (or Ctrl+S) to keep them — you stay on this field. (In this practice, Save only pretends.)', done: ['save'] },
+    { round: 2, title: 'Save and continue', text: 'When the field looks right, press “Save and continue”. Everything you left as it is counts as checked by you, the field is done, nobody else is asked to do it again, and your next field opens.', done: ['finish'] },
+    { round: 1, title: 'One object at a time', text: 'The other kind of session goes through a field one object at a time. If the AI is right, press Enter to keep its call.', done: ['keep'] },
     { round: 1, title: 'Correct it', text: 'If the AI is wrong, press the right class number, 0 for unsure or Delete for not an object. The same keys as on the field — Tab, Space and Z work here too.', done: ['class', 'subtype', 'unsure', 'remove'] },
+    { round: 1, title: 'Save here too', text: 'Your answers stay on the page until you press Save (Ctrl+S). Once every object of the field has an answer, “Save and continue” finishes the field and brings the next one. If you close the page by mistake, your unsaved answers come back when you return.', done: ['save', 'finish'] },
   ]
   return typed ? steps : steps.filter((s) => s.title !== 'Say which type')
 }
@@ -104,7 +106,7 @@ function Coached({ practice }: { practice: NonNullable<TutorialInfo['practice']>
           {!finished && <button className="link-btn small" onClick={skip}>Skip tutorial</button>}</div>
         {finished ? <>
           <h3>You are ready</h3>
-          <p className="small secondary">That is all: point, press a key, and the AI’s work is corrected. You can see this again with “Tutorial” at the top.</p>
+          <p className="small secondary">That is all: point, press a key, correct the AI’s work, and save each field. You can see this again with “Tutorial” at the top.</p>
           <Link className="btn primary" to="/annotate">Start labelling →</Link>
         </> : <>
           <div className="tutorial-step small muted">Step {index + 1} of {steps.length}{cheer && <span className="good-text"> · well done ✓</span>}</div>

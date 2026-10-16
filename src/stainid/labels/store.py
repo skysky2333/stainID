@@ -7,7 +7,7 @@ line up. The latest version of (source, id) wins; edits and deletions keep the h
 
 Tasks: `class` (the object's class, also used for objects people add: `value` is its identity and `subtype` its
 subtype, see `labels.vocabulary`; labels made before subtypes existed have one value and no subtype),`outline` (polygon), `tag`, `note` and `done`
-(a person finished reviewing the field).
+(a person finished reviewing the field; its `value` says which review, see `reviewed_fields`).
 """
 from __future__ import annotations
 
@@ -121,7 +121,9 @@ def consensus(labels: pd.DataFrame, stain: str, vocabulary: Vocabulary | None = 
     return pd.DataFrame(out)
 
 
-def reviewed_fields(labels: pd.DataFrame, stain: str) -> dict[str, set[str]]:
-    """Fields someone finished reviewing, and who."""
+def reviewed_fields(labels: pd.DataFrame, stain: str, kind: str = "") -> dict[str, set[str]]:
+    """Fields someone finished reviewing, and who. `kind` is the review a `done` label closes (its `value`): "" a
+    whole-field review (older sessions and "Fix the field"), `labels.rounds.CALLS` a field of "Check the AI's calls"."""
     done = labels[(labels.stain == stain) & (labels.task == "done")]
+    done = done[done.value.fillna("").astype(str) == kind]
     return {tile: set(group.source) for tile, group in done.groupby("tile_id")}

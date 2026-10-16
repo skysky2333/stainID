@@ -394,18 +394,26 @@ export interface ImportedLabels {
 
 /* ---------- annotation rounds over the v2 candidates (labels/checkcalls.tsx, labels/fixfield.tsx) ---------- */
 
-/** How far a round session is: candidates (round 1) or fields (round 2) done, by anyone, and by whom. */
-export interface RoundProgress { total: number; decided: number; people: { person: string; decided: number }[]; open_now?: number }
+/** How far a round session is, in fields (tiles): done (`decided`), in progress (`open_now`), `left`, and how many each person finished. */
+export interface RoundProgress { total: number; decided: number; people: { person: string; decided: number }[]; open_now?: number; left?: number }
 /** What a round session's pages get besides the session's settings. */
 export interface RoundDetail { round: 1 | 2; labels_needed: number; level: number | null; remove_class: string; segment_anything: boolean; progress: RoundProgress }
+/** This person's saved answer on a round-1 candidate: its class (`keep`: the AI's call confirmed), the mask chosen
+ *  with it, or an outline they edited (crop pixels). */
+export interface RoundAnswer { identity: string; subtype: string; keep: boolean; mask: number | null; outline: number[][] | null }
 /** One candidate to check in round 1: the AI's call, its masks (crop pixels, small to large) and the one shown first. */
 export interface RoundItem {
   key: string; candidate_id: string; tile_id: string; x: number; y: number; radius_px: number
   ai_value: string; ai_subtype: string; ai_probability: number | null; decision: string; reason: string; tier: number | null
-  masks: (number[][] | null)[]; mask: number; crop_px: number; labels_so_far: number
+  masks: (number[][] | null)[]; mask: number; crop_px: number; mine: RoundAnswer | null
 }
-export interface RoundNext { objects: RoundItem[]; remaining: number; pictures: QueuePictures; progress: RoundProgress }
-export interface RoundLive { gone?: string[]; checked?: Record<string, RoundCheck>; open_by?: string[]; progress: RoundProgress; time: number }
+/** Round 1: the field (tile) handed to this person, with every candidate on it to check, in order. */
+export interface RoundTile {
+  tile_id: string | null; objects: RoundItem[]; tiles_left: number; taken: number; open_by: string[]; pictures: QueuePictures; progress: RoundProgress
+}
+export interface RoundLive { checked?: Record<string, RoundCheck>; open_by?: string[]; done_by?: string[]; progress: RoundProgress; time: number }
+/** What saving a field's changes returns: the labels as saved, whether the field is now finished, and the progress. */
+export interface RoundSaved { saved: (Label & { candidate?: string | null })[]; submitted: boolean; progress: RoundProgress }
 /** Who decided a candidate already, and the class most of them gave. */
 export interface RoundCheck { by: string[]; identity: string; subtype: string; time: number | null }
 /** One candidate on a round-2 field: field-picture pixels, `own` false for a neighbouring field's candidate in the margin. */
@@ -416,7 +424,7 @@ export interface RoundObject {
 export interface RoundField {
   tile_id: string; box: { x: number; y: number; width: number; height: number }; objects: RoundObject[]; checked: Record<string, RoundCheck>
   layers: string[]; mine: (Label & { candidate?: string | null })[]; added: AddedState[]; segment_anything: boolean; segment_ready: boolean
-  open_by: string[]; pixel_size_um: number
+  open_by: string[]; done_by: string[]; pixel_size_um: number
 }
 export interface RoundSessionField extends SessionField { open_by?: string[]; done?: boolean; done_by?: string[] }
 /** What a new round session can draw from, per TMA. */

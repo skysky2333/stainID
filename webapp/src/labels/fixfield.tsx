@@ -3,13 +3,16 @@
    colour when unsure. Everything acts on the object under the cursor (it lights up and its facts show at the side):
    1–9 (and the type keys) choose its class, 0 unsure, Delete removes it (dotted grey), Tab / Shift+Tab switch between its
    three Segment Anything masks at once, Space edits it precisely (everything else locked: right-click a spot to include,
-   left-click one to leave out, drag the corners; Space again saves), Z undoes. Clicking empty tissue outlines a missed
+   left-click one to leave out, drag the corners; Space again keeps it), Z undoes. Clicking empty tissue outlines a missed
    object with one click (dotted, "new — choose a class") until a class key gives it a class. A change of call is
-   recorded exactly like an answer in round 1. Finished: every call nobody has decided and every outline left as it is
-   counts as checked by this person. What others decide meanwhile shows within seconds ("checked by Ben"). */
+   recorded exactly like an answer in round 1. Every change stays on this page ("3 unsaved changes", with a draft in
+   this browser in case of a reload; Z undoes) until Save (stays on the field) or Save and continue: the field is then
+   finished, every call nobody has decided and every outline left as it is counts as checked by this person, and the
+   next field comes. Opening a field holds it for this person, so the others are handed other fields; what others decide
+   meanwhile shows within seconds ("checked by Ben"). */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import type { AddedState, Label, RoundCheck, RoundDetail, RoundField, RoundObject, RoundProgress, RoundSamOptions, SessionDetail } from '../api'
+import type { AddedState, Label, RoundCheck, RoundDetail, RoundField, RoundObject, RoundProgress, RoundSamOptions, RoundSaved, SessionDetail } from '../api'
 import { api, apiUrl, enc } from '../api'
 import { ErrorNote, Loaded, fmt } from '../components'
 import { useFetch, useStored } from '../hooks'
@@ -18,8 +21,8 @@ import { RASTER_LAYERS, ZoomViewer } from '../viewer'
 import type { ClassPick } from './classKeys'
 import { resolveClass } from './classKeys'
 import type { RoundEvent } from './rounds'
-import { ClassLegend, KeyLegend, MaskSwitch, ROUND_TITLE, RoundProgressLine, callText, lookOf, maskName, polygonArea, polygonPoints, stepMask, unsureClass,
-  useCandidateKeys, useLive } from './rounds'
+import { ClassLegend, KeyLegend, MaskSwitch, ROUND_TITLE, RoundProgressLine, SaveButtons, SaveState, callText, changesText, draftKey, lookOf, maskName, polygonArea,
+  polygonPoints, readDraft, stepMask, unsureClass, useCandidateKeys, useLeaveGuard, useLive, useSaveKeys, writeDraft } from './rounds'
 
 const BOX_COLOR = '#ffd21f'
 const MAX_HANDLES = 200
@@ -33,8 +36,17 @@ interface Fresh { key: string; x: number; y: number; options: number[][][]; chos
 interface Shown { key: string; x: number; y: number; r: number; candidate?: RoundObject; added?: Mine; fresh?: Fresh }
 /** Precise editing of one object: its polygon and the spots clicked (x, y, 1 include / 0 leave out). */
 interface Precise { key: string; points: number[][]; clicks: number[][]; busy: boolean }
-/** One change, and how to take it back: records to save again, and what to do on the page. */
-interface Undo { records: Rec[]; local?: () => void }
+/** An unsaved change of one label: what to send on Save (null when another label's record carries it, e.g. the mask
+ *  chosen with a class) and how the label looks on the page meanwhile (null: taken away). */
+interface Change { mark: Rec | null; label: Mine | null }
+/** One step back with Z: the changes of these labels as they were before, and what to do on the page. */
+interface Undo { before: Record<string, Change | undefined>; local?: () => void }
+const SEND_ORDER: Record<string, number> = { class: 0, outline: 1 }  // a class record that carries its mask goes before an outline chosen after it
+
+/** How many things the unsaved changes touch: one per object (its class and outline together), tag or note. */
+function changedThings(changes: Record<string, Change>) {
+  return new Set(Object.keys(changes).map((id) => (/^(class|outline):/.test(id) ? id.split(':').slice(-2).join(':') : id))).size
+}
 
 function inside(polygon: number[][], x: number, y: number) {
   let hit = false
@@ -67,11 +79,20 @@ function Fixer({ detail, reload, tile, field, onEvent, onFinished }: { detail: S
   const { vocabulary, keys, subtypes: typesAsked } = meta
   const waitMs = Math.round(1000 * vocabulary.subtype_wait_s)
   const unsure = unsureClass(vocabulary)
-  const [mine, setMine] = useState<Record<string, Mine>>(() => Object.fromEntries(field.mine.map((m) => [m.id, m])))
+  const draftAt = draftKey(detail.annotator, name, tile)
+  const [saved, setSaved] = useState<Record<string, Mine>>(() => Object.fromEntries(field.mine.map((m) => [m.id, m])))  // as the server has them
+  const [changes, setChanges] = useState<Record<string, Change>>(() => readDraft<{ changes: Record<string, Change> }>(draftAt)?.changes ?? {})  // not saved yet
+  const [restored, setRestored] = useState(() => changedThings(changes))
+  const mine = useMemo(() => {  // this person's labels as the page shows them: the saved ones with the unsaved changes on top
+    const out = { ...saved }
+    for (const [id, c] of Object.entries(changes)) { if (c.label) out[id] = c.label; else delete out[id] }
+    return out
+  }, [saved, changes])
   const [checked, setChecked] = useState<Record<string, RoundCheck>>(field.checked)
   const [openBy, setOpenBy] = useState<string[]>(field.open_by)
+  const [doneBy, setDoneBy] = useState<string[]>(field.done_by)
   const [progress, setProgress] = useState<RoundProgress | null>(meta.progress)
-  const [masks, setMasks] = useState<Record<string, number>>(() => Object.fromEntries(field.mine  // the mask chosen per candidate
+  const [masks, setMasks] = useState<Record<string, number>>(() => Object.fromEntries(Object.values(mine)  // the mask chosen per candidate
     .filter((m) => m.task === 'outline' && m.candidate && /^mask \d+$/.test(m.value ?? '')).map((m) => [m.candidate!, Number(m.value.slice(5))])))
   const [prompts, setPrompts] = useState<Record<string, { options: number[][][]; chosen: number }>>({})  // masks of objects added in this visit
   const [fresh, setFresh] = useState<Record<string, Fresh>>({})
@@ -84,7 +105,7 @@ function Fixer({ detail, reload, tile, field, onEvent, onFinished }: { detail: S
   const [cursor, setCursor] = useState<number[] | null>(null)
   const [pending, setPending] = useState<number[] | null>(null)
   const [undos, setUndos] = useState<Undo[]>([])
-  const [saving, setSaving] = useState(0)
+  const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [samReady, setSamReady] = useState(field.segment_ready)
   const [addedStates, setAddedStates] = useState<AddedState[]>(field.added)
@@ -95,8 +116,11 @@ function Fixer({ detail, reload, tile, field, onEvent, onFinished }: { detail: S
   useLive(name, { tile_id: tile }, (live) => {
     if (live.checked) setChecked(live.checked)
     if (live.open_by) setOpenBy(live.open_by)
+    if (live.done_by) setDoneBy(live.done_by)
     if (live.progress) setProgress(live.progress)
   })
+  const unsaved = changedThings(changes)
+  useEffect(() => { writeDraft(draftAt, unsaved ? { changes } : null) }, [draftAt, changes, unsaved])
   useEffect(() => {  // Segment Anything still preparing this field: look again until clicks answer at once
     if (samReady || !sam) return
     const timer = setInterval(() => {
@@ -136,6 +160,7 @@ function Fixer({ detail, reload, tile, field, onEvent, onFinished }: { detail: S
     const prompt = prompts[s.key]
     return prompt ? { list: prompt.options, index: prompt.chosen } : { list: [], index: 0 }
   }
+  const isUnsaved = (s: Shown) => !!changes[classId(s.x, s.y)] || !!changes[outlineId(s.x, s.y)]
   const outlineOf = (s: Shown): number[][] | null => {
     if (precise?.key === s.key) return precise.points
     if (s.fresh) return s.fresh.options[s.fresh.chosen] ?? null
@@ -145,35 +170,32 @@ function Fixer({ detail, reload, tile, field, onEvent, onFinished }: { detail: S
     return list[index] ?? null
   }
 
-  /** Saves records; with `undo`, the change can be taken back with Z (what these labels were before is saved again). */
-  const save = useCallback(async (records: Rec[], undo?: { local?: () => void }) => {
-    if (undo) {
-      const touched = records.flatMap((r) => (r.task === 'class' && r.mask != null ? [r, { ...r, task: 'outline' }] : r.task === 'class' || r.task === 'outline' ? [r] : []))
-      const before: Rec[] = touched.map((r) => {
-        const at = r.candidate ? own.find((o) => o.candidate_id === r.candidate) : undefined
-        const x = Number(at?.x ?? r.x), y = Number(at?.y ?? r.y)
-        const old = mine[`${r.task}:${tile}:${rkey(x, y)}`]
-        const where = r.candidate ? { candidate: r.candidate } : { x, y }
-        return old ? { task: r.task, ...where, value: old.value, subtype: old.subtype ?? '', points: old.points } : { task: r.task, ...where, deleted: true }
-      })
-      setUndos((u) => [{ records: before, local: undo.local }, ...u].slice(0, 100))
+  /** Puts changes on the page (nothing is sent before Save); each call is one step Z takes back. */
+  const save = useCallback((records: Rec[], undo?: { local?: () => void }) => {
+    const next: Record<string, Change> = {}
+    const label = (id: string, task: Mine['task'], x: number, y: number, more: Partial<Mine>): Mine => ({
+      id, source: detail.annotator ?? '', stain: meta.stain, task, tile_id: tile, x, y, value: '', subtype: null, points: null, session: name, confirmed: false,
+      time: Date.now() / 1000, ...more })
+    const noObject = (identity: unknown) => identity === meta.remove_class || identity === unsure
+    for (const r of records) {
+      const at = r.candidate ? own.find((o) => o.candidate_id === r.candidate) : undefined
+      const x = Number(at?.x ?? r.x), y = Number(at?.y ?? r.y)
+      const id = r.task === 'tag' ? `tag:${tile}:${r.value}` : r.task === 'note' || r.task === 'done' ? `${r.task}:${tile}` : `${r.task}:${tile}:${rkey(x, y)}`
+      const candidate = (r.candidate as string | undefined) ?? null
+      if (r.deleted) { next[id] = { mark: saved[id] ? r : null, label: null }; continue }
+      next[id] = { mark: r, label: label(id, r.task as Mine['task'], x, y, { value: String(r.value ?? ''), subtype: (r.subtype as string) || null, points: (r.points as number[][]) ?? null, candidate }) }
+      if (r.task === 'class' && at && r.mask != null && !noObject(r.value)) {  // the mask chosen with the call is saved with it
+        const mask = Number(r.mask)
+        next[outlineId(x, y)] = { mark: null, label: label(outlineId(x, y), 'outline', x, y, { value: `mask ${mask}`, points: at.masks[mask] ?? null, candidate }) }
+      } else if (r.task === 'class' && at && changes[outlineId(x, y)]?.label?.value?.startsWith('mask')) {
+        next[outlineId(x, y)] = { mark: null, label: null }  // not an object (or unsure): no mask goes with it
+      }
     }
-    if (!records.length) return
-    setSaving((n) => n + 1)
-    try {
-      const saved = await api.post<Mine[]>(`/api/annotate/${name}/labels`, { records: records.map((r) => ({ tile_id: tile, ...r })) })
-      setMine((current) => {
-        const next = { ...current }
-        for (const r of saved) { if (r.deleted) delete next[r.id]; else next[r.id] = r }
-        return next
-      })
-      setError(null)
-    } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      setSaving((n) => n - 1)
-    }
-  }, [name, tile, mine, own])
+    setUndos((u) => [{ before: Object.fromEntries(Object.keys(next).map((id) => [id, changes[id]])), local: undo?.local }, ...u].slice(0, 200))
+    const out = { ...changes, ...next }
+    for (const [id, c] of Object.entries(next)) if (!c.mark && !c.label) delete out[id]  // taken away before it was ever saved
+    setChanges(out)
+  }, [name, tile, own, saved, changes, meta.stain, meta.remove_class, unsure, detail.annotator])  // eslint-disable-line react-hooks/exhaustive-deps
 
   /** The object under the cursor gets this class (a new one is saved with its outline then). */
   const giveClass = useCallback((s: Shown, pick: ClassPick) => {
@@ -246,8 +268,12 @@ function Fixer({ detail, reload, tile, field, onEvent, onFinished }: { detail: S
     if (!last) return
     setUndos((u) => u.slice(1))
     last.local?.()
-    if (last.records.length) save(last.records)
-  }, [precise, undos, save])
+    setChanges((current) => {
+      const out = { ...current }
+      for (const [id, before] of Object.entries(last.before)) { if (before) out[id] = before; else delete out[id] }
+      return out
+    })
+  }, [precise, undos])
 
   const classKeys = useCandidateKeys(keys, waitMs, {
     answering: !!target && !draft.length,
@@ -355,26 +381,46 @@ function Fixer({ detail, reload, tile, field, onEvent, onFinished }: { detail: S
     return () => window.removeEventListener('mouseup', up)
   }, [dragging])
 
-  const finish = async () => {
-    setSaving((n) => n + 1)
+  /** Sends these labels (and, with `finish`, finishes the field) in one request: all of them are saved, or none. */
+  const send = async (records: Rec[], finish: boolean) => {
+    setSaving(true)
     try {
-      await api.post(`/api/annotate/${name}/fields/${enc(tile)}/finish`, {})
-      tell('finish')
-      if (onFinished) { onFinished(); return }
-      reload()
-      const next = await api.get<{ tile_id: string | null }>(`/api/annotate/${name}/next`).catch(() => ({ tile_id: null }))
-      navigate(next.tile_id && next.tile_id !== tile ? `/annotate/${name}/${enc(next.tile_id)}` : `/annotate/${name}`)
+      const result = await api.post<RoundSaved>(`/api/annotate/${name}/tiles/${enc(tile)}/save`, { records: records.map((r) => ({ tile_id: tile, ...r })), submit: finish })
+      setSaved((current) => {
+        const next = { ...current }
+        for (const r of result.saved) { if (r.deleted) delete next[r.id]; else next[r.id] = r }
+        return next
+      })
+      setProgress(result.progress)
+      setError(null)
+      return true
     } catch (e) {
-      setError((e as Error).message)
+      setError(`Not saved: ${(e as Error).message.replace(/^\d{3}: /, '')} — your changes are still here.`)
+      return false
     } finally {
-      setSaving((n) => n - 1)
+      setSaving(false)
     }
   }
-  const reopen = async () => { await save([{ task: 'done', deleted: true }]); reload() }
-  const done = !!mine[`done:${tile}`]
+  /** Save (stays on the field) or, with `finish`, Save and continue: the field is finished and the next one opens. */
+  const saveAll = async (finish: boolean) => {
+    if (saving || (!finish && !unsaved)) return
+    const marks = Object.values(changes).flatMap((c) => (c.mark ? [c.mark] : []))
+      .sort((a, b) => (SEND_ORDER[String(a.task)] ?? 2) - (SEND_ORDER[String(b.task)] ?? 2))
+    if (!(await send(marks, finish))) return
+    setChanges({}); setUndos([]); setRestored(0)
+    writeDraft(draftAt, null)
+    tell(finish ? 'finish' : 'save')
+    if (!finish) return
+    if (onFinished) { onFinished(); return }
+    reload()
+    const next = await api.get<{ tile_id: string | null }>(`/api/annotate/${name}/next`).catch(() => ({ tile_id: null }))
+    navigate(next.tile_id && next.tile_id !== tile ? `/annotate/${name}/${enc(next.tile_id)}` : `/annotate/${name}`)
+  }
+  const reopen = async () => { if (await send([{ task: 'done', deleted: true }], false)) reload() }
+  const done = !!saved[`done:${tile}`]
 
   const addedState = (s: Shown) => addedStates.find((a) => rkey(a.x, a.y) === rkey(s.x, s.y))?.state ?? 'measuring'
-  const measuring = !(meta as { practice?: boolean }).practice && added.some((m) => addedStates.find((a) => rkey(a.x, a.y) === rkey(m.x!, m.y!))?.state !== 'measured')
+  const measuring = !(meta as { practice?: boolean }).practice && added.some((m) => saved[m.id] && addedStates.find((a) => rkey(a.x, a.y) === rkey(m.x!, m.y!))?.state !== 'measured')
   useEffect(() => {  // follow the added objects while the server measures them (so they can train the model)
     if (!measuring) return
     const timer = setTimeout(() => { api.get<AddedState[]>(`/api/annotate/${name}/fields/${enc(tile)}/added`).then(setAddedStates).catch(() => undefined) }, 4000)
@@ -387,8 +433,13 @@ function Fixer({ detail, reload, tile, field, onEvent, onFinished }: { detail: S
   const changed = Object.values(mine).filter((m) => (m.task === 'class' || m.task === 'outline') && !m.confirmed).length
   const unclassed = Object.keys(fresh).length
   const toggle = (k: string) => setLayers({ ...layers, [k]: !layers[k] })
-  const busy = saving > 0 || !!pending
+  const busy = saving || !!pending
   const px = field.pixel_size_um
+  const mayLeave = useLeaveGuard(unsaved + unclassed)
+  const canFinish = !busy && !precise && !draft.length && !unclassed
+  useSaveKeys(() => { if (!precise) void saveAll(false) }, () => { if (canFinish) void saveAll(true) })
+  const finishTitle = unclassed ? 'Give the new objects a class first (or Delete them)'
+    : 'Save your changes and finish this field: every call and outline you left as it is counts as checked by you (Ctrl+Enter)'
 
   return (
     <div className="annotate-page round-page">
@@ -399,20 +450,28 @@ function Fixer({ detail, reload, tile, field, onEvent, onFinished }: { detail: S
           <div className="muted small">{meta.stain} · Round 2 · {ROUND_TITLE[2]}</div>
         </div>
         <div className="annotate-progress">
-          <RoundProgressLine progress={progress} unit="fields" me={detail.annotator} />
-          {openBy.length > 0 && <span className="small warning-text">{openBy.join(', ')} {openBy.length === 1 ? 'is' : 'are'} also on this field</span>}
+          <RoundProgressLine progress={progress} me={detail.annotator} />
         </div>
         <div className="annotate-actions">
-          <span className="muted small save-state" aria-live="polite">{pending ? 'Outlining…' : saving ? 'Saving…' : 'All changes saved'}</span>
-          <button className="btn" onClick={() => later && navigate(`/annotate/${name}/${enc(later.tile_id)}`)} disabled={!later}
+          {pending ? <span className="small muted save-state">Outlining…</span> : <SaveState unsaved={unsaved} saving={saving} />}
+          <button className="btn" onClick={() => later && mayLeave() && navigate(`/annotate/${name}/${enc(later.tile_id)}`)} disabled={!later}
             title={later ? 'Come back to this field later' : 'No other field is waiting for you'}>Skip for now</button>
-          {done ? <button className="btn" onClick={reopen} disabled={busy}>Reopen this field</button>
-            : <button className="btn primary big" disabled={busy || !!precise || draft.length > 0 || unclassed > 0} onClick={finish}
-              title={unclassed ? 'Give the new objects a class first (or Delete them)' : 'Every call and outline you left as it is counts as checked by you'}>Finished — next field →</button>}
+          {done && <button className="btn" onClick={reopen} disabled={busy} title="Count this field as not finished by you yet">Reopen</button>}
+          <SaveButtons unsaved={unsaved} saving={busy || !!precise} onSave={() => void saveAll(false)} onContinue={() => void saveAll(true)} canContinue={canFinish}
+            continueTitle={finishTitle} />
         </div>
       </div>
       {meta.instructions && <div className="instructions">{meta.instructions}</div>}
       <ErrorNote error={error} />
+      {restored > 0 && <div className="found found-warn small round-restored" role="status">{changesText(restored)} you had not saved came back from this browser.
+        They are not saved yet. <button className="link-btn small" onClick={() => { setChanges({}); setUndos([]); setRestored(0) }}>Discard them</button></div>}
+      {(openBy.length > 0 || doneBy.length > 0) && <div className="found found-warn small field-others" role="status">
+        {doneBy.length > 0 ? `${doneBy.join(', ')} already finished this field.` : `${openBy.join(', ')} ${openBy.length === 1 ? 'is' : 'are'} working on this field right now.`}
+        {' '}You can still look and change things here, or <button className="link-btn small" onClick={() => void (async () => {
+          if (!mayLeave()) return
+          const next = await api.get<{ tile_id: string | null }>(`/api/annotate/${name}/next?skip=${enc(tile)}`).catch(() => ({ tile_id: null }))
+          navigate(next.tile_id ? `/annotate/${name}/${enc(next.tile_id)}` : `/annotate/${name}`)
+        })()}>go to a field nobody is on</button>.</div>}
       <div className="annotate-workspace">
         <div className={`annotate-image${precise ? ' is-precise' : ''}`} onContextMenu={(e) => e.preventDefault()} onMouseLeave={() => { if (!precise) setHovered(null) }}>
           <ZoomViewer src={apiUrl(`/api/annotate/${name}/fields/${enc(tile)}/image.jpg`)}
@@ -442,7 +501,8 @@ function Fixer({ detail, reload, tile, field, onEvent, onFinished }: { detail: S
                     const lit = s.key === hovered
                     const width = (look.dash ? 1.3 : 1.8) * unit
                     const style = { stroke: look.colour, fill: look.colour }
-                    return <g key={s.key} className={`round-object look-${look.look}${lit ? ' lit' : ''}`} data-key={s.key}>
+                    const pending = isUnsaved(s)
+                    return <g key={s.key} className={`round-object look-${look.look}${lit ? ' lit' : ''}${pending ? ' unsaved' : ''}`} data-key={s.key}>
                       {lit && poly && <polygon points={polygonPoints(poly)} fill="none" stroke="#ffffff" strokeOpacity={0.9} strokeWidth={5 * unit} />}
                       {look.dash && !lit && poly && <polygon points={polygonPoints(poly)} fill="none" stroke="#ffffff" strokeOpacity={0.55} strokeWidth={width + 1.4 * unit} />}
                       {poly ? <polygon points={polygonPoints(poly)} style={style} fillOpacity={lit ? 0.22 : look.dash ? 0 : 0.08} strokeWidth={lit ? 2.4 * unit : width}
@@ -450,6 +510,8 @@ function Fixer({ detail, reload, tile, field, onEvent, onFinished }: { detail: S
                         : <circle cx={s.x} cy={s.y} r={Math.max(6, s.r)} style={style} fillOpacity={0} strokeWidth={width} strokeDasharray={look.dash ? `${1.5 * unit} ${3 * unit}` : undefined} />}
                       {(s.added || s.fresh) && <polygon points={`${s.x},${s.y - 5 * unit} ${s.x + 5 * unit},${s.y} ${s.x},${s.y + 5 * unit} ${s.x - 5 * unit},${s.y}`} style={style} fillOpacity={1} stroke="#000" strokeWidth={0.8 * unit} />}
                       {call.by === 'others' && <circle cx={s.x} cy={s.y} r={2.4 * unit} fill="#4ade80" stroke="#000" strokeWidth={0.6 * unit} />}
+                      {pending && !s.fresh && <circle className="unsaved-mark" cx={s.x + Math.max(6, s.r) * 0.75} cy={s.y - Math.max(6, s.r) * 0.75} r={2.6 * unit}
+                        strokeWidth={0.8 * unit} />}
                     </g>
                   })}
                 </g>
@@ -473,7 +535,7 @@ function Fixer({ detail, reload, tile, field, onEvent, onFinished }: { detail: S
         </div>
         <aside className="annotate-side">
           <TargetCard s={target} call={target ? callOf(target) : null} meta={meta} precise={precise} px={px} outline={target ? outlineOf(target) : null}
-            choices={choicesOf(target)} added={target?.added ? addedState(target) : null}
+            choices={choicesOf(target)} added={target?.added && saved[target.added.id] ? addedState(target) : null} unsaved={!!target && isUnsaved(target)}
             onMask={(i) => { const s = target; if (!s) return; const { index } = choicesOf(s); if (i !== index) switchMask(i > index) }} />
           {!target && (
             <div className="card">
@@ -482,7 +544,8 @@ function Fixer({ detail, reload, tile, field, onEvent, onFinished }: { detail: S
                 <li><b>Point at an object</b> — it lights up. Press its class number, <span className="kbd">0</span> unsure, <span className="kbd">Del</span> not an object.</li>
                 <li><b>Outline too big or small?</b> <span className="kbd">Tab</span> / <span className="kbd">⇧ Tab</span>. Still not right: <span className="kbd">Space</span> to edit it precisely.</li>
                 <li><b>Missed object?</b> {sam ? 'Click it: its outline appears; then press its class number.' : 'Click its corners one by one, then the first corner (or Enter).'}</li>
-                <li><b>Finished</b> when the field looks right: what you left as it is counts as checked by you.</li>
+                <li><b>Nothing is saved until you press Save</b> (the count at the top; a small orange dot marks each object you changed).
+                  <b> Save and continue</b> when the field looks right: what you left as it is counts as checked by you, and the next field opens.</li>
               </ol>
               {sam && !samReady && <p className="small muted">Preparing one-click outlines for this field… the first clicks may take a few seconds.</p>}
               {sam && (byHand ? <p className="small precise-bar">Drawing by hand: click the corners of the object, then the first corner or press Enter.
@@ -494,6 +557,7 @@ function Fixer({ detail, reload, tile, field, onEvent, onFinished }: { detail: S
           <div className="card">
             <h3>This field</h3>
             <p className="small secondary">{own.length.toLocaleString()} objects the AI considered · {added.length} added by you · {changed} change{changed === 1 ? '' : 's'} by you
+              {unsaved > 0 && <b className="warning-text"> ({changesText(unsaved)})</b>}
               {Object.keys(checked).length > 0 && <> · {Object.keys(checked).length} checked by others (green dot)</>}.
               {unclassed > 0 && <b className="warning-text"> {unclassed} new object{unclassed === 1 ? '' : 's'} still need a class.</b>}</p>
             <div className="tag-list">{meta.tags.map((t) => (
@@ -542,9 +606,9 @@ const ADDED_TEXT: Record<AddedState['state'], string> = {
 }
 
 /** The facts of the object under the cursor (or being edited precisely). */
-function TargetCard({ s, call, meta, precise, px, outline, choices, added, onMask }: {
+function TargetCard({ s, call, meta, precise, px, outline, choices, added, unsaved, onMask }: {
   s: Shown | undefined; call: { pick: ClassPick; by: string; who?: string[] } | null; meta: Meta; precise: Precise | null; px: number
-  outline: number[][] | null; choices: { list: (number[][] | null)[]; index: number }; added: AddedState['state'] | null
+  outline: number[][] | null; choices: { list: (number[][] | null)[]; index: number }; added: AddedState['state'] | null; unsaved: boolean
   onMask: (i: number) => void
 }) {
   if (!s || !call) return null
@@ -560,10 +624,11 @@ function TargetCard({ s, call, meta, precise, px, outline, choices, added, onMas
       {outline && <p className="small muted" style={{ margin: '4px 0 0' }}>{fmt(polygonArea(outline) * px * px, 3)} µm²
         {choices.list.length > 1 && ` · outline ${maskName(choices.index, choices.list.length)}`}</p>}
       {call.by === 'others' && <p className="small checked-by">✓ Checked by <b>{call.who?.join(', ')}</b> — you can still change it.</p>}
-      {call.by === 'me' && <p className="small muted" style={{ margin: '4px 0 0' }}>Changed by you{s.added ? ' (you added it)' : ''}.</p>}
+      {call.by === 'me' && <p className="small muted" style={{ margin: '4px 0 0' }}>Changed by you{s.added ? ' (you added it)' : ''}{unsaved ? <b className="warning-text"> — not saved yet</b> : ''}.</p>}
+      {call.by !== 'me' && unsaved && <p className="small warning-text" style={{ margin: '4px 0 0' }}>Outline changed — not saved yet.</p>}
       {added && added !== 'proposed' && <p className={`small added-note${added === 'could_not_be_measured' ? ' warn' : ''}`}><b>The AI never proposed this object.</b> {ADDED_TEXT[added]}</p>}
       {precise ? <p className="small precise-bar"><b>Precise editing.</b> Right-click a spot to include it, left-click one to leave it out, drag the corners.
-        {precise.busy ? ' Outlining…' : ''} <span className="kbd">Space</span> saves · <span className="kbd">Esc</span> cancels.</p>
+        {precise.busy ? ' Outlining…' : ''} <span className="kbd">Space</span> keeps it · <span className="kbd">Esc</span> cancels.</p>
         : <MaskSwitch count={choices.list.length} index={choices.index} onChange={onMask} />}
     </div>
   )

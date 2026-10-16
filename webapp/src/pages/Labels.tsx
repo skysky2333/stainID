@@ -149,7 +149,7 @@ function SessionProgress({ s }: { s: SessionInfo }) {
     return (
       <div className="session-progress">
         <Progress done={p.decided} total={p.total} />
-        <span className="small secondary">{p.decided.toLocaleString()} of {p.total.toLocaleString()} {s.round === 1 ? 'objects checked' : 'fields done'} (by anyone)
+        <span className="small secondary">{p.decided.toLocaleString()} of {p.total.toLocaleString()} fields done (by anyone){p.open_now ? ` · ${p.open_now.toLocaleString()} in progress` : ''}
           {s.pictures && s.pictures.ready < s.pictures.total && <span className="muted"> · pictures ready: {s.pictures.ready.toLocaleString()} of {s.pictures.total.toLocaleString()}</span>}</span>
       </div>
     )
