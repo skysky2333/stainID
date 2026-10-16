@@ -76,3 +76,14 @@ def test_failed_step_skips_what_waits_for_it_and_missing_inputs_are_reported(tmp
     manager._finish(calibrate, 1)
     assert calibrate.status == "failed" and neun.status == "skipped" and "Calibrate stain thresholds” failed" in neun.outcome["error"]
     assert nuclei.status == "queued"
+
+
+def test_project_models_never_go_to_a_shell_wide_hugging_face_cache(tmp_path, monkeypatch):
+    """A shell that points HF_HOME / HF_HUB_CACHE elsewhere (e.g. an LLM cache) must not receive the project's models."""
+    from stainid.project import load_project
+    (tmp_path / "stainid.yaml").write_text("name: t\n")
+    monkeypatch.setenv("HF_HOME", "/elsewhere"); monkeypatch.setenv("HF_HUB_CACHE", "/elsewhere/hub")
+    project = load_project(tmp_path)
+    project.apply_environment()
+    import os
+    assert os.environ["HF_HUB_CACHE"].startswith(str(project.model("huggingface_home"))) and os.environ["HF_HOME"] == str(project.model("huggingface_home"))

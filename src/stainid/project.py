@@ -19,7 +19,10 @@ LEGACY_INPUTS = ("field_manifest", "tile_manifest")
 # or regions, each linked to a donor; whole slides are scans whose tissue regions are tiled like whole cores. In the last
 # two every image (or tissue region) plays the part of a core image, so every step from the stain thresholds on is the same.
 KINDS = {"tma": "TMA study", "images": "Image set", "slides": "Whole slides"}
-ENVIRONMENT_KEYS = ("HF_HOME", "CELLPOSE_LOCAL_MODELS_PATH", "STAINID_PLAQUE_CNN_DIR")  # set per project (`Project.environment`)
+# Hugging Face caches always point at the project's own model folder, whatever the shell says (a shell-wide HF_HUB_CACHE,
+# e.g. for LLMs, would otherwise win over HF_HOME and put project models in that cache)
+HF_KEYS = ("HF_HOME", "HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE", "TRANSFORMERS_CACHE", "HF_ASSETS_CACHE")
+ENVIRONMENT_KEYS = (*HF_KEYS, "CELLPOSE_LOCAL_MODELS_PATH", "STAINID_PLAQUE_CNN_DIR")  # set per project (`Project.environment`)
 
 DEFAULTS: dict = {
     "name": "stainID project",
@@ -202,13 +205,18 @@ class Project:
 
     def environment(self) -> dict[str, str]:
         """Where third-party model caches look for this project's models (offline, reproducible)."""
-        return {"HF_HOME": str(self.model("huggingface_home")), "HF_HUB_OFFLINE": "1",
+        home = self.model("huggingface_home")
+        return {"HF_HOME": str(home), "HF_HUB_CACHE": str(home / "hub"), "HUGGINGFACE_HUB_CACHE": str(home / "hub"),
+                "TRANSFORMERS_CACHE": str(home / "hub"), "HF_ASSETS_CACHE": str(home / "assets"), "HF_HUB_OFFLINE": "1",
                 "CELLPOSE_LOCAL_MODELS_PATH": str(self.model("cellpose").parent), "STAINID_PLAQUE_CNN_DIR": str(self.model("plaque_cnn_dir"))}
 
     def apply_environment(self) -> None:
         """Point third-party model caches at the project's model folder, unless the environment already says otherwise."""
         for key, value in self.environment().items():
-            os.environ.setdefault(key, value)
+            if key in HF_KEYS:
+                os.environ[key] = value  # always the project's models, never a shell-wide cache
+            else:
+                os.environ.setdefault(key, value)
 
 
 def load_project(path: Path | str | None = None) -> Project:
