@@ -42,7 +42,7 @@ DEFAULTS: dict = {
     "rules": {
         # edge_band: a candidate found only by the new sources lying mostly within 5 µm of a tissue edge or hole (brown rims)
         "NeuN": {"excluded_fraction": 0.5, "near_profile": True, "pale_nucleus": True, "profile_shape": True, "edge_band": 0.5,
-                 "fold_fraction": 0.5, "body_min_solidity": 0.6},
+                 "fold_fraction": 0.5, "fold_min_edge": 1.0, "body_min_solidity": 0.6},
         "6E10": {"excluded_fraction": 0.5, "artifact_shape": False, "speck_diameter_um": 10.0, "lumen_contact": 0.25},
         "AT8": {"excluded_fraction": 0.5, "min_contrast": 0.3, "min_body_um2": 40.0, "centroid_valid": True,
                 "thread_like": False, "edge_band": 0.5,

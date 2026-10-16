@@ -107,8 +107,10 @@ def pre_rules(stain: str, frame: pd.DataFrame, rules: dict) -> np.ndarray:
             shape = (_number(frame, "m_stained_area_um2") < 4.0) | (area < 15.0) | (area > 650.0) | (_number(frame, "m_aspect_ratio") > 3.5)
             apply(profile & shape, "shape")
         apply(rim, "edge")
-        # the new sources also find dark fold bands, which the legacy NeuN detection never masked
-        apply(new_source & (_number(frame, "fold_fraction") >= float(rules.get("fold_fraction", np.inf))), "fold")
+        # the new sources also find patches of dark fold bands, which the legacy NeuN detection never masked; a neuron on a
+        # band keeps a sharp edge (DAB gradient on its boundary), a patch of the band does not
+        on_fold = _number(frame, "fold_fraction") >= float(rules.get("fold_fraction", np.inf))
+        apply(new_source & on_fold & (_number(frame, "edge_strength") < float(rules.get("fold_min_edge", 0.0))), "fold")
         apply(new_source & (_number(frame, "m_solidity") < float(rules.get("body_min_solidity", 0.0))), "irregular")
     elif stain == "6E10":
         apply(excluded, "excluded")
