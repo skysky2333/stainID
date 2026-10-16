@@ -2,8 +2,9 @@
 the stain's rules, and give each candidate a decision, a reason code, a class and a subtype.
 
 Rules come before the model where the legacy pipeline dropped a candidate before scoring it (`rule:excluded`,
-`rule:near_profile`, `rule:pale_nucleus`, `rule:shape`, `rule:low_contrast`, `rule:small`, `rule:artifact_shape`, `rule:edge`, `rule:irregular`) and after
-it where it re-labelled an accepted one (`rule:speck`, `rule:vascular_or_edge`, `rule:duplicate`); each can be switched off
+`rule:near_profile`, `rule:pale_nucleus`, `rule:shape`, `rule:low_contrast`, `rule:small`, `rule:artifact_shape`) or where a
+candidate only the new sources found looks like an artifact (`rule:edge`, `rule:fold`, `rule:irregular`), and after it
+where it re-labelled an accepted one (`rule:speck`, `rule:vascular_or_edge`, `rule:duplicate`); each can be switched off
 or retuned under `v2.rules` in stainid.yaml. Re-running this stage after a new model, cut-off or rule takes minutes.
 
 Also here: assembling the candidate store (proposals + outlines + calls) of a core image.
@@ -106,6 +107,9 @@ def pre_rules(stain: str, frame: pd.DataFrame, rules: dict) -> np.ndarray:
             shape = (_number(frame, "m_stained_area_um2") < 4.0) | (area < 15.0) | (area > 650.0) | (_number(frame, "m_aspect_ratio") > 3.5)
             apply(profile & shape, "shape")
         apply(rim, "edge")
+        # the new sources also find dark fold bands, which the legacy NeuN detection never masked
+        apply(new_source & (_number(frame, "fold_fraction") >= float(rules.get("fold_fraction", np.inf))), "fold")
+        apply(new_source & (_number(frame, "m_solidity") < float(rules.get("body_min_solidity", 0.0))), "irregular")
     elif stain == "6E10":
         apply(excluded, "excluded")
         if rules.get("artifact_shape", False):

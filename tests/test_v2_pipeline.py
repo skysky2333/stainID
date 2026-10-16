@@ -76,7 +76,7 @@ def test_merged_profile_above_the_size_limit_is_cut_by_the_watershed():
     assert all(r.area_px * PS * PS <= 650.0 for r in regions)
 
 
-def test_neun_proposals_split_merged_profiles_and_merge_nuclei_into_their_profile():
+def test_neun_proposals_split_merged_neurons_and_merge_nuclei_into_their_profile():
     from stainid.v2 import neun
     from stainid.v2.params import DEFAULTS
 
@@ -85,9 +85,11 @@ def test_neun_proposals_split_merged_profiles_and_merge_nuclei_into_their_profil
     for x in (260, 325, 390):  # merged neurons
         cv2.circle(rgb, (x, 300), 36, BROWN, -1)
     cv2.circle(rgb, (120, 400), 9, BLUE, -1)  # a glial nucleus, no stain
+    cv2.ellipse(rgb, (400, 120), (45, 7), 0, 0, 360, BROWN, -1)  # a long thin stained cell the legacy profile filter drops
     nuclei = np.zeros(rgb.shape[:2], np.int32)
     cv2.circle(nuclei, (120, 120), 8, 1, -1)
     cv2.circle(nuclei, (120, 400), 9, 2, -1)
+    cv2.ellipse(nuclei, (400, 120), (20, 6), 0, 0, 360, 3, -1)
     field = field_of(rgb, nuclei=nuclei.astype(np.uint32))
     p = DEFAULTS["proposals"]
     regions = neun.propose(field, p["NeuN"], {k: v for k, v in p.items() if k not in ("NeuN", "6E10", "AT8")})
@@ -96,9 +98,11 @@ def test_neun_proposals_split_merged_profiles_and_merge_nuclei_into_their_profil
         by_source.setdefault(r.source, []).append(r)
     neuron = min(regions, key=lambda r: np.hypot(*(np.array(r.centroid()) - (120, 120))))
     assert neuron.source == "profile" and "cellpose" in neuron.sources  # one candidate, both sources recorded
-    assert len(by_source.get("profile_split", [])) == 3
+    assert sum(len(v) for k, v in by_source.items() if k.startswith("split@")) == 3  # the merge cut by the tree
     glia = min(regions, key=lambda r: np.hypot(*(np.array(r.centroid()) - (120, 400))))
     assert glia.source == "cellpose"
+    thin = min(regions, key=lambda r: np.hypot(*(np.array(r.centroid()) - (400, 120))))
+    assert thin.source == "cellpose" and "profile" in thin.sources  # the legacy candidate there was the Cellpose cell
 
 
 def test_same_object_rules():

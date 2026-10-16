@@ -39,13 +39,15 @@ stage's manifest. A core image is out of date when any of these differs from wha
 Per tile (the tile with its 128 px context margin; a candidate belongs to the tile holding its centroid) and stain:
 
 - **NeuN**: the legacy DAB profiles and the legacy Cellpose cells, with the legacy filters recorded instead of applied
-  (`flag_legacy_kept`, `flag_legacy_drop` = shape / excluded / near_profile / pale_nucleus); merged profiles above
-  650 µm² cut into cells by a marker watershed (`profile_split`) unless they look like a stained rim or band
-  (`stainid.v2.tree.cell_pieces`: within 5 µm of a tissue edge, a long band, or too thin for a cell body); the DAB
-  component tree at 0.5, 0.75, 1 and 1.5 × the slide threshold (`dab@<level>`, best-fitting node per object: the one
-  with the strongest DAB edge; merges split at their children; merged chains cut by the watershed, `split@<level>`);
-  components standing 0.5 × threshold above the 60 µm local background (`localbg`). A Cellpose nucleus inside a stained
-  profile becomes a source of that candidate, not a candidate of its own.
+  (`flag_legacy_kept`, `flag_legacy_drop` = shape / excluded / near_profile / pale_nucleus); the legacy cells come before
+  the profiles the legacy shape filter dropped, so where the old pipeline counted a cell the same cell is the candidate;
+  the DAB component tree at 0.5, 0.75, 1 and 1.5 × the slide threshold (`dab@<level>`, best-fitting node per object: the
+  one with the strongest DAB edge; merges split at their children, so merged neurons above 650 µm² that the legacy
+  filter dropped are separated by the higher levels; a merge no level separates is cut into cells by a marker watershed
+  on its darkest node, `split@<level>`, unless it looks like a stained rim or band — within 5 µm of a tissue edge, a long
+  band, or too thin for a cell body, `stainid.v2.tree.cell_pieces`); components standing 0.5 × threshold above the 60 µm
+  local background (`localbg`). A Cellpose nucleus inside a stained profile becomes a source of that candidate, not a
+  candidate of its own.
 - **6E10**: every deposit of the legacy segmentation (touching plaques split at h-maxima), including those the legacy
   shape rule called artifacts and never showed the classifier (`flag_artifact_shape`); faint deposits of the tree at
   0.5 and 0.75 × the threshold (roots: a dense core inside a diffuse halo is one deposit).
@@ -79,7 +81,7 @@ The stain model scores every candidate from `m_` columns (`stainid.candidates.mo
 
 | Stain | Before the model | After the model |
 |---|---|---|
-| NeuN | `rule:excluded` (≥ 50 % excluded, or a Cellpose cell in a hand-drawn exclusion), `rule:near_profile`, `rule:pale_nucleus` (legacy Cellpose filters), `rule:shape` (legacy profile size / shape filter), `rule:edge` (new sources only, ≥ 50 % within 5 µm of an edge or hole) | — |
+| NeuN | `rule:excluded` (≥ 50 % excluded, or a Cellpose cell in a hand-drawn exclusion), `rule:near_profile`, `rule:pale_nucleus` (legacy Cellpose filters), `rule:shape` (legacy profile size / shape filter); for the new sources only: `rule:edge` (≥ 50 % within 5 µm of an edge or hole), `rule:fold` (≥ 50 % on a fold band; the legacy NeuN detection never masked folds), `rule:irregular` (solidity < 0.6) | — |
 | 6E10 | `rule:excluded`; `rule:artifact_shape` off by default (the legacy shape rule; the classifier now decides) | `rule:speck` (≤ 10 µm), `rule:vascular_or_edge` (outer boundary ≥ 25 % on a lumen or tissue edge); subtype compact / diffuse / small by the model's morphotype threshold |
 | AT8 | `rule:excluded` (also a centre outside valid tissue), `rule:low_contrast` (< 0.3, the legacy bar), `rule:small` (new-source bodies < 40 µm²), `rule:edge`, `rule:irregular` (new-source bodies less compact than legacy bodies: solidity < 0.7 or circularity < 0.35) | `rule:duplicate` (12 µm suppression, now over the whole core); subtype mature tangle / pretangle by the model's p90 threshold |
 

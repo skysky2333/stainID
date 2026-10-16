@@ -138,8 +138,8 @@ def select(field_, roots: list[Node], minimum_px: int, maximum_px: int, signific
             scored = [(edge_score(field_, n.region("")), -n.level, i) for i, n in enumerate(fitting)]
             best = fitting[max(scored)[2]]
             out.append(best.region(f"dab@{best.level:g}"))
-        elif split_max_px and maximum_px < chain[0].area <= split_max_px:
-            out.extend(cell_pieces(field_, chain[0], minimum_px, maximum_px, split_rules))
+        elif split_max_px and maximum_px < chain[-1].area <= split_max_px:  # cut the tightest (darkest) node of the merge
+            out.extend(cell_pieces(field_, chain[-1], minimum_px, maximum_px, split_rules))
 
     for root in roots:
         (roots_mode if mode == "roots" else split_mode)(root)

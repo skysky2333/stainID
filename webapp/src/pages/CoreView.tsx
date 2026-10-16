@@ -53,6 +53,7 @@ const REASON_TEXT: Record<string, string> = {
   'rule:low_contrast': 'too faint against its surroundings', 'rule:small': 'too small for a tau+ neuron',
   'rule:artifact_shape': 'shaped like an artifact', 'rule:thread_like': 'lies on a thread',
   'rule:edge': 'a brown rim along a tissue edge or hole', 'rule:irregular': 'too irregular for a cell body (thread tangle)',
+  'rule:fold': 'on a tissue fold',
 }
 const reasonText = (code: string) => REASON_TEXT[code] ?? code.replace(/^rule:/, '').replace(/_/g, ' ')
 

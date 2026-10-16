@@ -153,7 +153,8 @@ def read_table(file: Path, columns: list[str] | None = None) -> pd.DataFrame:
             frame = pd.read_parquet(file)
         else:
             header = pd.read_csv(file, nrows=0).columns
-            frame = pd.read_csv(file, dtype=_dtypes(header), keep_default_na=False, na_values={c: [""] for c in header if c not in TEXT_COLUMNS})
+            frame = pd.read_csv(file, dtype=_dtypes(header), keep_default_na=False, na_values={c: [""] for c in header if c not in TEXT_COLUMNS},
+                                low_memory=False)
         with _GUARD:
             if len(_CACHE) >= _CACHE_LIMIT:
                 _CACHE.pop(next(iter(_CACHE)))

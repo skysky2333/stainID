@@ -2,11 +2,11 @@
 merged profiles above 650 µm² split by a marker watershed, and the DAB component tree / local-background components.
 
 Order (the first geometry of an object is kept, later ones only add their source tag):
-1. legacy profiles (the old candidate outlines, kept unchanged so the current model scores them as before), including
-   those the legacy size / shape filter dropped (flagged), and the pieces of merged profiles;
-2. Cellpose cells the legacy combination kept;
+1. legacy profiles (the old candidate outlines, kept unchanged so the current model scores them as before);
+2. Cellpose cells the legacy combination kept, then the profiles the legacy size / shape filter dropped (flagged);
 3. component-tree and local-background components (stain-visible profiles the chromogen-fraction rule broke up, dark
-   neurons in brown bands, …);
+   neurons in brown bands, merged neurons the legacy filter dropped above 650 µm², split at higher DAB levels or by
+   the tree's watershed, …);
 4. the Cellpose cells the legacy combination dropped (beside a profile, pale, excluded): merged into the DAB region they
    lie in, else kept as their own candidates with the legacy reason flagged.
 """
@@ -17,7 +17,7 @@ import numpy as np
 from scipy import ndimage
 
 from stainid.v2.geometry import Occupancy, Region, same_object
-from stainid.v2.tree import Node, cell_pieces, local_background_regions, tree_regions
+from stainid.v2.tree import local_background_regions, tree_regions
 
 MEASUREMENT = ("selection_area_um2", "stained_area_um2", "profile_area_um2", "area_um2", "aspect_ratio", "solidity", "circularity",
                "mean_dab_od", "mean_hematoxylin_od", "neighborhood_dab_p80", "chromogen_fraction", "mean_chromogen_fraction",
@@ -186,7 +186,6 @@ def propose(field, settings: dict, shared: dict) -> list[Region]:
     occupancy = Occupancy(field.shape)
     same = dict(same_iou=shared["same_iou"], same_inside=shared["same_inside"], covered=shared["covered"],
                 significant_px=round(settings["significant_um2"] / pixel_area))
-    minimum_px = round(settings["min_um2"] / pixel_area)
 
     def offer(region: Region) -> Region | None:
         """Keep a region unless it is an object already kept (then it only adds its source), spans several, or is covered."""
@@ -199,21 +198,17 @@ def propose(field, settings: dict, shared: dict) -> list[Region]:
         occupancy.add(region)
         return region
 
+    shape_failed = []
     for row, region, component, box in legacy_profiles(field):
         if row["legacy_kept"]:
             region.flags["legacy_kept"] = True
             occupancy.add(region)
-        elif row["profile_area_um2"] > 650.0:  # a merged profile: cut into its cells (not a stained rim or band)
-            node = Node(0.0, box, component, int(component.sum()))
-            for piece in cell_pieces(field, node, minimum_px, round(settings["max_um2"] / pixel_area), settings.get("split")):
-                piece.mask &= field.tissue[piece.box]
-                if piece.mask.sum() >= minimum_px:
-                    piece.source, piece.sources, piece.style, piece.level = "profile_split", ["profile_split"], "profile", None
-                    offer(piece)
-        elif row["profile_area_um2"] >= settings["min_um2"]:
+        elif settings["min_um2"] <= row["profile_area_um2"] <= settings["max_um2"]:
             region.flags["legacy_kept"] = False
             region.flags["legacy_drop"] = "shape"
-            offer(region)
+            shape_failed.append(region)
+        # a merged profile (above max_um2) is left to the component tree: its higher levels separate the cells, and a
+        # merge no level separates is cut into cells (`stainid.v2.tree.cell_pieces`)
 
     cells = cellpose_cells(field)
     supported = cv2.dilate(np.isin(occupancy.labels, [i + 1 for i, r in enumerate(occupancy.regions) if r.flags.get("legacy_kept")]).astype(np.uint8),
@@ -237,6 +232,8 @@ def propose(field, settings: dict, shared: dict) -> list[Region]:
         else:
             offer(region)
 
+    for region in shape_failed:  # after the legacy cells, so a cell the legacy pipeline kept stays the candidate there
+        offer(region)
     allowed = field.tissue & ~field.neun_exclusion
     for region in tree_regions(field, settings["levels"], allowed, settings["min_um2"], settings["max_um2"], settings["significant_um2"],
                                settings["split_max_um2"], settings["mode"], settings.get("split")):
