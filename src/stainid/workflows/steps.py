@@ -261,7 +261,7 @@ def _v2_status(project: Project, stage: str) -> dict:
     folders = [project.output("v2") / "manifests" / s / stain for s in ("proposals", stage) for stain in STAINS] + [project.analysis_tiles()]
     found = cache.memo(("v2 status", str(project.root), stage), folders, lambda: status(project), every=10.0, folders=True)[stage]
     done, outdated, total = (sum(v[k] for v in found.values()) for k in ("done", "outdated", "total"))
-    return _state(done, total, "core images", f"{outdated} out of date: run again to update them" if outdated else "", outdated=bool(outdated))
+    return _state(done, total, "core images", f"{outdated:,} core images are out of date." if outdated else "", outdated=bool(outdated))
 
 
 def _has_content(path: Path) -> bool:

@@ -260,10 +260,13 @@ function StepNotes({ step, state, parts, blocked, onDetails }: { step: Step; sta
         <div className="small muted step-note">Needs first: {step.needs.filter((n) => !n.exists).map((m) => m.download ? `${m.label} (download on the Models page)` : m.format ? `${m.label} (yours to provide)` : m.label).join(', ')}.
           {' '}<button className="link-btn small" onClick={onDetails}>How to get it</button></div>
       )}
-      {step.progress.outdated && (
+      {step.progress.outdated && (step.stage === V2_STAGE ? (
+        <div className="warning-note">{step.progress.note || 'Some cores are out of date.'} Something they were made from changed since (a
+          setting, a model, or an earlier step). Run the step again: it redoes only those cores.</div>
+      ) : (
         <div className="warning-note">These results were made with a different model than the one in use now. Run the step again to redo them with the
           current model: old results are moved aside, not deleted.</div>
-      )}
+      ))}
     </>
   )
 }
