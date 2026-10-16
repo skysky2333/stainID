@@ -160,8 +160,8 @@ def test_store_ids_encodings_and_reads(tmp_path):
     assert store.parse_id(ids[1]) == ("NeuN", "LIP-1_A-1", 10, 20)
     assert store.points(store.encode_points([[1, 2], [3, 4], [5, 6]])) == [1, 2, 3, 4, 5, 6]
     assert store.rings("1 2 3 4 5 6;7 8 9 10 11 12") == [[1, 2, 3, 4, 5, 6], [7, 8, 9, 10, 11, 12]]
-    assert store.sam_masks("1 2 3 4 5 6;;7 8 9 10 11 12")[1] == []
-    assert store.sam_scores("0.9 0.8;0.5 0.4;0.1 0.2")[0] == {"iou": 0.9, "stability": 0.8}
+    assert store.sam_masks("1 2 3 4 5 6||7 8 9 10 11 12")[1] == []
+    assert store.sam_scores("0.9|0.5|0.1") == [0.9, 0.5, 0.1]
     frame = pd.DataFrame({"candidate_id": ids, "stain": "NeuN", "core_id": "LIP-1_A-1", "tile_id": ["T1", "T1", "T2"],
                           "x_core": [10.2, 10.4, 30.0], "y_core": [20.0, 19.9, 5.0], "area_um2": [50.0, 60.0, 70.0],
                           "outline": ["0 0 20 0 20 20", "1 1 2 2 3 1", "25 0 35 0 35 10"], "m_context_dab_mean": [0.1, 0.2, np.nan]})
@@ -381,12 +381,23 @@ def test_outlines_keep_all_three_sam_outputs(v2_project, monkeypatch):
     table = store.read_table(store.path(project, "6E10", "LIP-1_B-2", "outlines"))
     assert result["new"] == len(table) > 0
     assert table.sam_masks.map(lambda t: len(store.sam_masks(t)) == 3).all()
-    assert table.sam_scores.map(lambda t: len(store.sam_scores(t)) == 3).all()
+    assert table.sam_scores.map(lambda t: len(store.sam_scores(t)) == 3).all() and table.sam_stability.map(lambda t: len(store.sam_scores(t)) == 3).all()
     ok = table[table.sam_status == "ok"]
     assert ok.sam_default.between(0, 2).all()
     assert table[table.sam_status != "ok"].sam_default.eq(-1).all()
     assembled = store.read_core(project, "6E10", "LIP-1_B-2")
     assert "sam_masks" in assembled and assembled.decision.ne("").all()
+    from stainid.labels import candidate_store  # the annotation pages read the store as written here
+
+    read = candidate_store.read_core(project, "6E10", "LIP-1_B-2")
+    outlined = read[read.sam_masks.map(lambda m: bool(m) and sum(bool(p) for p in m) == 3)]
+    assert len(outlined)
+    row = outlined.iloc[0]
+    found, default = candidate_store.masks(row)
+    assert len(found) == 3 and 0 <= default < 3 and len(row.sam_scores) == 3
+    if row.sam_default >= 0:
+        assert default == int(row.sam_default)
+    assert read.threshold.notna().all()
     again = outlines.outline_core(project, "6E10", "LIP-1_B-2", tiles, outliner, 0.05)  # nothing new to outline
     assert again["new"] == 0
     del torch

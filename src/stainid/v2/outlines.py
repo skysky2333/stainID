@@ -31,7 +31,7 @@ from stainid.v2.params import params, stage_params
 
 Image.MAX_IMAGE_PIXELS = None
 BATCH = 32
-COLUMNS = ["candidate_id", "sam_status", "sam_default", "sam_outline", "sam_masks", "sam_scores", "sam_area_um2", "sam_perimeter_um",
+COLUMNS = ["candidate_id", "sam_status", "sam_default", "sam_outline", "sam_masks", "sam_scores", "sam_stability", "sam_area_um2", "sam_perimeter_um",
            "sam_equivalent_diameter_um", "sam_major_axis_um", "sam_minor_axis_um", "sam_elongation", "sam_eccentricity", "sam_solidity",
            "sam_circularity", "sam_mean_dab_od", "sam_p90_dab_od", "sam_normalized_mean_dab", "sam_ring_contrast", "sam_core_dab_q"]
 
@@ -192,8 +192,9 @@ def outline_field(outliner: BatchOutliner, rgb: np.ndarray, field_origin: tuple[
             order = np.argsort([o.area for o in outputs], kind="stable")  # small → large
             result = {"candidate_id": row.candidate_id, "sam_status": status,
                       "sam_default": int(np.flatnonzero(order == chosen)[0]) if chosen >= 0 else -1,
-                      "sam_masks": ";".join(store.encode_points(polygons[j]) for j in order),
-                      "sam_scores": ";".join(f"{outputs[j].iou:.4f} {outputs[j].stability:.4f}" for j in order),
+                      "sam_masks": "|".join(store.encode_points(polygons[j]) for j in order),
+                      "sam_scores": "|".join(f"{outputs[j].iou:.4f}" for j in order),
+                      "sam_stability": "|".join(f"{outputs[j].stability:.4f}" for j in order),
                       "sam_outline": store.encode_points(polygons[chosen]) if chosen >= 0 else ""}
             if chosen >= 0:
                 best = outputs[chosen]
@@ -243,7 +244,7 @@ def outline_core(project, stain: str, core_id: str, tiles: list[dict], outliner:
     previous = store.read_table(target)
     recorded = manifest.read(project, "outlines", stain, core_id)
     made = expected(project, stain, core_id)
-    same_base = recorded is not None and recorded["inputs"].get("proposals") == made["inputs"]["proposals"] and \
+    same_base = recorded is not None and recorded.get("version") == made["version"] and recorded["inputs"].get("proposals") == made["inputs"]["proposals"] and \
         recorded["inputs"].get("sam") == made["inputs"]["sam"] and recorded.get("params", {}).get("runaway_factor") == settings["runaway_factor"]
     done = set(previous.candidate_id) if same_base and not redo and not previous.empty else set()
     wanted = selected(frame, calls, settings)

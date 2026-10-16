@@ -11,6 +11,9 @@ Encodings (see also the contract in the v2 brief):
 - coordinates: `x_core`, `y_core` core-image pixels; `x_tile`, `y_tile` the tile's own frame; `x_field`, `y_field` the
   frame of the labelling field picture (the tile with its context margin);
 - `bbox` "x0 y0 x1 y1"; `outline` and each ring of `sam_outline` (";"-separated) a flat "x0 y0 x1 y1 …" of core pixels;
+  `sam_masks` Segment Anything's three outputs small → large, "|"-separated polygons, with `sam_scores` (predicted IoU)
+  and `sam_stability` ("|"-separated, same order) and `sam_default` (0–2, -1 when none survived the runaway cap);
+- `threshold`: the model's probability cut-off the call used;
 - `m_<name>`: the input `<name>` of the current stain models; plain names: generic measurements.
 
 Also per core: thread segments (`threads/<core_id>.csv.gz`, AT8) and stained regions no candidate covers
@@ -28,10 +31,10 @@ KINDS = ("candidates", "proposals", "outlines", "calls", "unproposed", "tiles") 
 MATCH_RADIUS_UM = {"NeuN": 4.0, "6E10": 6.0, "AT8": 4.0}
 DEFAULT_MATCH_RADIUS_UM = 5.0
 TEXT_COLUMNS = ("candidate_id", "stain", "core_id", "tile_id", "bbox", "sources", "source", "outline", "sam_outline", "sam_status",
-                "sam_masks", "sam_scores", "model_id", "decision", "reason", "class", "subtype", "points", "kind", "legacy_class",
+                "sam_masks", "sam_scores", "sam_stability", "model_id", "decision", "reason", "class", "subtype", "points", "kind", "legacy_class",
                 "legacy_source_class", "flag_legacy_drop", "dab_q", "core_dab_q", "region_id", "density_windows", "density_window_px")
-CALL_COLUMNS = ("probability", "model_id", "decision", "reason", "class", "subtype")
-OUTLINE_COLUMNS = ("sam_outline", "sam_status", "sam_masks", "sam_scores", "sam_default")
+CALL_COLUMNS = ("probability", "threshold", "model_id", "decision", "reason", "class", "subtype")
+OUTLINE_COLUMNS = ("sam_outline", "sam_status", "sam_masks", "sam_scores", "sam_stability", "sam_default")
 _CACHE: dict[str, tuple[tuple[int, int], pd.DataFrame]] = {}
 _CACHE_LIMIT = 64
 _GUARD = threading.Lock()
@@ -85,23 +88,23 @@ def rings(text) -> list[list[int]]:
     return [points(part) for part in str(text).split(";") if part.strip()]
 
 
+def _empty(text) -> bool:
+    return text is None or (isinstance(text, float) and text != text) or not str(text).strip()
+
+
 def sam_masks(text) -> list[list[int]]:
-    """The three Segment Anything outputs of a candidate (small, medium, large), each a flat polygon ([] where SAM gave
-    nothing usable); [] when the candidate was not outlined."""
-    if text is None or (isinstance(text, float) and text != text) or not str(text).strip():
+    """The three Segment Anything outputs of a candidate (small, medium, large), "|"-separated in the store, each a flat
+    polygon ([] where SAM gave nothing usable); [] when the candidate was not outlined."""
+    if _empty(text):
         return []
-    return [points(part) for part in str(text).split(";")]
+    return [points(part) for part in str(text).split("|")]
 
 
-def sam_scores(text) -> list[dict[str, float]]:
-    """SAM's predicted IoU and stability score of each of the three outputs: [{"iou": …, "stability": …}, …]."""
-    if text is None or (isinstance(text, float) and text != text) or not str(text).strip():
+def sam_scores(text) -> list[float]:
+    """A "|"-separated number per SAM output (`sam_scores`: predicted IoU; `sam_stability`: stability score)."""
+    if _empty(text):
         return []
-    out = []
-    for part in str(text).split(";"):
-        values = [float(v) for v in part.split()] or [float("nan"), float("nan")]
-        out.append({"iou": values[0], "stability": values[1]})
-    return out
+    return [float(v) if v.strip() else float("nan") for v in str(text).split("|")]
 
 
 def bbox(text) -> tuple[int, int, int, int] | None:
@@ -196,7 +199,7 @@ def read_core(project, stain: str, core_id: str, columns: list[str] | None = Non
         return frame
     for column in (*OUTLINE_COLUMNS, *CALL_COLUMNS):
         if (columns is None or column in columns) and column not in frame:
-            frame[column] = np.nan if column in ("probability", "sam_default") else ""
+            frame[column] = np.nan if column in ("probability", "threshold", "sam_default") else ""
     return frame
 
 
@@ -279,7 +282,8 @@ def outline_rings(row) -> list[list[int]]:
 def outlines(project, stain: str, core_id: str, decision: str | None = None) -> list[dict]:
     """Every candidate's id, centroid, call and outline rings (core pixels) of one core image; `decision` limits them."""
     frame = read_core(project, stain, core_id, ["candidate_id", "x_core", "y_core", "decision", "class", "subtype", "probability",
-                                               "outline", "sam_outline", "sam_status", "sam_masks", "sam_scores", "sam_default"])
+                                               "outline", "sam_outline", "sam_status", "sam_masks", "sam_scores", "sam_stability",
+                                               "sam_default", "threshold"])
     if decision is not None and "decision" in frame:
         frame = frame[frame.decision == decision]
     out = []
@@ -288,7 +292,8 @@ def outlines(project, stain: str, core_id: str, decision: str | None = None) -> 
         out.append({"candidate_id": r["candidate_id"], "x": r["x_core"], "y": r["y_core"], "decision": r.get("decision", ""),
                     "class": r.get("class", ""), "subtype": r.get("subtype", ""), "probability": r.get("probability"),
                     "rings": outline_rings(r), "outline": points(r.get("outline")), "sam_masks": sam_masks(r.get("sam_masks")),
-                    "sam_scores": sam_scores(r.get("sam_scores")),
+                    "sam_scores": sam_scores(r.get("sam_scores")), "sam_stability": sam_scores(r.get("sam_stability")),
+                    "threshold": r.get("threshold"),
                     "sam_default": None if default is None or default != default or int(default) < 0 else int(default)})
     return out
 

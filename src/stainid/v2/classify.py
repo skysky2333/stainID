@@ -25,7 +25,7 @@ MODEL_KEY = {"NeuN": "neun", "6E10": "amyloid", "AT8": "tau"}
 POSITIVE = {"NeuN": "NeuN+ neuron", "6E10": "plaque", "AT8": "tau+ neuron"}
 NEGATIVE = {"NeuN": "not a neuron", "6E10": "not a plaque", "AT8": "not tau"}
 LEGACY_SOURCES = {"NeuN": ("profile", "cellpose"), "6E10": ("legacy",), "AT8": ("ring", "dense")}  # what the old pipeline proposed
-CALL_COLUMNS = ["candidate_id", "probability", "model_id", "decision", "reason", "class", "subtype"]
+CALL_COLUMNS = ["candidate_id", "probability", "threshold", "model_id", "decision", "reason", "class", "subtype"]
 
 
 @dataclass
@@ -179,7 +179,7 @@ def call(project, stain: str, frame: pd.DataFrame, model: Model, rules: dict) ->
     reason[passed] = "accepted"
     reason[(reason == "") & scored] = "rejected_by_model"
     return pd.DataFrame({
-        "candidate_id": frame.candidate_id.to_numpy(), "probability": probability,
+        "candidate_id": frame.candidate_id.to_numpy(), "probability": probability, "threshold": model.threshold,
         "model_id": model.model_id, "decision": np.where(passed, "accepted", "rejected"), "reason": reason, "class": klass, "subtype": subtype,
     })
 

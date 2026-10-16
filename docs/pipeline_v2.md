@@ -83,12 +83,13 @@ The stain model scores every candidate from `m_` columns (`stainid.candidates.mo
 | 6E10 | `rule:excluded`; `rule:artifact_shape` off by default (the legacy shape rule; the classifier now decides) | `rule:speck` (≤ 10 µm), `rule:vascular_or_edge` (outer boundary ≥ 25 % on a lumen or tissue edge); subtype compact / diffuse / small by the model's morphotype threshold |
 | AT8 | `rule:excluded` (also a centre outside valid tissue), `rule:low_contrast` (< 0.3, the legacy bar), `rule:small` (new-source bodies < 40 µm²), `rule:edge`, `rule:irregular` (new-source bodies less compact than legacy bodies: solidity < 0.7 or circularity < 0.35) | `rule:duplicate` (12 µm suppression, now over the whole core); subtype mature tangle / pretangle by the model's p90 threshold |
 
-`class` and `subtype` are label-vocabulary ids (`stainid.labels.vocabulary`).
+`class` and `subtype` are label-vocabulary ids (`stainid.labels.vocabulary`); `threshold` is the cut-off the call used.
 
 ## Stage 3: outlines
 
 Segment Anything ViT-B, one point at the candidate as the one-click tool, all three outputs kept small → large
-(`sam_masks`), with predicted IoU and stability (`sam_scores`) and the default (`sam_default`): the output the stain's
+(`sam_masks`, "|"-separated polygons), with predicted IoU (`sam_scores`) and stability (`sam_stability`) and the default
+(`sam_default`): the output the stain's
 outline step uses (NeuN large, 6E10 medium, AT8 best DAB contrast) when it survives the runaway cap (more than 5 × the
 candidate's area, touching the 1024 px window edge, or outside the stain's size limits), else the surviving output with
 the best predicted IoU; none surviving → `sam_status` fallback_* and the candidate outline stands.
