@@ -1,7 +1,8 @@
 """Train a stain model on the human labels in the label store and compare it with the current model on the same labels.
 
 Each labelled object's class is the majority of the people who labelled it; its features are those of the matching
-candidate in the pool. An object people added where the detection step proposed nothing is measured at the clicked
+candidate in the pool, or, for objects of the annotation rounds, of the v2 candidate store (`labels.candidate_store`:
+the decisions people made there are class labels on its candidates). An object people added where the detection step proposed nothing is measured at the clicked
 position first (`labels.added`) and trains the model like a candidate; the report counts these person-added objects and
 those that could not be measured (their labels stay, but cannot train). Labels on positions with no candidate on fields
 that are not prepared are skipped.
@@ -21,7 +22,7 @@ from sklearn.metrics import precision_score, recall_score, roc_auc_score
 from sklearn.model_selection import LeaveOneGroupOut, StratifiedGroupKFold
 from sklearn.pipeline import make_pipeline
 
-from stainid.labels import added, frames, pool, store, vocabulary
+from stainid.labels import added, candidate_store, frames, pool, store, vocabulary
 from stainid.labels import sessions as label_sessions
 from stainid.labels.tasks import MODEL_KEY
 from stainid.project import Project, save_project
@@ -46,6 +47,8 @@ def labelled(project: Project, stain: str, sessions: list[str] | None = None) ->
     truth = store.consensus(label_sessions.in_sessions(labels, sessions), stain, vocabulary.of(project, stain))
     truth = truth[truth.positive.notna()]
     names = pool.feature_names(project, stain)
+    tiles = known_tiles(project)
+    stored, names = candidate_store.training_rows(project, stain, truth, tiles, names)
     rows, unmeasured = [], 0
     for tile_id, group in truth.groupby("tile_id"):
         objects = pool.load_field(project, stain, tile_id)
@@ -58,6 +61,8 @@ def labelled(project: Project, stain: str, sessions: list[str] | None = None) ->
             label = {"tile_id": tile_id, "label": r.value, "subtype": r.subtype, "positive": bool(r.positive), "sources": r.sources}
             if i is not None:
                 rows.append({**objects.iloc[i].to_dict(), **label, "added_by_person": False})
+            elif r.Index in stored:
+                rows.append({**stored[r.Index], **label, "added_by_person": False})
             elif hit is not None and added.is_true(hit.measured):
                 rows.append({**hit.to_dict(), **label, "added_by_person": True})
             elif hit is not None:

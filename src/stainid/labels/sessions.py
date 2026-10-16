@@ -37,7 +37,8 @@ KINDS = ("fields", "queue", "outline")
 FIELD_TOOLS = ("class", "point", "outline", "tag")
 AI_VIEWS = ("full", "positions", "none")
 RULES = {"uncertain": "where the AI is unsure (probability 0.3–0.7)", "disagree": "where people disagree with each other or with the AI",
-         "second": "objects one other person has labelled", "random": "any candidate"}
+         "second": "objects one other person has labelled", "random": "any candidate",
+         "informative": "the most informative first: near the AI’s threshold, then rejected but strong, then accepted but weak"}
 
 
 REFERENCE = "reference"

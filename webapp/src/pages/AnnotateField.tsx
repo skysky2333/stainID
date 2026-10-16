@@ -11,6 +11,10 @@ import { classText, resolveClass, roleOf } from '../labels/classKeys'
 import { ClassChooser, ClassKeyHint, useClassKeys } from '../labels/classes'
 import { FieldThumb } from '../labels/fields'
 import { QuickCheck } from '../labels/quickcheck'
+import { CheckCalls } from '../labels/checkcalls'
+import { FixField } from '../labels/fixfield'
+import { ROUND_TITLE, RoundProgressLine } from '../labels/rounds'
+import type { RoundDetail } from '../api'
 import { Register, useSession } from '../session'
 import { OutlineWorkspace } from '../segcheck/OutlineWorkspace'
 import type { ImagePoint } from '../viewer'
@@ -45,6 +49,9 @@ export default function AnnotatePage() {
   if (!session.annotator) return <><PageHead title="Help check tissue images" subtitle="Type your name to start." /><Register /></>
   if (detail.error) return <SessionProblem error={detail.error} retry={detail.reload} />
   if (!detail.data) return <Loading label="Opening the session…" />
+  const round = (detail.data.meta as Partial<RoundDetail>).round
+  if (round === 1) return <CheckCalls detail={detail.data} />
+  if (round === 2 && tile) return <FixField key={tile} detail={detail.data} reload={detail.reload} tile={tile} />
   if (detail.data.meta.kind === 'queue') return <QuickCheck detail={detail.data} />
   if (detail.data.meta.kind === 'outline' && tile) return <OutlineWorkspace key={tile} detail={detail.data} reload={detail.reload} tile={tile} />
   return tile ? <Workspace key={tile} detail={detail.data} reload={detail.reload} tile={tile} /> : <SessionOverview detail={detail.data} reload={detail.reload} />
@@ -81,11 +88,12 @@ function SessionOverview({ detail, reload }: { detail: SessionDetail; reload: ()
   const done = fields.filter((f) => f.done_by_me).length
   const preparing = fields.filter((f) => !f.prepared).length
   const left = fields.length - done
-  useEffect(() => {  // fields still being prepared: look again by itself
-    if (!preparing) return
-    const timer = setInterval(reload, 10000)
+  const live = (meta as Partial<RoundDetail>).round === 2
+  useEffect(() => {  // fields still being prepared, or others working on the round: look again by itself
+    if (!preparing && !live) return
+    const timer = setInterval(reload, live ? 5000 : 10000)
     return () => clearInterval(timer)
-  }, [preparing, reload])
+  }, [preparing, live, reload])
   const next = async () => {
     setFinding(true)
     const found = await api.get<{ tile_id: string | null }>(`/api/annotate/${name}/next`).catch(() => ({ tile_id: null }))
@@ -99,12 +107,16 @@ function SessionOverview({ detail, reload }: { detail: SessionDetail; reload: ()
         {left > 0 && <button className="btn primary big" disabled={finding || left === preparing} onClick={next}>{done ? 'Continue with the next field →' : 'Start with the first field →'}</button>}
       </PageHead>
       {meta.instructions && <div className="instructions">{meta.instructions}</div>}
+      {(meta as Partial<RoundDetail>).round === 2 && <div className="card annotate-progress-card">
+        <div className="row"><b>Round 2 · {ROUND_TITLE[2]}</b><span className="spacer" /><span className="small muted">everyone’s work, live</span></div>
+        <RoundProgressLine progress={(meta as Partial<RoundDetail>).progress ?? null} unit="fields" me={detail.annotator} />
+      </div>}
       <div className="card annotate-progress-card">
         <div className="row"><b>{done} of {fields.length} fields finished by you</b><span className="spacer" />
           <span className="small secondary">{left ? `${left} left` : 'All done — thank you!'}{preparing ? ` · ${preparing} still being prepared (this page checks again by itself)` : ''}</span></div>
         <Progress done={done} total={fields.length} />
         <p className="small muted" style={{ margin: 0 }}>A field is one square of tissue (about 560 µm across). {meta.stain} · {AI_VIEW_FOR_LABELLERS[meta.ai_view]}.</p>
-        {nothing && <p className="small secondary" style={{ margin: 0 }}>Every field still to do is open by someone else right now or is still being prepared; try again in a minute.</p>}
+        {nothing && <p className="small secondary" style={{ margin: 0 }}>Every field still to do is being checked by someone else right now or is still being prepared; try again in a minute.</p>}
       </div>
       <div className="field-grid annotate-fields">{fields.map((f, i) => {
         const state = myState(f)

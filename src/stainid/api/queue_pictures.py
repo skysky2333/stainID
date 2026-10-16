@@ -17,7 +17,7 @@ import pandas as pd
 from stainid import cache
 from stainid.api import label_crops, pyramid
 from stainid.api.state import ProjectState
-from stainid.labels import frames, pool, sessions, store
+from stainid.labels import decisions, frames, pool, rounds, sessions, store
 
 AHEAD, NOW = 2, 0  # priorities on the picture queue: made ahead; someone is about to see it
 EVERY = 10.0  # seconds between two looks for missing pictures of the same session
@@ -46,14 +46,28 @@ def _cores(state: ProjectState, stain: str, objects: pd.DataFrame) -> pd.Series:
     return objects.tile_id.map(place)
 
 
+def round_wanted(state: ProjectState, meta: dict) -> pd.DataFrame:
+    """The candidates of a "Check the AI's calls" session nobody has decided yet (`labels.rounds`)."""
+    frame = rounds.items(state.project, meta, state.tiles)
+    if frame.empty:
+        return frame.assign(key=[])
+    decided = decisions.state(state.project, meta["stain"], state.tiles)
+    frame = frame[[not decided.done(c, rounds.needed(meta)) for c in frame.candidate_id]]
+    return frame.assign(key=sessions.object_keys(frame)) if len(frame) else frame.assign(key=[])
+
+
 def _wanted(state: ProjectState, stain: str) -> pd.DataFrame:
     """Every object any queue session of this stain may serve."""
     root = _reviews(state)
     queues = [m for m in (sessions.meta(root, n) for n in sessions.names(root)) if m["kind"] == "queue" and m["stain"] == stain]
     if not queues:
         return pd.DataFrame(columns=["tile_id", "x", "y"])
-    objects, labels = pool.all_objects(state.project, stain), store.current(root)
-    return pd.concat([sessions.may_serve(m, objects, labels) for m in queues]).drop_duplicates("key")
+    parts = [round_wanted(state, m)[["tile_id", "x", "y", "key"]] for m in queues if rounds.is_round(m)]
+    older = [m for m in queues if not rounds.is_round(m)]
+    if older:
+        objects, labels = pool.all_objects(state.project, stain), store.current(root)
+        parts += [sessions.may_serve(m, objects, labels) for m in older]
+    return pd.concat(parts).drop_duplicates("key")
 
 
 def _spots(stain: str, objects: pd.DataFrame) -> list[label_crops.Spot]:
@@ -83,7 +97,11 @@ def prepare(state: ProjectState, meta: dict, objects: pd.DataFrame, labels: pd.D
     """Queue the cutting of every picture this queue session may need and has not got (at most every `EVERY` seconds
     unless `force`); the cores of `first` (objects someone is about to see) go to the front. Returns how many of the
     pictures are `ready` of the `total`."""
-    wanted = sessions.may_serve(meta, objects, labels)
+    return prepare_wanted(state, meta, sessions.may_serve(meta, objects, labels), first, force)
+
+
+def prepare_wanted(state: ProjectState, meta: dict, wanted: pd.DataFrame, first: pd.DataFrame | None = None, force: bool = False) -> dict:
+    """`prepare` for these objects (tile_id, x, y) the session may serve."""
     made = ready(state, meta["stain"], wanted)
     look = (str(state.root), meta["name"])
     if force or time.monotonic() - _LOOKED.get(look, 0.0) >= EVERY:

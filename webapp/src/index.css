@@ -1069,3 +1069,53 @@ tr.significant-row td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 /* outline page: Segment Anything still preparing the field */
 .sam-preparing { margin: 6px 0 0; animation: sam-preparing 1.6s ease-in-out infinite; }
 @keyframes sam-preparing { 50% { opacity: 0.45; } }
+
+/* ---------- annotation rounds (labels/checkcalls.tsx, labels/fixfield.tsx, labels/newround.tsx) ---------- */
+.round-progress { display: flex; flex-direction: column; gap: 4px; min-width: 220px; }
+.round-taken { margin: 0 0 10px; }
+.mask-switch { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 6px; padding: 8px 10px; border-radius: 10px;
+  background: var(--accent-soft); border: 1px solid var(--border); }
+.mask-switch-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 6px; }
+.mask-switch .btn { white-space: nowrap; }
+.mask-dots { display: inline-flex; align-items: center; gap: 6px; justify-content: center; }
+.mask-dot { width: 12px; height: 12px; border-radius: 50%; padding: 0; border: 2px solid var(--accent); background: transparent; cursor: pointer; }
+.mask-dot:nth-child(2) { width: 16px; height: 16px; }
+.mask-dot:nth-child(3) { width: 20px; height: 20px; }
+.mask-dot.on { background: var(--accent); }
+.ai-call { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 10px; background: var(--surface-1); border: 1px solid var(--border); margin-bottom: 12px; }
+.ai-call-class { display: flex; align-items: center; gap: 8px; font-size: 1.15rem; }
+.round-actions { display: flex; flex-direction: column; gap: 8px; margin-bottom: 6px; }
+.round-actions .btn.big { width: 100%; justify-content: center; }
+.round-change { margin: 12px 0 6px; font-size: 0.95rem; }
+.queue-crop svg.round-outline.editing { pointer-events: auto; cursor: crosshair; }
+.queue-image.is-precise .queue-crop img, .annotate-image.is-precise { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 8px; }
+.precise-bar { margin: 8px 0 0; padding: 6px 10px; border-radius: 8px; background: var(--accent-soft); }
+.look-swatch { display: inline-block; width: 16px; height: 12px; border-radius: 3px; border: 2px solid; flex: none; }
+.look-swatch.look-removed, .look-swatch.look-unsure, .look-swatch.look-new { border-style: dotted; }
+.round-target { border-left: 4px solid var(--accent); }
+.round-target.look-removed { border-left-color: var(--border); }
+.checked-by { margin: 6px 0 0; color: var(--good); }
+.round-steps { margin: 0 0 8px; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.key-legend { margin-top: 8px; }
+.tma-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.tma-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-1); }
+.tma-chip.is-blocked { opacity: 0.55; }
+.round-object.lit { filter: drop-shadow(0 0 3px rgb(255 255 255 / 80%)); }
+.tutorial { padding-bottom: 240px; display: flex; flex-direction: column; }
+.tutorial-coach { position: fixed; right: 16px; bottom: 16px; width: min(360px, calc(100vw - 32px)); z-index: 40; box-shadow: var(--shadow), 0 8px 30px rgb(0 0 0 / 18%);
+  border: 2px solid var(--accent); }
+@media (max-width: 1100px) {  /* the picture takes the whole width: the coach goes above it instead of over it */
+  .tutorial { padding-bottom: 0; }
+  .tutorial-coach { position: static; order: -1; width: auto; margin-bottom: 12px; }
+}
+.tutorial-coach h3 { margin: 6px 0 4px; }
+.tutorial-coach p { margin: 0 0 8px; }
+.tutorial-dots { display: flex; gap: 4px; margin: 4px 0 8px; }
+.tutorial-dots span { flex: 1; height: 4px; border-radius: 2px; background: var(--border); }
+.tutorial-dots span.done { background: var(--good); }
+.tutorial-dots span.now { background: var(--accent); }
+.good-text { color: var(--good); }
+.tutorial-link { margin-right: 14px; }
+.class-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.class-legend li { display: flex; align-items: center; gap: 6px; }
+.class-legend .look-swatch:not(.look-removed):not(.look-unsure):not(.look-new) { opacity: 0.85; }

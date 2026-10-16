@@ -1,6 +1,6 @@
 """Every label in one append-only log: who said what about which object (or field), for which task.
 
-A label is {id, source, stain, task, tile_id, x, y, value, points, session, confirmed, time, deleted, subtype}. `source` is a
+A label is {id, source, stain, task, tile_id, x, y, value, points, session, confirmed, time, deleted, subtype, candidate}. `source` is a
 person's name or `import: <set>`; the pipeline's own call is not stored here, it is read from the results. Objects are
 identified by field and position (rounded pixel), so labels from different people and sessions about the same object
 line up. The latest version of (source, id) wins; edits and deletions keep the history.
@@ -21,7 +21,7 @@ import pandas as pd
 from stainid.labels import vocabulary as vocab
 from stainid.labels.vocabulary import Vocabulary
 
-COLUMNS = ["id", "source", "stain", "task", "tile_id", "x", "y", "value", "points", "session", "confirmed", "time", "deleted", "subtype"]
+COLUMNS = ["id", "source", "stain", "task", "tile_id", "x", "y", "value", "points", "session", "confirmed", "time", "deleted", "subtype", "candidate"]
 _CACHE: dict[Path, tuple[tuple[int, int], pd.DataFrame]] = {}
 
 

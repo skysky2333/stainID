@@ -8,6 +8,7 @@ import { ProjectProvider, ProjectSwitcher, useProject } from './project'
 import { AdminSignIn, Annotator, ServerSetting, SessionContext, useSession } from './session'
 import AnnotateField from './pages/AnnotateField'
 import AnnotateHome from './pages/AnnotateHome'
+import { Tutorial, TutorialLink } from './labels/tutorial'
 import Calibration from './pages/Calibration'
 import Cohort from './pages/Cohort'
 import CoreView from './pages/CoreView'
@@ -82,11 +83,13 @@ function AnnotatorShell() {
       <header className="row" style={{ padding: '10px 24px', borderBottom: '1px solid var(--border)', background: 'var(--surface-2)' }}>
         <Link to="/annotate" className="brand" style={{ margin: 0 }}><img src="/favicon.svg" alt="" />stainID annotation</Link>
         <span className="spacer" />
+        <TutorialLink />
         <Annotator />
       </header>
       <main className="main">
         <Routes>
           <Route path="/annotate" element={<AnnotateHome />} />
+          <Route path="/annotate/tutorial" element={<Tutorial />} />
           <Route path="/annotate/:name" element={<AnnotateField />} />
           <Route path="/annotate/:name/:tile" element={<AnnotateField />} />
         </Routes>

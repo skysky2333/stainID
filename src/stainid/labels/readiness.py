@@ -75,3 +75,24 @@ def blockers(project: Project, tiles: pd.DataFrame) -> list[dict | None]:
 def ready(project: Project, tiles: pd.DataFrame) -> pd.DataFrame:
     """Only the tiles that can be labelled now."""
     return tiles[[b is None for b in blockers(project, tiles)]] if not tiles.empty else tiles
+
+
+def store_blockers(project: Project, tiles: pd.DataFrame) -> list[dict | None]:
+    """The same for the annotation rounds, which read the v2 candidate store (`labels.candidate_store`) instead of the
+    pool: a field can be labelled once its core has candidates there and its picture exists."""
+    if tiles.empty:
+        return []
+    from stainid.labels import candidate_store
+
+    have = {stain: candidate_store.cores(project, stain) for stain in set(tiles.stain)}
+    images = {path: os.path.exists(project.root / path) for path in set(tiles.image_path)}
+    out: list[dict | None] = []
+    for tile in tiles[["core_id", "stain", "image_path"]].itertuples(index=False):
+        if not images[tile.image_path]:
+            out.append(_blocker("The picture of this core has not been cut out yet: run “Export cores” first.", "export", "Export cores"))
+        elif str(tile.core_id) not in have[tile.stain]:
+            out.append(_blocker("The AI has not proposed candidates on this core yet: run the v2 detection (“Find candidates”) first.",
+                                "candidates", "Find candidates"))
+        else:
+            out.append(None)
+    return out
