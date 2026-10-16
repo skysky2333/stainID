@@ -58,6 +58,14 @@ def core_images(project) -> dict[str, list[str]]:
     return {stain: sorted(manifest.read_all(project, "calls", stain)) for stain in STAINS}
 
 
+def by_tile(frame: pd.DataFrame) -> dict:
+    """The rows of each tile (in their order), so a core's tiles are not each filtered out of the whole table (a whole
+    slide has thousands of tiles); `.get(tile_id, empty)` for a tile without rows."""
+    if frame.empty or "tile_id" not in frame:
+        return {}
+    return {tile_id: rows for tile_id, rows in frame.groupby("tile_id", sort=False)}
+
+
 def _tiles(project, stain: str, core_id: str) -> pd.DataFrame:
     return store.read_table(store.path(project, stain, core_id, "tiles"))
 
@@ -78,8 +86,9 @@ def _local_cv(windows: str, size: str, points: np.ndarray, pixel_width_um: float
 
 def neun_rows(tiles: pd.DataFrame, found: pd.DataFrame, addition_threshold: float) -> tuple[list[dict], list[dict]]:
     tile_rows, objects = [], []
+    grouped, none = by_tile(found), found.iloc[0:0]
     for tile in tiles.to_dict("records"):
-        mine = found[found.tile_id == tile["tile_id"]]
+        mine = grouped.get(tile["tile_id"], none)
         scored = mine[~mine.reason.astype(str).str.startswith("rule:")]
         accepted = mine[mine.decision == "accepted"]
         probability = pd.to_numeric(scored.probability, errors="coerce").to_numpy(float)
@@ -103,8 +112,9 @@ def neun_rows(tiles: pd.DataFrame, found: pd.DataFrame, addition_threshold: floa
 def amyloid_rows(tiles: pd.DataFrame, found: pd.DataFrame, morphotype: float, threshold_of: dict) -> tuple[list[dict], list[dict], list[dict]]:
     """6E10 tile rows for both families, the v1-shaped plaque rows and the stainID-shaped plaque rows."""
     tile_rows, v1_objects, objects = [], [], []
+    grouped, none = by_tile(found), found.iloc[0:0]
     for tile in tiles.to_dict("records"):
-        mine = found[found.tile_id == tile["tile_id"]]
+        mine = grouped.get(tile["tile_id"], none)
         plaques = mine[mine.decision == "accepted"]
         core_fraction = np.array([fraction_at_least(q, morphotype) for q in plaques.core_dab_q]) if len(plaques) else np.zeros(0)
         eligible = plaques[plaques.subtype.isin(["compact", "diffuse"])]
@@ -140,10 +150,12 @@ def tau_rows(project, tiles: pd.DataFrame, found: pd.DataFrame, threads: pd.Data
     tile_rows, objects = [], []
     accepted_ids = set(found.candidate_id[found.decision == "accepted"])
     ps = project.pixel_size_um
+    grouped, none = by_tile(found), found.iloc[0:0]
+    pieces = by_tile(threads)
     for tile in tiles.to_dict("records"):
-        mine = found[found.tile_id == tile["tile_id"]]
+        mine = grouped.get(tile["tile_id"], none)
         neurons = mine[mine.decision == "accepted"]
-        segments = threads[threads.tile_id == tile["tile_id"]] if not threads.empty else threads
+        segments = pieces.get(tile["tile_id"], threads.iloc[0:0]) if not threads.empty else threads
         free = segments[~segments.candidate_id.isin(accepted_ids)] if not segments.empty else segments
         skeleton_px = int(free.n_px.sum()) if not free.empty else 0
         area = float(tile["analysis_area_mm2"])
@@ -172,11 +184,10 @@ def tau_rows(project, tiles: pd.DataFrame, found: pd.DataFrame, threads: pd.Data
 
 def mask_rows(found: pd.DataFrame, tiles: pd.DataFrame, stain: str, morphotype: float | None) -> list[dict]:
     """Accepted objects with a kept Segment Anything outline, in the column names of the legacy outline step."""
-    meta = tiles.set_index("tile_id")
+    meta = {tile["tile_id"]: {k: tile[k] for k in REGION_KEYS if k in tile} for tile in tiles.to_dict("records")}
     rows = []
     for row in found[(found.decision == "accepted") & (found.sam_status == "ok")].to_dict("records"):
-        tile = meta.loc[row["tile_id"]]
-        out = {**{k: tile[k] for k in REGION_KEYS if k in tile}, "tile_id": row["tile_id"], "mask_status": "ok",
+        out = {**meta[row["tile_id"]], "tile_id": row["tile_id"], "mask_status": "ok",
                "area_um2": row["sam_area_um2"], "solidity": row["sam_solidity"], "circularity": row["sam_circularity"],
                "elongation": row["sam_elongation"], "normalized_mean_dab": row["sam_normalized_mean_dab"]}
         if stain == "6E10":

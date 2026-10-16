@@ -35,8 +35,9 @@ TEXT_COLUMNS = ("candidate_id", "stain", "core_id", "tile_id", "bbox", "sources"
                 "legacy_source_class", "flag_legacy_drop", "dab_q", "core_dab_q", "region_id", "density_windows", "density_window_px")
 CALL_COLUMNS = ("probability", "threshold", "model_id", "decision", "reason", "class", "subtype")
 OUTLINE_COLUMNS = ("sam_outline", "sam_status", "sam_masks", "sam_scores", "sam_stability", "sam_default")
-_CACHE: dict[str, tuple[tuple[int, int], pd.DataFrame]] = {}
+_CACHE: dict[tuple[str, tuple | None], tuple[tuple[int, int], pd.DataFrame, int]] = {}
 _CACHE_LIMIT = 64
+_CACHE_BYTES = 2 * 2**30  # a whole NeuN or AT8 core store is a few hundred MB in memory: bound the cache by size too
 _GUARD = threading.Lock()
 
 
@@ -137,32 +138,53 @@ def _dtypes(columns) -> dict:
     return {c: str for c in columns if c in TEXT_COLUMNS}
 
 
+def _size(frame: pd.DataFrame) -> int:
+    """Rough bytes of a frame: its arrays, plus about 400 bytes per text cell (outlines are long)."""
+    text = sum(frame[c].dtype == object for c in frame.columns)
+    return int(frame.memory_usage(index=True, deep=False).sum()) + 400 * text * len(frame)
+
+
+def _remember(key, stamp, frame: pd.DataFrame) -> None:
+    size = _size(frame)
+    with _GUARD:
+        _CACHE.pop(key, None)
+        while _CACHE and (len(_CACHE) >= _CACHE_LIMIT or sum(v[2] for v in _CACHE.values()) + size > _CACHE_BYTES):
+            _CACHE.pop(next(iter(_CACHE)))
+        if size <= _CACHE_BYTES:
+            _CACHE[key] = (stamp, frame, size)
+
+
 def read_table(file: Path, columns: list[str] | None = None) -> pd.DataFrame:
-    """A store table (cached by mtime and size); an empty frame when the file does not exist."""
+    """A store table (cached by mtime and size); an empty frame when the file does not exist. With `columns`, only those
+    are read (the whole table when it is in memory already): a stage-5 pass or a viewer layer parses a fraction of a
+    core's columns."""
     file = Path(file)
     try:
         stat = file.stat()
     except FileNotFoundError:
         return pd.DataFrame(columns=columns or [])
-    key = str(file)
     stamp = (stat.st_mtime_ns, stat.st_size)
+    wanted = None if columns is None else tuple(dict.fromkeys(columns))
     with _GUARD:
-        cached = _CACHE.get(key)
-    if cached is None or cached[0] != stamp:
+        whole = _CACHE.get((str(file), None))
+        part = _CACHE.get((str(file), wanted)) if wanted is not None else None
+    if whole is not None and whole[0] == stamp:
+        frame = whole[1]
+    elif part is not None and part[0] == stamp:
+        frame = part[1]
+    else:
         if file.suffix == ".parquet":
-            frame = pd.read_parquet(file)
+            frame = pd.read_parquet(file, columns=None if wanted is None else list(wanted))
         else:
             header = pd.read_csv(file, nrows=0).columns
-            frame = pd.read_csv(file, dtype=_dtypes(header), keep_default_na=False, na_values={c: [""] for c in header if c not in TEXT_COLUMNS},
-                                low_memory=False)
-        with _GUARD:
-            if len(_CACHE) >= _CACHE_LIMIT:
-                _CACHE.pop(next(iter(_CACHE)))
-            _CACHE[key] = (stamp, frame)
-    else:
-        frame = cached[1]
-    if columns is not None:
-        return frame[[c for c in columns if c in frame.columns]].copy()
+            use = list(header) if wanted is None else [c for c in header if c in wanted]
+            frame = pd.read_csv(file, usecols=use or list(header[:1]), dtype=_dtypes(use) if use else str, keep_default_na=False,
+                                na_values={c: [""] for c in use if c not in TEXT_COLUMNS}, low_memory=False)
+            if not use:  # none of the wanted columns: the rows without columns, as the whole table would give
+                frame = frame.iloc[:, 0:0]
+        _remember((str(file), wanted), stamp, frame)
+    if wanted is not None:
+        return frame[[c for c in wanted if c in frame.columns]].copy()
     return frame.copy()
 
 

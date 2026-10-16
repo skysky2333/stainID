@@ -142,13 +142,13 @@ def suppress_near(frame: pd.DataFrame, probability: np.ndarray, candidates: np.n
         return suppressed
     xy = frame[["x_core", "y_core"]].to_numpy(float)[index]
     tree = cKDTree(xy)
-    kept: list[int] = []
+    kept = np.zeros(len(index), bool)  # a lookup, not a list: thousands of passed AT8 candidates made the scan quadratic
     for position in np.argsort(-probability[index], kind="stable"):
         near = tree.query_ball_point(xy[position], radius_px)
-        if any(k in kept for k in near if k != position):
+        if any(kept[k] for k in near if k != position):
             suppressed[index[position]] = True
         else:
-            kept.append(position)
+            kept[position] = True
     return suppressed
 
 
