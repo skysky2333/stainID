@@ -8,7 +8,9 @@ re-run here). Nothing here applies a model: stage 4 decides from the stored feat
 from __future__ import annotations
 
 import gc
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import cv2
 import numpy as np
@@ -18,6 +20,7 @@ from scipy.spatial import cKDTree
 
 from stainid import candidates as store
 from stainid.imaging.core_images import open_image
+from stainid.imaging.shared import shared_pictures
 from stainid.imaging.tissue import core_glass_darkness
 from stainid.nuclei import nucleus_centroids
 from stainid.pipelines.cohort_v1 import context_crop
@@ -261,8 +264,10 @@ def expected(project, stain: str, core_id: str, tiles: list[dict], threshold: fl
 
 
 def propose_core(project, stain: str, core_id: str, tiles: list[dict], threshold: float, manual_polygons: list,
-                 nuclei_names: frozenset) -> dict:
-    """Run stage 2 on one core image and write its outputs; returns counts and timing."""
+                 nuclei_names: frozenset, tiles_at_once: int = 1) -> dict:
+    """Run stage 2 on one core image and write its outputs; returns counts and timing. `tiles_at_once` tiles are worked on
+    in threads at once (they share the decoded core image; each needs about 0.7 GB more); the outputs keep the tile
+    order and do not depend on it."""
     started = time.time()
     p = params(project)["proposals"]
     settings, shared = p[stain], {k: v for k, v in p.items() if k not in ("NeuN", "6E10", "AT8")}
@@ -274,9 +279,12 @@ def propose_core(project, stain: str, core_id: str, tiles: list[dict], threshold
         glass = core_glass_darkness(image)
         size = (image.height, image.width)
         mask = np.zeros(((size[0] + MASK_SCALE - 1) // MASK_SCALE, (size[1] + MASK_SCALE - 1) // MASK_SCALE), np.uint8)
-        for tile in tiles:
+        cutting = threading.Lock()
+
+        def one(tile: dict) -> tuple[dict, np.ndarray]:
             x, y = int(tile["x_px"]), int(tile["y_px"])
-            rgb, inner = context_crop(image, x, y, int(tile["width_px"]), int(tile["height_px"]), context)
+            with cutting:
+                rgb, inner = context_crop(image, x, y, int(tile["width_px"]), int(tile["height_px"]), context)
             origin = (x - inner[1].start, y - inner[0].start)
             nuclei_path = nuclei_dir / f"{tile['tile_id']}.npz"
             raw = None
@@ -287,18 +295,27 @@ def propose_core(project, stain: str, core_id: str, tiles: list[dict], threshold
                           float(np.sqrt(float(tile["pixel_width_um"]) * float(tile["pixel_height_um"]))),
                           rasterize_core_exclusions(manual_polygons, origin[0], origin[1], rgb.shape[:2]), raw, glass,
                           smooth_px=float(p["smooth_px"]), background_um=float(p["local_background_um"]))
-            result = process_tile(field, stain, settings, shared)
+            with shared_pictures(rgb):  # the stain separation and tissue mask of the field, made once for every step
+                result = process_tile(field, stain, settings, shared)
+                piece = mask_piece(field, stain)
+            field.release()
+            del field, rgb, raw
+            gc.collect()
+            return result, piece
+
+        if tiles_at_once > 1 and len(tiles) > 1:
+            with ThreadPoolExecutor(min(tiles_at_once, len(tiles)), thread_name_prefix="stainid-tile") as pool:
+                done = list(pool.map(one, tiles))
+        else:
+            done = map(one, tiles)
+        for tile, (result, piece) in zip(tiles, done):
             rows += result["rows"]
             summaries.append(result["summary"])
             unproposed += result["unproposed"]
             thread_rows += result["threads"]
-            piece = mask_piece(field, stain)
-            my, mx = y // MASK_SCALE, x // MASK_SCALE
+            my, mx = int(tile["y_px"]) // MASK_SCALE, int(tile["x_px"]) // MASK_SCALE
             h, w = min(piece.shape[0], mask.shape[0] - my), min(piece.shape[1], mask.shape[1] - mx)
             mask[my: my + h, mx: mx + w] = piece[:h, :w]
-            field.release()
-            del field, rgb, raw
-            gc.collect()
     write_core(project, stain, core_id, tiles, rows, summaries, unproposed, thread_rows, mask)
     manifest.write(project, "proposals", stain, core_id, expected(project, stain, core_id, tiles, threshold, manual_polygons, nuclei_names),
                    candidates=len(rows), unproposed=len(unproposed), seconds=round(time.time() - started, 1), tiles=len(tiles))

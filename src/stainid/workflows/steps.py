@@ -450,7 +450,7 @@ STEPS = (
          (Option("stain", "Stains", "stains", list(STAINS), choices=tuple(STAINS)),
           Option("workers", "Cores at once", "number", 0, "0 = as many as the memory and processors allow (about 2 GB each).", advanced=True),
           Option("redo", "Redo all", "bool", False, "Redo every core, not only new and out-of-date ones.", advanced=True), *SHARD),
-         heavy=True, view="/cohort", duration="about 10–20 minutes per core image (several at once)", status=lambda p: _v2_status(p, "proposals"),
+         heavy=True, view="/cohort", duration="about 3–10 minutes per core image (several at once)", status=lambda p: _v2_status(p, "proposals"),
          kinds=("tma", "images", "slides")),
     Step("v2_calls", V2, "Decide (v2)", "Let the model decide on every candidate, from the saved measurements.",
          "Scores every candidate with the stain's model and applies the stain's rules (specks, vessel walls, duplicates, …), saving a "

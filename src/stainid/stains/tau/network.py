@@ -18,16 +18,15 @@ def _remove_small_components(mask: np.ndarray, minimum_pixels: int) -> np.ndarra
     count, labels, stats, _ = cv2.connectedComponentsWithStats(
         mask.astype(np.uint8), 8
     )
-    output = np.zeros(mask.shape, dtype=np.uint8)
-    for label in range(1, count):
-        if stats[label, cv2.CC_STAT_AREA] >= minimum_pixels:
-            output[labels == label] = 1
-    return output.astype(bool)
+    keep = stats[:, cv2.CC_STAT_AREA] >= minimum_pixels
+    keep[0] = False
+    return keep[labels]
 
 
-def _shape_features(mask: np.ndarray, pixel_area_um2: float) -> dict[str, float]:
+def _shape_features(mask: np.ndarray, pixel_area_um2: float, offset: tuple[int, int] = (0, 0)) -> dict[str, float]:
+    """Shape of a mask; `offset` (x, y) places a mask cut out of a bigger picture there (coordinates as in the picture)."""
     contours, _ = cv2.findContours(
-        mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE, offset=offset
     )
     contour = max(contours, key=cv2.contourArea)
     perimeter_px = float(cv2.arcLength(contour, True))
@@ -35,6 +34,8 @@ def _shape_features(mask: np.ndarray, pixel_area_um2: float) -> dict[str, float]
     hull_area_px = float(cv2.contourArea(cv2.convexHull(contour)))
     x, y, width, height = cv2.boundingRect(contour)
     ys, xs = np.nonzero(mask)
+    if offset != (0, 0):
+        xs, ys = xs + offset[0], ys + offset[1]
     covariance = np.cov(np.column_stack((xs, ys)).astype(np.float64), rowvar=False)
     eigenvalues = np.sort(np.linalg.eigvalsh(covariance))[::-1]
     major_axis_um = 4.0 * np.sqrt(max(eigenvalues[0], 0.0) * pixel_area_um2)
@@ -49,6 +50,12 @@ def _shape_features(mask: np.ndarray, pixel_area_um2: float) -> dict[str, float]
         "major_axis_um": float(major_axis_um),
         "minor_axis_um": float(minor_axis_um),
     }
+
+
+def _box(stats_row) -> tuple[tuple[slice, slice], tuple[int, int]]:
+    """A component's box from its connectedComponentsWithStats row, and its offset (x, y)."""
+    x, y, width, height = (int(v) for v in stats_row[:4])
+    return (slice(y, y + height), slice(x, x + width)), (x, y)
 
 
 def _orientation_entropy(dab: np.ndarray, mask: np.ndarray) -> float:
@@ -230,11 +237,12 @@ def segment_at8_network(
     kept_compact_labels = np.zeros(compact_labels.shape, dtype=np.int32)
     next_label = 1
     for label in range(1, compact_count):
-        mask = compact_labels == label
-        area_um2 = int(mask.sum()) * pixel_area_um2
+        area_um2 = int(compact_stats[label, cv2.CC_STAT_AREA]) * pixel_area_um2
         if not 12.0 <= area_um2 <= 1_000.0:
             continue
-        shape = _shape_features(mask, pixel_area_um2)
+        box, offset = _box(compact_stats[label])
+        mask = compact_labels[box] == label  # the component in its own box (the same pixels, in the same order)
+        shape = _shape_features(mask, pixel_area_um2, offset)
         if shape["aspect_ratio"] > 4.0 or shape["minor_axis_um"] < 3.0:
             continue
         overlapping = [
@@ -246,7 +254,7 @@ def segment_at8_network(
         tangle_confidence = max(
             [float(row["confidence"]) for row in overlapping], default=float("nan")
         )
-        kept_compact_labels[mask] = next_label
+        kept_compact_labels[box][mask] = next_label
         objects.append(
             {
                 "label": next_label,
@@ -255,8 +263,8 @@ def segment_at8_network(
                 "suggested_class": "AT8-positive neuronal soma or NFT",
                 "area_um2": area_um2,
                 **shape,
-                "mean_dab_od": float(dab[mask].mean()),
-                "max_dab_od": float(dab[mask].max()),
+                "mean_dab_od": float(dab[box][mask].mean()),
+                "max_dab_od": float(dab[box][mask].max()),
                 "tangle_tracer_overlap": bool(overlapping),
                 "tangle_tracer_max_confidence": tangle_confidence,
                 "review_status": "ai_proposed_development",
@@ -301,12 +309,13 @@ def segment_at8_network(
     cluster_labels = np.zeros(cluster_seed.shape, dtype=np.int32)
     next_cluster = 1
     for label in range(1, cluster_count):
-        mask = raw_cluster_labels == label
-        area_um2 = int(mask.sum()) * pixel_area_um2
+        area_um2 = int(cluster_stats[label, cv2.CC_STAT_AREA]) * pixel_area_um2
         if not 150.0 <= area_um2 <= 20_000.0:
             continue
-        shape = _shape_features(mask, pixel_area_um2)
-        cluster_labels[mask] = next_cluster
+        box, offset = _box(cluster_stats[label])
+        mask = raw_cluster_labels[box] == label
+        shape = _shape_features(mask, pixel_area_um2, offset)
+        cluster_labels[box][mask] = next_cluster
         objects.append(
             {
                 "label": next_cluster,
@@ -315,9 +324,9 @@ def segment_at8_network(
                 "suggested_class": "AT8 thread-rich region",
                 "area_um2": area_um2,
                 **shape,
-                "mean_dab_od": float(dab[mask].mean()),
-                "max_dab_od": float(dab[mask].max()),
-                "mean_local_thread_fraction": float(local_density[mask].mean()),
+                "mean_dab_od": float(dab[box][mask].mean()),
+                "max_dab_od": float(dab[box][mask].max()),
+                "mean_local_thread_fraction": float(local_density[box][mask].mean()),
                 "tangle_tracer_overlap": False,
                 "tangle_tracer_max_confidence": float("nan"),
                 "review_status": "ai_proposed_development",

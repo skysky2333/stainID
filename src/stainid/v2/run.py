@@ -132,19 +132,27 @@ def status(project) -> dict:
 
 # ---------------------------------------------------------------- stage 2
 
-def _propose_worker(root: str, stain: str, core_id: str, tiles: list[dict], threshold: float, polygons: list, nuclei: frozenset) -> dict:
+def default_threads(workers: int) -> int:
+    """Filter threads per stage-2 process: the processors the processes leave idle, shared out (at most 4)."""
+    return max(1, min(4, (os.cpu_count() or 2) // max(1, workers)))
+
+
+def _propose_worker(root: str, stain: str, core_id: str, tiles: list[dict], threshold: float, polygons: list, nuclei: frozenset,
+                    threads: int = 1, tiles_at_once: int = 1) -> dict:
     import cv2
 
+    from stainid.imaging import parallel
     from stainid.project import load_project
     from stainid.v2.proposals import propose_core
 
     cv2.setNumThreads(2)
+    parallel.threads(threads)
     project = load_project(root)
     claim = _claim(project, "proposals", stain, core_id)
     if claim is None:
         return {"skipped": True}
     try:
-        return propose_core(project, stain, core_id, tiles, threshold, polygons, nuclei)
+        return propose_core(project, stain, core_id, tiles, threshold, polygons, nuclei, tiles_at_once)
     finally:
         claim.unlink(missing_ok=True)
 
@@ -155,18 +163,23 @@ def _limited_threads() -> None:
 
 
 def run_proposals(project, stains=STAINS, cores: set[str] | None = None, workers: int | None = None, shard_index: int = 0,
-                  shard_count: int = 1, redo: bool = False) -> None:
+                  shard_count: int = 1, redo: bool = False, threads: int | None = None, tiles_at_once: int = 1) -> None:
+    """Stage 2 on every core image to do, `workers` at once, each with `threads` filter threads (`stainid.imaging.parallel`)
+    and `tiles_at_once` tiles in flight (sharing the decoded core image); the results depend on none of them."""
     jobs = todo(project, "proposals", stains, cores, redo)[shard_index::shard_count]
     calibration, manual, nuclei = proposal_inputs(project)
-    workers = workers or default_workers()
-    print(f"[0/{len(jobs)}] stage 2 (proposals): {len(jobs)} core images to do with {workers} at once", flush=True)
+    workers = workers or default_workers(2.2 + 1.0 * (tiles_at_once - 1))
+    threads = threads or default_threads(workers * tiles_at_once)
+    print(f"[0/{len(jobs)}] stage 2 (proposals): {len(jobs)} core images to do with {workers} at once ({threads} filter threads and "
+          f"{tiles_at_once} tile(s) at once each)", flush=True)
     if not jobs:
         return
     _limited_threads()
     started = time.time()
     with ProcessPoolExecutor(workers, mp_context=get_context("spawn")) as pool:
         futures = {pool.submit(_propose_worker, str(project.root), stain, core, tiles, calibration[(tiles[0]["tma"], stain)],
-                               manual.get(tiles[0]["image_path"], []), nuclei): (core, stain, why) for core, stain, tiles, why in jobs}
+                               manual.get(tiles[0]["image_path"], []), nuclei, threads, tiles_at_once): (core, stain, why)
+                   for core, stain, tiles, why in jobs}
         for number, future in enumerate(as_completed(futures), start=1):
             core, stain, why = futures[future]
             try:

@@ -441,3 +441,29 @@ def test_viewer_reads_the_store_for_every_stain(v2_project, monkeypatch):
     saved = client.get("/api/cores/LIP-1_B-2/AT8/threads").json()
     assert saved["status"] == "done" and saved["saved"] and saved["rows"]
     state.reset()
+
+
+def test_tiles_at_once_and_filter_threads_do_not_change_the_outputs(v2_project):
+    """Stage 2 with several tiles in flight and filter threads writes exactly what one tile at a time writes."""
+    import gzip
+
+    from stainid.imaging import parallel
+
+    project = load_project(v2_project)
+    root = store.root(project)
+    calibration, manual, nuclei = run.proposal_inputs(project)
+    jobs = run.todo(project, "proposals", ["NeuN", "6E10", "AT8"])
+
+    def outputs(tiles_at_once: int, threads: int) -> dict:
+        parallel.threads(threads)
+        try:
+            for core, stain, tiles, _ in jobs:
+                proposals.propose_core(project, stain, core, tiles, calibration[(tiles[0]["tma"], stain)], [], nuclei, tiles_at_once)
+        finally:
+            parallel.threads(1)
+        files = sorted(p for kind in ("proposals", "tiles", "unproposed", "threads", "masks") for p in (root / kind).rglob("*.*"))
+        return {str(p.relative_to(root)): gzip.decompress(p.read_bytes()) if p.suffix == ".gz" else p.read_bytes() for p in files}
+
+    one = outputs(1, 1)
+    assert len(one) == 3 * 4 + 1  # proposals, tiles, unproposed and a mask per stain, AT8 threads
+    assert outputs(3, 3) == one

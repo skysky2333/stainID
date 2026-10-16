@@ -5,6 +5,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from scipy import ndimage
 from skimage.morphology import h_maxima
 from skimage.segmentation import watershed
 
@@ -77,16 +78,15 @@ def _remove_small_components(mask: np.ndarray, minimum_pixels: int) -> np.ndarra
     count, labels, stats, _ = cv2.connectedComponentsWithStats(
         mask.astype(np.uint8), 8
     )
-    clean = np.zeros(mask.shape, dtype=np.uint8)
-    for label in range(1, count):
-        if stats[label, cv2.CC_STAT_AREA] >= minimum_pixels:
-            clean[labels == label] = 1
-    return clean.astype(bool)
+    keep = stats[:, cv2.CC_STAT_AREA] >= minimum_pixels
+    keep[0] = False
+    return keep[labels]
 
 
-def _shape_features(mask: np.ndarray, pixel_area_um2: float) -> dict[str, float]:
+def _shape_features(mask: np.ndarray, pixel_area_um2: float, offset: tuple[int, int] = (0, 0)) -> dict[str, float]:
+    """Shape of a mask; `offset` (x, y) places a mask cut out of a bigger picture there (coordinates as in the picture)."""
     contours, _ = cv2.findContours(
-        mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE, offset=offset
     )
     contour = max(contours, key=cv2.contourArea)
     perimeter_px = float(cv2.arcLength(contour, True))
@@ -94,6 +94,8 @@ def _shape_features(mask: np.ndarray, pixel_area_um2: float) -> dict[str, float]
     hull_area_px = float(cv2.contourArea(cv2.convexHull(contour)))
     x, y, width, height = cv2.boundingRect(contour)
     ys, xs = np.nonzero(mask)
+    if offset != (0, 0):
+        xs, ys = xs + offset[0], ys + offset[1]
     coordinates = np.column_stack((xs, ys)).astype(np.float64)
     covariance = np.cov(coordinates, rowvar=False)
     eigenvalues = np.sort(np.linalg.eigvalsh(covariance))[::-1]
@@ -127,8 +129,12 @@ def _shape_features(mask: np.ndarray, pixel_area_um2: float) -> dict[str, float]
     }
 
 
-def _radial_features(mask: np.ndarray, dab: np.ndarray) -> dict[str, float]:
+def _radial_features(mask: np.ndarray, dab: np.ndarray, offset: tuple[int, int] = (0, 0)) -> dict[str, float]:
+    """Radial DAB profile of a mask (`dab` the same crop; `offset` (x, y) as in _shape_features)."""
     ys, xs = np.nonzero(mask)
+    values = dab[ys, xs]
+    if offset != (0, 0):
+        xs, ys = xs + offset[0], ys + offset[1]
     center_x = float(xs.mean())
     center_y = float(ys.mean())
     radius = np.sqrt((xs - center_x) ** 2 + (ys - center_y) ** 2)
@@ -136,7 +142,6 @@ def _radial_features(mask: np.ndarray, dab: np.ndarray) -> dict[str, float]:
     if scale == 0:
         scale = 1.0
     normalized = radius / scale
-    values = dab[ys, xs]
     inner = values[normalized <= 0.35]
     outer = values[(normalized >= 0.65) & (normalized <= 1.0)]
     return {
@@ -224,15 +229,21 @@ def segment_amyloid_candidates(
     core_labels = np.zeros(tissue.shape, dtype=np.int32)
     objects: list[dict[str, float | int | bool | str]] = []
     image_height, image_width = tissue.shape
+    # each component is measured in its own box (the same pixels, in the same order, as in the whole field)
+    boxes = ndimage.find_objects(extent_labels, max_label=count - 1) if count > 1 else []
     for component in range(1, count):
-        component_mask = extent_labels == component
-        seed_area_px = int((component_mask & seed).sum())
+        box = boxes[component - 1]
+        if box is None:
+            continue
+        offset = (box[1].start, box[0].start)
+        component_mask = extent_labels[box] == component
+        seed_area_px = int((component_mask & seed[box]).sum())
         if seed_area_px < minimum_seed_pixels:
             continue
         area_um2 = int(component_mask.sum()) * pixel_area_um2
         if not 20.0 <= area_um2 <= 50_000.0:
             continue
-        shape = _shape_features(component_mask, pixel_area_um2)
+        shape = _shape_features(component_mask, pixel_area_um2, offset)
         x = int(shape["bbox_x_px"])
         y = int(shape["bbox_y_px"])
         width = int(shape["bbox_width_px"])
@@ -243,13 +254,13 @@ def segment_amyloid_candidates(
             or x + width == image_width
             or y + height == image_height
         )
-        values = dab[component_mask]
+        values = dab[box][component_mask]
         core_threshold = max(
             0.10,
             1.20 * seed_threshold,
             float(np.quantile(values, 0.85)),
         )
-        core = component_mask & (local_dab >= core_threshold)
+        core = component_mask & (local_dab[box] >= core_threshold)
         core = _remove_small_components(
             core, max(1, round(4.0 / pixel_area_um2))
         )
@@ -264,9 +275,10 @@ def segment_amyloid_candidates(
             largest_core = candidate_core_labels == largest
         core_area_um2 = int(largest_core.sum()) * pixel_area_um2
         core_fraction = core_area_um2 / area_um2
-        radial = _radial_features(component_mask, dab)
+        radial = _radial_features(component_mask, dab[box], offset)
         if largest_core.any():
             core_y, core_x = np.nonzero(largest_core)
+            core_x, core_y = core_x + offset[0], core_y + offset[1]
             centroid_distance_um = np.hypot(
                 float(core_x.mean()) - radial["centroid_x_px"],
                 float(core_y.mean()) - radial["centroid_y_px"],
@@ -280,7 +292,7 @@ def segment_amyloid_candidates(
             else float("nan")
         )
         stained_area_um2 = (
-            int((component_mask & (dab >= extent_threshold)).sum())
+            int((component_mask & (dab[box] >= extent_threshold)).sum())
             * pixel_area_um2
         )
         stain_fill_fraction = stained_area_um2 / area_um2
@@ -340,9 +352,9 @@ def segment_amyloid_candidates(
             decision_basis = "small_large_or_merged_amyloid_deposit"
 
         label = len(objects) + 1
-        plaque_labels[component_mask] = label
+        plaque_labels[box][component_mask] = label
         if largest_core.any():
-            core_labels[largest_core] = label
+            core_labels[box][largest_core] = label
         objects.append(
             {
                 "label": label,

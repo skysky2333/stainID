@@ -4,6 +4,8 @@ import cv2
 import numpy as np
 
 from stainid.imaging.color import rgb_to_hed
+from stainid.imaging.parallel import map_all
+from stainid.imaging.shared import remembered
 
 
 def linear_artifact_mask(rgb: np.ndarray) -> np.ndarray:
@@ -21,7 +23,9 @@ def linear_artifact_mask(rgb: np.ndarray) -> np.ndarray:
     internal = tissue & (distance >= max(5, kernel_size // 10))
     darkness = cv2.GaussianBlur(darkness * non_brown * internal, (0, 0), 2.0)
     candidates = np.zeros((height, width), dtype=np.uint8)
-    for angle in range(0, 180, 15):
+    dark = (darkness >= 0.35).astype(np.uint8)
+
+    def opened(angle: int) -> np.ndarray:
         radians = np.deg2rad(angle)
         dx = round(radius * np.cos(radians))
         dy = round(radius * np.sin(radians))
@@ -33,21 +37,20 @@ def linear_artifact_mask(rgb: np.ndarray) -> np.ndarray:
             1,
             thickness,
         )
-        opened = cv2.morphologyEx(darkness, cv2.MORPH_OPEN, kernel)
-        candidates |= (opened >= 0.35).astype(np.uint8)
+        # a flat opening commutes with a threshold: open(darkness) >= 0.35 is the opening of (darkness >= 0.35), which
+        # is the same mask computed on bytes (several times faster than on floats)
+        return cv2.morphologyEx(dark, cv2.MORPH_OPEN, kernel)
+
+    for found in map_all(opened, range(0, 180, 15)):
+        candidates |= found
 
     count, labels, stats, _ = cv2.connectedComponentsWithStats(candidates, 8)
-    artifact = np.zeros((height, width), dtype=np.uint8)
     minimum_area = 0.002 * height * width
     minimum_span = 0.35 * max(height, width)
-    for index in range(1, count):
-        area = stats[index, cv2.CC_STAT_AREA]
-        span = max(
-            stats[index, cv2.CC_STAT_WIDTH],
-            stats[index, cv2.CC_STAT_HEIGHT],
-        )
-        if area >= minimum_area and span >= minimum_span:
-            artifact[labels == index] = 1
+    span = np.maximum(stats[:, cv2.CC_STAT_WIDTH], stats[:, cv2.CC_STAT_HEIGHT])
+    keep = (stats[:, cv2.CC_STAT_AREA] >= minimum_area) & (span >= minimum_span)
+    keep[0] = False
+    artifact = keep.astype(np.uint8)[labels]
     dilation = max(5, round(kernel_size * 0.2))
     if dilation % 2 == 0:
         dilation += 1
@@ -83,8 +86,25 @@ def core_glass_darkness(image) -> float | None:
 def field_tissue_mask(rgb: np.ndarray, glass: float | None = None) -> np.ndarray:
     """Pixels darker than bare glass. The detection steps use the fixed cut-off they were trained with (glass=None);
     tissue-area measurements pass the core's glass darkness (core_glass_darkness, see tissue_area_mask)."""
-    scaled = np.maximum(rgb.astype(np.float32) / 255.0, 1.0 / 255.0)
-    darkness = np.max(-np.log(scaled), axis=2)
+    if glass is None:
+        return remembered("tissue", rgb, lambda: _field_tissue_mask(rgb, None))
+    return _field_tissue_mask(rgb, glass)
+
+
+def _darkness(levels: np.ndarray) -> np.ndarray:
+    return -np.log(np.maximum(levels.astype(np.float32) / 255.0, 1.0 / 255.0))
+
+
+# the darkness of each 8-bit level; it falls with the level, so a pixel's darkest channel is its lowest level
+_DARKNESS = _darkness(np.arange(256, dtype=np.uint8))
+_DARKNESS_FALLS = bool(np.all(np.diff(_DARKNESS) <= 0))
+
+
+def _field_tissue_mask(rgb: np.ndarray, glass: float | None) -> np.ndarray:
+    if rgb.dtype == np.uint8 and _DARKNESS_FALLS:
+        darkness = _DARKNESS[rgb.min(axis=2)]
+    else:
+        darkness = np.max(_darkness(rgb), axis=2)
     threshold = TISSUE_DARKNESS if glass is None else max(TISSUE_DARKNESS, glass + GLASS_MARGIN)
     mask = (darkness >= threshold).astype(np.uint8)
     mask = cv2.morphologyEx(
@@ -125,18 +145,23 @@ def fold_mask(rgb: np.ndarray, pixel_size_um: float) -> np.ndarray:
     mad = float(np.median(np.abs(values - median)))
     candidate = (blurred >= median + max(0.02, 5.0 * 1.4826 * mad)) & tissue
     count, labels, stats, _ = cv2.connectedComponentsWithStats(candidate.astype(np.uint8), 8)
-    mask = np.zeros(tissue.shape, dtype=bool)
+    keep = np.zeros(count, dtype=bool)
     for index in range(1, count):
-        component = labels == index
         area_um2 = stats[index, cv2.CC_STAT_AREA] * pixel_size_um**2
         if area_um2 < 1000.0:
             continue
+        # the component's own box (one pixel wider where the picture allows): the same contour as in the whole picture
+        x, y, w, h = (int(v) for v in stats[index, :4])
+        x0, y0 = max(0, x - 1), max(0, y - 1)
+        component = labels[y0: y + h + 1, x0: x + w + 1] == index
         contours, _ = cv2.findContours(component.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-        (_, _), (w, h), _ = cv2.minAreaRect(max(contours, key=cv2.contourArea))
+        contour = max(contours, key=cv2.contourArea) + np.array([x0, y0], dtype=np.int32)
+        (_, _), (w, h), _ = cv2.minAreaRect(contour)
         length_um = max(w, h) * pixel_size_um
         width_um = area_um2 / max(length_um, 1e-6)
         if length_um >= 150.0 and length_um / max(width_um, 1e-6) >= 4.0:
-            mask |= component
+            keep[index] = True
+    mask = keep[labels]
     radius = max(1, round(5.0 / pixel_size_um))
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * radius + 1, 2 * radius + 1))
     return cv2.dilate(mask.astype(np.uint8), kernel).astype(bool)

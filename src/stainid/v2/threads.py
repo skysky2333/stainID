@@ -56,14 +56,18 @@ def segments(skeleton: np.ndarray, width_um: np.ndarray, owner: np.ndarray, pixe
     junctions = set(zip(*map(np.ndarray.tolist, np.nonzero(junction))))
     out = []
     plain = skeleton & ~junction
-    # pieces: connected runs of plain skeleton with one owner (a run crossing an outline is cut there)
+    # pieces: connected runs of plain skeleton with one owner (a run crossing an outline is cut there); an owner's runs
+    # are labelled in the box of its skeleton pixels (the same pieces, in the same order, as in the whole field)
+    owned = np.where(plain, owner, 0)
+    owner_boxes = ndimage.find_objects(owned)
     for value in np.unique(owner[plain]):
-        labels, _ = ndimage.label(plain & (owner == value), np.ones((3, 3)))
+        area = (slice(0, owner.shape[0]), slice(0, owner.shape[1])) if value == 0 else owner_boxes[int(value) - 1]
+        labels, _ = ndimage.label(plain[area] & (owner[area] == value), np.ones((3, 3)))
         for index, box in enumerate(ndimage.find_objects(labels), start=1):
             if box is None:
                 continue
             ys, xs = np.nonzero(labels[box] == index)
-            ys, xs = ys + box[0].start, xs + box[1].start
+            ys, xs = ys + box[0].start + area[0].start, xs + box[1].start + area[1].start
             for path in walk(set(zip(ys.tolist(), xs.tolist()))):
                 own = width_um[[p[0] for p in path], [p[1] for p in path]]
                 for end, at in ((0, path[0]), (len(path), path[-1])):

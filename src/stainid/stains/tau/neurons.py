@@ -5,6 +5,7 @@ import numpy as np
 from scipy import ndimage
 
 from stainid.imaging.color import rgb_to_hed
+from stainid.imaging.morphology import dilate_disk, runs
 from stainid.imaging.tissue import field_tissue_mask
 from stainid.stains.amyloid.classifier import context_features
 from stainid.stains.neun.audit import crop_with_padding
@@ -54,8 +55,8 @@ def _local_features(
     height, width = soma.shape
     local_dab = dab[y0 : y0 + height, x0 : x0 + width]
     local_tissue = tissue[y0 : y0 + height, x0 : x0 + width]
-    inner = cv2.dilate(soma.astype(np.uint8), _disk(max(1, round(2 / pixel_size_um)))).astype(bool)
-    outer = cv2.dilate(soma.astype(np.uint8), _disk(max(1, round(10 / pixel_size_um)))).astype(bool)
+    inner = dilate_disk(soma, max(1, round(2 / pixel_size_um)))
+    outer = dilate_disk(soma, max(1, round(10 / pixel_size_um)))
     background = outer & ~inner & local_tissue
     background_median = float(np.median(local_dab[background])) if background.any() else float("nan")
     values = local_dab[soma]
@@ -78,27 +79,23 @@ def _local_features(
     }
 
 
-def tau_neuron_candidates(
-    rgb: np.ndarray,
+def nucleus_rings(
     nuclei: np.ndarray,
+    tissue: np.ndarray,
+    smooth: np.ndarray,
     dab_threshold: float,
     pixel_size_um: float,
-    exclusion: np.ndarray | None = None,
     ring_um: float = 5.0,
     minimum_contrast: float = 0.3,
-) -> tuple[list[dict[str, object]], np.ndarray]:
-    tissue = field_tissue_mask(rgb)
-    if exclusion is not None:
-        tissue &= ~exclusion
-    hed = rgb_to_hed(rgb)
-    hematoxylin = np.maximum(hed[..., 0], 0).astype(np.float32)
-    dab = np.maximum(hed[..., 2], 0).astype(np.float32)
-    smooth = cv2.GaussianBlur(dab, (0, 0), 1.0 / pixel_size_um)
-    height, width = dab.shape
+) -> list[dict[str, object]]:
+    """Every nucleus (10–200 µm², at least half on `tissue`) with a measurable ring: its ring contrast (mean smoothed DAB
+    of the `ring_um` ring above the median of the band 2–8 µm beyond it, in slide thresholds), and for a contrast of at
+    least `minimum_contrast` the soma (stained ring and nucleus, closed), its local origin and the nucleus centre."""
+    height, width = smooth.shape
     margin = max(1, round(14 / pixel_size_um))
-    candidates: list[tuple[str, tuple[float, float], np.ndarray, tuple[int, int]]] = []
-
     ring_px = max(1, round(ring_um / pixel_size_um))
+    far_in_px, far_out_px = ring_px + round(2 / pixel_size_um), ring_px + round(8 / pixel_size_um)
+    out = []
     for label, bounds in enumerate(ndimage.find_objects(nuclei), start=1):
         if bounds is None:
             continue
@@ -111,18 +108,51 @@ def tau_neuron_candidates(
         local_tissue = tissue[y0:y1, x0:x1]
         if not 10.0 <= area <= 200.0 or local_tissue[nucleus].mean() < 0.5:
             continue
-        ring = cv2.dilate(nucleus.astype(np.uint8), _disk(ring_px)).astype(bool) & ~nucleus & local_tissue
-        far = cv2.dilate(nucleus.astype(np.uint8), _disk(ring_px + round(8 / pixel_size_um))).astype(bool) & ~cv2.dilate(nucleus.astype(np.uint8), _disk(ring_px + round(2 / pixel_size_um))).astype(bool) & local_tissue
+        nucleus_runs = runs(nucleus)
+        ring = dilate_disk(nucleus, ring_px, nucleus_runs) & ~nucleus & local_tissue
+        far = dilate_disk(nucleus, far_out_px, nucleus_runs) & ~dilate_disk(nucleus, far_in_px, nucleus_runs) & local_tissue
         if ring.sum() < 20 or far.sum() < 20:
             continue
         local = smooth[y0:y1, x0:x1]
         background = float(np.median(local[far]))
-        if (float(local[ring].mean()) - background) / dab_threshold < minimum_contrast:
-            continue
-        stained = (local >= background + 0.5 * dab_threshold) & (ring | nucleus)
-        soma = cv2.morphologyEx((stained | nucleus).astype(np.uint8), cv2.MORPH_CLOSE, _disk(2)).astype(bool)
-        ys, xs = np.nonzero(nucleus)
-        candidates.append(("nucleus_ring", (x0 + xs.mean(), y0 + ys.mean()), soma, (x0, y0)))
+        contrast = (float(local[ring].mean()) - background) / dab_threshold
+        row = {"label": label, "contrast": contrast, "origin": (x0, y0), "soma": None, "center": None}
+        if contrast >= minimum_contrast:
+            stained = (local >= background + 0.5 * dab_threshold) & (ring | nucleus)
+            row["soma"] = cv2.morphologyEx((stained | nucleus).astype(np.uint8), cv2.MORPH_CLOSE, _disk(2)).astype(bool)
+            ys, xs = np.nonzero(nucleus)
+            row["center"] = (x0 + xs.mean(), y0 + ys.mean())
+        out.append(row)
+    return out
+
+
+def tau_neuron_candidates(
+    rgb: np.ndarray,
+    nuclei: np.ndarray,
+    dab_threshold: float,
+    pixel_size_um: float,
+    exclusion: np.ndarray | None = None,
+    ring_um: float = 5.0,
+    minimum_contrast: float = 0.3,
+    rings: list[dict] | None = None,
+) -> tuple[list[dict[str, object]], np.ndarray]:
+    """Tau+ neuron candidates: stained rings around nuclei (`nucleus_rings` with a contrast of at least
+    `minimum_contrast`; `rings` made from the same pictures can be passed in) and dense bodies above the 60 µm
+    background."""
+    tissue = field_tissue_mask(rgb)
+    if exclusion is not None:
+        tissue = tissue & ~exclusion
+    hed = rgb_to_hed(rgb)
+    hematoxylin = np.maximum(hed[..., 0], 0).astype(np.float32)
+    dab = np.maximum(hed[..., 2], 0).astype(np.float32)
+    smooth = cv2.GaussianBlur(dab, (0, 0), 1.0 / pixel_size_um)
+    height, width = dab.shape
+    margin = max(1, round(14 / pixel_size_um))
+    candidates: list[tuple[str, tuple[float, float], np.ndarray, tuple[int, int]]] = []
+
+    if rings is None:
+        rings = nucleus_rings(nuclei, tissue, smooth, dab_threshold, pixel_size_um, ring_um, minimum_contrast)
+    candidates += [("nucleus_ring", ring["center"], ring["soma"], ring["origin"]) for ring in rings if ring["contrast"] >= minimum_contrast]
 
     taken = np.zeros(dab.shape, dtype=bool)
     for _, _, soma, (x0, y0) in candidates:

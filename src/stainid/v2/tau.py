@@ -6,12 +6,11 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
-from scipy import ndimage
 
 from stainid.stains.tau.network import segment_at8_network
-from stainid.stains.tau.neurons import TAU_FEATURES, _local_features, tau_neuron_candidates
+from stainid.stains.tau.neurons import TAU_FEATURES, _local_features, nucleus_rings, tau_neuron_candidates
 from stainid.stains.tau.threads import thread_network
-from stainid.v2.geometry import Occupancy, Region, disk, label_regions, same_object
+from stainid.v2.geometry import Occupancy, Region, label_regions, same_object
 from stainid.v2.tree import local_background_regions, tree_regions
 
 LEGACY_CONTRAST = 0.3
@@ -32,41 +31,20 @@ def _soma_smooth(field) -> np.ndarray:
     return field.memo["tau_smooth"]
 
 
+def rings(field, minimum: float, ring_um: float = 5.0) -> list[dict]:
+    """The nucleus rings of the field (`stainid.stains.tau.neurons.nucleus_rings`, somata down to contrast `minimum`),
+    made once: the legacy candidates (contrast >= LEGACY_CONTRAST) and the fainter ones are the same loop."""
+    key = ("tau_rings", minimum, ring_um)
+    if key not in field.memo:
+        field.memo[key] = nucleus_rings(field.nuclei, field.tissue & ~field.exclusion, _soma_smooth(field), field.threshold,
+                                        field.pixel_size_um, ring_um, min(minimum, LEGACY_CONTRAST))
+    return field.memo[key]
+
+
 def faint_rings(field, minimum: float, below: float = LEGACY_CONTRAST, ring_um: float = 5.0) -> list[tuple[str, tuple, np.ndarray, tuple]]:
     """Nucleus-ring candidates whose ring contrast is in [minimum, below): the legacy loop with a lower bar."""
-    ps = field.pixel_size_um
-    tissue = field.tissue & ~field.exclusion
-    smooth = _soma_smooth(field)
-    height, width = field.shape
-    margin = max(1, round(14 / ps))
-    ring_px = max(1, round(ring_um / ps))
-    near, far_in, far_out = disk(ring_px), disk(ring_px + round(2 / ps)), disk(ring_px + round(8 / ps))
-    out = []
-    for label, bounds in enumerate(ndimage.find_objects(field.nuclei), start=1):
-        if bounds is None:
-            continue
-        y0, y1 = max(0, bounds[0].start - margin), min(height, bounds[0].stop + margin)
-        x0, x1 = max(0, bounds[1].start - margin), min(width, bounds[1].stop + margin)
-        nucleus = field.nuclei[y0:y1, x0:x1] == label
-        area = nucleus.sum() * ps * ps
-        local_tissue = tissue[y0:y1, x0:x1]
-        if not 10.0 <= area <= 200.0 or local_tissue[nucleus].mean() < 0.5:
-            continue
-        n8 = nucleus.astype(np.uint8)
-        ring = cv2.dilate(n8, near).astype(bool) & ~nucleus & local_tissue
-        far = cv2.dilate(n8, far_out).astype(bool) & ~cv2.dilate(n8, far_in).astype(bool) & local_tissue
-        if ring.sum() < 20 or far.sum() < 20:
-            continue
-        local = smooth[y0:y1, x0:x1]
-        background = float(np.median(local[far]))
-        contrast = (float(local[ring].mean()) - background) / field.threshold
-        if not minimum <= contrast < below:
-            continue
-        stained = (local >= background + 0.5 * field.threshold) & (ring | nucleus)
-        soma = cv2.morphologyEx((stained | nucleus).astype(np.uint8), cv2.MORPH_CLOSE, disk(2)).astype(bool)
-        ys, xs = np.nonzero(nucleus)
-        out.append(("ring_faint", (x0 + xs.mean(), y0 + ys.mean()), soma, (x0, y0)))
-    return out
+    return [("ring_faint", ring["center"], ring["soma"], ring["origin"]) for ring in rings(field, minimum, ring_um)
+            if minimum <= ring["contrast"] < below]
 
 
 def tau_row(field, kind: str, center: tuple[float, float], soma: np.ndarray, origin: tuple[int, int]) -> dict:
@@ -80,7 +58,8 @@ def tau_row(field, kind: str, center: tuple[float, float], soma: np.ndarray, ori
 
 def propose(field, settings: dict, shared: dict) -> list[Region]:
     ps = field.pixel_size_um
-    objects, labels = tau_neuron_candidates(field.rgb, field.nuclei, field.threshold, ps, field.exclusion)
+    objects, labels = tau_neuron_candidates(field.rgb, field.nuclei, field.threshold, ps, field.exclusion,
+                                            rings=rings(field, settings["ring_contrast"]))
     regions = label_regions(labels, "legacy", style="tau")
     occupancy = Occupancy(field.shape)
     for row in objects:
