@@ -2,6 +2,7 @@
    its types (subtypes). Keys follow labels/classKeys.ts: a class key, then within a moment a number for the type (by
    its place), or a type's own key for both at once. With the mouse: click the class, then its type (or “No type”). */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
 import type { ClassDef, ClassPick, KeyMap, Vocabulary, Waiting } from './classKeys'
 import { expire, keyOf, pressKey } from './classKeys'
 import { classExample } from '../api'
@@ -62,9 +63,9 @@ const shownTypes = (c: ClassDef, typesAsked: boolean) => (typesAsked ? c.subtype
 
 /** The classes as buttons with their keys; under the class being chosen (`active`) its types. `counts`: how many objects
  *  of each class (by identity) are on the page. */
-export function ClassChooser({ vocabulary, keys, typesAsked, active, waiting, waitMs, counts, big = false, onPick, onPickType }: {
+export function ClassChooser({ vocabulary, keys, typesAsked, active, waiting, waitMs, counts, big = false, swatch, onPick, onPickType }: {
   vocabulary: Vocabulary; keys: KeyMap; typesAsked: boolean; active: ClassPick | null; waiting: Waiting | null; waitMs: number
-  counts?: Record<string, number>; big?: boolean; onPick: (identity: string) => void; onPickType: (subtype: string | null) => void
+  counts?: Record<string, number>; big?: boolean; swatch?: (identity: string) => CSSProperties; onPick: (identity: string) => void; onPickType: (subtype: string | null) => void
 }) {
   const open = waiting?.identity ?? active?.identity
   const described = vocabulary.classes.find((c) => c.id === open)
@@ -79,7 +80,7 @@ export function ClassChooser({ vocabulary, keys, typesAsked, active, waiting, wa
             <div key={c.id} className={`class-row${chosen ? ' open' : ''}`}>
               <button className={`btn class-btn${big ? ' big' : ''}${chosen ? ' chosen' : ''}`} aria-pressed={chosen} title={c.description}
                 onClick={() => onPick(c.id)}>
-                <span className="kbd">{keyOf(keys, c.id) ?? '·'}</span><span className="swatch" style={{ background: classColour(vocabulary, c.id) }} />
+                <span className="kbd">{keyOf(keys, c.id) ?? '·'}</span><span className="swatch" style={swatch ? swatch(c.id) : { background: classColour(vocabulary, c.id) }} />
                 <span className="class-name">{c.name}</span><span className="spacer" />
                 {types.length > 0 && <span className="muted small">{types.length} types</span>}
                 {counts && <span className="muted small">{counts[c.id] ?? ''}</span>}

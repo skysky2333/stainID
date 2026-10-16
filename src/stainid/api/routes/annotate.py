@@ -21,7 +21,7 @@ from stainid.api import label_crops, pyramid, queue_pictures, render, sam_embedd
 from stainid.api.routes.images import OVERLAYS
 from stainid.api.session import annotator, annotator_name, is_admin, require_admin
 from stainid.api.state import get_state
-from stainid.labels import added, frames, outline, overview, pool, readiness, sessions, store
+from stainid.labels import added, frames, outline, overview, pool, readiness, rounds, sessions, store
 from stainid.labels import objects as label_objects
 from stainid.labels import vocabulary as vocab
 from stainid.labels.overview import SPLIT
@@ -66,6 +66,8 @@ def viewer(request: Request) -> str | None:
 
 
 def session_meta(name: str, request: Request) -> dict:
+    if name.startswith("practice-"):  # the tutorial's practice (`routes.rounds`): nothing is saved
+        return _rounds().practice_meta(name)
     if not re.fullmatch(r"[A-Za-z0-9_\-]+", name) or name not in sessions.names(root()):
         raise HTTPException(404, f"no labelling session {name}")
     meta = sessions.meta(root(), name)
@@ -94,8 +96,18 @@ def finished_fields(meta: dict, labels: pd.DataFrame) -> dict[str, set[str]]:
 
 
 def ready_fields(meta: dict) -> set[str]:
-    """The fields people can open: outline sessions need only the picture, reviews their candidates found."""
+    """The fields people can open: outline sessions need only the picture, reviews their candidates found (round sessions
+    in the candidate store, older ones in the pool)."""
+    if rounds.is_round(meta):
+        return _rounds().ready_fields(meta)
     return set(meta["fields"]) if meta["kind"] == outline.KIND else pool.prepared(get_state().project, meta["stain"])
+
+
+def _rounds():
+    """The routes of the annotation rounds (imported late: they build on this module)."""
+    from stainid.api.routes import rounds as round_routes
+
+    return round_routes
 
 
 def field_objects(meta: dict, tile_id: str) -> pd.DataFrame:
@@ -127,7 +139,12 @@ def session_progress(meta: dict, labels: pd.DataFrame) -> dict:
     now = {p for open_by in busy(meta["name"]).values() for p in open_by}
     progress = {"people": len(people), "labels": int(mine.task.isin(("class", "object")).sum()), "labellers": people,
                 "labelling_now": sum(time.time() - p["last_active"] < BUSY_SECONDS or p["person"] in now for p in people)}
-    if meta["kind"] != "queue":
+    if rounds.is_round(meta):
+        progress |= {"round_progress": _rounds().progress(meta)}
+    if rounds.is_round(meta) and meta["kind"] == "queue":
+        frame = rounds.items(get_state().project, meta, get_state().tiles)
+        progress |= {"pictures": queue_pictures.prepare_wanted(get_state(), meta, _rounds().open_items(meta, frame))}
+    elif meta["kind"] != "queue":
         reviewed = finished_fields(meta, labels)
         covered = sum(len(reviewed.get(t, set())) >= meta["per_field"] for t in meta["fields"])
         prepared = len(ready_fields(meta) & set(meta["fields"]))
@@ -207,7 +224,11 @@ class NewSession(BaseModel):
     instructions: str = ""
     open: bool = False
     subtypes: bool = True  # people are asked for the type (subtype) of the objects, where a class has types
-    tmas: list[str] | None = None  # outline sessions: the TMAs fields are drawn from (default: `outline.default_tmas`)
+    tmas: list[str] | None = None  # outline and round sessions: the TMAs fields are drawn from (outline default: `outline.default_tmas`)
+    round: int | None = None  # an annotation round over the v2 candidates (`labels.rounds`): 1 check the AI's calls, 2 fix the field
+    n_objects: int = 500  # round 1: how many candidates (0: every one)
+    level: float | None = None  # rounds: how generous (lowest proposal level shown; None: every candidate)
+    labels_needed: int = 1  # rounds: people who must decide a candidate (or finish a field) before it is done for everyone
 
 
 class Opening(BaseModel):
@@ -492,6 +513,8 @@ def create_session(body: NewSession) -> dict:
         raise HTTPException(400, "name may contain letters, digits, - and _ only")
     if body.name == sessions.REFERENCE:
         raise HTTPException(400, f"{sessions.REFERENCE} is the name of the imported reference labels; choose another name")
+    if body.round:
+        return _rounds().create_round_session(body)
     if body.kind == outline.KIND:
         from stainid.api.routes.outline import create_outline_session
 
@@ -521,6 +544,8 @@ def set_open(name: str, body: Opening, request: Request) -> dict:
     meta = sessions.update(root(), name, open=body.open)
     if meta["kind"] == outline.KIND:
         sam_embeddings.prepare_session(get_state(), meta, force=True)
+    if rounds.is_round(meta) and meta["open"]:
+        _rounds().warm(meta, force=True)
     return meta
 
 
@@ -532,6 +557,8 @@ def add_fields(name: str, body: MoreFields, request: Request) -> dict:
         from stainid.api.routes.outline import add_outline_fields
 
         return add_outline_fields(meta, body.n, body.tile_ids)
+    if rounds.is_round(meta):
+        return _rounds().add_fields(meta, body.n, body.tile_ids)
     if meta["kind"] != "fields":
         prepare_job(meta["stain"], body.n)
         return meta
@@ -567,6 +594,8 @@ def _text(value) -> str | None:
 def session_fields(name: str, request: Request) -> list[dict]:
     """Every field of a session with where it stands (see `sessions.field_states`) and where it is."""
     meta = session_meta(name, request)
+    if rounds.is_round(meta):
+        return [{**_field_facts(meta["fields"]).get(s["tile_id"], {}), **s} for s in _rounds().admin_fields(meta)] if meta["kind"] == "fields" else []
     labels = store.current(root())
     working = outline.started(labels, name) if meta["kind"] == outline.KIND else sessions.labelled_by(labels[labels.session == name], meta["stain"])
     states = sessions.field_states(meta, finished_fields(meta, labels), working, ready_fields(meta), busy(name))
@@ -576,7 +605,7 @@ def session_fields(name: str, request: Request) -> list[dict]:
 
 @router.get("/labels/picker", dependencies=admin)
 def picker(stain: str, tma: str = "", region: str = "", group: str = "", core: str = "", free: bool = False, offset: int = 0,
-           limit: int = 12) -> dict:
+           limit: int = 12, source: str = "") -> dict:
     """The fields people can be asked to label, core by core (for choosing them by hand): each field's square in its
     core image, whether it already has labels or belongs to a session, and, when it cannot be labelled yet, why and
     which step comes first (`blocked`, see `labels.readiness`; a core whose fields all wait for the same thing carries
@@ -595,7 +624,8 @@ def picker(stain: str, tma: str = "", region: str = "", group: str = "", core: s
         tiles = tiles[tiles.core_id.str.contains(core, case=False, regex=False)]
     if free:
         tiles = tiles[~tiles.tile_id.isin(set(labelled) | set(taken))]
-    blocked = dict(zip(tiles.tile_id, readiness.blockers(state.project, tiles))) if not tiles.empty else {}
+    check = readiness.store_blockers if source == rounds.SOURCE else readiness.blockers  # rounds read the v2 candidate store
+    blocked = dict(zip(tiles.tile_id, check(state.project, tiles))) if not tiles.empty else {}
     first_rows = tiles.drop_duplicates("core_id") if not tiles.empty else tiles
     order = [r["core_id"] for r in sorted(first_rows.to_dict("records"), key=_core_order)]
     page = order[max(0, offset): max(0, offset) + max(1, min(limit, 48))]
@@ -686,13 +716,16 @@ def export(session: str = "") -> Response:
 
 class Mark(BaseModel):
     task: str
-    tile_id: str
+    tile_id: str = ""  # a label naming its `candidate` takes the candidate's field
     x: float | None = None
     y: float | None = None
     value: str = ""
     subtype: str = ""  # class labels: the subtype's id, under the identity `value`
     points: list[list[float]] | None = None
     deleted: bool = False
+    candidate: str = ""  # annotation rounds: the v2 candidate the label is about (its field and position come from the store)
+    keep: bool = False  # annotation rounds: the AI's call on `candidate` is right (recorded as confirmed)
+    mask: int | None = None  # annotation rounds: which of the candidate's Segment Anything masks is right (small to large)
 
 
 class Marks(BaseModel):
@@ -709,7 +742,8 @@ def list_open(request: Request, person: str | None = Depends(viewer)) -> list[di
             continue
         reviewed = finished_fields(meta, labels)
         done = sum(person in reviewed.get(t, set()) for t in meta["fields"]) if person else 0
-        out.append({**{k: meta.get(k) for k in ("name", "title", "stain", "kind", "open", "instructions")}, "fields": len(meta["fields"]), "done_by_me": done,
+        extra = {"round": rounds.round_of(meta), "progress": _rounds().progress(meta)} if rounds.is_round(meta) else {"round": None}
+        out.append({**{k: meta.get(k) for k in ("name", "title", "stain", "kind", "open", "instructions")}, **extra, "fields": len(meta["fields"]), "done_by_me": done,
                     "my_labels": int(((labels.session == name) & (labels.source == person) & labels.task.isin(("class", "object"))).sum()),
                     "link": annotate_path(name)})
     return out
@@ -724,6 +758,11 @@ def session_detail(name: str, request: Request, person: str | None = Depends(vie
     open_now = busy(name)
     fields = [{"tile_id": t, "done_by_me": bool(person) and person in reviewed.get(t, set()), "annotators_done": len(reviewed.get(t, set())),
                "open_by_others": len(open_now.get(t, set()) - {person}), "prepared": t in prepared} for t in meta["fields"]]
+    if rounds.is_round(meta):
+        fields = _rounds().session_fields(meta, person)
+        meta = {**meta, **_rounds().detail(meta, person)}
+        if meta["open"]:
+            _rounds().warm(meta)
     words = vocabulary(meta["stain"])
     outlines = {"outline_classes": outline.classes(words)} if meta["kind"] == outline.KIND else {}
     if meta["kind"] == outline.KIND:
@@ -744,6 +783,8 @@ def next_item(name: str, request: Request, person: str = Depends(annotator), cou
     page shows the first and loads the others' pictures meanwhile), held for this person for a while so others get
     other objects; with how many the rule leaves them and how many of the queue's pictures are made."""
     meta = session_meta(name, request)
+    if rounds.is_round(meta):
+        return _rounds().next_objects(meta, person, count) if meta["kind"] == "queue" else _rounds().next_field(meta, person)
     labels = store.current(root())
     state = get_state()
     if meta["kind"] != "queue":
@@ -763,6 +804,8 @@ def next_item(name: str, request: Request, person: str = Depends(annotator), cou
 @router.get("/annotate/{name}/fields/{tile_id}")
 def open_field(name: str, tile_id: str, request: Request, person: str = Depends(annotator)) -> dict:
     meta = session_meta(name, request)
+    if rounds.is_round(meta):
+        return _rounds().open_field(meta, tile_id, person)
     tile = field_tile(meta, tile_id)
     objects = field_objects(meta, tile_id)
     busy(name, tile_id, person)
@@ -824,15 +867,19 @@ def class_of(words: vocab.Vocabulary, value: str, subtype: str = "") -> tuple[st
 def field_added(name: str, tile_id: str, request: Request, person: str = Depends(annotator)) -> list[dict]:
     """Where this person's added objects stand (`added_states`), for the page to follow their measuring."""
     meta = session_meta(name, request)
-    field_tile(meta, tile_id)
+    tile = field_tile(meta, tile_id)
     labels = store.current(root())
     mine = labels[(labels.source == person) & (labels.tile_id == tile_id) & (labels.stain == meta["stain"])]
+    if rounds.is_round(meta):
+        return _rounds().added_states(meta, tile, mine)
     return added_states(get_state().project, meta["stain"], tile_id, mine, field_objects(meta, tile_id))
 
 
 @router.post("/annotate/{name}/labels")
 def save(name: str, body: Marks, request: Request, person: str = Depends(annotator)) -> list[dict]:
     meta = writable(session_meta(name, request))
+    if rounds.is_round(meta):
+        return _rounds().save(meta, body.records, person)
     for mark in body.records:
         if meta["kind"] != "queue":
             field_tile(meta, mark.tile_id)
@@ -852,6 +899,8 @@ def save(name: str, body: Marks, request: Request, person: str = Depends(annotat
 def finish(name: str, tile_id: str, request: Request, person: str = Depends(annotator)) -> list[dict]:
     """Done with this field: every AI call (and AI outline of a positive object) the person left untouched counts as confirmed."""
     meta = writable(session_meta(name, request))
+    if rounds.is_round(meta):
+        return _rounds().finish(meta, tile_id, person)
     field_tile(meta, tile_id)
     objects = field_objects(meta, tile_id)
     labels = store.current(root())

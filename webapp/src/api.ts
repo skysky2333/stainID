@@ -163,10 +163,14 @@ export interface SessionInfo {
   pictures?: QueuePictures  // quick-check queues
   subtypes?: boolean  // people are asked for the type of objects (sessions made before this choice: yes)
   read_only?: boolean; imported?: { dataset: string; rater: string }  // labels imported from a dataset package
+  round?: 1 | 2; round_progress?: RoundProgress; labels_needed?: number; level?: number | null; objects?: number  // annotation rounds
 }
 export interface Labeller { person: string; fields_done: number; labels: number; changed: number; confirmed: number; outlines: number; tags: number; last_active: number }
 export interface LabelsOverview { stains: StainOverview[]; sessions: SessionInfo[]; reference: ReferenceLabels | null }
-export interface OpenSession { name: string; title: string; stain: string; kind: 'fields' | 'queue' | 'outline'; open: boolean; instructions: string; fields: number; done_by_me: number; my_labels: number }
+export interface OpenSession {
+  name: string; title: string; stain: string; kind: 'fields' | 'queue' | 'outline'; open: boolean; instructions: string; fields: number; done_by_me: number; my_labels: number
+  round?: 1 | 2 | null; progress?: RoundProgress  // annotation rounds
+}
 export interface SessionField { tile_id: string; done_by_me: boolean; annotators_done: number; open_by_others: number; prepared: boolean }
 export interface SessionDetail {
   meta: SessionInfo & { fields: string[]; tags: string[]; vocabulary: Vocabulary; keys: KeyMap; subtypes: boolean }
@@ -387,3 +391,38 @@ export interface ImportedLabels {
   import?: { annotations: number; raters: string[]; consensus: boolean; sessions: string[]; notes: string[]; by_rater: Record<string, number> } | null
   placed?: Record<string, number>; scores?: Scores | null
 }
+
+/* ---------- annotation rounds over the v2 candidates (labels/checkcalls.tsx, labels/fixfield.tsx) ---------- */
+
+/** How far a round session is: candidates (round 1) or fields (round 2) done, by anyone, and by whom. */
+export interface RoundProgress { total: number; decided: number; people: { person: string; decided: number }[]; open_now?: number }
+/** What a round session's pages get besides the session's settings. */
+export interface RoundDetail { round: 1 | 2; labels_needed: number; level: number | null; remove_class: string; segment_anything: boolean; progress: RoundProgress }
+/** One candidate to check in round 1: the AI's call, its masks (crop pixels, small to large) and the one shown first. */
+export interface RoundItem {
+  key: string; candidate_id: string; tile_id: string; x: number; y: number; radius_px: number
+  ai_value: string; ai_subtype: string; ai_probability: number | null; decision: string; reason: string; tier: number | null
+  masks: (number[][] | null)[]; mask: number; crop_px: number; labels_so_far: number
+}
+export interface RoundNext { objects: RoundItem[]; remaining: number; pictures: QueuePictures; progress: RoundProgress }
+export interface RoundLive { gone?: string[]; checked?: Record<string, RoundCheck>; open_by?: string[]; progress: RoundProgress; time: number }
+/** Who decided a candidate already, and the class most of them gave. */
+export interface RoundCheck { by: string[]; identity: string; subtype: string; time: number | null }
+/** One candidate on a round-2 field: field-picture pixels, `own` false for a neighbouring field's candidate in the margin. */
+export interface RoundObject {
+  candidate_id: string; x: number; y: number; own: boolean; radius_px: number; ai_value: string; ai_subtype: string
+  ai_probability: number | null; decision: string; reason: string; masks: (number[][] | null)[]; mask: number
+}
+export interface RoundField {
+  tile_id: string; box: { x: number; y: number; width: number; height: number }; objects: RoundObject[]; checked: Record<string, RoundCheck>
+  layers: string[]; mine: (Label & { candidate?: string | null })[]; added: AddedState[]; segment_anything: boolean; segment_ready: boolean
+  open_by: string[]; pixel_size_um: number
+}
+export interface RoundSessionField extends SessionField { open_by?: string[]; done?: boolean; done_by?: string[] }
+/** What a new round session can draw from, per TMA. */
+export interface RoundScope {
+  stain: string; tmas: { tma: string; cores: number; cores_ready: number; fields: number; fields_ready: number }[]
+  cores: number; cores_ready: number; fields_ready: number; levels: Record<string, number | null>; default_objects: number; from_pool: boolean
+}
+/** Segment Anything's outlines of a clicked object, smallest first, and the one it would choose. */
+export interface RoundSamOptions { options: { points: number[][]; area_px: number; score: number }[]; chosen: number }

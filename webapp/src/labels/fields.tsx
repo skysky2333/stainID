@@ -45,12 +45,12 @@ const PAGE = 12
 
 /** Cores of one stain with their fields drawn on the picture; click a field to choose it. Fields (or whole cores) that
  *  cannot be labelled yet are greyed out with the reason and a link to the step that comes first; all others stay choosable. */
-export function FieldPicker({ stain, chosen, onChange }: { stain: string; chosen: string[]; onChange: (ids: string[]) => void }) {
+export function FieldPicker({ stain, chosen, onChange, source = '' }: { stain: string; chosen: string[]; onChange: (ids: string[]) => void; source?: string }) {
   const { tmaName } = useProject()
   const [filters, setFilters] = useState({ tma: '', region: '', group: '', core: '', free: true })
   const [page, setPage] = useState(0)
   const query = new URLSearchParams({ stain, tma: filters.tma, region: filters.region, group: filters.group, core: filters.core,
-    free: String(filters.free), offset: String(page * PAGE), limit: String(PAGE) })
+    free: String(filters.free), offset: String(page * PAGE), limit: String(PAGE), source })
   const picker = useFetch<PickerPage>(`/api/labels/picker?${query}`)
   const set = (change: Partial<typeof filters>) => { setFilters({ ...filters, ...change }); setPage(0) }
   const selected = new Set(chosen)

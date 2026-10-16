@@ -7,6 +7,8 @@ import { useFetch } from '../hooks'
 import { AI_VIEW_TEXT, ConfirmDialog, CopyButton, DetectionLine, KIND_TEXT, TOOL_TEXT, objectsOf, percent } from '../labelling'
 import { SessionLabelsView } from '../labels/examine'
 import { FIELD_TEXT, FieldChoice, SessionFields } from '../labels/fields'
+import { NewRoundSession } from '../labels/newround'
+import { ROUND_TITLE } from '../labels/rounds'
 import { Advanced } from '../setup/parts'
 
 interface Defaults {
@@ -18,6 +20,7 @@ export default function Labels() {
   const overview = useFetch<LabelsOverview>('/api/labels/overview', 10000)
   const share = useFetch<Share>('/api/labels/share')
   const [creating, setCreating] = useState(false)
+  const [older, setOlder] = useState(false)  // one of the kinds of session made before the annotation rounds
   const [notice, setNotice] = useState<string | null>(null)
   const linkFor = (name = '') => {
     const base = share.data?.network && share.data.links[0] ? share.data.links[0] : `${location.origin}${appPath('/annotate')}`
@@ -33,8 +36,9 @@ export default function Labels() {
       <HelpBox id="labels">
         <p style={{ marginTop: 0 }}>{FIELD_TEXT}</p>
         <ol className="plain-steps">
-          <li><b>Start a session</b>: pick a stain and the fields: stainID can choose them (spread over TMAs and groups, nobody has labelled them yet),
-            or you click them on the cores yourself.</li>
+          <li><b>Start a session</b>: pick a stain and a round. <b>Round 1, Check the AI’s calls</b>: one object at a time, the AI’s call and outline shown,
+            people keep or correct it with one key. <b>Round 2, Fix the field</b>: whole fields with every object the AI considered; people add what it
+            missed and fix outlines. Both share one set of answers, so nothing is checked twice.</li>
           <li><b>Send the link</b>. People type their name and label in their browser — no account needed. Everything is saved as they go.</li>
           <li><b>Watch progress</b> here, field by field, then <Link to="/models">train a new model</Link> from the sessions you choose and compare it with the one in use.</li>
         </ol>
@@ -45,10 +49,14 @@ export default function Labels() {
           <Sessions sessions={data.sessions} reference={data.reference} linkFor={linkFor} onChanged={overview.reload} onNew={() => setCreating(true)} />
           <ShareCard share={share.data} error={share.error} link={linkFor()} anyOpen={data.sessions.some((s) => s.open)} />
           <LabelledSoFar stains={data.stains} onChanged={overview.reload} />
-          {creating && <NewSession stains={data.stains.map((s) => s.stain)} onClose={() => setCreating(false)}
-            onCreated={(s) => { overview.reload(); setNotice(s.open
-              ? `“${s.title}” is open. Fields are prepared in the background (10–30 s each) and appear to people as they become ready. Copy its link below and send it.`
-              : `“${s.title}” is ready but closed. Open it when you want people to start.`) }} />}
+          {creating && (older
+            ? <NewSession stains={data.stains.map((s) => s.stain)} onClose={() => { setCreating(false); setOlder(false) }}
+              onCreated={(s) => { overview.reload(); setNotice(s.open
+                ? `“${s.title}” is open. Fields are prepared in the background (10–30 s each) and appear to people as they become ready. Copy its link below and send it.`
+                : `“${s.title}” is ready but closed. Open it when you want people to start.`) }} />
+            : <NewRoundSession stains={data.stains.map((s) => s.stain)} onClose={() => setCreating(false)} onOlder={() => setOlder(true)}
+              onCreated={(s) => { overview.reload(); setNotice(s.open ? `“${s.title}” is open: copy its link below and send it. Pictures and outlines are made ahead in the background.`
+                : `“${s.title}” is ready but closed. Open it when you want people to start.`) }} />)}
         </>}
       </Loaded>
     </>
@@ -95,7 +103,8 @@ function ReferenceRow({ r }: { r: ReferenceLabels }) {
 }
 
 function sessionState(s: SessionInfo): { text: string; className: string } {
-  if (s.kind !== 'queue' && s.fields && (s.fields_covered ?? 0) >= s.fields) return { text: 'Done', className: 'status-done' }
+  if (s.round_progress && s.round_progress.total > 0 && s.round_progress.decided >= s.round_progress.total) return { text: 'Done', className: 'status-done' }
+  if (!s.round && s.kind !== 'queue' && s.fields && (s.fields_covered ?? 0) >= s.fields) return { text: 'Done', className: 'status-done' }
   return s.open ? { text: 'Open', className: 'status-running' } : { text: 'Closed', className: '' }
 }
 
@@ -117,7 +126,8 @@ function SessionRow({ s, link, onChanged }: { s: SessionInfo; link: string; onCh
           <b>{s.title}</b> {s.read_only ? <span className="badge" title="Imported from a dataset package; the labels stay as they were">read only</span> : <span className={`badge ${state.className}`}>{state.text}</span>}
           {s.labelling_now > 0 && <span className="badge status-running"><span className="pulse" />{s.labelling_now} labelling now</span>}
         </div>
-        <div className="muted small">{s.stain} · {KIND_TEXT[s.kind]}{s.kind === 'fields' && s.per_field > 1 ? ` · ${s.per_field} people per field` : ''}</div>
+        <div className="muted small">{s.stain} · {s.round ? `Round ${s.round} · ${ROUND_TITLE[s.round]}` : KIND_TEXT[s.kind]}
+          {(s.labels_needed ?? s.per_field) > 1 ? ` · ${s.labels_needed ?? s.per_field} people per ${s.kind === 'queue' ? 'object' : 'field'}` : ''}</div>
         <SessionProgress s={s} />
         <People people={s.labellers} fields={s.kind !== 'queue' ? s.fields ?? 0 : null} />
       </div>
@@ -134,6 +144,16 @@ function SessionRow({ s, link, onChanged }: { s: SessionInfo; link: string; onCh
 }
 
 function SessionProgress({ s }: { s: SessionInfo }) {
+  if (s.round_progress) {
+    const p = s.round_progress
+    return (
+      <div className="session-progress">
+        <Progress done={p.decided} total={p.total} />
+        <span className="small secondary">{p.decided.toLocaleString()} of {p.total.toLocaleString()} {s.round === 1 ? 'objects checked' : 'fields done'} (by anyone)
+          {s.pictures && s.pictures.ready < s.pictures.total && <span className="muted"> · pictures ready: {s.pictures.ready.toLocaleString()} of {s.pictures.total.toLocaleString()}</span>}</span>
+      </div>
+    )
+  }
   if (s.kind === 'queue') {
     const pictures = s.pictures
     return <div className="small secondary session-progress">{s.labels.toLocaleString()} objects labelled so far · open-ended
@@ -182,7 +202,7 @@ function SessionMore({ s, onChanged, onError }: { s: SessionInfo; onChanged: () 
         <button className="btn small" onClick={() => setExamining(true)} disabled={!s.labels}
           title={s.labels ? 'Every labelled object, field by field' : 'Nobody has labelled anything in this session yet'}>Look at the labels</button>
         <a className="btn small" href={apiUrl(`/api/labels/export.csv?session=${s.name}`)}>Download this session’s labels</a>
-        {s.kind === 'queue' && <button className="btn small" disabled={adding} onClick={prepareMore} title="Prepares 10 more fields the queue can draw objects from">
+        {s.kind === 'queue' && !s.round && <button className="btn small" disabled={adding} onClick={prepareMore} title="Prepares 10 more fields the queue can draw objects from">
           {adding ? 'Preparing…' : 'Prepare 10 more fields'}</button>}
         <span className="spacer" />
         <button className="btn small danger-outline" onClick={() => setConfirm('delete')}>Delete session</button>
@@ -195,6 +215,7 @@ function SessionMore({ s, onChanged, onError }: { s: SessionInfo; onChanged: () 
           <tr><td className="secondary">Session ID</td><td><code>{s.name}</code></td></tr>
           <tr><td className="secondary">Created</td><td>{timeAgo(s.created)}</td></tr>
           <tr><td className="secondary">What people see of the AI</td><td>{AI_VIEW_TEXT[s.ai_view]}</td></tr>
+          {s.round && <tr><td className="secondary">How generous</td><td>{s.level == null ? 'every candidate' : `proposed at ${s.level} × the stain threshold or stronger`}</td></tr>}
           {s.kind !== 'queue' ? <>
             <tr><td className="secondary">Tasks</td><td>{s.tools.map((t) => TOOL_TEXT[t] ?? t).join(' · ')}</td></tr>
             <tr><td className="secondary">People per field</td><td>{s.per_field}</td></tr>
@@ -384,7 +405,7 @@ function NewSession({ stains, onClose, onCreated }: { stains: string[]; onClose:
   )
   const nothingChosen = form.kind !== 'queue' && mode === 'pick' && !chosen.length
   return (
-    <Modal title="New labelling session" onClose={onClose} wide>
+    <Modal title="New session of an older kind" onClose={onClose} wide>
       <div className="new-session">
         <fieldset className="field"><legend>Stain</legend>
           <div className="segmented">{stains.map((s) => (
@@ -394,8 +415,8 @@ function NewSession({ stains, onClose, onCreated }: { stains: string[]; onClose:
         </fieldset>
         <fieldset className="field"><legend>What should people do?</legend>
           <div className="choice-grid">
-            {choice('fields', 'Check whole fields (recommended)', 'People see a whole field with the AI’s calls filled in, correct the wrong ones and add what it missed. Gives complete labels for every object.')}
-            {choice('queue', 'Quick check, one object at a time', 'People see one object and pick what it is with a key press. Fast; aims at the objects the AI is unsure about.')}
+            {choice('fields', 'Whole-field review (current label pool)', 'People see a whole field with the AI’s calls filled in, correct the wrong ones and add what it missed. Gives complete labels for every object.')}
+            {choice('queue', 'Quick check, one object at a time (current label pool)', 'People see one object and pick what it is with a key press. Fast; aims at the objects the AI is unsure about.')}
             {choice('outline', 'Outline every object (segmentation check)', 'People outline every object in whole fields without seeing the AI, to measure how well detection finds and outlines objects. Scored on Models.')}
           </div>
         </fieldset>

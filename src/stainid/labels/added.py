@@ -23,7 +23,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from stainid.labels import frames, pool, store
+from stainid.labels import candidate_store, frames, pool, store
 from stainid.labels.sessions import REFERENCE, session_of
 from stainid.project import Project
 from stainid.sampling.tiles import known_tile_rows, known_tiles
@@ -78,13 +78,20 @@ def additions(project: Project, stain: str, labels: pd.DataFrame | None = None) 
     if labels is None:
         labels = frames.in_field_frame(store.current(project.output("reviews")), known_tiles(project), project.context_px)
     mine = labels[(labels.stain == stain) & (labels.task == "class") & labels.x.notna() & (session_of(labels) != REFERENCE)]
-    mine = mine[mine.tile_id.isin(pool.prepared(project, stain))]
+    if "candidate" in mine:  # a decision on a candidate of the v2 store is no addition
+        mine = mine[mine.candidate.fillna("").astype(str) == ""]
+    tiles = known_tiles(project)
+    stored = candidate_store.cores(project, stain)
+    on_store = set(tiles.tile_id[tiles.core_id.astype(str).isin(stored)]) if stored and not tiles.empty else set()
+    mine = mine[mine.tile_id.isin(pool.prepared(project, stain) | on_store)]
     if mine.empty:
         return pd.DataFrame(columns=["tile_id", "x", "y"])
     mine = mine.assign(x=mine.x.astype(float), y=mine.y.astype(float), rx=mine.x.astype(float).round(), ry=mine.y.astype(float).round())
     mine = mine.drop_duplicates(["tile_id", "rx", "ry"])
     candidates = {t: g for t, g in pool.all_objects(project, stain).groupby("tile_id")}
-    lonely = [pool.nearest(candidates.get(r.tile_id), r.x, r.y) is None for r in mine.itertuples()]
+    lonely = pd.Series([pool.nearest(candidates.get(r.tile_id), r.x, r.y) is None for r in mine.itertuples()], index=mine.index, dtype=bool)
+    if on_store and lonely.any():  # nor is a label on a candidate of the store
+        lonely &= candidate_store.match(project, stain, mine, tiles).isna()
     return mine[lonely][["tile_id", "x", "y"]].reset_index(drop=True)
 
 

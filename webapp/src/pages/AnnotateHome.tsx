@@ -3,11 +3,14 @@ import type { OpenSession } from '../api'
 import { Empty, Loaded, PageHead, Progress } from '../components'
 import { useFetch } from '../hooks'
 import { KIND_TEXT } from '../labelling'
+import { ROUND_TEXT, ROUND_TITLE } from '../labels/rounds'
 import { Register, useSession } from '../session'
+import { useFirstTutorial } from '../labels/tutorial'
 
 export default function AnnotateHome() {
   const { session } = useSession()
   const list = useFetch<OpenSession[]>(session.annotator ? '/api/annotate' : null, 15000)
+  useFirstTutorial()
   if (!session.annotator) return <Welcome />
   return (
     <div className="annotate-home">
@@ -28,13 +31,19 @@ export default function AnnotateHome() {
 
 function SessionCard({ s }: { s: OpenSession }) {
   const started = s.done_by_me > 0 || s.my_labels > 0
-  const finished = s.kind !== 'queue' && s.fields > 0 && s.done_by_me >= s.fields
+  const progress = s.round ? s.progress : undefined
+  const finished = progress ? progress.total > 0 && progress.decided >= progress.total : s.kind !== 'queue' && s.fields > 0 && s.done_by_me >= s.fields
   return (
     <div className="card annotate-session">
       <h2 style={{ margin: 0 }}>{s.title}</h2>
-      <p className="muted small" style={{ margin: '4px 0 10px' }}>{s.stain} · {KIND_TEXT[s.kind]}</p>
+      <p className="muted small" style={{ margin: '4px 0 10px' }}>{s.stain} · {s.round ? `Round ${s.round} · ${ROUND_TITLE[s.round]}` : KIND_TEXT[s.kind]}</p>
       {s.instructions && <p className="small secondary">{s.instructions}</p>}
-      {s.kind !== 'queue' ? <>
+      {progress ? <>
+        <Progress done={progress.decided} total={progress.total} />
+        <p className="small secondary">{finished ? 'Everything here has been checked — thank you!'
+          : `${progress.decided.toLocaleString()} of ${progress.total.toLocaleString()} ${s.round === 1 ? 'objects' : 'fields'} done by everyone${s.my_labels ? ` · ${s.my_labels.toLocaleString()} answers by you` : ''}`}</p>
+        <p className="small muted" style={{ marginTop: 0 }}>{s.round === 1 ? ROUND_TEXT[1] : ROUND_TEXT[2]}</p>
+      </> : s.kind !== 'queue' ? <>
         <Progress done={s.done_by_me} total={s.fields} />
         <p className="small secondary">{finished ? 'You have finished every field — thank you!' : `${s.done_by_me} of ${s.fields} fields finished by you`}</p>
       </> : <p className="small secondary">{s.my_labels ? `${s.my_labels.toLocaleString()} objects labelled by you` : 'Pick what each object is with one key press.'}</p>}

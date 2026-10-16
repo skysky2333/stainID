@@ -11,7 +11,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from stainid.labels import added, frames, pool, store
+from stainid import cache
+from stainid.labels import added, candidate_store, frames, pool, store
 from stainid.labels import vocabulary as vocab
 from stainid.labels.tasks import positive
 from stainid.project import Project
@@ -21,11 +22,12 @@ SPLIT = "people disagree"  # an object people labelled differently, as many for 
 
 
 def match(consensus: pd.DataFrame, objects: pd.DataFrame, stain: str, prepared: set[str] | None = None,
-          extra: pd.DataFrame | None = None) -> pd.DataFrame:
+          extra: pd.DataFrame | None = None, stored: pd.Series | None = None) -> pd.DataFrame:
     """Each consensus label with the AI call of the pool candidate at its position, and whether the detection step
     proposed the object at all: True (a candidate is there), False (no candidate, on a field in `prepared`: the AI never
     proposed it) or None (no candidate on a field that is not prepared, so it cannot tell). `extra`: measured added
-    objects (`labels.added`); one that turned out to be a candidate counts as that candidate."""
+    objects (`labels.added`); one that turned out to be a candidate counts as that candidate. `stored`: the AI's call of
+    the v2 store candidate at each row's position (`candidate_store.calls_at`, None where there is none)."""
     by_tile = {t: g for t, g in objects.groupby("tile_id")}
     extra_by_tile = {t: g for t, g in extra.groupby("tile_id")} if extra is not None and len(extra) else {}
     prepared = prepared or set()
@@ -36,6 +38,9 @@ def match(consensus: pd.DataFrame, objects: pd.DataFrame, stain: str, prepared: 
         hit = added.resolve(extra_by_tile.get(row.tile_id), row.x, row.y) if i is None else None
         if i is not None:
             calls.append(candidates.iloc[i].ai_value)
+            proposed.append(True)
+        elif stored is not None and stored.get(row.Index) is not None:
+            calls.append(stored[row.Index])
             proposed.append(True)
         elif hit is not None and pd.notna(hit.candidate_x):
             calls.append(hit.ai_value)
@@ -89,7 +94,11 @@ def stain_overview(project: Project, stain: str, labels: pd.DataFrame, tiles: pd
     consensus = store.consensus(labels, stain, vocabulary)
     objects = pool.all_objects(project, stain)
     prepared = pool.prepared(project, stain)
-    matched = match(consensus, objects, stain, prepared, added.all_added(project, stain)) if len(consensus) \
+    on_store = candidate_store.cores(project, stain)
+    if on_store and not tiles.empty:  # fields whose core has v2 candidates are prepared too
+        prepared = prepared | set(tiles.tile_id[(tiles.stain == stain) & tiles.core_id.astype(str).isin(on_store)])
+    stored = candidate_store.calls_at(project, stain, consensus, tiles) if on_store and len(consensus) else None
+    matched = match(consensus, objects, stain, prepared, added.all_added(project, stain), stored) if len(consensus) \
         else consensus.assign(ai_value=[], ai_positive=[], proposed=[])
     judged = matched[matched.ai_positive.notna() & matched.positive.notna()]
     human, ai = judged.positive.astype(bool).to_numpy(), judged.ai_positive.astype(bool).to_numpy()
@@ -123,7 +132,8 @@ def stain_overview(project: Project, stain: str, labels: pd.DataFrame, tiles: pd
 def cached_stain_overview(project: Project, stain: str, root: Path, tiles: pd.DataFrame) -> dict:
     """`stain_overview`, worked out again only when a label is saved or a pool field is (re)built."""
     key = (str(project.root), stain)
-    stamp = (store.signature(root), pool.signature(project, stain), added.signature(project, stain), len(tiles), vocab.of(project, stain))
+    stamp = (store.signature(root), pool.signature(project, stain), added.signature(project, stain), len(tiles), vocab.of(project, stain),
+             cache.signature(candidate_store.folder(project, stain)))
     if key not in _CACHE or _CACHE[key][0] != stamp:
         _CACHE[key] = (stamp, stain_overview(project, stain, frames.in_field_frame(store.current(root), tiles, project.context_px), tiles))
     return _CACHE[key][1]

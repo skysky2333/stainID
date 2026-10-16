@@ -17,10 +17,10 @@ const REFILL = 4  // ask for more when fewer than this many are left on the page
 const GUARD_MS = 150  // a key pressed sooner after a new object appears does not answer it (a double press)
 const typing = (e: KeyboardEvent) => ['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement).tagName)
 const pictureUrl = (session: string, o: QueueItem) => apiUrl(`/api/annotate/${session}/object.jpg?tile_id=${enc(o.tile_id)}&x=${o.x}&y=${o.y}`)
-type Picture = 'loading' | 'ready' | 'failed'
+export type Picture = 'loading' | 'ready' | 'failed'
 
 /** Loads these pictures in the browser ahead of showing them; says where each stands (by address). */
-function usePreload(urls: string[]): [Record<string, Picture>, (url: string) => void] {
+export function usePreload(urls: string[]): [Record<string, Picture>, (url: string) => void] {
   const [states, setStates] = useState<Record<string, Picture>>({})
   const images = useRef(new Map<string, HTMLImageElement>())
   const load = useCallback((url: string) => {
@@ -45,7 +45,7 @@ interface Pending { id: number; record: Record<string, unknown> }
 
 /** Saves answers in the background, in the order given, a few at a time; a failed save is tried again (after 1, 2, 4 … 15
  *  seconds), unless the server refused it (then `retry` tries again). An answer not sent yet can be taken back (`cancel`). */
-function useSaver(session: string) {
+export function useSaver(session: string) {
   const queue = useRef<Pending[]>([])
   const sending = useRef(new Set<number>())
   const running = useRef(false)
@@ -107,7 +107,7 @@ function useSaver(session: string) {
 }
 
 /** True once `value` has stayed true for `ms` (so a quick save does not flash "Saving…"). */
-function useLasting(value: boolean, ms: number) {
+export function useLasting(value: boolean, ms: number) {
   const [lasting, setLasting] = useState(false)
   useEffect(() => {
     if (!value) { setLasting(false); return }
@@ -281,7 +281,7 @@ export function QuickCheck({ detail }: { detail: SessionDetail }) {
 }
 
 /** "Pictures ready: 1,240 of 1,500" while the queue's pictures are still being made (objects with one are shown first). */
-function PicturesBeingMade({ pictures }: { pictures: QueuePictures }) {
+export function PicturesBeingMade({ pictures }: { pictures: QueuePictures }) {
   return (
     <div className="quick-pictures">
       <Progress done={pictures.ready} total={pictures.total} />
