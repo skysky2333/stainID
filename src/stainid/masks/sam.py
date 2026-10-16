@@ -4,11 +4,30 @@ from pathlib import Path
 
 import numpy as np
 
+WINDOW, STRIDE = 1024, 768  # SAM sees a field in native-resolution windows this big, this far apart
+
+
+def _starts(length: int, window: int, stride: int) -> list[int]:
+    return sorted({min(max(0, s), max(0, length - window)) for s in range(0, length, stride)})
+
+
+def window_origins(shape: tuple[int, ...], window: int = WINDOW, stride: int = STRIDE) -> list[tuple[int, int]]:
+    """The top-left corners (x, y) of every window of a field of this (height, width)."""
+    height, width = shape[:2]
+    return [(x, y) for y in _starts(height, window, stride) for x in _starts(width, window, stride)]
+
+
+def window_origin(shape: tuple[int, ...], x: float, y: float, window: int = WINDOW, stride: int = STRIDE) -> tuple[int, int]:
+    """The window whose centre is nearest to (x, y) (top-left corner)."""
+    height, width = shape[:2]
+    return (min(_starts(width, window, stride), key=lambda s: abs(s + window / 2 - x)),
+            min(_starts(height, window, stride), key=lambda s: abs(s + window / 2 - y)))
+
 
 class WindowedSam:
     """Point- and box-prompted SAM on native-resolution windows of a large field."""
 
-    def __init__(self, checkpoint: Path, device: str = "cpu", window: int = 1024, stride: int = 768, precision: str = "fp32"):
+    def __init__(self, checkpoint: Path, device: str = "cpu", window: int = WINDOW, stride: int = STRIDE, precision: str = "fp32"):
         """`precision` applies on CUDA only (see `Project.precision`): bf16 runs the image encoder (the expensive part) in
         bfloat16 and the small mask decoder in fp32; tf32 uses TF32 tensor cores throughout."""
         import torch
@@ -30,13 +49,7 @@ class WindowedSam:
         self.current = None
 
     def _origin(self, x: float, y: float) -> tuple[int, int]:
-        height, width = self.rgb.shape[:2]
-        starts_x = sorted({min(max(0, s), max(0, width - self.window)) for s in range(0, width, self.stride)})
-        starts_y = sorted({min(max(0, s), max(0, height - self.window)) for s in range(0, height, self.stride)})
-        return (
-            min(starts_x, key=lambda s: abs(s + self.window / 2 - x)),
-            min(starts_y, key=lambda s: abs(s + self.window / 2 - y)),
-        )
+        return window_origin(self.rgb.shape[:2], x, y, self.window, self.stride)
 
     def predict(
         self,
@@ -73,6 +86,10 @@ def paste(mask: np.ndarray, origin: tuple[int, int], shape: tuple[int, int]) -> 
 
 
 __all__ = [
+    "STRIDE",
+    "WINDOW",
     "WindowedSam",
     "paste",
+    "window_origin",
+    "window_origins",
 ]

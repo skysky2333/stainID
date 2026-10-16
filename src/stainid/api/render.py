@@ -33,9 +33,13 @@ def core_thumbnail(state: ProjectState, core_id: str, stain: str, size: int = 51
     return pyramid.thumbnail(state, core_id, stain, size)
 
 
+def field_path(state: ProjectState, tile_id: str) -> Path:
+    return state.cache_dir("fields") / f"{tile_id}.jpg"
+
+
 def field_rgb(state: ProjectState, tile_id: str) -> np.ndarray:
     """Field crop including the context halo, cached as JPEG (coordinates match all pipeline outputs)."""
-    target = state.cache_dir("fields") / f"{tile_id}.jpg"
+    target = field_path(state, tile_id)
     for attempt in (1, 2):  # a second time when it was cleaned up between the look and the read
         if not target.exists():
             tile = state.tile(tile_id)

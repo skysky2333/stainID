@@ -1065,3 +1065,7 @@ tr.significant-row td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 .measured-swatch { width: 14px; height: 14px; border-radius: 3px; border: 1px solid var(--border); flex: none; }
 .cache-space-drive { display: grid; gap: 4px; }
 .cache-space-drive p { margin: 0; }
+
+/* outline page: Segment Anything still preparing the field */
+.sam-preparing { margin: 6px 0 0; animation: sam-preparing 1.6s ease-in-out infinite; }
+@keyframes sam-preparing { 50% { opacity: 0.45; } }

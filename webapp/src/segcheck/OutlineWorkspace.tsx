@@ -11,7 +11,7 @@ import { useFetch } from '../hooks'
 import { objectsOf } from '../labelling'
 import type { ImagePoint } from '../viewer'
 import { ZoomViewer } from '../viewer'
-import type { OutlineClass, OutlineField, OutlineObject, OutlineReference, SamOptions } from './types'
+import type { OutlineClass, OutlineField, OutlineObject, OutlineReference, SamOptions, SamStatus } from './types'
 
 /* drawn on the tissue picture, so the same in light and dark mode */
 const COLORS = ['#ff4fd8', '#ff8c1a', '#facc15', '#4ade80', '#a78bfa', '#f87171']
@@ -84,6 +84,9 @@ function Outliner({ detail, reload, tile, field }: { detail: SessionDetail; relo
   const [selected, setSelected] = useState<string | null>(null)
   const [samReady, setSamReady] = useState(field.segment_anything)
   const [tool, setTool] = useState<Tool>(field.segment_anything ? 'click' : 'draw')
+  const [prepared, setPrepared] = useState(field.segment_ready !== false)
+  const preparing = useFetch<SamStatus>(samReady && !prepared ? `/api/annotate/${name}/outline/${enc(tile)}/segment` : null, 1500)
+  useEffect(() => { if (preparing.data && preparing.data.state !== 'preparing') setPrepared(true) }, [preparing.data])
   const [labelIndex, setLabelIndex] = useState(0)
   const [draft, setDraft] = useState<number[][]>([])
   const [redrawing, setRedrawing] = useState<string | null>(null)
@@ -333,6 +336,7 @@ function Outliner({ detail, reload, tile, field }: { detail: SessionDetail; relo
             <p className="small secondary tool-hint">{redrawing || draft.length ? 'Click the corners of the outline, then the first corner or press Enter.'
               : tool === 'click' ? `Click the middle of a ${one}: its outline appears. Not right? Tab tries another size, Shift+click adds a spot that belongs to it, right-click a spot that does not.`
               : 'Click the corners of the outline, then the first corner or press Enter.'}</p>
+            {samReady && !prepared && tool === 'click' && <p className="muted small sam-preparing" aria-live="polite">Preparing outlines…</p>}
             {!samReady && <p className="small warning-note">Click-to-outline is not available here, so draw each outline by hand.</p>}
             <h3 style={{ marginTop: 14 }}>2 · Class</h3>
             <div className="class-list">

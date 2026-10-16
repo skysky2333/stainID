@@ -10,7 +10,12 @@ export interface OutlineObject { ref: string; value: string; points: number[][] 
 export interface OutlineField {
   tile_id: string; box: { x: number; y: number; width: number; height: number }; objects: (OutlineObject & { x: number; y: number })[]
   complete: boolean; segment_anything: boolean; pixel_size_um: number
+  /** false while Segment Anything is still preparing the field (clicks work, the first ones are slower) */
+  segment_ready?: boolean
 }
+
+/** Whether clicks on a field outline at once (GET /api/annotate/<session>/outline/<field>/segment). */
+export interface SamStatus { ready: boolean; state: 'ready' | 'preparing' | 'failed' | 'unavailable' }
 
 /** The outlines Segment Anything offers for a click, smallest first, and the one the stain's outline step would choose. */
 export interface SamOptions { options: { points: number[][]; area_px: number; score: number }[]; chosen: number }

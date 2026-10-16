@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from stainid import cache
-from stainid.api import label_crops, pyramid, queue_pictures, render
+from stainid.api import label_crops, pyramid, queue_pictures, render, sam_embeddings
 from stainid.api.routes.images import OVERLAYS
 from stainid.api.session import annotator, annotator_name, is_admin, require_admin
 from stainid.api.state import get_state
@@ -518,7 +518,10 @@ def create_session(body: NewSession) -> dict:
 @router.post("/labels/sessions/{name}/open", dependencies=admin)
 def set_open(name: str, body: Opening, request: Request) -> dict:
     session_meta(name, request)
-    return sessions.update(root(), name, open=body.open)
+    meta = sessions.update(root(), name, open=body.open)
+    if meta["kind"] == outline.KIND:
+        sam_embeddings.prepare_session(get_state(), meta, force=True)
+    return meta
 
 
 @router.post("/labels/sessions/{name}/fields", dependencies=admin)
@@ -723,6 +726,8 @@ def session_detail(name: str, request: Request, person: str | None = Depends(vie
                "open_by_others": len(open_now.get(t, set()) - {person}), "prepared": t in prepared} for t in meta["fields"]]
     words = vocabulary(meta["stain"])
     outlines = {"outline_classes": outline.classes(words)} if meta["kind"] == outline.KIND else {}
+    if meta["kind"] == outline.KIND:
+        sam_embeddings.prepare_session(get_state(), meta)
     return {"meta": {**meta, "subtypes": asks_subtypes(meta), "vocabulary": words.to_api(), "keys": words.keymap(asks_subtypes(meta)), "tags": FIELD_TAGS,
                      **outlines},
             "fields": fields, "annotator": person}

@@ -239,8 +239,12 @@ check measures that end to end:
    medium and dense staining (thirds of the AI's objects per mm² of tissue), fields nobody has labelled first. Its
    fields' candidates are found in the background (`stainid score-segmentation --proposals-only`, 10–30 s per field).
 2. **People outline every object** of the stain's classes whose middle lies in the field's yellow square, without
-   seeing the AI: *click to outline* (Segment Anything on the server's CPU: Tab tries another size, Shift+click adds a
-   spot that belongs to the object, right-click one that does not), *draw by hand* (D), drag corners, 1–9 for the
+   seeing the AI: *click to outline* (Segment Anything: Tab tries another size, Shift+click adds a spot that belongs to
+   the object, right-click one that does not; a click answers in well under a tenth of a second because the server
+   prepares each field's picture features ahead — on a GPU, fp16, every field of the open checks as soon as one is made
+   or opened; on the CPU the field someone has open and their next two, about 50 s each — kept in
+   `data/cache/sam_embeddings/`; the page says *Preparing outlines…* until its field is done (clicks work meanwhile, the
+   first in each part of the field slower); `$STAINID_SAM_DEVICE` (`cpu`, `cuda:1`) chooses the device), *draw by hand* (D), drag corners, 1–9 for the
    class ("unsure" is left out of the scores), Delete, Esc. *Compare with the AI* (R) shows what the AI counted and
    every candidate it considered, off by default. *Mark field complete* asks to confirm that nothing is left; only
    complete fields are scored. These outlines are kept apart from the class labels models train on (tasks `object`

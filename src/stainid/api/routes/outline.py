@@ -2,8 +2,9 @@
 for the admin their set-up and the scores (`segmentation.report`).
 
 People outlining (`/api/annotate/<session>/outline/<field>`): their own objects in a field; click-to-outline with
-Segment Anything (`masks.clicks`); saving, editing and deleting objects; marking the field complete; and, only when
-they ask for it, what the pipeline found there as a reference (hidden at first, so the check is blind).
+Segment Anything (`masks.clicks`, from features made ahead by `api.sam_embeddings`); saving, editing and deleting
+objects; marking the field complete; and, only when they ask for it, what the pipeline found there as a reference
+(hidden at first, so the check is blind).
 """
 from __future__ import annotations
 
@@ -16,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from stainid import cache
-from stainid.api import render
+from stainid.api import render, sam_embeddings
 from stainid.api.outlines import label_rings
 from stainid.api.routes.annotate import NewSession, _known_fields, annotate_path, busy, field_tile, free_name, root, session_meta, viewer, writable
 from stainid.api.session import annotator, require_admin
@@ -77,14 +78,24 @@ def open_field(name: str, tile_id: str, request: Request, person: str = Depends(
     state = get_state()
     x0, y0 = render.crop_origin(tile, state.project.context_px)
     box = {"x": int(tile["x_px"]) - x0, "y": int(tile["y_px"]) - y0, "width": int(tile["width_px"]), "height": int(tile["height_px"])}
-    complete = person in outline.finished(store.current(root()), name).get(tile_id, set())
+    finished = outline.finished(store.current(root()), name)
+    complete = person in finished.get(tile_id, set())
+    ready = sam_embeddings.prepare_field(state, meta, tile_id, {t for t, people in finished.items() if person in people})
     return {"tile_id": tile_id, "box": box, "objects": _mine(meta, tile_id, person), "complete": complete,
-            "segment_anything": state.project.model("sam").exists(), "pixel_size_um": state.project.pixel_size_um}
+            "segment_anything": state.project.model("sam").exists(), "segment_ready": ready["ready"], "pixel_size_um": state.project.pixel_size_um}
+
+
+@router.get("/annotate/{name}/outline/{tile_id}/segment")
+def segment_status(name: str, tile_id: str, request: Request, person: str = Depends(annotator)) -> dict:
+    """Whether clicks on this field outline at once (`ready`), or Segment Anything is still preparing it (asked first)."""
+    meta = _outline_meta(name, request)
+    field_tile(meta, tile_id)
+    return sam_embeddings.status(get_state(), tile_id)
 
 
 @router.post("/annotate/{name}/outline/{tile_id}/segment")
 def segment(name: str, tile_id: str, body: Clicks, request: Request, person: str = Depends(annotator)) -> dict:
-    """Outlines Segment Anything proposes for the clicked object (see `masks.clicks.outline`)."""
+    """Outlines Segment Anything proposes for the clicked object (see `masks.clicks.ClickOutliner.outline`)."""
     meta = _outline_meta(name, request)
     field_tile(meta, tile_id)
     if not body.points or any(len(p) != 3 for p in body.points):
@@ -94,10 +105,7 @@ def segment(name: str, tile_id: str, body: Clicks, request: Request, person: str
     if not checkpoint.exists():
         raise HTTPException(409, "The Segment Anything weights are not downloaded: draw the outline by hand, or ask the person running stainID "
                                  "to download them on the Models page.")
-    from stainid.masks import clicks
-
-    rgb = render.field_rgb(state, tile_id)
-    return clicks.outline(checkpoint, f"{state.id}:{tile_id}", rgb, meta["stain"], [(float(x), float(y), bool(on)) for x, y, on in body.points])
+    return sam_embeddings.outline(state, tile_id, meta["stain"], [(float(x), float(y), bool(on)) for x, y, on in body.points])
 
 
 @router.post("/annotate/{name}/outline/{tile_id}/objects")
@@ -225,7 +233,10 @@ def create_outline_session(body: NewSession) -> dict:
     meta = sessions.create(root(), name, title=title, stain=body.stain, kind=outline.KIND, tools=["outline"], ai_view="none",
                            per_field=max(1, body.per_field), rule="random", fields=fields, instructions=body.instructions, benchmark=benchmark)
     proposals_job(body.stain, name)
-    return sessions.update(root(), name, open=True) if body.open else meta
+    if body.open:
+        meta = sessions.update(root(), name, open=True)
+        sam_embeddings.prepare_session(get_state(), meta, force=True)
+    return meta
 
 
 def add_outline_fields(meta: dict, n: int, tile_ids: list[str] | None) -> dict:
@@ -238,6 +249,7 @@ def add_outline_fields(meta: dict, n: int, tile_ids: list[str] | None) -> dict:
     sessions.update(root(), meta["name"], benchmark=benchmark)
     updated = sessions.add_fields(root(), meta["name"], more)
     proposals_job(meta["stain"], meta["name"])
+    sam_embeddings.prepare_session(get_state(), updated, force=True)
     return updated
 
 
@@ -264,6 +276,7 @@ def overview() -> dict:
     present = [s for s in STAINS if not state.tiles.empty and s in set(state.tiles.stain)]
     checks = []
     for meta in report.outline_sessions(state.project):
+        sam_embeddings.prepare_session(state, meta)
         done = outline.finished(labels, meta["name"])
         checks.append({"name": meta["name"], "title": meta.get("title", meta["name"]), "stain": meta["stain"], "open": meta["open"],
                        "created": meta["created"], "fields": len(meta["fields"]), "complete": sum(bool(done.get(t)) for t in meta["fields"]),
