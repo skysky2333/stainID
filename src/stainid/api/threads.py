@@ -6,7 +6,8 @@ them again exactly as the step did — the same crop of the core image, exclusio
 traced skeleton is pixel for pixel the one the step measured — the first time someone turns the layer on for a core.
 The core image is decoded once and its tiles are traced a few at a time in separate processes (about 15 s of CPU per
 tile; tracing is mostly Python-bound work that would hold up the server's own threads), one core at a time, and the result is cached in `data/cache/core_threads/`, rebuilt when the step rewrites the core.
-Tiles finished so far are served while the rest are being traced.
+Tiles finished so far are served while the rest are being traced. Where the v2 proposal stage has saved a core's skeleton
+(`stainid.candidates.threads`), the viewer draws that instead and nothing is traced (`stainid.api.store_view`).
 
 Each thread piece (the skeleton between junctions) is a simplified open polyline in core-image pixel indices with its
 mean width in µm.
@@ -37,6 +38,8 @@ from stainid.pipelines.cohort_v1 import context_crop
 from stainid.qc.exclusions import read_manual_exclusions
 from stainid.stains.tau.network import segment_at8_network
 from stainid.stains.tau.threads import thread_network
+from stainid.v2.threads import NEIGHBOURS as _NEIGHBOURS
+from stainid.v2.threads import walk as _walk
 from stainid.workflows import calibration_table
 from stainid.workflows.fields import exclusion_mask
 
@@ -47,7 +50,6 @@ WORKERS = 3  # tiles traced at once, each in its own process (~0.6 GB while it r
 STALE_SECONDS = 60  # a core nobody has asked about for this long is no longer waited for
 RETRY_SECONDS = 60  # a failed core is reported for this long, then tried again
 COLUMNS = ["width_um", "points"]
-_NEIGHBOURS = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)]  # straight steps first
 
 
 # ---------------------------------------------------------------- tracing one tile
@@ -62,26 +64,6 @@ def trace_tile(rgb: np.ndarray, inner: tuple[slice, slice], nuclei: np.ndarray, 
     inside = np.zeros(valid.shape, bool)
     inside[inner] = True
     return network["skeleton"] & valid & inside, network["width_um"]
-
-
-def _walk(pixels: set[tuple[int, int]]) -> list[list[tuple[int, int]]]:
-    """Order the pixels of a thin piece into paths, starting from its ends (straight steps before diagonal ones)."""
-    left = set(pixels)
-    degree = {p: sum((p[0] + dy, p[1] + dx) in pixels for dy, dx in _NEIGHBOURS) for p in pixels}
-    paths = []
-    while left:
-        start = min(left, key=lambda p: (degree[p], p))
-        path, at = [start], start
-        left.discard(start)
-        while True:
-            step = next(((at[0] + dy, at[1] + dx) for dy, dx in _NEIGHBOURS if (at[0] + dy, at[1] + dx) in left), None)
-            if step is None:
-                break
-            path.append(step)
-            left.discard(step)
-            at = step
-        paths.append(path)
-    return paths
 
 
 def polylines(skeleton: np.ndarray, width_um: np.ndarray, epsilon: float = EPSILON_PX) -> list[tuple[float, list[int]]]:

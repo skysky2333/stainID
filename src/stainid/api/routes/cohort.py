@@ -9,7 +9,7 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException, Request, Response
 from scipy.spatial import cKDTree
 
-from stainid.api import outlines, placeholders, pyramid, render, threads
+from stainid.api import outlines, placeholders, pyramid, render, store_view, threads
 from stainid.api.state import ProjectState, get_state
 from stainid.api.util import records
 from stainid.outputs import objects
@@ -19,6 +19,7 @@ CORE_COLUMNS = ["core_id", "tma", "core_label", "donor_id", "sample_region_id", 
 GRID_THUMB = 256
 IMAGE_COLUMNS = 6  # pictures per row of an image set or whole-slide project on the Cores page
 OBJECT_COLUMNS = ["x", "y", "radius_px", "model_class", "probability", "area_um2"]
+V2_OBJECT_COLUMNS = [*OBJECT_COLUMNS, "reason", "candidate_id"]
 OUTLINE_COLUMNS = ["x", "y", "area_um2", "rings"]
 MATCH_PX = 2.0  # an outline's prompt point lies on its detection (up to rounding)
 GZIP_MIN_BYTES = 1024
@@ -193,13 +194,20 @@ def core_objects(core_id: str, stain: str) -> dict:
     the step measured on its neuropil threads (`threads`, see `core_threads`)."""
     state = get_state()
     tiles = _core_tiles(state, core_id, stain)
+    boxes = tiles[["x_px", "y_px", "width_px", "height_px"]].astype(int).values.tolist() if not tiles.empty else []
+    if store_view.available(state.project, core_id, stain):  # the v2 store: every candidate, accepted and rejected, with its outline
+        found = store_view.found(state.project, core_id, stain)
+        rows = [list(r.values()) for r in records(found[V2_OBJECT_COLUMNS])] if not found.empty else []
+        saved = store_view.threads(state.project, core_id) if stain == "AT8" else None
+        return {"status": "done", "tiles_done": len(tiles), "tiles_total": len(tiles), "columns": V2_OBJECT_COLUMNS, "rows": rows, "tiles": boxes,
+                "outlines": True, "threads": saved["measured"] if saved else None, "source": "v2",
+                "unproposed": store_view.unproposed_count(state.project, core_id, stain)}
     status, done, total = _detection(state, tiles, stain)
     found = _found(state, tiles, stain) if done else pd.DataFrame()
     rows = [list(r.values()) for r in records(found[OBJECT_COLUMNS])] if not found.empty else []
-    boxes = tiles[["x_px", "y_px", "width_px", "height_px"]].astype(int).values.tolist() if not tiles.empty else []
     return {"status": status, "tiles_done": done, "tiles_total": total, "columns": OBJECT_COLUMNS, "rows": rows, "tiles": boxes,
             "outlines": bool(done) and outlines.parts_path(state, core_id, stain).exists(),
-            "threads": threads.measured(state, core_id) if stain == "AT8" and done else None}
+            "threads": threads.measured(state, core_id) if stain == "AT8" and done else None, "source": "current", "unproposed": None}
 
 
 @router.get("/cores/{core_id}/{stain}/outlines")
@@ -209,6 +217,8 @@ def core_outlines(core_id: str, stain: str, request: Request) -> Response:
     (flat [x0, y0, x1, y1, …] in core-image pixel indices). `status` is "not_made" until the step has outlined the core.
     Sent gzip-compressed when the browser accepts it (a busy core is ~1.5 MB of JSON, ~0.6 MB compressed)."""
     state = get_state()
+    if store_view.available(state.project, core_id, stain):
+        return _json({"status": "done", "columns": OUTLINE_COLUMNS, "rows": store_view.outline_rows(state.project, core_id, stain)}, request)
     tiles = _core_tiles(state, core_id, stain)
     made = outlines.core_outlines(state, core_id, stain, tiles) if not tiles.empty else None
     rows = []
@@ -234,7 +244,21 @@ def core_threads(core_id: str, stain: str, request: Request, prepare: bool = Tru
     if stain != "AT8":
         raise HTTPException(404, "neuropil threads are traced on AT8 only")
     state = get_state()
+    saved = store_view.threads(state.project, core_id) if _v2_allowed(state) else None
+    if saved is not None:  # saved by the v2 proposal stage: never traced again
+        return _json(saved, request)
     return _json(threads.core_threads(state, core_id, _core_tiles(state, core_id, stain), prepare), request)
+
+
+def _v2_allowed(state: ProjectState) -> bool:
+    return store_view.setting(state.project) != "current"
+
+
+@router.get("/cores/{core_id}/{stain}/unproposed")
+def core_unproposed(core_id: str, stain: str, request: Request) -> Response:
+    """Stained regions (brown at or above the slide threshold, at least the stain's minimum size) that no v2 candidate
+    covers: rows of `columns` (core-image pixels; `rings` as for outlines). `status` "not_run" before the v2 proposals."""
+    return _json(store_view.unproposed(get_state().project, core_id, stain), request)
 
 
 def _json(content: dict, request: Request) -> Response:

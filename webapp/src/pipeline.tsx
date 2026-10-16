@@ -11,7 +11,10 @@ export const STAGE: Record<string, { name: string; about: string }> = {
   '1 · Set up': { name: 'Set up', about: 'Slides, cores, TMA maps, tiles and stain thresholds' },
   '2 · Detect': { name: 'Run', about: 'Nuclei, neurons, plaques and tau found in every tile' },
   '3 · Results': { name: 'Results', about: 'One table row per donor and brain region' },
+  '2 · Detect (v2)': { name: 'New detection (v2)', about: 'Candidates, AI calls, outlines and tables, stage by stage (not used by the results yet)' },
 }
+/** The v2 detection stages: shown on the Run page under the main stages, each run on its own (not by “Run what’s left”). */
+export const V2_STAGE = '2 · Detect (v2)'
 /** Steps the results do not need (they never count as “left to run”). */
 export const OPTIONAL = new Set(['masks'])
 

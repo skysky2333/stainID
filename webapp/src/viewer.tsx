@@ -9,6 +9,7 @@ export const CLASS_STYLE: Record<string, { color: string; label: string; short?:
   small_plaque: { color: '#c8c8c8', label: 'small plaque (10–15 µm)', short: 'small' },
   tau_neuron_ring: { color: '#00e050', label: 'tau+ neuron (nucleus-ring)', short: 'ring' },
   tau_neuron_dense: { color: '#ffd000', label: 'tau+ neuron (dense body)', short: 'dense body' },
+  unproposed: { color: '#ff9f1a', label: 'stained but never proposed', short: 'not proposed' },
 }
 
 export const RASTER_LAYERS: Record<string, { label: string; color: string }> = {

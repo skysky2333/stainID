@@ -93,6 +93,7 @@ DEFAULTS: dict = {
         "fields": "data/analysis/cohort_v3",
         "nuclei": "data/analysis/tile_nuclei",
         "masks": "data/analysis/cohort_object_masks",
+        "v2": "data/analysis/v2",  # the v2 detection stages and the candidate store (`stainid.v2`, `stainid.candidates`)
         "tables": "data/analysis",
         "reviews": "data/annotations",
         "trained_models": "data/models/trained",

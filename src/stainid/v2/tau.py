@@ -1,0 +1,147 @@
+"""AT8 proposals: the legacy tau+ neuron candidates (stained rings around Cellpose nuclei, dense bodies above the 60 µm
+background), fainter rings (down to `ring_contrast`, flagged), and DAB bodies of the component tree and the local
+background pass (pretangle-like bodies without a ring and small bodies the legacy thickness / size filters missed).
+Also the AT8 maps the measures need: burden, the legacy network, and the neuropil thread skeleton."""
+from __future__ import annotations
+
+import cv2
+import numpy as np
+from scipy import ndimage
+
+from stainid.stains.tau.network import segment_at8_network
+from stainid.stains.tau.neurons import TAU_FEATURES, _local_features, tau_neuron_candidates
+from stainid.stains.tau.threads import thread_network
+from stainid.v2.geometry import Occupancy, Region, disk, label_regions, same_object
+from stainid.v2.tree import local_background_regions, tree_regions
+
+LEGACY_CONTRAST = 0.3
+
+
+def maps(field) -> dict:
+    """segment_at8_network's maps (valid tissue, burden, legacy compact profiles and threads) and the thread network."""
+    if "at8" not in field.memo:
+        summary, objects, network_maps = segment_at8_network(field.rgb, field.threshold, field.pixel_width_um, field.pixel_height_um, field.exclusion)
+        threads = thread_network(field.rgb, network_maps["valid"], field.threshold, field.pixel_size_um, nuclei=field.nuclei)
+        field.memo["at8"] = {"summary": summary, "objects": objects, "maps": network_maps, "threads": threads}
+    return field.memo["at8"]
+
+
+def _soma_smooth(field) -> np.ndarray:
+    if "tau_smooth" not in field.memo:
+        field.memo["tau_smooth"] = cv2.GaussianBlur(field.dab, (0, 0), 1.0 / field.pixel_size_um)
+    return field.memo["tau_smooth"]
+
+
+def faint_rings(field, minimum: float, below: float = LEGACY_CONTRAST, ring_um: float = 5.0) -> list[tuple[str, tuple, np.ndarray, tuple]]:
+    """Nucleus-ring candidates whose ring contrast is in [minimum, below): the legacy loop with a lower bar."""
+    ps = field.pixel_size_um
+    tissue = field.tissue & ~field.exclusion
+    smooth = _soma_smooth(field)
+    height, width = field.shape
+    margin = max(1, round(14 / ps))
+    ring_px = max(1, round(ring_um / ps))
+    near, far_in, far_out = disk(ring_px), disk(ring_px + round(2 / ps)), disk(ring_px + round(8 / ps))
+    out = []
+    for label, bounds in enumerate(ndimage.find_objects(field.nuclei), start=1):
+        if bounds is None:
+            continue
+        y0, y1 = max(0, bounds[0].start - margin), min(height, bounds[0].stop + margin)
+        x0, x1 = max(0, bounds[1].start - margin), min(width, bounds[1].stop + margin)
+        nucleus = field.nuclei[y0:y1, x0:x1] == label
+        area = nucleus.sum() * ps * ps
+        local_tissue = tissue[y0:y1, x0:x1]
+        if not 10.0 <= area <= 200.0 or local_tissue[nucleus].mean() < 0.5:
+            continue
+        n8 = nucleus.astype(np.uint8)
+        ring = cv2.dilate(n8, near).astype(bool) & ~nucleus & local_tissue
+        far = cv2.dilate(n8, far_out).astype(bool) & ~cv2.dilate(n8, far_in).astype(bool) & local_tissue
+        if ring.sum() < 20 or far.sum() < 20:
+            continue
+        local = smooth[y0:y1, x0:x1]
+        background = float(np.median(local[far]))
+        contrast = (float(local[ring].mean()) - background) / field.threshold
+        if not minimum <= contrast < below:
+            continue
+        stained = (local >= background + 0.5 * field.threshold) & (ring | nucleus)
+        soma = cv2.morphologyEx((stained | nucleus).astype(np.uint8), cv2.MORPH_CLOSE, disk(2)).astype(bool)
+        ys, xs = np.nonzero(nucleus)
+        out.append(("ring_faint", (x0 + xs.mean(), y0 + ys.mean()), soma, (x0, y0)))
+    return out
+
+
+def tau_row(field, kind: str, center: tuple[float, float], soma: np.ndarray, origin: tuple[int, int]) -> dict:
+    """The legacy tau candidate measurements of a soma mask (local, at `origin`) with a margin around it."""
+    tissue = field.tissue & ~field.exclusion
+    features = _local_features(field.dab, field.hematoxylin, tissue, field.nuclei, center, soma, origin, field.threshold, field.pixel_size_um)
+    x0, y0 = origin
+    features["edge_fraction"] = float(field.edge_band[y0: y0 + soma.shape[0], x0: x0 + soma.shape[1]][soma].mean())
+    return {"candidate_source": kind, "centroid_x_px": float(center[0]), "centroid_y_px": float(center[1]), **features}
+
+
+def propose(field, settings: dict, shared: dict) -> list[Region]:
+    ps = field.pixel_size_um
+    objects, labels = tau_neuron_candidates(field.rgb, field.nuclei, field.threshold, ps, field.exclusion)
+    regions = label_regions(labels, "legacy", style="tau")
+    occupancy = Occupancy(field.shape)
+    for row in objects:
+        region = regions.get(int(row["label"]))
+        if region is None:
+            continue
+        region.source = "ring" if row["candidate_source"] == "nucleus_ring" else "dense"
+        region.sources = [region.source]
+        region.legacy = row
+        occupancy.add(region)
+    same = dict(same_iou=shared["same_iou"], same_inside=shared["same_inside"], covered=shared["covered"],
+                significant_px=round(settings["significant_um2"] / ps ** 2))
+    for kind, center, soma, (x0, y0) in faint_rings(field, settings["ring_contrast"]):
+        region = Region(y0, x0, soma, "ring_faint", style="tau")
+        how, index = same_object(region, occupancy, **same)
+        if how == "same":
+            occupancy.regions[index].add_source("ring_faint")
+        elif how == "new":
+            region.legacy = tau_row(field, "nucleus_ring", center, soma, (x0, y0))
+            occupancy.add(region)
+    allowed = field.tissue & ~field.exclusion
+    found = tree_regions(field, settings["levels"], allowed, settings["min_um2"], settings["max_um2"], settings["significant_um2"],
+                         settings["split_max_um2"], settings["mode"], settings.get("split"))
+    if settings.get("local_contrast"):
+        found += local_background_regions(field, settings["local_contrast"], allowed, settings["min_um2"], settings["max_um2"])
+    margin = max(1, round(14 / ps))
+    for region in found:
+        how, index = same_object(region, occupancy, **same)
+        if how == "same":
+            occupancy.regions[index].add_source(region.source)
+        elif how == "new":
+            region.style = "tau"
+            box, local = region.padded(margin, field.shape)
+            region.legacy = tau_row(field, "dab_body", region.centroid(), local, (box[1].start, box[0].start))
+            occupancy.add(region)
+    return occupancy.regions
+
+
+def extras(field, regions: list[Region]) -> list[dict]:
+    """Per candidate: whether its centre lies in valid tissue (the legacy filter) and its share on traced threads."""
+    found = maps(field)
+    valid, line = found["maps"]["valid"], found["threads"]["line"]
+    out = []
+    for region in regions:
+        x, y = float(region.legacy["centroid_x_px"]), float(region.legacy["centroid_y_px"])
+        out.append({"centroid_valid": bool(valid[min(int(y), field.shape[0] - 1), min(int(x), field.shape[1] - 1)]),
+                    "thread_fraction": float(line[region.box][region.mask].mean())})
+    return out
+
+
+def model_inputs(regions: list[Region], contexts: list[dict]) -> list[dict]:
+    """The tau model's inputs (`stainid.stains.tau.neurons.tau_feature_matrix`), as m_ columns."""
+    out = []
+    for region, context in zip(regions, contexts):
+        row = region.legacy
+        values = {f"m_{name}": float(row.get(name, np.nan)) for name in TAU_FEATURES}
+        values |= {f"m_ctx_{k}": v for k, v in context.items()}
+        values["m_from_ring"] = float(row["candidate_source"] == "nucleus_ring")
+        out.append(values)
+    return out
+
+
+def context_diameters(regions: list[Region]) -> list[float]:
+    return [2 * np.sqrt(float(r.legacy["soma_area_um2"]) / np.pi) for r in regions]

@@ -251,6 +251,19 @@ def _segmentation_status(project: Project) -> dict:
     return _state(1, 1, "report", f"{scored} fields scored")
 
 
+V2 = "2 · Detect (v2)"
+
+
+def _v2_status(project: Project, stage: str) -> dict:
+    """How many core images a v2 stage has done (up to date) of those it can do, and whether some are out of date."""
+    from stainid.v2.run import status
+
+    folders = [project.output("v2") / "manifests" / s / stain for s in ("proposals", stage) for stain in STAINS] + [project.analysis_tiles()]
+    found = cache.memo(("v2 status", str(project.root), stage), folders, lambda: status(project), every=10.0, folders=True)[stage]
+    done, outdated, total = (sum(v[k] for v in found.values()) for k in ("done", "outdated", "total"))
+    return _state(done, total, "core images", f"{outdated} out of date: run again to update them" if outdated else "", outdated=bool(outdated))
+
+
 def _has_content(path: Path) -> bool:
     """A file, or a folder with something in it (kept until the folder changes: output folders hold thousands)."""
     def look() -> bool:
@@ -319,6 +332,13 @@ RESOURCES = {r.id: r for r in (
     Resource("trained_models", "Trained models", "Models you trained, with their accuracy reports.", lambda p: p.output("trained_models")),
     Resource("segmentation_check", "Segmentation check", "How well detection finds and outlines the objects people outlined, and the "
              "candidates of the check's fields.", lambda p: p.output("tables") / "segmentation_benchmark"),
+    # v2 detection (stainid.v2): each stage reads the previous stage's saved outputs
+    Resource("v2_proposals", "Candidates (v2)", "Every object the new detection proposes in each core, with its outline and measurements, "
+             "the neuropil threads and stained areas nothing proposed.", lambda p: p.output("v2") / "proposals"),
+    Resource("v2_calls", "AI calls (v2)", "The model's call on every candidate: kept or rejected, why, and its class.", lambda p: p.output("v2") / "calls"),
+    Resource("v2_outlines", "Exact outlines (v2)", "Segment Anything's three outline sizes for the likely objects.", lambda p: p.output("v2") / "outlines"),
+    Resource("v2_measures", "Results tables (v2)", "Per-core and per-donor-region tables made from the v2 calls.",
+             lambda p: p.output("v2") / "measures" / "results_donor_region.csv"),
 )}
 
 SHARD = (Option("shard_index", "Part", "number", 0, "Split a long run over several processes: this process runs part N …", advanced=True),
@@ -421,6 +441,37 @@ STEPS = (
          (), ("results",), ("summarize",),
          (Option("level", "One row per", "select", "sample_region_id", "donor-region (recommended) or single core.", ("sample_region_id", "core_id")),),
          view="/results", duration="about a minute", status=_summary_status, uses=("neun_results", "field_results", "mask_results")),
+    Step("v2_proposals", V2, "Find candidates (v2)", "Propose every stained object in each core, generously, and measure it.",
+         "Reads each core image once and proposes candidates from several brown-stain thresholds, the local background and the "
+         "Find nuclei cells (it never runs Cellpose again), splits merged neurons, and saves every candidate with its outline and "
+         "measurements, the AT8 thread skeleton and the stained areas no candidate covers. Nothing is decided here, so a new model "
+         "or rule only needs the quick steps after it. Cores already done and up to date are skipped.",
+         ("tiles", "calibration", "nuclei"), ("v2_proposals",), ("v2", "proposals"),
+         (Option("stain", "Stains", "stains", list(STAINS), choices=tuple(STAINS)),
+          Option("workers", "Cores at once", "number", 0, "0 = as many as the memory and processors allow (about 2 GB each).", advanced=True),
+          Option("redo", "Redo all", "bool", False, "Redo every core, not only new and out-of-date ones.", advanced=True), *SHARD),
+         heavy=True, view="/cohort", duration="about 10–20 minutes per core image (several at once)", status=lambda p: _v2_status(p, "proposals"),
+         kinds=("tma", "images", "slides")),
+    Step("v2_calls", V2, "Decide (v2)", "Let the model decide on every candidate, from the saved measurements.",
+         "Scores every candidate with the stain's model and applies the stain's rules (specks, vessel walls, duplicates, …), saving a "
+         "call, a reason and a class for each. No picture is read, so after a new model or threshold this takes minutes.",
+         ("v2_proposals", "model_neun", "model_amyloid", "model_tau"), ("v2_calls",), ("v2", "calls"),
+         (Option("stain", "Stains", "stains", list(STAINS), choices=tuple(STAINS)),
+          Option("redo", "Redo all", "bool", False, "Decide on every core again, not only new and out-of-date ones.", advanced=True)),
+         heavy=True, view="/cohort", duration="seconds per core image", status=lambda p: _v2_status(p, "calls")),
+    Step("v2_outlines", V2, "Outline objects (v2)", "Draw Segment Anything outlines (three sizes) around the likely objects.",
+         "Optional. Outlines the kept and the likely candidates with Segment Anything and saves all three sizes it offers, so people can "
+         "switch between them while checking. Run one per GPU with Part / of parts.",
+         ("v2_calls", "model_sam"), ("v2_outlines",), ("v2", "outlines"),
+         (Option("stain", "Stains", "stains", list(STAINS), choices=tuple(STAINS)), Option("device", "Processor", "text", "",
+                 "cuda, cuda:1 or cpu (empty: a GPU when there is one).", advanced=True),
+          Option("redo", "Redo all", "bool", False, advanced=True), *SHARD),
+         heavy=True, view="/cohort", duration="about a minute per core image on a GPU", status=lambda p: _v2_status(p, "outlines")),
+    Step("v2_measures", V2, "Make results tables (v2)", "Count and measure from the v2 calls, per core and per donor-region.",
+         "Writes the results tables (and the tables the R analyses read) from the saved candidates, calls, outlines and thread "
+         "skeletons, under the v2 folder; the current results are not touched.",
+         ("v2_calls",), ("v2_measures",), ("v2", "measures"), (), view="/results", duration="a few minutes",
+         status=lambda p: _state(int(_has_content(p.output("v2") / "measures" / "results_donor_region.csv")), 1, "table")),
     Step("download_models", "Models", "Download public models", "Fetch the Cellpose-SAM, Segment Anything and Phikon weights.",
          "These models are published by their authors and are the same for every study. The NeuN, 6E10 and AT8 models are specific to "
          "your staining and are trained on the Models page instead.", (), ("model_cellpose", "model_sam", "model_phikon"), ("download-models",),

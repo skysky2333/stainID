@@ -4,7 +4,7 @@ import type { Job, ResourceInfo, SetupOverview, SlideRow, SlidesInfo, Step, Step
 import { api, apiUrl, runStep } from '../api'
 import { CommandLineTag, Empty, ErrorNote, FilePicker, HelpBox, Loaded, OptionField, PageHead, PathLine, Progress, StatusBadge, Term, timeAgo, withError } from '../components'
 import { useFetch } from '../hooks'
-import { MAIN_STAGES, OPTIONAL, PipelineMap, STAGE, duration, groupState, isActive, runFacts, stepState, stopJobs } from '../pipeline'
+import { MAIN_STAGES, OPTIONAL, PipelineMap, STAGE, V2_STAGE, duration, groupState, isActive, runFacts, stepState, stopJobs } from '../pipeline'
 import { useProject } from '../project'
 import { Advanced } from '../setup/parts'
 import { SlideTable, slideProblems } from '../slides'
@@ -18,6 +18,7 @@ export default function Workflow() {
   const navigate = useNavigate()
   const { hash } = useLocation()
   const list = (steps.data ?? []).filter((s) => MAIN_STAGES.includes(s.stage))
+  const v2 = (steps.data ?? []).filter((s) => s.stage === V2_STAGE)
   useEffect(() => {
     if (hash && steps.data) document.getElementById(hash.slice(1))?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }, [hash, steps.data === null])
@@ -40,6 +41,7 @@ export default function Workflow() {
           <>
             <RunSummary steps={list} setup={setup.data} onChanged={refresh} />
             {MAIN_STAGES.map((stage) => <StageSection key={stage} stage={stage} steps={list.filter((s) => s.stage === stage)} onChanged={refresh} />)}
+            {v2.length > 0 && <StageSection stage={V2_STAGE} steps={v2} onChanged={refresh} />}
             <Advanced title="Pipeline map" hint="which step needs which">
               <PipelineMap steps={list} state={stepState} onOpen={(id) => navigate(`/workflow#${id}`)} />
             </Advanced>
