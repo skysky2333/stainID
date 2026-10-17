@@ -116,12 +116,13 @@ def status(task: Task) -> dict:
 
 
 def _forget_old(now: float) -> None:
-    for key, task in list(_BY_KEY.items()):
+    for task_id, task in list(_BY_ID.items()):
         if task.finished is not None and now - task.finished > KEEP_SECONDS:
-            _BY_KEY.pop(key, None)
-            _BY_ID.pop(task.id, None)
-        elif task.state == "failed" and task.finished is not None and now - task.finished > 5:
-            _BY_KEY.pop(key, None)  # asked again a little later: tried again (its status stays readable by id)
+            _BY_ID.pop(task_id, None)
+            if _BY_KEY.get(task.key) is task:
+                _BY_KEY.pop(task.key, None)
+        elif task.state == "failed" and task.finished is not None and now - task.finished > 5 and _BY_KEY.get(task.key) is task:
+            _BY_KEY.pop(task.key, None)  # asked again a little later: tried again (its status stays readable by id)
 
 
 def submit(kind: str, key: Any, run: Callable[[Task], Any], priority: int = NOW, label: str = "", admin: bool = False,

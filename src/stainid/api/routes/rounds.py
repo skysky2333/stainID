@@ -543,7 +543,8 @@ def open_field(meta: dict, tile_id: str, person: str):
         _TILES_HELD.hold(tile_hold(meta), person, [tile_id])
         busy(meta["name"], tile_id, person)
     if not field_prepared(meta, tile):
-        made = work.answer("field", _prepare_key(meta, tile_id), lambda task: prepare_field(meta, tile_id, task), work.NOW, "Opening the field")
+        made = work.answer("field", _prepare_key(meta, tile_id), lambda task: prepare_field(meta, tile_id, task), work.NOW, "Opening the field",
+                           fresh=work.within(10))
         if isinstance(made, Response):
             return made
     found = _field_candidates(meta, tile)
