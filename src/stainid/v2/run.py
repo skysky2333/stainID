@@ -13,6 +13,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing import get_context
 
 from stainid import cache
+from stainid.jobs import units
 from stainid.tables import claim_field
 from stainid.v2 import manifest
 from stainid.v2.params import STAINS
@@ -64,6 +65,7 @@ def todo(project, stage: str, stains, cores: set[str] | None = None, redo: bool 
     if stage == "proposals":
         calibration, nuclei = proposal_inputs(project)
     models = {}
+    since = units.since() if redo else None  # a redo that was paused: what it redid already stays
     for (core_id, stain), tiles in found.items():
         recorded = manifest.read_all(project, stage, stain).get(core_id)
         if stage == "proposals":
@@ -79,11 +81,20 @@ def todo(project, stage: str, stains, cores: set[str] | None = None, redo: bool 
             made = outlines.expected(project, stain, core_id)
         if made is None:  # its upstream stage has not run
             continue
+        if since is not None and recorded is not None and _written(recorded) >= since and manifest.up_to_date(recorded, made):
+            continue
         if redo or recorded is None:
             out.append((core_id, stain, tiles, "missing" if recorded is None else "redo"))
         elif not manifest.up_to_date(recorded, made):
             out.append((core_id, stain, tiles, "outdated"))
     return out
+
+
+def _written(recorded: dict) -> float:
+    try:
+        return time.mktime(time.strptime(recorded.get("written", ""), "%Y-%m-%d %H:%M:%S"))
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def status(project) -> dict:
@@ -205,6 +216,9 @@ def run_proposals(project, stains=STAINS, cores: set[str] | None = None, workers
                    for core, stain, tiles, why in jobs}
         for number, future in enumerate(as_completed(futures), start=1):
             core, stain, why = futures[future]
+            units.drain(futures)  # asked to stop: the core images not started yet wait for the next run
+            if future.cancelled():
+                continue
             try:
                 result = future.result()
             except Exception as error:  # noqa: BLE001 - one bad core must not stop the others
@@ -215,6 +229,7 @@ def run_proposals(project, stains=STAINS, cores: set[str] | None = None, workers
             else:
                 print(f"[{number}/{len(jobs)}] {core} {stain} ({why}): {result['candidates']} candidates, {result['unproposed']} unproposed, "
                       f"{result['seconds']:.0f} s ({(time.time() - started) / number:.0f} s per core image so far)", flush=True)
+    units.boundary("stage 2")
 
 
 # ---------------------------------------------------------------- stage 4
@@ -243,11 +258,15 @@ def run_calls(project, stains=STAINS, cores: set[str] | None = None, workers: in
         futures = {pool.submit(_calls_worker, str(project.root), stain, core): (core, stain) for core, stain, _, _ in jobs}
         for number, future in enumerate(as_completed(futures), start=1):
             core, stain = futures[future]
+            units.drain(futures)
+            if future.cancelled():
+                continue
             try:
                 result = future.result()
                 print(f"[{number}/{len(jobs)}] {core} {stain}: {result['accepted']} of {result['candidates']} accepted", flush=True)
             except Exception as error:  # noqa: BLE001
                 print(f"[{number}/{len(jobs)}] {core} {stain}: failed: {type(error).__name__}: {error}", flush=True)
+    units.boundary("stage 4")
 
 
 # ---------------------------------------------------------------- stage 3
@@ -264,6 +283,7 @@ def run_outlines(project, stains=STAINS, cores: set[str] | None = None, device: 
     outliner = BatchOutliner(project.model("sam"), device)
     calibration = calibration_table(project.input("calibration"))
     for number, (core, stain, tiles, why) in enumerate(jobs, start=1):
+        units.boundary(f"{number - 1} core images outlined")
         claim = _claim(project, "outlines", stain, core)
         if claim is None:
             continue

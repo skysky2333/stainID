@@ -10,9 +10,9 @@ from pathlib import Path
 import pytest
 import yaml
 
-from stainid.api import jobs as server_jobs
 from stainid.api import registry
-from stainid.jobs import COMMAND_LINE, Job, JobStore
+from stainid.jobs import COMMAND_LINE, Job, JobStore, queue
+from stainid.project import load_project
 
 
 def _project(folder: Path, name: str, **settings) -> Path:
@@ -57,8 +57,9 @@ def server(tmp_path, monkeypatch):
 
     from stainid.api.app import create_app
 
-    monkeypatch.setattr(server_jobs.JobManager, "_start", lambda self, job: setattr(job, "status", "running"))
-    monkeypatch.setattr(server_jobs.JobManager, "_missing", lambda self, step: "")
+    monkeypatch.setattr(queue.Scheduler, "_start", lambda self, job, gpus: setattr(job, "status", "running"))
+    monkeypatch.setattr(queue.Scheduler, "_missing", lambda self, job, step: "")
+    monkeypatch.setattr(queue.Scheduler, "_reap", lambda self: None)
     a = _project(tmp_path / "study-a", "Study A", groups=[{"code": "AD", "label": "AD"}])
     b = _project(tmp_path / "study-b", "Study B", tma={"prefix": "LIP-"})
     for root, tma in ((a, "1"), (b, "7")):
@@ -83,8 +84,8 @@ def test_each_request_sees_its_own_project(server):
     assert server.get(f"{a}/project").json()["tma_prefix"] == "BRC-" and server.get(f"{b}/project").json()["tma_prefix"] == "LIP-"
     job = server.post(f"{b}/jobs", json={"workflow": "summarize", "options": {}}).json()
     assert [j["id"] for j in server.get(f"{b}/jobs").json()] == [job["id"]] and server.get(f"{a}/jobs").json() == []
-    assert (server.roots["b"] / "data" / "jobs" / f"{job['id']}.json").exists()  # each project keeps its own job store
-    assert not (server.roots["a"] / "data" / "jobs" / f"{job['id']}.json").exists()
+    record = json.loads((queue.queue_dir() / f"{job['id']}.json").read_text())  # one queue for every project
+    assert record["project"] == str(server.roots["b"].resolve()) and record["project_name"] == "Study B"
     assert server.get("/api/projects/nothing-123456/project").status_code == 404
 
 
@@ -137,31 +138,23 @@ def test_annotation_links_name_their_project(server):
     assert server.get(f"/api/projects/{b}/annotate").status_code == 200  # the annotation pages stay public, per project
 
 
-# ---------------------------------------------------------------- one heavy-step limit for the whole server
+# ---------------------------------------------------------------- one queue and one budget for the whole computer
 
-def _queue(root: Path, name: str, slots: server_jobs.HeavySlots, monkeypatch, started: list) -> server_jobs.JobManager:
-    monkeypatch.setattr(server_jobs.JobManager, "_loop", lambda self: None)
-    monkeypatch.setattr(server_jobs.JobManager, "_missing", lambda self, step: "")
-    monkeypatch.setattr(server_jobs.JobManager, "_start", lambda self, job: (started.append((self.name, job.workflow)), setattr(job, "status", "running")))
-    return server_jobs.JobManager(root, root / "data" / "jobs", name=name, slots=slots)
-
-
-def test_heavy_steps_share_one_limit_across_projects(tmp_path, monkeypatch):
-    slots, started = server_jobs.HeavySlots(limit=1), []
-    a = _queue(_project(tmp_path / "a", "Study A"), "Study A", slots, monkeypatch, started)
-    b = _queue(_project(tmp_path / "b", "Study B"), "Study B", slots, monkeypatch, started)
-    first = a.submit("nuclei", {})
-    a._schedule()
-    waiting = b.submit("export", {})
-    light = b.submit("summarize", {})
-    b._schedule()
+def test_projects_share_one_budget(tmp_path, monkeypatch):
+    started = []
+    monkeypatch.setattr(queue.Scheduler, "_missing", lambda self, job, step: "")
+    monkeypatch.setattr(queue.Scheduler, "_start", lambda self, job, gpus: (started.append((job.project_name, job.workflow)), setattr(job, "status", "running")))
+    scheduler = queue.Scheduler(tmp_path / "queue", budget=queue.Budget(5, 1, 32))
+    a, b = (load_project(_project(tmp_path / name, title)) for name, title in (("a", "Study A"), ("b", "Study B")))
+    first = scheduler.submit_step(a, "nuclei", {})
+    waiting = scheduler.submit_step(b, "export", {})
+    light = scheduler.submit_step(b, "summarize", {})
+    scheduler._schedule()
     assert started == [("Study A", "nuclei"), ("Study B", "summarize")] and light.status == "running"
-    assert waiting.status == "queued" and "1 in the project “Study A” (Find nuclei)" in waiting.waiting and "at most 1 at a time on this server" in waiting.waiting
+    assert waiting.status == "queued" and "processors" in waiting.waiting
     first.status = "finished"
-    b._schedule()
-    assert started[-1] == ("Study B", "export") and waiting.waiting == ""
-    a.close()
-    assert a not in slots.managers
+    scheduler._schedule()
+    assert started[-1] == ("Study B", "export") and waiting.status == "running"
 
 
 def test_command_line_runs_in_projects_not_open_count_too(tmp_path, monkeypatch):
@@ -170,17 +163,15 @@ def test_command_line_runs_in_projects_not_open_count_too(tmp_path, monkeypatch)
 
     other = _project(tmp_path / "other", "Other study")
     registry.remember(other)
-    store = JobStore(other / "data" / "jobs")
+    store = JobStore(queue.queue_dir())
     store.save(Job(id=time.strftime("%Y%m%d-%H%M%S-") + "abcdef", workflow="nuclei", options={}, argv=["nuclei"], status="running",
-                   started=time.time(), pid=os.getpid(), source=COMMAND_LINE))
-    store.save(Job(id="20200101-000000-old000", workflow="nuclei", options={}, argv=["nuclei"], status="finished", pid=os.getpid()))
-    running = state.running_elsewhere()
-    assert [(name, job.workflow) for name, job in running] == [("Other study", "nuclei")]
+                   started=time.time(), pid=os.getpid(), source=COMMAND_LINE, project=str(other.resolve()), needs=queue.needs_of("nuclei")))
     assert state.project_status(other)["text"] == "Running: Find nuclei"
 
-    slots, started = server_jobs.HeavySlots(limit=1), []
-    slots.elsewhere = state.running_elsewhere
-    here = _queue(_project(tmp_path / "here", "Here"), "Here", slots, monkeypatch, started)
-    job = here.submit("nuclei", {})
-    here._schedule()
-    assert started == [] and "“Other study” (Find nuclei)" in job.waiting
+    started = []
+    monkeypatch.setattr(queue.Scheduler, "_missing", lambda self, job, step: "")
+    monkeypatch.setattr(queue.Scheduler, "_start", lambda self, job, gpus: (started.append(job.workflow), setattr(job, "status", "running")))
+    scheduler = queue.Scheduler(queue.queue_dir(), budget=queue.Budget(32, 1, 32))
+    job = scheduler.submit_step(load_project(_project(tmp_path / "here", "Here")), "nuclei", {})
+    scheduler._schedule()
+    assert started == [] and "GPUs" in job.waiting

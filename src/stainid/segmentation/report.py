@@ -118,7 +118,10 @@ def find_proposals(project: Project, truths: list[Truth], redo: bool = False) ->
     waiting = [(s, t) for s, t in todo if t in tiles and (redo or not proposals.current(project, tiles[t], loader))]
     failed = []
     print(f"[0/{len(waiting)}] {len(todo) - len(waiting)} of {len(todo)} fields have their candidates already", flush=True)
+    from stainid.jobs import units
+
     for number, (stain, tile_id) in enumerate(waiting, start=1):
+        units.boundary(f"{number - 1} fields done")  # each field's candidates are saved as it is done
         try:
             count = proposals.compute(project, tiles[tile_id], loader)
             print(f"[{number}/{len(waiting)}] {tile_id}: {count} candidates", flush=True)

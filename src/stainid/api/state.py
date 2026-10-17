@@ -20,7 +20,6 @@ import pandas as pd
 
 from stainid import cache, disk_cache
 from stainid.api import registry
-from stainid.jobs import Job, JobStore, alive
 from stainid.project import Project, load_project
 from stainid.sampling.tiles import known_tiles, labelling_tiles, table
 
@@ -289,11 +288,10 @@ def project_status(root: Path) -> dict:
     if not (root / "stainid.yaml").exists():
         return {"state": "missing", "text": "Folder not found" if not root.exists() else "No stainid.yaml in this folder", "running": []}
     project = load_project(root)
-    runner = _open_runner(root)
-    if runner is not None:
-        running = [_title(j) for j in list(runner.jobs.values()) if j.status == "running"]
-    else:
-        running = [_title(j) for j in JobStore(project.output("jobs"), create=False).newest() if j.status == "running" and alive(j.pid, j.started)]
+    from stainid.jobs import queue
+
+    mine = str(project.root.resolve())
+    running = [_title(j) for j in list(queue.shared().jobs.values()) if j.status == "running" and j.project == mine]
     if running:
         return {"state": "running", "text": "Running: " + ", ".join(dict.fromkeys(running)), "running": running}
     if any((folder / "results_donor_region.csv").exists() for folder in (project.output("v2") / "measures", project.output("tables"))):
@@ -302,21 +300,3 @@ def project_status(root: Path) -> dict:
     if all(project.input(key).exists() for key in needed):
         return {"state": "set_up", "text": "Set up", "running": []}
     return {"state": "not_set_up", "text": "Not set up yet", "running": []}
-
-
-def running_elsewhere() -> list[tuple[str, Job]]:
-    """Heavy steps running in the projects this server knows but has not opened (command-line runs, or app jobs started
-    before a restart), as (project name, job). The open projects report their own."""
-    from stainid.workflows.steps import BY_ID
-
-    with _LOCK:
-        open_ids = set(_STATES)
-    out = []
-    for entry in registry.entries():
-        if entry.id in open_ids or not entry.exists:
-            continue
-        store = JobStore(load_project(entry.path).output("jobs"), create=False)
-        out += [(entry.name, job) for job in store.newest() if job.status == "running" and job.workflow in BY_ID and BY_ID[job.workflow].heavy
-                and alive(job.pid, job.started)]
-    return out
-

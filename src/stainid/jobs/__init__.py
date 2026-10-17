@@ -46,6 +46,26 @@ class Job:
     outcome: dict = field(default_factory=dict)
     source: str = APP
     log_file: str = ""
+    # the shared queue (`stainid.jobs.queue`): which project, priority class and place in it, what the job needs, and what
+    # was asked of it; `command` is set for a job that is not a workflow step (any command, e.g. a download script)
+    project: str = ""
+    project_name: str = ""
+    klass: str = ""
+    order: float = 0.0
+    needs: dict = field(default_factory=dict)
+    request: str = ""
+    requested_at: float | None = None
+    paused_by: str = ""
+    attempts: int = 0
+    command: list = field(default_factory=list)
+    cwd: str = ""
+    env: dict = field(default_factory=dict)
+    title: str = ""
+    unit: str = ""
+    gpus: list = field(default_factory=list)
+    grace: float = 0.0
+    runs: list = field(default_factory=list)  # [started, ended] of each earlier run (paused, pre-empted or interrupted)
+    after: list = field(default_factory=list)  # ids of jobs that must have finished before this one starts
 
 
 def new_id() -> str:
@@ -181,14 +201,23 @@ def output_file() -> str:
 
 
 @contextmanager
-def command_line_job(store: JobStore, workflow: str, options: dict, argv: list[str]):
+def command_line_job(store: JobStore, workflow: str, options: dict, argv: list[str], project=None):
     """Record a step run from the command line for as long as it runs, and how it ended: finished, failed (an error),
-    or stopped (Ctrl+C, or stopped from the app)."""
+    paused (asked to stop between two units from the app or `stainid jobs pause`: Resume then runs the rest through the
+    queue) or stopped (Ctrl+C, or stopped from the app). `project`: the project it runs in (for the shared queue)."""
+    from stainid.jobs.units import CONTROL_ENV, PAUSED
+
     log_file = output_file()
     job = Job(id=new_id(), workflow=workflow, options=options, argv=argv, status="running", started=time.time(), pid=os.getpid(),
               source=COMMAND_LINE, log_file=log_file)
+    if project is not None:
+        from stainid.jobs.queue import class_of, needs_of
+
+        job.project, job.project_name = str(Path(project.root).resolve()), project.name
+        job.klass, job.needs, job.order = class_of(project, workflow), needs_of(workflow, options), job.created
     store.save(job)
     os.environ[JOB_ENV] = job.id  # commands this one starts belong to this job
+    os.environ[CONTROL_ENV] = str(store.dir / f"{job.id}.control")  # where the queue asks it to stop between two units
 
     def end(status: str, code: int, error: str = "") -> None:
         if os.getpid() != job.pid or job.ended:  # a forked worker, or already recorded
@@ -215,7 +244,11 @@ def command_line_job(store: JobStore, workflow: str, options: dict, argv: list[s
         raise
     except SystemExit as exit_:
         code = exit_.code if isinstance(exit_.code, int) else (0 if exit_.code is None else 1)
-        end("finished" if code == 0 else "failed", code, "" if code == 0 else str(exit_.code))
+        if code == PAUSED:
+            job.paused_by = "user"
+            end("paused", code)
+        else:
+            end("finished" if code == 0 else "failed", code, "" if code == 0 else str(exit_.code))
         raise
     except BaseException as error:
         end("failed", 1, ERROR.sub("", f"{type(error).__name__}: {error}"))
@@ -225,3 +258,4 @@ def command_line_job(store: JobStore, workflow: str, options: dict, argv: list[s
     finally:
         if previous is signal.SIG_DFL:
             signal.signal(signal.SIGTERM, previous)
+        (store.dir / f"{job.id}.control").unlink(missing_ok=True)

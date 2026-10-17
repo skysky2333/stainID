@@ -1309,3 +1309,14 @@ details.side-details.compact > summary { font-weight: 500; }
 .area-size { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .area-size input { flex: 1; }
 .areas-table td, .areas-table th { white-space: nowrap; }
+
+/* the shared job queue (Run page) */
+.queue-card .queue-title { margin: 0; }
+.queue-class { margin-top: 10px; }
+.queue-class-title { margin-bottom: 4px; color: var(--text-secondary); }
+.queue-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.queue-row { display: flex; gap: 12px; align-items: center; border: 1px solid var(--border); border-radius: 10px; padding: 6px 10px; background: var(--surface-1); min-width: 0; }
+.queue-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.queue-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.status-paused { color: var(--warning); }
+@media (max-width: 640px) { .queue-row { flex-direction: column; align-items: stretch; } .queue-actions { justify-content: flex-start; } }

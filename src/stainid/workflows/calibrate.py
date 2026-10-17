@@ -9,6 +9,7 @@ from PIL import Image
 
 from stainid.imaging.calibration import calibrate_threshold
 from stainid.imaging.core_images import open_image
+from stainid.jobs import units
 from stainid.project import Project
 from stainid.tables import read_csv, write_records
 
@@ -105,7 +106,7 @@ def calibrate_slides(project: Project, stains: list[str] | None = None, redo: bo
         rows.append({"tma": tma, "stain": stain, "threshold_dab_od": threshold, "sampled_tissue_pixels": int(values.size),
                      "excluded_tissue_fraction": round(sample["excluded_px"] / max(1, sample["tissue_px"]), 6),
                      **{f"dab_p{q}": v for q, v in zip(("50", "75", "90", "95", "99", "999"), quantiles)}})
+        write_records(output, kept + rows)  # each slide's threshold is kept as soon as it is known: a new run goes on from here
         print(f"[{number}/{len(groups)}] TMA {tma} {stain}: threshold {threshold:.4f} OD", flush=True)
-    if rows:
-        write_records(output, kept + rows)
+        units.boundary(f"TMA {tma} {stain}")
     return output

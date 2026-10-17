@@ -131,11 +131,20 @@ export interface Job {
   created: number; started: number | null; ended: number | null; returncode: number | null; waiting: string
   progress: { done: number; total: number; last_line: string; error: string }
   source?: 'app' | 'command line'; pid: number | null; log_file?: string
-  /** a queued job: how many queued jobs of the project start before it, and how many run now */
-  queue?: { ahead: number; running: number } | null
+  /** a waiting job: how many waiting jobs start before it (all classes), its place in its class, and how many run now */
+  queue?: { ahead: number; running: number; position?: number; in_class?: number } | null
+  /** the shared queue: the job's project, priority class, what it needs, what was asked of it, estimates */
+  project_name?: string; class?: string; class_title?: string; rank?: number; paused_by?: string; stopping?: string
+  needs?: { cpus: number; gpus: number; ram_gb: number; network: boolean }; eta_s?: number | null; typical_s?: number | null
+}
+export interface QueueClass { id: string; title: string; rank: number; jobs: Job[] }
+export interface QueueOverview {
+  classes: QueueClass[]; recent: Job[]; paused_all: boolean; led: boolean
+  budget: { cpus: number; gpus: number; ram_gb: number }; used: { cpus: number; gpus: number; ram_gb: number }
 }
 /** Why a queued job has not started, with its place in the queue: "2 ahead of it · waits for a free slot". */
 export function queueText(job: Job): string {
+  if (job.status === 'paused') return job.paused_by === 'all' ? 'Paused with all background work' : 'Paused: Resume continues where it stopped'
   const place = job.queue ? (job.queue.ahead > 0 ? `${job.queue.ahead} ahead of it in the queue` : 'next in the queue') : ''
   return [place, job.waiting].filter(Boolean).join(' · ') || 'Starts in a moment'
 }

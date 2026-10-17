@@ -114,8 +114,11 @@ def test_download_is_limited_to_project(client):
 
 
 def test_settings_can_change_while_steps_run(client, synthetic_project, tmp_path, monkeypatch):
+    from stainid.jobs import queue
+
     runner = state.get_state().jobs
-    monkeypatch.setattr(runner, "_start", lambda job: None)
+    monkeypatch.setattr(queue.Scheduler, "_start", lambda self, job, gpus: None)
+    monkeypatch.setattr(queue.Scheduler, "_reap", lambda self: None)
     job = runner.submit("summarize", {})
     job.status = "running"
     assert client.put("/api/project/config", json={"changes": {"name": "Renamed"}}).status_code == 200
@@ -124,6 +127,7 @@ def test_settings_can_change_while_steps_run(client, synthetic_project, tmp_path
     first = state.get_state().id
     assert client.post("/api/project/create", json={"path": str(tmp_path / "other")}).status_code == 200
     assert state.get_state().jobs is not runner and runner.open and job.status == "running"
+    assert state.get_state().jobs.scheduler is runner.scheduler  # one queue for every project
     assert client.get(f"/api/projects/{first}/jobs").json()[0]["id"] == job.id
     job.status = "finished"
 
@@ -353,14 +357,15 @@ def test_cross_origin_requests_only_for_allowed_origins(client, monkeypatch):
     assert app.get("/api/session").json()["allowed_origins"] == ["http://lab-pc:8080", "https://stainid.example.org"]
 
 
-def test_steps_list_every_running_part(client):
-    from stainid.jobs import COMMAND_LINE, Job
+def test_steps_list_every_running_part(client, monkeypatch):
+    from stainid.jobs import COMMAND_LINE, Job, queue
 
+    monkeypatch.setattr(queue.Scheduler, "_reap", lambda self: None)
     runner = state.get_state().jobs
     for index in range(2):  # two parts of one step, run from a terminal (no process to follow here)
         job = Job(id=f"part-{index}", workflow="nuclei", options={"shard_index": index, "shard_count": 2}, argv=["nuclei"], status="running",
-                  source=COMMAND_LINE)
-        runner.jobs[job.id] = job
+                  source=COMMAND_LINE, project=str(runner.root))
+        runner.scheduler.jobs[job.id] = job
     steps = {s["id"]: s for s in client.get("/api/steps").json()}
     assert sorted(j["id"] for j in steps["nuclei"]["active"]) == ["part-0", "part-1"]
     assert steps["neun"]["active"] == [] and steps["nuclei"]["job"]["id"] in ("part-0", "part-1")

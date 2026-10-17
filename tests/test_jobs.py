@@ -1,4 +1,4 @@
-"""The shared job store: app jobs, their exit codes across a server restart, and steps run from the command line."""
+"""The shared job store and queue: app jobs, their exit codes across a server restart, and steps run from the command line."""
 from __future__ import annotations
 
 import json
@@ -13,11 +13,17 @@ import pytest
 import yaml
 
 import stainid
-from stainid.api import jobs as server_jobs
-from stainid.jobs import COMMAND_LINE, JOB_ENV, Job, JobStore, alive, command_line_job
+from stainid.jobs import COMMAND_LINE, JOB_ENV, Job, JobStore, alive, command_line_job, queue
+from stainid.project import load_project
 
 SRC = str(Path(stainid.__file__).parents[1])
-ENV = {**{k: v for k, v in os.environ.items() if k != JOB_ENV}, "PYTHONPATH": SRC}
+
+
+def _env() -> dict:
+    """This test's environment (its own queue folder, see conftest) for the commands it starts."""
+    return {**{k: v for k, v in os.environ.items() if k != JOB_ENV}, "PYTHONPATH": SRC}
+
+
 
 
 def _project(tmp_path: Path) -> Path:
@@ -25,13 +31,11 @@ def _project(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def _manager(root: Path, monkeypatch, started: list | None = None) -> server_jobs.JobManager:
-    monkeypatch.setattr(server_jobs.JobManager, "_loop", lambda self: None)
-    monkeypatch.setattr(server_jobs.JobManager, "_missing", lambda self, step: "")
+def _scheduler(monkeypatch, started: list | None = None, budget=None) -> queue.Scheduler:
+    monkeypatch.setattr(queue.Scheduler, "_missing", lambda self, job, step: "")
     if started is not None:
-        monkeypatch.setattr(server_jobs.JobManager, "_start",
-                            lambda self, job: (started.append(job.workflow), setattr(job, "status", "running")))
-    return server_jobs.JobManager(root, root / "data" / "jobs")
+        monkeypatch.setattr(queue.Scheduler, "_start", lambda self, job, gpus: (started.append(job.workflow), setattr(job, "status", "running")))
+    return queue.Scheduler(queue.queue_dir(), budget=budget or queue.Budget(32, 2, 32))
 
 
 def _wait(condition, seconds: float = 20.0) -> None:
@@ -59,14 +63,14 @@ def test_store_round_trip_and_tolerates_old_and_broken_records(tmp_path):
 def test_runner_records_exit_code_and_stops_the_whole_group(tmp_path):
     exit_file = tmp_path / "a.exit"
     done = subprocess.run([sys.executable, "-m", "stainid.jobs.run", str(exit_file), "--", sys.executable, "-c", "import sys; sys.exit(3)"],
-                          env=ENV)
+                          env=_env())
     assert done.returncode == 3 and exit_file.read_text() == "3"
 
     exit_file, marker = tmp_path / "b.exit", tmp_path / "grandchild.pid"
     script = (f"import subprocess, sys, time; p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
               f"open({str(marker)!r}, 'w').write(str(p.pid)); time.sleep(60)")
     runner = subprocess.Popen([sys.executable, "-m", "stainid.jobs.run", str(exit_file), "--", sys.executable, "-c", script],
-                              env=ENV, start_new_session=True)
+                              env=_env(), start_new_session=True)
     _wait(lambda: marker.exists() and marker.read_text())
     os.killpg(runner.pid, signal.SIGTERM)  # what Stop in the app does
     assert runner.wait(20) == 128 + signal.SIGTERM and exit_file.read_text() == str(-signal.SIGTERM)
@@ -83,40 +87,40 @@ def _zombie(pid: int) -> bool:
 
 def test_restarted_server_finishes_adopted_jobs_with_their_real_exit_code(tmp_path, monkeypatch):
     root = _project(tmp_path)
-    store = JobStore(root / "data" / "jobs")
+    store = JobStore(queue.queue_dir())
     ended, running = Job(id="1-ended", workflow="summarize", options={}, argv=["summarize"]), Job(id="2-running", workflow="qc", options={}, argv=["qc"])
     gone = Job(id="0-gone", workflow="export", options={}, argv=["export"])
     script = "import sys, time; time.sleep(float(sys.argv[1])); sys.exit(int(sys.argv[2]))"
     processes = {}
     for job, (seconds, code) in ((ended, (0, 0)), (running, (1.5, 5))):
         processes[job.id] = subprocess.Popen([sys.executable, "-m", "stainid.jobs.run", str(store.exit_path(job.id)), "--", sys.executable,
-                                              "-c", script, str(seconds), str(code)], env=ENV, start_new_session=True)
-        job.status, job.pid, job.started = "running", processes[job.id].pid, time.time()
+                                              "-c", script, str(seconds), str(code)], env=_env(), start_new_session=True)
+        job.status, job.pid, job.started, job.project = "running", processes[job.id].pid, time.time(), str(root.resolve())
         store.save(job)
     processes[ended.id].wait()
-    gone.status, gone.pid, gone.started = "running", processes[ended.id].pid, time.time()  # its process ended without an exit file
+    gone.status, gone.pid, gone.started, gone.project = "running", processes[ended.id].pid, time.time(), str(root.resolve())  # ended without an exit file
     store.save(gone)
 
-    manager = _manager(root, monkeypatch)  # the "restarted" server: these processes are not its children
-    assert manager.jobs[ended.id].status == "finished" and manager.jobs[ended.id].returncode == 0
-    assert manager.jobs[gone.id].status == "interrupted"
-    assert manager.jobs[running.id].status == "running"
+    scheduler = _scheduler(monkeypatch)  # the "restarted" server: these processes are not its children
+    assert scheduler.jobs[ended.id].status == "finished" and scheduler.jobs[ended.id].returncode == 0
+    assert scheduler.jobs[gone.id].status == "queued" and scheduler.jobs[gone.id].attempts == 1  # resumes where it stopped
+    assert "Interrupted" in scheduler.jobs[gone.id].waiting
+    assert scheduler.jobs[running.id].status == "running"
     processes[running.id].wait()
-    manager._reap()
-    assert manager.jobs[running.id].status == "failed" and manager.jobs[running.id].returncode == 5
+    scheduler._reap()
+    assert scheduler.jobs[running.id].status == "failed" and scheduler.jobs[running.id].returncode == 5
     assert json.loads(store.path(running.id).read_text())["returncode"] == 5
 
 
 def test_app_job_runs_through_the_runner(tmp_path, monkeypatch):
     root = _project(tmp_path)
     monkeypatch.setenv("PYTHONPATH", SRC)
-    manager = _manager(root, monkeypatch)
-    job = manager.submit("summarize", {})
-    manager._schedule()
+    scheduler = _scheduler(monkeypatch)
+    job = scheduler.submit_step(load_project(root), "summarize", {})
+    scheduler._schedule()
     assert job.status == "running" and job.log_file
-    _wait(lambda: (manager._reap(), job.status != "running")[1])
+    _wait(lambda: (scheduler._reap(), job.status != "running")[1])
     assert job.status == "failed" and job.returncode == 1 and "No detection results yet" in job.outcome["error"]
-    assert manager.store.exit_code(job.id) == 1
 
 
 def test_command_line_run_registers_in_the_shared_list(tmp_path):
@@ -124,63 +128,63 @@ def test_command_line_run_registers_in_the_shared_list(tmp_path):
     log = tmp_path / "run.log"
     with log.open("w") as out:
         done = subprocess.run([sys.executable, "-m", "stainid.cli", "--project", str(root), "summarize", "--level", "core_id"],
-                              stdout=out, stderr=subprocess.STDOUT, env=ENV)
+                              stdout=out, stderr=subprocess.STDOUT, env=_env())
     assert done.returncode == 1
-    [job] = JobStore(root / "data" / "jobs").all()
+    [job] = JobStore(queue.queue_dir()).all()
     assert job.source == COMMAND_LINE and job.workflow == "summarize" and job.argv == ["summarize", "--level", "core_id"]
     assert job.options == {"level": "core_id"} and job.status == "failed" and job.returncode == 1
+    assert job.project == str(root.resolve()) and job.klass == "pipeline"
     assert Path(job.log_file) == log and "No detection results yet" in job.outcome["error"]
 
-    subprocess.run([sys.executable, "-m", "stainid.cli", "--project", str(root), "summarize"], capture_output=True, env={**ENV, JOB_ENV: "x"})
-    subprocess.run([sys.executable, "-m", "stainid.cli", "--project", str(root), "info"], capture_output=True, env=ENV)
-    assert len(JobStore(root / "data" / "jobs").all()) == 1  # started by the app, or not a workflow step: not registered
+    subprocess.run([sys.executable, "-m", "stainid.cli", "--project", str(root), "summarize"], capture_output=True, env={**_env(), JOB_ENV: "x"})
+    subprocess.run([sys.executable, "-m", "stainid.cli", "--project", str(root), "info"], capture_output=True, env=_env())
+    assert len(JobStore(queue.queue_dir()).all()) == 1  # started by the queue, or not a workflow step: not registered
 
 
-def test_command_line_run_holds_back_conflicting_app_jobs(tmp_path, monkeypatch):
+def test_command_line_run_holds_back_conflicting_queued_jobs_and_counts_in_the_budget(tmp_path, monkeypatch):
     root = _project(tmp_path)
+    project = load_project(root)
     started = []
-    manager = _manager(root, monkeypatch, started)
-    store = manager.store
-    queued = manager.submit("neun", {})
-    with command_line_job(store, "nuclei", {}, ["nuclei", "--stain", "NeuN"]) as outside:
-        manager._rescan()
-        assert manager.jobs[outside.id].source == COMMAND_LINE
-        manager._schedule()
+    scheduler = _scheduler(monkeypatch, started, queue.Budget(8, 1, 32))
+    queued = scheduler.submit_step(project, "neun", {})
+    with command_line_job(scheduler.store, "nuclei", {}, ["nuclei", "--stain", "NeuN"], project) as outside:
+        scheduler.refresh()
+        assert scheduler.jobs[outside.id].source == COMMAND_LINE
+        scheduler._schedule()
         assert started == [] and queued.waiting.startswith("Waits for “Find nuclei”, running from the command line, to finish")
-        other = manager.submit("download_models", {})
-        manager.jobs[outside.id].workflow = "export"  # two heavy steps outside the app fill both slots
-        manager.jobs["x"] = Job(id="x", workflow="dearray", options={}, argv=["dearray"], status="running", pid=os.getpid(), source=COMMAND_LINE)
-        manager._schedule()
-        assert "2 heavy steps are already running, 2 of them from the command line" in other.waiting
-        del manager.jobs["x"]
-    assert store.load(store.path(outside.id)).status == "finished"
-    manager._rescan()
-    manager._schedule()
-    assert manager.jobs[outside.id].status == "finished" and started == ["neun", "download_models"]
+        other = scheduler.submit_step(project, "v2_outlines", {})  # needs the GPU Find nuclei holds
+        scheduler._schedule()
+        assert started == [] and "GPUs" in other.waiting
+    assert scheduler.store.load(scheduler.store.path(outside.id)).status == "finished"
+    scheduler.refresh()
+    scheduler._schedule()
+    assert scheduler.jobs[outside.id].status == "finished" and started == ["neun"]  # NeuN takes all 8 processors first
 
 
 def test_command_line_runs_that_die_or_are_stopped_from_the_app(tmp_path, monkeypatch):
     root = _project(tmp_path)
-    store = JobStore(root / "data" / "jobs")
+    store = JobStore(queue.queue_dir())
     finished = subprocess.Popen([sys.executable, "-c", "pass"])
     finished.wait()
-    dead = Job(id="dead", workflow="nuclei", options={}, argv=["nuclei"], status="running", pid=finished.pid, started=time.time(), source=COMMAND_LINE)
+    dead = Job(id="dead", workflow="nuclei", options={}, argv=["nuclei"], status="running", pid=finished.pid, started=time.time(), source=COMMAND_LINE,
+               project=str(root.resolve()))
     store.save(dead)
     script = ("import sys, time; from pathlib import Path; from stainid.jobs import JobStore, command_line_job\n"
               "with command_line_job(JobStore(Path(sys.argv[1])), 'nuclei', {}, ['nuclei']):\n    print('ready', flush=True); time.sleep(60)")
-    terminal = subprocess.Popen([sys.executable, "-c", script, str(store.dir)], env=ENV, stdout=subprocess.PIPE, start_new_session=True)
+    terminal = subprocess.Popen([sys.executable, "-c", script, str(store.dir)], env=_env(), stdout=subprocess.PIPE, start_new_session=True)
     assert terminal.stdout.readline().strip() == b"ready"
 
-    manager = _manager(root, monkeypatch)
-    assert manager.jobs["dead"].status == "interrupted"
-    [running] = [j for j in manager.jobs.values() if j.pid == terminal.pid]
-    manager.cancel(running.id)
+    scheduler = _scheduler(monkeypatch)
+    scheduler._reap()
+    assert scheduler.jobs["dead"].status == "interrupted"
+    [running] = [j for j in scheduler.jobs.values() if j.pid == terminal.pid]
+    scheduler.request("cancel", running.id)
     assert terminal.wait(20) == -signal.SIGTERM
     record = store.load(store.path(running.id))
     assert record.status == "cancelled" and record.returncode == 128 + signal.SIGTERM
-    manager._rescan()
-    manager._reap()
-    assert manager.jobs[running.id].status == "cancelled"
+    scheduler.refresh()
+    scheduler._reap()
+    assert scheduler.jobs[running.id].status == "cancelled"
 
 
 @pytest.mark.skipif(not Path("/proc/self/stat").exists(), reason="process start times come from /proc")
