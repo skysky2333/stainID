@@ -165,7 +165,8 @@ def call(project, stain: str, frame: pd.DataFrame, model: Model, rules: dict) ->
         duplicate = suppress_near(frame, probability, passed, radius)
         reason[duplicate] = "rule:duplicate"
         passed &= ~duplicate
-        mature = _number(frame, "m_soma_dab_p90") >= float(model.bundle.get("mature_p90_threshold", np.inf))
+        feature = str(model.bundle.get("mature_feature", "soma_dab_p90"))  # s_soma_dab_p90 for a slide-scaled model
+        mature = _number(frame, feature if feature.startswith("s_") else f"m_{feature}") >= float(model.bundle.get("mature_p90_threshold", np.inf))
         subtype[passed] = np.where(mature[passed], "mature tangle", "pretangle")
         threadish = _number(frame, "thread_fraction") >= 0.5
         klass[~passed & threadish] = "thread"

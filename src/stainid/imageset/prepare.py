@@ -34,7 +34,7 @@ REGION_PX = 6144
 THUMB_UM = 8.0  # whole slides are searched for tissue on a picture with 8 µm pixels
 MIN_REGION_TISSUE = 0.05
 REGION_MARGIN_UM = 60.0
-MIN_TILE_TISSUE = {"images": 0.01, "slides": 0.10}
+MIN_TILE_TISSUE = {"images": 0.01, "slides": 0.005}  # slides: every square with tissue, as sampling.whole_core
 DIRECT = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"}  # read as they are when already at scale and in DAB
 DIRECT_LIMIT = 16384 * 16384
 

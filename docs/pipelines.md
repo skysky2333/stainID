@@ -25,8 +25,8 @@ QuPath alternatives for grid placement and export are in `tools/qupath/`.
 ## 2. Tiles — `stainid tiles`
 
 Writes the core image table (`inputs.core_images`, one row per core and stain) and cuts every
-core image into a grid of 2048 px squares (about 560 µm), keeping every square that holds at least
-10 % tissue, including the narrower squares at the right and bottom image edges, so the whole core
+core image into a grid of 2048 px squares (about 560 µm), keeping every square that holds tissue
+(at least 0.5 %, about 1,600 µm²; edge slivers too: only their tissue counts in any area), including the narrower squares at the right and bottom image edges, so the whole core
 is covered without overlap (`inputs.whole_core_manifest`). Tiles are named `…_W<row><column>`.
 Every analysis runs on all tiles of every core; `stainid summarize` pools them per core and
 donor-region. The study aggregation (`stainid.analysis.aggregation`) keeps a `sampling_extent`

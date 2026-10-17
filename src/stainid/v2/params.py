@@ -59,10 +59,10 @@ DEFAULTS: dict = {
         # their dense part; NeuN: SAM is as good or better; AT8: mixed.
         "default_outline": {"NeuN": "sam", "6E10": "stain", "AT8": "stain"},
     },
-    # model training (not a detection stage: changing it re-runs nothing). 6E10 slide_scaled: the next 6E10 model takes
-    # its DAB intensities in slide thresholds and its dense core / seed at levels relative to the threshold (`s_` inputs,
-    # stainid.v2.amyloid.scaled_names) instead of absolute OD, so pale slides (LIP-6) are not rejected for being pale
-    "training": {"6E10": {"slide_scaled": True}},
+    # model training (not a detection stage: changing it re-runs nothing). slide_scaled: a new model takes its DAB
+    # intensities in slide thresholds and the measures cut at absolute OD floors at levels relative to the threshold
+    # (`s_` inputs, stainid.v2.scaled) instead of absolute OD, so pale slides (LIP-6) are not rejected for being pale
+    "training": {"NeuN": {"slide_scaled": True}, "6E10": {"slide_scaled": True}, "AT8": {"slide_scaled": True}},
     "rules": {
         # edge_band: a candidate found only by the new sources lying mostly within 5 µm of a tissue edge or hole (brown rims)
         "NeuN": {"excluded_fraction": 0.5, "near_profile": True, "pale_nucleus": True, "profile_shape": True, "edge_band": 0.5,

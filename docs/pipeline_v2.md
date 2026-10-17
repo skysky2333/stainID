@@ -68,7 +68,7 @@ merged.
   inner and outer mean, centre, annulus, context, contrasts), and the seed and dense core measured at levels relative to
   the threshold (seed above max(1 × threshold, median + 6 σ), core above max(1.25 × threshold, 1.2 × seed, the 85th
   percentile)) instead of the legacy absolute 0.035 / 0.10 OD (`stainid.v2.amyloid.scaled_names`). The current model
-  still reads the legacy `m_` inputs; see "Retraining 6E10" below.
+  still reads the legacy `m_` inputs; see "Retraining on slide-scaled inputs" below.
 - **AT8**: the legacy candidates (`ring`: stained ring around a Cellpose nucleus; `dense`: dense body above the 60 µm
   background); fainter rings down to 0.15 (`ring_faint`); tree bodies at 1, 1.5, 2 × the threshold and the local
   background pass (`dab@…`, `localbg`).
@@ -99,7 +99,16 @@ max(0.75 × threshold, tissue median + 0.25 × threshold), ≥ 100 µm², that n
 pale diffuse plaque that only specks of candidates touch is reported, which the old rule (DAB ≥ threshold, touching no
 candidate) never did.
 
-## Retraining 6E10
+## Retraining on slide-scaled inputs
+
+The current models take DAB intensities in absolute OD, and some measures are cut at absolute OD floors; slides differ
+3–4 fold in staining strength (thresholds 6E10 0.026–0.108, AT8 0.014–0.055, NeuN 0.026–0.099 OD). Stage 2 therefore
+also stores slide-scaled inputs for every stain (`s_<name>`, `stainid.v2.scaled`): 6E10 as above; NeuN mean DAB, the
+80th percentile around the nucleus, the context DAB and the stained area above 0.35 × threshold without the 0.012 OD
+floor; AT8 the soma's DAB 90th percentile, the background median and the context DAB (its contrast and soma DAB are
+already in thresholds). New models of every stain train on them by default (`v2.training.<stain>.slide_scaled`); an
+AT8 model so trained also cuts mature tangles on the scaled 90th percentile (`mature_feature` in the bundle). The
+current models keep reading the legacy `m_` inputs until a new one is made active.
 
 The current 6E10 model takes absolute DAB OD and dense-core / seed measures cut at absolute OD. The LIP-6 6E10 slide is
 3–4 × paler than the others (threshold 0.026 OD against 0.067–0.108), so its plaques have low intensities and no dense

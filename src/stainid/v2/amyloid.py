@@ -10,6 +10,7 @@ from stainid.nuclei import nucleus_centroids
 from stainid.stains.amyloid.classifier import MORPHOLOGY_FEATURES
 from stainid.stains.amyloid.model import identity_features, outer_boundary_contact
 from stainid.stains.amyloid.segmentation import _radial_features, _remove_small_components, _shape_features, segment_amyloid_candidates
+from stainid.v2 import scaled
 from stainid.v2.geometry import Occupancy, Region, label_regions, same_object
 from stainid.v2.tree import coarse_regions, tree_regions, walk_roots
 
@@ -153,17 +154,15 @@ def extras(field, regions: list[Region], ring_um: float = 15.0) -> list[dict]:
 # dense core and seed measured at levels relative to the slide threshold. The legacy inputs use absolute OD (a core above
 # max(0.10 OD, …), seeds above max(0.035 OD, …)), so on a pale slide such as LIP-6 (threshold 0.026 OD against 0.07–0.11
 # elsewhere) plaques have no dense core and low intensities, and the current model rejects them.
-SCALED_INTENSITY = ("mean_dab_od", "median_dab_od", "p90_dab_od", "max_dab_od", "inner_mean_dab_od", "outer_mean_dab_od",
-                    "radial_dab_contrast", "context_dab_mean", "context_dab_p90", "context_dab_std", "center_dab_mean", "center_dab_p90",
-                    "annulus_dab_mean", "center_annulus_dab_contrast")
-SCALED_CORE = ("seed_area_um2", "core_area_um2", "core_fraction", "normalized_core_offset")
+SCALED_INTENSITY = scaled.INTENSITY["6E10"]
+SCALED_CORE = scaled.RECOMPUTED["6E10"]
 CORE_FLOOR = 1.25  # × the slide threshold: the legacy 0.10 OD at the cohort's typical threshold (0.08 OD)
 SEED_FLOOR = 1.0  # × the slide threshold (the legacy floor 0.035 OD binds only below a 0.035 OD threshold)
 
 
 def scaled_names(names: list[str]) -> list[str]:
     """A model's input names with each one that has a slide-scaled version replaced by it (`s_<name>`)."""
-    return [f"s_{n}" if n in SCALED_INTENSITY or n in SCALED_CORE else n for n in names]
+    return scaled.names("6E10", names)
 
 
 def scaled_core(field, region: Region) -> dict:
@@ -206,7 +205,7 @@ def model_inputs(field, regions: list[Region]) -> list[dict]:
     out = []
     for region, values in zip(regions, matrix):
         row = {f"m_{n}": float(v) for n, v in zip(names, values)}
-        row |= {f"s_{n}": row[f"m_{n}"] / field.threshold for n in SCALED_INTENSITY if f"m_{n}" in row}
+        row |= scaled.intensities("6E10", row, field.threshold)
         out.append(row | scaled_core(field, region))
     return out
 
