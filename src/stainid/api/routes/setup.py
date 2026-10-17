@@ -78,7 +78,7 @@ def _rows(path: Path) -> list[dict[str, str]]:
     return read_csv(path) if path.exists() else []
 
 
-def _steps() -> list[dict]:
+def _steps():
     from stainid.api.routes.jobs import steps
 
     return steps()
@@ -93,9 +93,11 @@ def _remaining(steps: list[dict]) -> list[dict]:
 # ---------------------------------------------------------------- overview and run
 
 @router.get("")
-def overview() -> dict:
+def overview():
     project = get_state().project
     steps = _steps()
+    if not isinstance(steps, list):  # still being counted: the page shows how far that is
+        return steps
     screens = guide.screens(project, steps)
     state = {s["id"]: s["state"] for s in screens}
     remaining = _remaining(steps)
@@ -110,7 +112,10 @@ def run_everything() -> dict:
     them in order. Steps made with an older model start over."""
     jobs = get_state().jobs
     queued = []
-    for step in _remaining(_steps()):
+    steps = _steps()
+    if not isinstance(steps, list):
+        raise HTTPException(503, "stainID is still looking at where the study stands; try again in a few seconds")
+    for step in _remaining(steps):
         options = {o.key: o.default for o in BY_ID[step["id"]].options}
         if "fresh" in options and step["progress"].get("outdated"):
             options["fresh"] = True

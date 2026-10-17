@@ -269,10 +269,9 @@ def _area_edits_status(project: Project) -> dict:
 
 def _v2_status(project: Project, stage: str) -> dict:
     """How many core images a v2 stage has done (up to date) of those it can do, and whether some are out of date."""
-    from stainid.v2.run import status
+    from stainid.v2.run import cached_status
 
-    folders = [project.output("v2") / "manifests" / s / stain for s in ("proposals", stage) for stain in STAINS] + [project.analysis_tiles()]
-    found = cache.memo(("v2 status", str(project.root), stage), folders, lambda: status(project), every=10.0, folders=True)[stage]
+    found = cached_status(project)[stage]  # one count of every stage, shared by the three steps
     done, outdated, total = (sum(v[k] for v in found.values()) for k in ("done", "outdated", "total"))
     return _state(done, total, "core images", f"{outdated:,} core images are out of date." if outdated else "", outdated=bool(outdated))
 

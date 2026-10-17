@@ -126,10 +126,11 @@ def _forget_old(now: float) -> None:
 
 
 def submit(kind: str, key: Any, run: Callable[[Task], Any], priority: int = NOW, label: str = "", admin: bool = False,
-           fresh: Callable[[Task], bool] | None = None) -> Task:
+           fresh: Callable[[Task], bool] | None = None, alone: bool = False) -> Task:
     """The task doing `run(task)` for `key` (the one already queued, running or just done, when there is one; its
     priority raised to this one). `fresh(task)` says whether a finished task's result still holds (default: it does
-    until `KEEP_SECONDS`)."""
+    until `KEEP_SECONDS`). `alone`: started at once on a thread of its own instead of queued behind the workers (quick
+    reads a page waits for, such as where the study stands, that must not wait for field preparations)."""
     with _COND:
         now = time.monotonic()
         _forget_old(now)
@@ -144,6 +145,10 @@ def submit(kind: str, key: Any, run: Callable[[Task], Any], priority: int = NOW,
         task = Task(kind, key, run, priority, label, admin)
         _BY_KEY[key] = task
         _BY_ID[task.id] = task
+        if alone:
+            task.state, task.started = "running", now  # not one of `_RUNNING`: it takes no worker
+            threading.Thread(target=_run_one, args=(task,), name=f"stainid-{kind}", daemon=True).start()
+            return task
         _QUEUE.append(task)
         _start_workers()
         _COND.notify_all()
@@ -177,9 +182,9 @@ def pending(task: Task, then: str = "retry") -> JSONResponse:
 
 
 def answer(kind: str, key: Any, run: Callable[[Task], Any], priority: int = NOW, label: str = "", then: str = "retry",
-           seconds: float | None = None, admin: bool = False, fresh: Callable[[Task], bool] | None = None):
+           seconds: float | None = None, admin: bool = False, fresh: Callable[[Task], bool] | None = None, alone: bool = False):
     """`run`'s result when it is done within `seconds` (default `WAIT_SECONDS`), else a 202 `pending` answer."""
-    task = submit(kind, key, run, priority, label, admin, fresh)
+    task = submit(kind, key, run, priority, label, admin, fresh, alone)
     if wait(task, WAIT_SECONDS if seconds is None else seconds):
         return outcome(task)
     return pending(task, then)
@@ -213,23 +218,26 @@ def _work() -> None:
     except (AttributeError, OSError):  # not Linux, or not allowed
         pass
     while True:
-        task = _next()
-        try:
-            task.result = task.context.run(task.run, task)
-            task.state = "done"
-        except HTTPException as error:
-            task.state, task.error, task.status_code = "failed", str(error.detail), error.status_code
-        except Exception as error:  # noqa: BLE001 - reported to the page that waits for it
-            log.exception("background work %s %s failed", task.kind, task.key)
-            task.state, task.error, task.status_code = "failed", f"{type(error).__name__}: {error}", 500
-        with _COND:
-            task.finished = time.monotonic()
-            if task.state == "done":
-                _DURATIONS.setdefault(task.kind, deque(maxlen=20)).append(task.finished - (task.started or task.finished))
-            if task in _RUNNING:
-                _RUNNING.remove(task)
-            _COND.notify_all()
-        task.event.set()
+        _run_one(_next())
+
+
+def _run_one(task: Task) -> None:
+    try:
+        task.result = task.context.run(task.run, task)
+        task.state = "done"
+    except HTTPException as error:
+        task.state, task.error, task.status_code = "failed", str(error.detail), error.status_code
+    except Exception as error:  # noqa: BLE001 - reported to the page that waits for it
+        log.exception("background work %s %s failed", task.kind, task.key)
+        task.state, task.error, task.status_code = "failed", f"{type(error).__name__}: {error}", 500
+    with _COND:
+        task.finished = time.monotonic()
+        if task.state == "done":
+            _DURATIONS.setdefault(task.kind, deque(maxlen=20)).append(task.finished - (task.started or task.finished))
+        if task in _RUNNING:
+            _RUNNING.remove(task)
+        _COND.notify_all()
+    task.event.set()
 
 
 def idle() -> bool:

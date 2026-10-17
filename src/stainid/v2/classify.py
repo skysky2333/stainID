@@ -193,11 +193,13 @@ def call(project, stain: str, frame: pd.DataFrame, model: Model, rules: dict) ->
 
 # ---------------------------------------------------------------- per core image: manifests, writing, assembling
 
-def expected(project, stain: str, core_id: str, model: Model) -> dict | None:
-    upstream = manifest.read(project, "proposals", stain, core_id)
+def expected(project, stain: str, core_id: str, model: Model, settings: dict | None = None, upstream=manifest.READ) -> dict | None:
+    """What stage 4's manifest of this core would be now (`settings`, `upstream`: the stain's `stage_params` and the
+    core's proposals manifest, when known already)."""
+    upstream = manifest.read(project, "proposals", stain, core_id) if upstream is manifest.READ else upstream
     if upstream is None:
         return None
-    return manifest.make("calls", stage_params(project, "calls", stain),
+    return manifest.make("calls", stage_params(project, "calls", stain) if settings is None else settings,
                          {"proposals": upstream["digest"], "model": model.model_id, "threshold": model.threshold})
 
 
@@ -211,14 +213,16 @@ def classify_core(project, stain: str, core_id: str, model: Model) -> dict:
     return {"candidates": len(calls), "accepted": int((calls.decision == "accepted").sum())}
 
 
-def assembled_expected(project, stain: str, core_id: str) -> dict | None:
+def assembled_expected(project, stain: str, core_id: str, settings: dict | None = None, recorded: dict | None = None) -> dict | None:
+    """What the assembled store's manifest of this core would be now (`settings`: the stain's `stage_params`;
+    `recorded`: the core's manifests by stage, when read already)."""
     inputs = {}
     for stage in ("proposals", "outlines", "calls"):
-        recorded = manifest.read(project, stage, stain, core_id)
-        if recorded is None and stage != "outlines":
+        mine = manifest.read(project, stage, stain, core_id) if recorded is None else recorded.get(stage)
+        if mine is None and stage != "outlines":
             return None
-        inputs[stage] = recorded["digest"] if recorded else ""
-    return manifest.make("candidates", stage_params(project, "candidates", stain), inputs)
+        inputs[stage] = mine["digest"] if mine else ""
+    return manifest.make("candidates", stage_params(project, "candidates", stain) if settings is None else settings, inputs)
 
 
 def assemble(project, stain: str, core_id: str) -> Path | None:
