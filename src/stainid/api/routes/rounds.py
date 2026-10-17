@@ -702,10 +702,10 @@ def candidate_row(stain: str, candidate: str) -> pd.Series:
     return row
 
 
-def clean(meta: dict, mark, person: str) -> dict:
+def clean(meta: dict, mark, person: str) -> dict | None:
     """A label of a round session, checked: about a candidate (`candidate`: its field and position come from the store;
-    `keep` records the AI's call as confirmed; an outline of it, e.g. a precise edit) or, in round 2, about the field or an
-    object people added."""
+    `keep` records the AI's call as confirmed; an outline of it, e.g. a precise edit) or, in round 2, about the field, an
+    object people added or an edit of the excluded areas (None when the brush painted nothing)."""
     stain = meta["stain"]
     second = rounds.round_of(meta) == 2
     allowed = {"class", "outline"} | ({"tag", "note", "done", exclusions.TASK} if second else set())
@@ -714,15 +714,17 @@ def clean(meta: dict, mark, person: str) -> dict:
     record = {"source": person, "stain": stain, "task": mark.task, "session": meta["name"], "deleted": mark.deleted, "value": mark.value,
               "subtype": None, "points": mark.points, "tile_id": mark.tile_id, "x": mark.x, "y": mark.y, "candidate": mark.candidate or None}
     words = vocabulary(stain)
-    if mark.task == exclusions.TASK:  # the area marked as bad on this field (the exclusion brush): rings in field pixels
+    if mark.task == exclusions.TASK:  # an edit of the excluded areas (the brush): what was painted and cleared this time
         field_tile(meta, mark.tile_id)
         pngs = dict(mark.pngs) or ({"1": mark.png} if mark.png else {})  # one painted mask per type (`exclusions.KINDS`)
         try:
             rings, holes, kinds = ([], [], []) if mark.deleted else exclusions.from_pngs(pngs, mark.scale)
         except ValueError as error:
             raise HTTPException(400, str(error))
-        return record | {"id": exclusions.label_id(mark.tile_id), "x": None, "y": None, "points": rings or None,
-                         "value": exclusions.value_text(holes, kinds), "deleted": mark.deleted or not rings}
+        if not rings:
+            return None
+        return record | {"id": exclusions.label_id(mark.tile_id), "x": None, "y": None, "points": rings,
+                         "value": exclusions.value_text(holes, kinds), "deleted": False}
     if mark.candidate:
         row = candidate_row(stain, mark.candidate)
         record |= {"tile_id": str(row.tile_id), "x": round(float(row.x), 1), "y": round(float(row.y), 1)}
@@ -806,15 +808,11 @@ def _confirmations(meta: dict, tile: dict, person: str, mine: pd.DataFrame) -> l
     words = vocabulary(meta["stain"])
     classes = mine[mine.task == "class"]
     said = {k: words.positive(v, s) for k, v, s in zip(classes.id, classes.value, classes.subtype)}
-    marked = mine[mine.task == exclusions.TASK]
-    area = exclusions.rings_of(marked.iloc[-1].to_dict()) if len(marked) else ([], [], [])  # the area this person marked as bad
     outlined = set(mine.id[mine.task == "outline"])
     records = []
     stamp = {"source": person, "stain": meta["stain"], "tile_id": tile_id, "session": meta["name"], "confirmed": True}
     for r in own.rename(columns={"class": "klass"}).itertuples():
         x, y = round(float(r.x), 1), round(float(r.y), 1)
-        if area[0] and exclusions.inside(*area, x, y):
-            continue  # excluded by the annotator: not checked, left out of scoring and training
         key = store.object_id("class", tile_id, x, y)
         identity, subtype = candidate_store.ai_call(words, r.decision, r.klass, r.subtype)
         if key in said:
@@ -841,6 +839,8 @@ def save_tile(meta: dict, tile_id: str, marks: list, submit: bool, person: str) 
         if not mark.candidate and not mark.tile_id:
             mark = mark.model_copy(update={"tile_id": tile_id})
         record = clean(meta, mark, person)
+        if record is None:
+            continue
         if record["tile_id"] != tile_id:
             raise HTTPException(400, f"{mark.candidate or mark.tile_id} is not on {tile_id}: save each field's changes with that field")
         cleaned.append(record)
@@ -890,12 +890,12 @@ def _round_meta(name: str, request: Request) -> dict:
 
 @router.get("/annotate/{name}/fields/{tile_id}/excluded")
 def field_excluded(name: str, tile_id: str, request: Request, person: str = Depends(annotator)) -> dict:
-    """The excluded areas over a field (`store_view.field_excluded`: detection's folds, artifacts, no tissue, edge guard,
-    hand-drawn exclusions and what other annotators marked; this person's own marks are drawn by their page)."""
+    """The excluded areas over a field: its part of the core's resolved layer (`store_view.field_excluded`), the same
+    pixels the Cores view, the analysis, training and scoring use. The page draws its unsaved edits over it."""
     from stainid.api import store_view  # noqa: PLC0415
 
     meta = _round_meta(name, request)
-    return store_view.field_excluded(get_state().project, field_tile(meta, tile_id), person)[0]
+    return store_view.field_excluded(get_state().project, field_tile(meta, tile_id))[0]
 
 
 @router.get("/annotate/{name}/fields/{tile_id}/excluded.png")
@@ -903,7 +903,7 @@ def field_excluded_png(name: str, tile_id: str, request: Request, person: str = 
     from stainid.api import store_view  # noqa: PLC0415
 
     meta = _round_meta(name, request)
-    png = store_view.field_excluded(get_state().project, field_tile(meta, tile_id), person)[1]
+    png = store_view.field_excluded(get_state().project, field_tile(meta, tile_id))[1]
     if png is None:
         raise HTTPException(404, f"the excluded areas of {tile_id} are not made yet (the v2 proposals make them)")
     return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})

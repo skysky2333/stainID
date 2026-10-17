@@ -116,18 +116,6 @@ function StudySettings({ info }: { info: ProjectInfo }) {
             onChange={(e) => update({ ...config, field_context_px: Number(e.target.value) })} /></label>
         </div>
         <p className="muted small" style={{ margin: 0 }}>{info.help.pixel_size_um} {info.help.field_context_px}</p>
-        {(() => {  // the areas annotators mark as bad (the field tool's brush): off, they only keep objects out of scoring and training
-          const labels = (config as unknown as { labels?: Record<string, unknown> }).labels ?? {}
-          return (
-            <label className="layer-toggle" style={{ marginTop: 8 }}>
-              <input type="checkbox" checked={!!labels.apply_exclusions}
-                onChange={(e) => update({ ...config, labels: { ...labels, apply_exclusions: e.target.checked } } as unknown as ProjectConfig)} />
-              Apply annotators’ excluded areas to the analysis
-              <span className="muted small"> — off: the areas people mark as bad while labelling only keep those objects out of scoring and training, and
-                the analyses use every tile as it is. On: they are added to the hand-drawn exclusions, and the detection redoes the cores they touch.</span>
-            </label>
-          )
-        })()}
         {PATH_SECTIONS.map(([section, title, text]) => (
           <section key={section} className="settings-paths">
             <h3>{title}</h3>

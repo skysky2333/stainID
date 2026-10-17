@@ -18,7 +18,8 @@ import numpy as np
 import pandas as pd
 
 from stainid import cache
-from stainid.labels import candidate_store, exclusions, frames, store
+from stainid import exclusions as excluded_areas
+from stainid.labels import candidate_store, frames, store
 from stainid.labels import vocabulary as vocab
 from stainid.project import Project
 
@@ -130,7 +131,7 @@ def _state_of(rows: pd.DataFrame) -> State:
 
 
 def _signature(project: Project, stain: str) -> tuple:
-    return store.signature(project.output("reviews")), _store_signature(project, stain)
+    return store.signature(project.output("reviews")), _store_signature(project, stain), excluded_areas.signature(project, stain)
 
 
 def cached(project: Project, stain: str) -> bool:
@@ -162,7 +163,7 @@ def state(project: Project, stain: str, tiles: pd.DataFrame, stale_ok: bool = Fa
         signature = _signature(project, stain)
         if kept is not None and kept[0] == signature:
             return kept[1]
-        made = _state_of(table(project, stain, exclusions.counted(store.current(root)), tiles))  # not what annotators marked as bad
+        made = _state_of(table(project, stain, excluded_areas.drop_excluded(project, store.current(root)), tiles))  # not on excluded objects
         with _LOCK:
             _STATE[key] = (signature, made)
         return made
