@@ -60,7 +60,7 @@ def _model_inputs(stain: str, field: Field, regions: list[Region]) -> list[dict]
         return neun.model_inputs(field, regions, contexts)
     if stain == "AT8":
         contexts = context_features_many(field, [_centroid(r) for r in regions], tau.context_diameters(regions), 55.0)
-        return tau.model_inputs(regions, contexts)
+        return tau.model_inputs(regions, contexts, field.threshold)
     return amyloid.model_inputs(field, regions)
 
 

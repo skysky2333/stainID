@@ -40,7 +40,7 @@ The *Prepare images* step (`stainid images`) replaces Find cores, Export cores a
   tile is one tile); every tile with any tissue is kept, as the lab chose the images.
 - **Whole slides**: each slide is covered by a grid of square regions of 6144 analysis pixels (about 1.7 mm, a large
   TMA core); every region holding at least 5 % tissue on an 8 µm/px picture, cut down to its tissue plus 60 µm, is one
-  core image. Regions never overlap. They are tiled like whole cores (tiles with at least 10 % tissue).
+  core image. Regions never overlap. They are tiled like whole cores (every square with tissue, at least 0.5 %).
 
 The core image table (`inputs.core_images`) records for every core image its source (`source_path`, `source_box` in the
 source's level-0 pixels, `scale`), its own antibody (`antibody`) and colour (`chromogen`); `stain` is the pipeline stain

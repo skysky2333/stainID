@@ -16,6 +16,7 @@ import cv2
 import numpy as np
 from scipy import ndimage
 
+from stainid.v2 import scaled
 from stainid.v2.geometry import Occupancy, Region, same_object
 from stainid.v2.tree import local_background_regions, tree_regions
 
@@ -257,7 +258,8 @@ def propose(field, settings: dict, shared: dict) -> list[Region]:
 
 
 def model_inputs(field, regions: list[Region], contexts: list[dict]) -> list[dict]:
-    """The current NeuN model's inputs (`stainid.stains.neun.classifier.build_matrix_from_contexts`), as m_ columns."""
+    """The current NeuN model's inputs (`stainid.stains.neun.classifier.build_matrix_from_contexts`), as m_ columns, and
+    their slide-scaled versions (`s_`, `stainid.v2.scaled`)."""
     out = []
     for region, context in zip(regions, contexts):
         row = region.legacy
@@ -269,6 +271,8 @@ def model_inputs(field, regions: list[Region], contexts: list[dict]) -> list[dic
             "m_source_candidate_is_review": float(row["source_candidate_class"] == "review"),
         }
         values |= {f"m_{k}": v for k, v in context.items()}
+        values |= scaled.intensities("NeuN", values, field.threshold)  # slide-scaled inputs (stainid.v2.scaled)
+        values["s_stained_area_um2"] = scaled.neun_stained_area(field, region, values["m_stained_area_um2"])
         out.append(values)
     return out
 

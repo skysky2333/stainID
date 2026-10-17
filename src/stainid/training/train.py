@@ -28,7 +28,7 @@ from stainid.labels.tasks import MODEL_KEY
 from stainid.project import Project, save_project
 from stainid.sampling.tiles import known_tiles
 from stainid.stains.amyloid.model import MORPHOTYPE_MINIMUM_DIAMETER_UM, morphotype_threshold
-from stainid.v2 import amyloid as v2_amyloid
+from stainid.v2 import scaled as v2_scaled
 from stainid.v2.params import params as v2_params
 
 MINIMUM_PER_CLASS = 10
@@ -130,18 +130,18 @@ def _current(project: Project, stain: str, x: np.ndarray, names: list[str]) -> t
 
 
 def slide_scaled(project: Project, stain: str) -> bool:
-    """Whether a new model of this stain takes slide-scaled inputs (`v2.training.<stain>.slide_scaled`; 6E10 only)."""
-    return stain == "6E10" and bool(((v2_params(project).get("training") or {}).get(stain) or {}).get("slide_scaled", False))
+    """Whether a new model of this stain takes slide-scaled inputs (`v2.training.<stain>.slide_scaled`)."""
+    return bool(((v2_params(project).get("training") or {}).get(stain) or {}).get("slide_scaled", False))
 
 
 def with_scaled(project: Project, stain: str, data: pd.DataFrame, names: list[str]) -> tuple[pd.DataFrame, list[str]]:
     """The labelled objects with the slide-scaled version of each input that has one (`s_<name>`, as stage 2 stores
     them), and those names. Where a row lacks one (a candidate of the old pool, a store made before the `s_` columns), an
-    intensity is its OD over the slide threshold of the object's TMA; a dense-core / seed measure stays empty (the
-    model's imputer fills it)."""
+    intensity is its OD over the slide threshold of the object's TMA; a recomputed measure (6E10 dense core / seed, NeuN
+    stained area) stays empty (the model's imputer fills it)."""
     from stainid.workflows import calibration_table
 
-    scaled = v2_amyloid.scaled_names(names)
+    scaled = v2_scaled.names(stain, names)
     calibration = calibration_table(project.input("calibration")) if project.input("calibration").exists() else {}
     threshold = data.tma.astype(str).map(lambda t: calibration.get((t, stain), np.nan)).astype(float)
     out = data.copy()
@@ -149,17 +149,20 @@ def with_scaled(project: Project, stain: str, data: pd.DataFrame, names: list[st
         if name == base:
             continue
         values = pd.to_numeric(out[name], errors="coerce") if name in out else pd.Series(np.nan, index=out.index)
-        if base in v2_amyloid.SCALED_INTENSITY and base in out:
+        if base in v2_scaled.INTENSITY.get(stain, ()) and base in out:
             values = values.fillna(pd.to_numeric(out[base], errors="coerce") / threshold)
         out[name] = values
+    for base in v2_scaled.INTENSITY.get(stain, ()):  # also the scaled intensities the model does not take (the AT8 maturity cut)
+        if base in out and f"s_{base}" not in out:
+            out[f"s_{base}"] = pd.to_numeric(out[base], errors="coerce") / threshold
     return out, scaled
 
 
 def train_model(project: Project, stain: str, sessions: list[str] | None = None, scaled: bool | None = None) -> Path:
     """A new model from the labels of these sessions (all when None), checked by leaving one TMA out at a time. `scaled`
-    (default: `slide_scaled`, on for 6E10): slide-scaled inputs instead of absolute DAB OD."""
+    (default: `slide_scaled`): slide-scaled inputs instead of absolute DAB OD (`stainid.v2.scaled`)."""
     data, names = labelled(project, stain, sessions)
-    scaled = slide_scaled(project, stain) if scaled is None else bool(scaled and stain == "6E10")
+    scaled = slide_scaled(project, stain) if scaled is None else bool(scaled)
     current_names = names
     if scaled:
         data, names = with_scaled(project, stain, data, names)
@@ -184,16 +187,22 @@ def train_model(project: Project, stain: str, sessions: list[str] | None = None,
 
     if stain == "NeuN":
         bundle = {"classifier": forest().fit(x[:, usable], y), "feature_names": names, "usable_features": usable, "decision_mode": "context_rf",
-                  "context_threshold": threshold, "addition_threshold": 0.6, "training_candidate_ids": ids}
+                  "context_threshold": threshold, "addition_threshold": 0.6, "training_candidate_ids": ids, "slide_scaled": bool(scaled)}
     elif stain == "AT8":
         positives = y & data.subtype.isin(["pretangle", "mature tangle"]).to_numpy()  # typed as mature or not
         mature = data.subtype.eq("mature tangle").to_numpy()
-        p90 = data.soma_dab_p90.to_numpy(float)
+        feature = v2_scaled.MATURE if scaled else "soma_dab_p90"  # mature tangle: the soma's DAB 90th percentile
+        p90 = pd.to_numeric(data[feature], errors="coerce").to_numpy(float)
+        positives &= np.isfinite(p90)  # (a scaled value needs the slide's threshold)
         enough = (positives & mature).sum() >= 3 and (positives & ~mature).sum() >= 3
-        maturity = float(max(np.unique(p90[positives]), key=lambda v: (p90[positives & mature] >= v).mean() + (p90[positives & ~mature] < v).mean())) \
-            if enough else float(old.get("mature_p90_threshold", 0.16))
+        fallback = float(old.get("mature_p90_threshold", 0.16))
+        if scaled and old.get("mature_feature", "soma_dab_p90") == "soma_dab_p90":  # the old cut-off in OD: in typical slide thresholds
+            fallback /= float(np.nanmedian(pd.to_numeric(data.soma_dab_p90, errors="coerce") / p90)) if np.isfinite(p90).any() else 1.0
+        maturity = float(max(np.unique(p90[positives & np.isfinite(p90)]), key=lambda v: (p90[positives & mature] >= v).mean()
+                             + (p90[positives & ~mature] < v).mean())) if enough else fallback
         bundle = {"classifier": forest().fit(x, y), "feature_names": names, "probability_threshold": threshold, "nms_radius_um": 12.0,
-                  "mature_p90_threshold": maturity, "context_um": 55.0, "training_n": int(len(y)), "training_positive_n": int(y.sum())}
+                  "mature_p90_threshold": maturity, "mature_feature": feature, "context_um": 55.0, "training_n": int(len(y)),
+                  "training_positive_n": int(y.sum()), "slide_scaled": bool(scaled)}
     else:
         plaques = y & (data.equivalent_diameter_um.to_numpy(float) >= MORPHOTYPE_MINIMUM_DIAMETER_UM)
         typed = data.subtype.isin(["compact", "diffuse"]).to_numpy()

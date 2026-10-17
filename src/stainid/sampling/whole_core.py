@@ -16,7 +16,10 @@ from stainid.qc.core_qc import tissue_mask
 from stainid.sampling.analysis_manifest import write_analysis_manifest
 from stainid.tables import read_csv, write_records
 
-MINIMUM_TISSUE = 0.10
+# every grid square with tissue: 0.5 % of a 2048 px square is about 1,600 µm² (glass-only squares hold none). The study
+# analyses every tile of tissue; the empty part of an edge tile is outside the tissue mask and counts in no area. At 10 %
+# the edge slivers dropped about 0.5–2 % of the tissue (more on some TMAs), with the plaques on it.
+MINIMUM_TISSUE = 0.005
 MINIMUM_EDGE_PX = 256
 KEEP = ("core_id", "tma", "core_label", "donor_id", "sample_region_id", "region", "disease_group", "technical_replicate", "stain",
         "image_path", "pixel_width_um", "pixel_height_um")

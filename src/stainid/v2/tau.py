@@ -10,6 +10,7 @@ import numpy as np
 from stainid.stains.tau.network import segment_at8_network
 from stainid.stains.tau.neurons import TAU_FEATURES, _local_features, nucleus_rings, tau_neuron_candidates
 from stainid.stains.tau.threads import thread_network
+from stainid.v2 import scaled
 from stainid.v2.geometry import Occupancy, Region, label_regions, same_object
 from stainid.v2.tree import local_background_regions, tree_regions
 
@@ -110,14 +111,17 @@ def extras(field, regions: list[Region]) -> list[dict]:
     return out
 
 
-def model_inputs(regions: list[Region], contexts: list[dict]) -> list[dict]:
-    """The tau model's inputs (`stainid.stains.tau.neurons.tau_feature_matrix`), as m_ columns."""
+def model_inputs(regions: list[Region], contexts: list[dict], threshold: float | None = None) -> list[dict]:
+    """The tau model's inputs (`stainid.stains.tau.neurons.tau_feature_matrix`), as m_ columns, and with the slide's
+    `threshold` their slide-scaled versions (`s_`, `stainid.v2.scaled`)."""
     out = []
     for region, context in zip(regions, contexts):
         row = region.legacy
         values = {f"m_{name}": float(row.get(name, np.nan)) for name in TAU_FEATURES}
         values |= {f"m_ctx_{k}": v for k, v in context.items()}
         values["m_from_ring"] = float(row["candidate_source"] == "nucleus_ring")
+        if threshold:
+            values |= scaled.intensities("AT8", values, threshold)
         out.append(values)
     return out
 
