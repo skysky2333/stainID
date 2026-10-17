@@ -25,7 +25,7 @@ POSITIVE, NEGATIVE, SKIP = "positive", "negative", "skip"
 ROLES = (POSITIVE, NEGATIVE, SKIP)
 UNTYPED = "type not recorded"  # shown for a positive object whose type nobody gave: "plaque (type not recorded)"
 TYPE_SPLIT = "people disagree on the type"  # "plaque (people disagree on the type)"
-RESERVED_KEYS = {"v", "a", "o", "z", "0"}  # field-page tools (v, a, o), undo in the quick check (z), "no type" (0)
+RESERVED_KEYS = {"v", "a", "o", "z", "0", "e"}  # field-page tools (v, a, o), undo (z), "no type" (0), the exclusion brush (e)
 DEFAULT_SUBTYPE_WAIT_S = 1.0  # how long after an identity key a number key picks its subtype
 
 
@@ -80,7 +80,7 @@ DEFAULTS: dict[str, tuple[Identity, ...]] = {
         _i("tau+ neuron", "tau+ neuron", POSITIVE, "A neuron whose cell body holds brown (AT8) tau.", "1", (
             _s("pretangle", "pretangle", "Diffuse or grainy brown in the cell body around a visible nucleus; the cell keeps its shape.", "q"),
             _s("mature tangle", "mature tangle", "A dense brown flame- or globe-shaped mass filling the cell body, often hiding the nucleus.", "w"),
-            _s("ghost tangle", "ghost (extracellular) tangle", "A loose, paler brown tangle with no cell or nucleus around it: the neuron has died.", "e"),
+            _s("ghost tangle", "ghost (extracellular) tangle", "A loose, paler brown tangle with no cell or nucleus around it: the neuron has died.", "t"),
         )),
         _i("neuritic plaque", "neuritic plaque (tau crown)", NEGATIVE,
            "A ring or cluster of swollen brown nerve endings around a plaque, with no cell body in the middle.", "2"),
@@ -97,7 +97,7 @@ DEFAULTS: dict[str, tuple[Identity, ...]] = {
         _i("plaque", "plaque", POSITIVE, "A brown amyloid deposit between the cells, at least about 10 µm across.", "1", (
             _s("compact", "compact (dense-core)", "A dense, well-defined brown core.", "q"),
             _s("diffuse", "diffuse", "A loose, fluffy brown deposit without a dense core.", "w"),
-            _s("cored-neuritic", "cored-neuritic", "A dense core with a halo of swollen nerve endings around it, if you can see them.", "e"),
+            _s("cored-neuritic", "cored-neuritic", "A dense core with a halo of swollen nerve endings around it, if you can see them.", "t"),
             _s("small", "small (too small to type)", "A real plaque only 10–15 µm across: too small to tell its type.", "r"),
         )),
         _i("CAA", "CAA / vascular amyloid", NEGATIVE, "Brown amyloid in the wall of a blood vessel (cerebral amyloid angiopathy).", "2"),
@@ -111,7 +111,7 @@ DEFAULTS: dict[str, tuple[Identity, ...]] = {
         _i("NeuN+ neuron", "NeuN+ neuron", POSITIVE, "A brown (DAB) neuron: its nucleus and often its cell body are stained.", "1", (
             _s("strong", "strongly stained", "Dark brown nucleus and cell body.", "q"),
             _s("weak", "weakly stained", "Pale brown, but clearly a neuron.", "w"),
-            _s("large pyramidal", "large pyramidal neuron", "A large triangular neuron with a thick dendrite towards the brain surface.", "e", hidden=True),
+            _s("large pyramidal", "large pyramidal neuron", "A large triangular neuron with a thick dendrite towards the brain surface.", "t", hidden=True),
         )),
         _i("not a neuron", "not a neuron", NEGATIVE, "A blue-only nucleus (glia, the lining of a vessel) or background.", "2"),
         _i(*ARTIFACT, "3"),

@@ -143,7 +143,7 @@ def test_keys_pick_an_identity_then_its_type_by_place_or_both_at_once():
     plain = words.keymap(subtypes=False)  # a session that does not ask for types
     assert plain["then"] == {} and "q" not in plain["direct"] and plain["direct"]["1"] == ["tau+ neuron", None]
     neun = vocabulary.defaults("NeuN").keymap()
-    assert neun["then"]["NeuN+ neuron"] == {"1": "strong", "2": "weak"} and "e" not in neun["direct"]  # hidden: no key
+    assert neun["then"]["NeuN+ neuron"] == {"1": "strong", "2": "weak"} and "t" not in neun["direct"]  # hidden: no key
 
 
 def test_the_page_logic_of_the_keys(tmp_path):

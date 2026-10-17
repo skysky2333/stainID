@@ -12,7 +12,7 @@ from pathlib import Path
 import pandas as pd
 
 from stainid import cache
-from stainid.labels import added, candidate_store, frames, pool, store
+from stainid.labels import added, candidate_store, exclusions, frames, pool, store
 from stainid.labels import vocabulary as vocab
 from stainid.labels.tasks import positive
 from stainid.project import Project
@@ -135,5 +135,5 @@ def cached_stain_overview(project: Project, stain: str, root: Path, tiles: pd.Da
     stamp = (store.signature(root), pool.signature(project, stain), added.signature(project, stain), len(tiles), vocab.of(project, stain),
              cache.signature(candidate_store.folder(project, stain)))
     if key not in _CACHE or _CACHE[key][0] != stamp:
-        _CACHE[key] = (stamp, stain_overview(project, stain, frames.in_field_frame(store.current(root), tiles, project.context_px), tiles))
+        _CACHE[key] = (stamp, stain_overview(project, stain, frames.in_field_frame(exclusions.counted(store.current(root)), tiles, project.context_px), tiles))
     return _CACHE[key][1]

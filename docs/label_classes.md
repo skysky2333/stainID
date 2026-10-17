@@ -62,7 +62,7 @@ default; sessions made before this choice ask for it). On the quick check and on
 - for a class with types, a number right after it (within 1 s, `labels.subtype_wait_s`) picks the type by its place
   (tau+ neuron: 1 pretangle, 2 mature tangle, 3 ghost tangle); 0 or Enter means no type; when nothing follows, the
   class stands without a type;
-- a type's own key (Q, W, E… by default) answers class and type in one press;
+- a type's own key (Q, W, T… by default; E is the field tool's exclusion brush) answers class and type in one press;
 - with the mouse: click the class, then its type or *No type / not sure*.
 
 The keys are shown on screen next to the classes and under the picture. Without types asked, only the class keys apply
@@ -88,7 +88,7 @@ The list of each stain's classes, keys and types is always shown; *Change the cl
 descriptions, example pictures, hides classes or types, adds types and adds classes (choosing their role), and sets the
 time for the type key. Built-in classes can be hidden and renamed but not removed, and keep their role, so a project's
 settings never change what the identity models learn from existing labels. Keys are one letter or number, unique per
-stain; V, A, O (field-page tools), Z (undo) and 0 (no type) are taken, and types cannot have number keys.
+stain; V, A, O (field-page tools), E (the exclusion brush), Z (undo) and 0 (no type) are taken, and types cannot have number keys.
 
 The classes are kept in `stainid.yaml`, per stain, only when they differ from the built-in ones:
 

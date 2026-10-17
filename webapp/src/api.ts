@@ -177,7 +177,7 @@ export interface SessionDetail {
   fields: SessionField[]; annotator: string | null
 }
 export interface Label {
-  id: string; source: string; stain: string; task: 'class' | 'outline' | 'tag' | 'note' | 'done'; tile_id: string
+  id: string; source: string; stain: string; task: 'class' | 'outline' | 'tag' | 'note' | 'done' | 'exclude'; tile_id: string  // exclude: an area marked as bad (points: its rings)
   x: number | null; y: number | null; value: string; subtype?: string | null; points: number[][] | null; session: string; confirmed: boolean; time: number; deleted?: boolean
 }
 export interface FieldObjectLite { x: number; y: number; radius_px: number; ai_value?: string; ai_probability?: number }

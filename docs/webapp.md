@@ -271,7 +271,8 @@ fields; and the *Tutorial* link. Pointing at an object also shows its name besid
 | Delete (Backspace) | not an object: it turns dotted grey and stays visible (also an object the person added); a class key brings it back |
 | Tab / Shift+Tab (or + / −) | a bigger or smaller outline: the three Segment Anything outputs come with the object, so it changes at once |
 | Space | precise editing of this object, with everything else locked (tags, note, other fields, saving): right-click a spot to add it, left-click one to leave it out, drag the white dots (at most 48, the outline simplified to them); Z one step back; Space again keeps it, Esc cancels |
-| Z | undo the last unsaved change |
+| E | the exclusion brush, on and off (Esc also leaves): left-drag paints a bad area (fold, smudge, empty glass) as a red hatch, right-drag or Shift-drag erases, the wheel sets the brush size, the middle button pans; outlines are locked meanwhile. Saved with Save as rings in field pixels (an `exclude` label, `labels/exclusions.py`). Objects whose centre lies in it are that person's "excluded by the annotator": left out of scoring, agreement and training, and not confirmed when the field is finished. The analyses ignore the areas unless *Settings → More study settings → Apply annotators' excluded areas to the analysis* (`labels.apply_exclusions`, off by default) adds them to the hand-drawn exclusions |
+| Z | undo the last unsaved change (a brush stroke too) |
 | Enter | round 1: keep detection's call |
 | Ctrl+S (⌘S) | save, and stay on the field |
 | Ctrl+Enter (⌘Enter) | save and continue |

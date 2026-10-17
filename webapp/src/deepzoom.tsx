@@ -104,14 +104,123 @@ function visibleTiles(pyramid: Pyramid, level: number, view: View, box: { w: num
   return out
 }
 
+/* Drawing many objects (10–30 thousand candidates of a busy core) smoothly:
+   - the objects, lines and boxes are drawn once into a cached canvas that covers the view and half of it again on every
+     side; panning only moves that picture (and the tiles, by a CSS transform), without React rendering anything;
+   - while zooming the cached picture is stretched and drawn sharp again once the zoom rests (SETTLE_MS);
+   - objects are found through a grid of CELL-px squares: only the squares in view are drawn, and hovering or clicking
+     tests only the objects near the pointer (at most once per frame);
+   - zoomed far out (an object smaller than DOT_PX on screen) every object is a dot; the outlines come when zoomed in. */
+const CELL = 512
+const MARGIN = 0.5
+const SETTLE_MS = 140
+const COMMIT_MS = 120  // while moving, the tiles, the zoom label and the scale bar follow at most this often
+const DOT_PX = 5
+
+interface Bounds { x0: number; y0: number; x1: number; y1: number }
+/** The marks prepared for drawing and hit-testing: each one's bounds, the grid squares (drawn by the square of their
+ *  centre, hit-tested in every square their bounds touch), their outline paths per square and style, their typical size. */
+interface Prepared {
+  bounds: Bounds[]
+  home: Map<number, number[]>
+  hits: Map<number, number[]>
+  paths: Map<number, Map<string, Path2D>>
+  styles: { key: string; color: string; dashed: boolean }[]
+  typical: number
+  reach: number  // the largest half size of a mark (image px): how far beyond a square its marks can reach
+}
+const cellKey = (cx: number, cy: number) => cx * 65536 + cy
+const styleKey = (m: Mark) => `${m.color}|${m.dashed ? 1 : 0}`
+
+function prepare(marks: Mark[]): Prepared {
+  const bounds: Bounds[] = []
+  const home = new Map<number, number[]>()
+  const hits = new Map<number, number[]>()
+  const styles = new Map<string, { key: string; color: string; dashed: boolean }>()
+  const sizes: number[] = []
+  let reach = 0
+  marks.forEach((m, i) => {
+    let b: Bounds
+    if (m.rings?.length) {
+      b = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity }
+      for (const ring of m.rings) for (let k = 0; k < ring.length; k += 2) {
+        if (ring[k] < b.x0) b.x0 = ring[k]
+        if (ring[k] + 1 > b.x1) b.x1 = ring[k] + 1
+        if (ring[k + 1] < b.y0) b.y0 = ring[k + 1]
+        if (ring[k + 1] + 1 > b.y1) b.y1 = ring[k + 1] + 1
+      }
+      sizes.push(Math.max(b.x1 - b.x0, b.y1 - b.y0))
+      const key = styleKey(m)
+      if (!styles.has(key)) styles.set(key, { key, color: m.color, dashed: !!m.dashed })
+    } else {
+      const r = m.r ?? 4
+      b = { x0: m.x - r, y0: m.y - r, x1: m.x + r, y1: m.y + r }
+      sizes.push(2 * r)
+    }
+    bounds.push(b)
+    reach = Math.max(reach, Math.abs(m.x - b.x0), Math.abs(b.x1 - m.x), Math.abs(m.y - b.y0), Math.abs(b.y1 - m.y))
+    const own = cellKey(Math.floor(m.x / CELL), Math.floor(m.y / CELL))
+    if (!home.has(own)) home.set(own, [])
+    home.get(own)!.push(i)
+    for (let cx = Math.floor(b.x0 / CELL); cx <= Math.floor(b.x1 / CELL); cx++) {
+      for (let cy = Math.floor(b.y0 / CELL); cy <= Math.floor(b.y1 / CELL); cy++) {
+        const key = cellKey(cx, cy)
+        if (!hits.has(key)) hits.set(key, [])
+        hits.get(key)!.push(i)
+      }
+    }
+  })
+  sizes.sort((a, b) => a - b)
+  // dashed (rejected) first, so the solid outlines of kept objects lie on top
+  const ordered = [...styles.values()].sort((a, b) => Number(b.dashed) - Number(a.dashed))
+  return { bounds, home, hits, paths: new Map(), styles: ordered, typical: sizes.length ? sizes[sizes.length >> 1] : 10, reach: Math.min(reach, 4 * CELL) }
+}
+
+/** The outline paths of one grid square's marks, one per style (built when the square is first drawn). */
+function cellPaths(prepared: Prepared, marks: Mark[], key: number): Map<string, Path2D> {
+  let out = prepared.paths.get(key)
+  if (out) return out
+  out = new Map()
+  for (const i of prepared.home.get(key) ?? []) {
+    const m = marks[i]
+    if (!m.rings?.length) continue
+    const style = styleKey(m)
+    if (!out.has(style)) out.set(style, new Path2D())
+    const path = out.get(style)!
+    for (const ring of m.rings) {
+      path.moveTo(ring[0] + 0.5, ring[1] + 0.5)
+      for (let k = 2; k < ring.length; k += 2) path.lineTo(ring[k] + 0.5, ring[k + 1] + 0.5)
+      path.closePath()
+    }
+  }
+  prepared.paths.set(key, out)
+  return out
+}
+
+/** The grid squares whose marks may show in the image rectangle (marks reach `reach` px beyond their square). */
+function cellsIn(prepared: Prepared, x0: number, y0: number, x1: number, y1: number): number[] {
+  const out: number[] = []
+  const pad = prepared.reach
+  for (let cx = Math.floor((x0 - pad) / CELL); cx <= Math.floor((x1 + pad) / CELL); cx++) {
+    for (let cy = Math.floor((y0 - pad) / CELL); cy <= Math.floor((y1 + pad) / CELL); cy++) {
+      const key = cellKey(cx, cy)
+      if (prepared.home.has(key)) out.push(key)
+    }
+  }
+  return out
+}
+
+/** A picture drawn over the whole image (e.g. the excluded areas), `width` × `height` image px, any resolution. */
+export interface Overlay { src: string; width: number; height: number; opacity?: number }
+
 /**
  * A whole core image to zoom (wheel, double-click, + / −, keyboard) and drag around. Only the tiles in view are
  * fetched, at the screen's resolution; the coarse picture underneath stays visible while sharper tiles arrive.
  * `marks` (detected objects, with their outlines), `lines` (in `lineColor`, thin at any zoom, faint when far out) and
- * `boxes` (tiles, fields) are drawn on a canvas on top; a click near
+ * `boxes` (tiles, fields) are drawn on a canvas on top; `overlays` are pictures laid over the whole image. A click near
  * a mark or inside its outline reports its index to `onPick` (null for empty space), hovering shows `describe(index)`.
  */
-export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lineColor = '#fff', boxes = [], selected = null, describe, onPick, target, pixelUm, toolbar, height = 'min(72vh, 760px)', onTileError }: {
+export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lineColor = '#fff', boxes = [], overlays = [], selected = null, describe, onPick, target, pixelUm, toolbar, height = 'min(72vh, 760px)', onTileError }: {
   pyramid: Pyramid
   tileUrl: (level: number, col: number, row: number, layer?: string) => string
   layers?: string[]
@@ -119,6 +228,7 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
   lines?: Line[]
   lineColor?: string
   boxes?: Mark[]
+  overlays?: Overlay[]
   selected?: number | null
   describe?: (index: number) => string
   onPick?: (index: number | null) => void
@@ -131,48 +241,194 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
 }) {
   const box = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
+  const plane = useRef<HTMLDivElement>(null)
   const drag = useRef<{ x: number; y: number; vx: number; vy: number; moved: boolean } | null>(null)
   const [size, setSize] = useState({ w: 0, h: 0 })
-  const [view, setView] = useState<View | null>(null)
+  // the view: `viewRef` follows every move at once (drawing, the plane's transform); the state follows it at most every
+  // COMMIT_MS, for what React draws (the tiles in view, the zoom label, the scale bar)
+  const viewRef = useRef<View | null>(null)
+  const [committed, setCommitted] = useState<View | null>(null)
   const [loaded, setLoaded] = useState<Set<string>>(() => new Set())
   const [tip, setTip] = useState<{ x: number; y: number; text: string } | null>(null)
   const [dragging, setDragging] = useState(false)
   const [hovered, setHovered] = useState<number | null>(null)
-  // outlines: one path per colour and line style, built once (redrawn with the view's transform), and each outline's bounding box
-  const outlines = useMemo(() => {
-    const byStyle = new Map<string, { color: string; dashed: boolean; group: Mark[] }>()
-    for (const m of marks) {
-      if (!m.rings?.length) continue
-      const key = `${m.color}|${m.dashed ? 1 : 0}`
-      if (!byStyle.has(key)) byStyle.set(key, { color: m.color, dashed: !!m.dashed, group: [] })
-      byStyle.get(key)!.group.push(m)
-    }
-    // dashed (rejected) first, so the solid outlines of kept objects lie on top
-    return [...byStyle.values()].sort((a, b) => Number(b.dashed) - Number(a.dashed)).map(({ color, dashed, group }) => ({ color, dashed, path: ringPath(group) }))
-  }, [marks])
+  const prepared = useMemo(() => prepare(marks), [marks])
   const strokes = useMemo(() => linePaths(lines ?? []), [lines])
   useEffect(() => setHovered(null), [marks])
-  const ringBoxes = useMemo(() => marks.map((m) => {
-    if (!m.rings?.length) return null
-    const xs = m.rings.flatMap((ring) => ring.filter((_, k) => k % 2 === 0))
-    const ys = m.rings.flatMap((ring) => ring.filter((_, k) => k % 2 === 1))
-    return { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs) + 1, y1: Math.max(...ys) + 1 }
-  }), [marks])
+  const cache = useRef<{ canvas: HTMLCanvasElement; view: View; w: number; h: number } | null>(null)
+  const frame = useRef(0)
+  const settle = useRef(0)
+  const commitTimer = useRef(0)
+  const latest = useRef({ prepared, marks, strokes, boxes, lineColor, size, hovered, selected })
+  latest.current = { prepared, marks, strokes, boxes, lineColor, size, hovered, selected }
+  const view = viewRef.current ?? committed
+
+  /** Draws the objects, lines and boxes for this view into the cached picture (the view plus MARGIN on every side). */
+  const renderCache = (v: View) => {
+    const { prepared: p, marks: ms, strokes: ls, boxes: bs, lineColor: lc, size: sz } = latest.current
+    const dpr = window.devicePixelRatio || 1
+    const mx = sz.w * MARGIN, my = sz.h * MARGIN
+    const w = sz.w + 2 * mx, h = sz.h + 2 * my
+    const c = cache.current?.canvas ?? document.createElement('canvas')
+    if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(h * dpr) }
+    const g = c.getContext('2d')!
+    g.setTransform(dpr, 0, 0, dpr, 0, 0)
+    g.clearRect(0, 0, w, h)
+    const ox = v.x + mx, oy = v.y + my  // where the image corner lies in the cached picture
+    const [ix0, iy0, ix1, iy1] = [-ox / v.s, -oy / v.s, (w - ox) / v.s, (h - oy) / v.s]
+    g.lineWidth = 1.5
+    for (const b of bs) {
+      g.strokeStyle = b.color
+      g.setLineDash(b.dashed ? [5, 4] : [])
+      g.strokeRect(b.x * v.s + ox, b.y * v.s + oy, (b.w ?? 0) * v.s, (b.h ?? 0) * v.s)
+    }
+    g.setLineDash([])
+    if (ls.length) {
+      g.save()
+      g.setTransform(dpr * v.s, 0, 0, dpr * v.s, dpr * ox, dpr * oy)
+      g.lineJoin = 'round'
+      g.lineCap = 'round'
+      const far = v.s < FAR_SCALE  // zoomed far out: hairlines, faint, so the picture and objects stay visible
+      g.globalAlpha = far ? 0.4 : 0.9
+      const inView = ls.filter((s) => !(s.x1 < ix0 || s.y1 < iy0 || s.x0 > ix1 || s.y0 > iy1))
+      if (!far) {  // a dark halo under the lines, so they read on light and dark tissue
+        g.strokeStyle = HALO_COLOR
+        for (const s of inView) { g.lineWidth = (s.width + HALO) / v.s; g.stroke(s.path) }
+      }
+      g.strokeStyle = lc
+      for (const s of inView) { g.lineWidth = (far ? Math.min(0.8, s.width) : s.width) / v.s; g.stroke(s.path) }
+      g.restore()
+    }
+    const cells = cellsIn(p, ix0, iy0, ix1, iy1)
+    if (p.typical * v.s < DOT_PX) {  // far out: a dot per object, rejected (dashed) ones first and smaller
+      const dots = new Map<string, { color: string; dashed: boolean; path: Path2D }>()
+      for (const key of cells) for (const i of p.home.get(key)!) {
+        const m = ms[i]
+        const x = m.x * v.s + ox, y = m.y * v.s + oy
+        if (x < -4 || y < -4 || x > w + 4 || y > h + 4) continue
+        const style = styleKey(m)
+        if (!dots.has(style)) dots.set(style, { color: m.color, dashed: !!m.dashed, path: new Path2D() })
+        const radius = m.dashed ? 1.8 : 2.4
+        const path = dots.get(style)!.path
+        path.moveTo(x + radius, y)
+        path.arc(x, y, radius, 0, 2 * Math.PI)
+      }
+      g.lineWidth = 1
+      g.strokeStyle = HALO_COLOR
+      for (const d of [...dots.values()].sort((a, b) => Number(b.dashed) - Number(a.dashed))) { g.fillStyle = d.color; g.fill(d.path); g.stroke(d.path) }
+      return { canvas: c, view: v, w, h }
+    }
+    g.save()
+    g.setTransform(dpr * v.s, 0, 0, dpr * v.s, dpr * ox, dpr * oy)
+    g.lineJoin = 'round'
+    const unit = 1 / v.s  // one screen px in image px: the strokes keep their width on screen at any zoom
+    const groups = cells.map((key) => cellPaths(p, ms, key))
+    for (const style of p.styles) {
+      const paths = groups.map((group) => group.get(style.key)).filter((x): x is Path2D => !!x)
+      if (!paths.length) continue
+      g.setLineDash(style.dashed ? DASH.map((d) => d * unit) : [])
+      g.strokeStyle = HALO_COLOR
+      g.lineWidth = (STROKE + HALO) * unit
+      for (const path of paths) g.stroke(path)
+      g.strokeStyle = style.color
+      g.lineWidth = STROKE * unit
+      for (const path of paths) g.stroke(path)
+    }
+    g.restore()
+    g.lineJoin = 'round'
+    for (const key of cells) for (const i of p.home.get(key)!) {  // objects without an outline: a circle, or a dot when small
+      const m = ms[i]
+      if (m.circle === false) continue
+      const x = m.x * v.s + ox, y = m.y * v.s + oy
+      const r = (m.r ?? 4) * v.s + 2
+      if (x < -r - 4 || y < -r - 4 || x > w + r + 4 || y > h + r + 4) continue
+      if (r < 4) {
+        g.beginPath()
+        g.arc(x, y, 2.4, 0, 2 * Math.PI)
+        g.fillStyle = m.color
+        g.strokeStyle = HALO_COLOR
+        g.lineWidth = 1
+        g.fill()
+        g.stroke()
+        continue
+      }
+      strokeWithHalo(g, () => { g.beginPath(); g.arc(x, y, Math.max(r, 5), 0, 2 * Math.PI); g.stroke() }, m.color, STROKE, 1, m.dashed)
+    }
+    return { canvas: c, view: v, w, h }
+  }
+
+  /** One frame: the cached picture moved (and stretched while zooming) to the current view, then the hovered and the
+   *  selected object on top, thicker and glowing. */
+  const draw = () => {
+    frame.current = 0
+    const c = canvas.current
+    const g = c?.getContext('2d')
+    const v = viewRef.current
+    const { size: sz, marks: ms, hovered: hov, selected: sel } = latest.current
+    if (!c || !g || !v || !sz.w) return
+    const dpr = window.devicePixelRatio || 1
+    g.setTransform(dpr, 0, 0, dpr, 0, 0)
+    g.clearRect(0, 0, sz.w, sz.h)
+    let k = cache.current ? v.s / cache.current.view.s : 0
+    const mx = sz.w * MARGIN, my = sz.h * MARGIN
+    const covers = (c: { view: View; w: number; h: number }) => {  // the cached picture, moved and stretched, still fills the view
+      const dx = (-mx - c.view.x) * k + v.x, dy = (-my - c.view.y) * k + v.y
+      return dx <= 0 && dy <= 0 && dx + c.w * k >= sz.w && dy + c.h * k >= sz.h
+    }
+    const stale = !cache.current || k > 3 || k < 1 / 3 || !covers(cache.current)
+    if (stale) { cache.current = renderCache(v); k = 1 }
+    const cached = cache.current!
+    if (k !== 1) {  // zooming: stretch the cached picture now, draw it sharp once the zoom rests
+      window.clearTimeout(settle.current)
+      settle.current = window.setTimeout(() => { cache.current = renderCache(viewRef.current!); requestDraw() }, SETTLE_MS)
+    }
+    g.imageSmoothingEnabled = true
+    g.drawImage(cached.canvas, (-mx - cached.view.x) * k + v.x, (-my - cached.view.y) * k + v.y, cached.w * k, cached.h * k)
+    const lit: [number | null, number][] = [[hov, STROKE_HOVER], [sel, STROKE_SELECTED]]
+    for (const [i, width] of lit) {
+      const m = i === null ? null : ms[i]
+      if (!m) continue
+      if (m.rings?.length && m.circle !== true) {
+        const path = ringPath([m])
+        g.save()
+        g.setTransform(dpr * v.s, 0, 0, dpr * v.s, dpr * v.x, dpr * v.y)
+        g.lineJoin = 'round'
+        strokeWithHalo(g, () => g.stroke(path), m.color, width, 1 / v.s, m.dashed, true)
+        g.restore()
+      } else {
+        const x = m.x * v.s + v.x, y = m.y * v.s + v.y
+        const radius = Math.max((m.r ?? 4) * v.s + 2, 5) + (i === sel ? 3 : 0)
+        strokeWithHalo(g, () => { g.beginPath(); g.arc(x, y, radius, 0, 2 * Math.PI); g.stroke() }, m.color, width, 1, m.dashed, true)
+      }
+    }
+  }
+  const requestDraw = () => { if (!frame.current) frame.current = requestAnimationFrame(draw) }
+
+  /** Moves the view at once (drawing, the plane's transform); React follows within COMMIT_MS, or now with `now`. */
+  const setView = (next: View | null, now = false) => {
+    viewRef.current = next
+    if (next && plane.current) plane.current.style.transform = `translate(${next.x}px, ${next.y}px) scale(${next.s})`
+    requestDraw()
+    if (now) { window.clearTimeout(commitTimer.current); commitTimer.current = 0; setCommitted(next); return }
+    if (!commitTimer.current) commitTimer.current = window.setTimeout(() => { commitTimer.current = 0; setCommitted(viewRef.current) }, COMMIT_MS)
+  }
+  useEffect(() => () => { cancelAnimationFrame(frame.current); window.clearTimeout(settle.current); window.clearTimeout(commitTimer.current) }, [])
 
   const fit = (): View => {
     const s = Math.min(size.w / pyramid.width, size.h / pyramid.height) * 0.96
     return { s, x: (size.w - pyramid.width * s) / 2, y: (size.h - pyramid.height * s) / 2 }
   }
   const centred = (t: ViewTarget): View => {
-    const s = Math.min(MAX_SCALE, Math.max(fit().s, t.scale ?? Math.max(view?.s ?? 0, 0.5)))
+    const s = Math.min(MAX_SCALE, Math.max(fit().s, t.scale ?? Math.max(viewRef.current?.s ?? 0, 0.5)))
     return { s, x: size.w / 2 - t.x * s, y: size.h / 2 - t.y * s }
   }
-  const zoomAt = (factor: number, px: number, py: number) => setView((v) => {
-    if (!v) return v
+  const zoomAt = (factor: number, px: number, py: number, now = false) => {
+    const v = viewRef.current
+    if (!v) return
     const s = Math.min(MAX_SCALE, Math.max(fit().s * 0.5, v.s * factor))
-    return { s, x: px - ((px - v.x) * s) / v.s, y: py - ((py - v.y) * s) / v.s }
-  })
-  const zoomCentre = (factor: number) => zoomAt(factor, size.w / 2, size.h / 2)
+    setView({ s, x: px - ((px - v.x) * s) / v.s, y: py - ((py - v.y) * s) / v.s }, now)
+  }
+  const zoomCentre = (factor: number) => zoomAt(factor, size.w / 2, size.h / 2, true)
 
   useEffect(() => {
     const element = box.current
@@ -181,11 +437,21 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
     resize.observe(element)
     return () => resize.disconnect()
   }, [])
+  useEffect(() => {  // the canvas has the box's size (in device pixels); changing it clears it, so only when the size changes
+    const c = canvas.current
+    const dpr = window.devicePixelRatio || 1
+    if (c && size.w) { c.width = Math.round(size.w * dpr); c.height = Math.round(size.h * dpr) }
+    cache.current = null
+    requestDraw()
+  }, [size.w, size.h])  // eslint-disable-line react-hooks/exhaustive-deps
+  // what is drawn changed: the cached picture is made again; hovering and selecting only redraw the frame
+  useEffect(() => { cache.current = null; requestDraw() }, [prepared, strokes, boxes, lineColor])  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { requestDraw() }, [hovered, selected])  // eslint-disable-line react-hooks/exhaustive-deps
 
   // a new image starts from the whole core (or the requested spot) as soon as the box has a size
-  useEffect(() => { setView(null); setLoaded(new Set()) }, [pyramid.version, pyramid.width])
-  useEffect(() => { if (size.w && size.h && !view) setView(target ? centred(target) : fit()) })
-  useEffect(() => { if (target && size.w) setView(centred(target)) }, [target?.key])
+  useEffect(() => { setView(null, true); setLoaded(new Set()) }, [pyramid.version, pyramid.width])  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (size.w && size.h && !viewRef.current) setView(target ? centred(target) : fit(), true) })
+  useEffect(() => { if (target && size.w) setView(centred(target), true) }, [target?.key])  // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const element = box.current
@@ -200,99 +466,49 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
     return () => element.removeEventListener('wheel', onWheel)
   })
 
-  // the drawing on top: boxes, then the marks inside the view (tiny dots when zoomed far out)
-  useEffect(() => {
-    const c = canvas.current
-    const g = c?.getContext('2d')
-    if (!c || !g || !view) return
-    const dpr = window.devicePixelRatio || 1
-    c.width = size.w * dpr
-    c.height = size.h * dpr
-    g.setTransform(dpr, 0, 0, dpr, 0, 0)
-    g.clearRect(0, 0, size.w, size.h)
-    g.lineWidth = 1.5
-    for (const b of boxes) {
-      g.strokeStyle = b.color
-      g.setLineDash(b.dashed ? [5, 4] : [])
-      g.strokeRect(b.x * view.s + view.x, b.y * view.s + view.y, (b.w ?? 0) * view.s, (b.h ?? 0) * view.s)
-    }
-    g.setLineDash([])
-    if (strokes.length) {
-      g.save()
-      g.setTransform(dpr * view.s, 0, 0, dpr * view.s, dpr * view.x, dpr * view.y)
-      g.lineJoin = 'round'
-      g.lineCap = 'round'
-      g.strokeStyle = lineColor
-      const far = view.s < FAR_SCALE  // zoomed far out: hairlines, faint, so the picture and objects stay visible
-      g.globalAlpha = far ? 0.4 : 0.9
-      const [vx0, vy0, vx1, vy1] = [-view.x / view.s, -view.y / view.s, (size.w - view.x) / view.s, (size.h - view.y) / view.s]
-      const inView = strokes.filter((s) => !(s.x1 < vx0 || s.y1 < vy0 || s.x0 > vx1 || s.y0 > vy1))
-      if (!far) {  // a dark halo under the lines, so they read on light and dark tissue
-        g.strokeStyle = HALO_COLOR
-        for (const s of inView) { g.lineWidth = (s.width + HALO) / view.s; g.stroke(s.path) }
-        g.strokeStyle = lineColor
-      }
-      for (const s of inView) {
-        g.lineWidth = (far ? Math.min(0.8, s.width) : s.width) / view.s
-        g.stroke(s.path)
-      }
-      g.restore()
-    }
-    if (outlines.length) {
-      g.save()
-      g.setTransform(dpr * view.s, 0, 0, dpr * view.s, dpr * view.x, dpr * view.y)
-      g.lineJoin = 'round'
-      const unit = 1 / view.s  // one screen px in image px: the strokes keep their width on screen at any zoom
-      for (const o of outlines) strokeWithHalo(g, () => g.stroke(o.path), o.color, STROKE, unit, o.dashed)
-      for (const [i, width] of [[hovered, STROKE_HOVER], [selected, STROKE_SELECTED]] as const) {
-        const m = i === null ? null : marks[i]
-        if (m?.rings?.length) { const path = ringPath([m]); strokeWithHalo(g, () => g.stroke(path), m.color, width, unit, m.dashed, true) }
-      }
-      g.restore()
-    }
-    g.lineJoin = 'round'
-    marks.forEach((m, i) => {
-      if (m.circle === false) return
-      const x = m.x * view.s + view.x
-      const y = m.y * view.s + view.y
-      const r = (m.r ?? 4) * view.s + 2
-      if (x < -r - 4 || y < -r - 4 || x > size.w + r + 4 || y > size.h + r + 4) return
-      const lit = i === selected || i === hovered
-      if (r < 4 && !lit) {  // zoomed far out: a dot with a dark rim
-        g.beginPath()
-        g.arc(x, y, 2.4, 0, 2 * Math.PI)
-        g.fillStyle = m.color
-        g.strokeStyle = HALO_COLOR
-        g.lineWidth = 1
-        g.fill()
-        g.stroke()
-        return
-      }
-      const radius = Math.max(r, 5) + (i === selected ? 3 : 0)
-      strokeWithHalo(g, () => { g.beginPath(); g.arc(x, y, radius, 0, 2 * Math.PI); g.stroke() }, m.color,
-        i === selected ? STROKE_SELECTED : i === hovered ? STROKE_HOVER : STROKE, 1, m.dashed, lit)
-    })
-  }, [view, size, marks, boxes, selected, hovered, outlines, strokes, lineColor])
-
   const local = (e: React.PointerEvent | React.MouseEvent) => {
     const rect = box.current!.getBoundingClientRect()
     return { px: e.clientX - rect.left, py: e.clientY - rect.top }
   }
+  /** The mark under a screen point: the nearest whose circle (or centre) is close or whose outline holds the point,
+   *  among the marks of the grid squares around it. */
   const nearest = (px: number, py: number): number | null => {
-    if (!view) return null
+    const v = viewRef.current
+    if (!v) return null
+    const ix = (px - v.x) / v.s
+    const iy = (py - v.y) / v.s
+    const near = Math.min(2 * CELL, 8 / v.s)
+    const seen = new Set<number>()
     let best: number | null = null
     let bestDistance = Infinity
-    const ix = (px - view.x) / view.s
-    const iy = (py - view.y) / view.s
-    marks.forEach((m, i) => {
-      const d = Math.hypot(m.x * view.s + view.x - px, m.y * view.s + view.y - py)
-      const b = ringBoxes[i]
-      const hit = d < (m.circle === false ? 8 : Math.max(8, (m.r ?? 4) * view.s + 6))
-        || (!!b && ix >= b.x0 && ix <= b.x1 && iy >= b.y0 && iy <= b.y1 && insideRings(m, ix, iy))
-      if (hit && d < bestDistance) { best = i; bestDistance = d }
-    })
+    for (let cx = Math.floor((ix - near) / CELL); cx <= Math.floor((ix + near) / CELL); cx++) {
+      for (let cy = Math.floor((iy - near) / CELL); cy <= Math.floor((iy + near) / CELL); cy++) {
+        for (const i of prepared.hits.get(cellKey(cx, cy)) ?? []) {
+          if (seen.has(i)) continue
+          seen.add(i)
+          const m = marks[i]
+          const d = Math.hypot(m.x * v.s + v.x - px, m.y * v.s + v.y - py)
+          const b = prepared.bounds[i]
+          const hit = d < (m.circle === false ? 8 : Math.max(8, (m.r ?? 4) * v.s + 6))
+            || (!!m.rings?.length && ix >= b.x0 && ix <= b.x1 && iy >= b.y0 && iy <= b.y1 && insideRings(m, ix, iy))
+          if (hit && d < bestDistance) { best = i; bestDistance = d }
+        }
+      }
+    }
     return best
   }
+  // hovering: the pointer's last position, hit-tested once per frame
+  const pointer = useRef<{ px: number; py: number } | null>(null)
+  const hoverFrame = useRef(0)
+  const hoverTest = () => {
+    hoverFrame.current = 0
+    const at = pointer.current
+    if (!at || drag.current?.moved) return
+    const hit = nearest(at.px, at.py)
+    setHovered(hit)
+    if (describe) setTip(hit === null ? null : { x: at.px, y: at.py, text: describe(hit) })
+  }
+  useEffect(() => () => cancelAnimationFrame(hoverFrame.current), [])
 
   const top = pyramid.levels.length - 1
   const level = view ? chooseLevel(pyramid, view.s) : top
@@ -313,8 +529,8 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
   const markLoaded = (key: string) => setLoaded((old) => (old.has(key) ? old : new Set(old).add(key)))
 
   let scaleBar = null
-  if (view && pixelUm) {
-    const umPerPx = pixelUm / view.s
+  if (committed && pixelUm) {
+    const umPerPx = pixelUm / committed.s
     const um = NICE_UM.find((n) => n / umPerPx >= 60) ?? NICE_UM[NICE_UM.length - 1]
     scaleBar = <div className="dz-scale"><span style={{ width: um / umPerPx }} />{um >= 1000 ? `${um / 1000} mm` : `${um} µm`}</div>
   }
@@ -326,46 +542,48 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
         <span className="spacer" />
         <span className="row dz-zoom-buttons">
           <button className="btn small" onClick={() => zoomCentre(1 / 1.6)} aria-label="Zoom out" title="Zoom out (−)">−</button>
-          <span className="small muted dz-zoom" title="100% shows every pixel of the scan">{view ? `${view.s >= 0.1 ? Math.round(view.s * 100) : (view.s * 100).toFixed(1)}%` : ''}</span>
+          <span className="small muted dz-zoom" title="100% shows every pixel of the scan">{committed ? `${committed.s >= 0.1 ? Math.round(committed.s * 100) : (committed.s * 100).toFixed(1)}%` : ''}</span>
           <button className="btn small" onClick={() => zoomCentre(1.6)} aria-label="Zoom in" title="Zoom in (+)">+</button>
-          <button className="btn small" onClick={() => setView(fit())} title="Show the whole core">Whole core</button>
+          <button className="btn small" onClick={() => setView(fit(), true)} title="Show the whole core">Whole core</button>
         </span>
       </div>
       <div ref={box} className={`dz${dragging ? ' dragging' : ''}`} style={{ height }} tabIndex={0} aria-label="Core image: scroll or use + and − to zoom, drag or use the arrow keys to move"
         onPointerDown={(e) => {
-          if (!view || e.button !== 0) return
+          const v = viewRef.current
+          if (!v || e.button !== 0) return
           e.currentTarget.setPointerCapture(e.pointerId)
-          drag.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y, moved: false }
+          drag.current = { x: e.clientX, y: e.clientY, vx: v.x, vy: v.y, moved: false }
         }}
         onPointerMove={(e) => {
           const d = drag.current
           if (d) {
             if (!d.moved && Math.hypot(e.clientX - d.x, e.clientY - d.y) > 4) { d.moved = true; setDragging(true); setTip(null); setHovered(null) }
-            if (d.moved) setView((v) => v && { ...v, x: d.vx + e.clientX - d.x, y: d.vy + e.clientY - d.y })
+            const v = viewRef.current
+            if (d.moved && v) setView({ ...v, x: d.vx + e.clientX - d.x, y: d.vy + e.clientY - d.y })
             return
           }
-          const { px, py } = local(e)
-          const hit = nearest(px, py)
-          setHovered(hit)
-          if (describe) setTip(hit === null ? null : { x: px, y: py, text: describe(hit) })
+          pointer.current = local(e)
+          if (!hoverFrame.current) hoverFrame.current = requestAnimationFrame(hoverTest)
         }}
         onPointerUp={(e) => {
           const d = drag.current
           drag.current = null
           setDragging(false)
+          if (d?.moved) setView(viewRef.current, true)
           if (d && !d.moved && onPick) { const { px, py } = local(e); onPick(nearest(px, py)) }
         }}
-        onPointerLeave={() => { setTip(null); setHovered(null) }}
-        onDoubleClick={(e) => { const { px, py } = local(e); zoomAt(2, px, py) }}
+        onPointerLeave={() => { pointer.current = null; setTip(null); setHovered(null) }}
+        onDoubleClick={(e) => { const { px, py } = local(e); zoomAt(2, px, py, true) }}
         onKeyDown={(e) => {
           const moves: Record<string, [number, number]> = { ArrowLeft: [80, 0], ArrowRight: [-80, 0], ArrowUp: [0, 80], ArrowDown: [0, -80] }
           const move = moves[e.key]
-          if (move) { e.preventDefault(); setView((v) => v && { ...v, x: v.x + move[0], y: v.y + move[1] }) }
+          const v = viewRef.current
+          if (move && v) { e.preventDefault(); setView({ ...v, x: v.x + move[0], y: v.y + move[1] }) }
           if (e.key === '+' || e.key === '=') zoomCentre(1.6)
           if (e.key === '-') zoomCentre(1 / 1.6)
         }}>
         {view && (
-          <div className="dz-plane" style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.s})` }}>
+          <div ref={plane} className="dz-plane" style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.s})` }}>
             {shown.map((t) => {
               const key = `${t.level}-${t.col}-${t.row}`
               return <img key={key} src={tileUrl(t.level, t.col, t.row)} style={tileStyle(t)} alt="" draggable={false} onLoad={() => markLoaded(key)} onError={onTileError} />
@@ -373,6 +591,10 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
             {layers.flatMap((layer) => sharp.map((t) => (
               <img key={`${layer}-${t.level}-${t.col}-${t.row}`} src={tileUrl(t.level, t.col, t.row, layer)} style={tileStyle(t)} alt="" draggable={false} />
             )))}
+            {overlays.map((o) => (
+              <img key={o.src} className="dz-overlay" src={o.src} alt="" draggable={false}
+                style={{ left: 0, top: 0, width: o.width, height: o.height, opacity: o.opacity ?? 1 }} />
+            ))}
           </div>
         )}
         <canvas ref={canvas} className="dz-canvas" style={{ width: size.w, height: size.h }} />

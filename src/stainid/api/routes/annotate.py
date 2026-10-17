@@ -732,6 +732,8 @@ class Mark(BaseModel):
     candidate: str = ""  # annotation rounds: the v2 candidate the label is about (its field and position come from the store)
     keep: bool = False  # annotation rounds: the AI's call on `candidate` is right (recorded as confirmed)
     mask: int | None = None  # annotation rounds: which of the candidate's Segment Anything masks is right (small to large)
+    png: str = ""  # round 2, task "exclude": the area marked as bad, painted (a PNG data URL at 1/`scale` of the field picture)
+    scale: float = 1.0
 
 
 class Marks(BaseModel):

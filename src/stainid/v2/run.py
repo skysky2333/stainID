@@ -47,11 +47,28 @@ def _claim(project, stage: str, stain: str, core_id: str):
 
 # ---------------------------------------------------------------- what is to do
 
+def annotator_exclusions(project, manual: dict) -> dict:
+    """The hand-drawn exclusions with the areas annotators marked as bad added (`labels.exclusions.for_analysis`), for
+    the project setting "Apply annotators' excluded areas to the analysis"."""
+    import pandas as pd
+
+    from stainid.labels import exclusions, store
+
+    tiles = pd.read_csv(project.analysis_tiles(), dtype={"tma": str}) if project.analysis_tiles().exists() else pd.DataFrame()
+    marked = exclusions.for_analysis(project, store.current(project.output("reviews")), tiles) if not tiles.empty else {}
+    out = {k: list(v) for k, v in manual.items()}
+    for image, polygons in marked.items():
+        out[image] = out.get(image, []) + polygons
+    return out
+
+
 def proposal_inputs(project, fresh: bool = True):
     """The slide thresholds, hand-drawn exclusions and the names of the nuclei files (empty before they exist); `fresh`
     lists the nuclei folder now (a run), else at most every 30 s (the app's status: the folder holds a file per tile)."""
     calibration = calibration_table(project.input("calibration")) if project.input("calibration").exists() else {}
     manual = read_manual_exclusions(project.input("manual_exclusions"))
+    if (project.config.get("labels") or {}).get("apply_exclusions"):  # off by default: the analyses use every tile as it is
+        manual = annotator_exclusions(project, manual)
     nuclei = cache.names(project.output("nuclei"), every=0 if fresh else 30)
     return calibration, manual, nuclei
 
