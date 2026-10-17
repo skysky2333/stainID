@@ -28,7 +28,7 @@ function stepsFor(typed: boolean): Step[] {
     { round: 2, title: 'Undo', text: 'Pressed the wrong key? Press Z to undo your last change. Z takes back changes you have not saved yet.', done: ['undo'] },
     { round: 2, title: 'Bigger or smaller outline', text: 'Point at an object and press Tab for a bigger outline, Shift+Tab for a smaller one. Each object has three sizes ready, so it changes at once.', done: ['mask'] },
     { round: 2, title: 'Add a missed object', text: 'Click on tissue where detection missed an object: its outline appears as a new candidate (dotted grey with a diamond). Then press its class number to make it solid.', done: ['added'] },
-    { round: 2, title: 'Precise editing', text: 'For an outline that no size fits: right-click the object. It is zoomed in on, and everything else is locked until you leave.', done: ['precise-in'] },
+    { round: 2, title: 'Precise editing', text: 'For an outline that no size fits: click the object. It is zoomed in on, and everything else is locked until you leave. (To give it a class you only point at it: no click needed.)', done: ['precise-in'] },
     { round: 2, title: 'Fix it spot by spot', text: 'Right-click a spot to add it, left-click one on or near the outline to leave it out, or drag one of the white dots. Z takes one step back.', done: ['precise-edit'] },
     { round: 2, title: 'Keep the edit', text: 'Click outside the object to keep the outline: the view goes back to where you were (Esc would cancel the edit).', done: ['precise-out'] },
     { round: 2, title: 'A clean look', text: 'Press Space to hide everything drawn over the picture and see the tissue alone. Press Space again to bring it back.', done: ['overlays'] },

@@ -70,7 +70,7 @@ and detection's confirmed calls (fields sessions, *Finished*) are stored without
 
 The annotation rounds use the same class and type keys, acting on the object under the mouse (round 2) or on screen
 (round 1). Their other keys are listed in [webapp.md](webapp.md#annotation-rounds): 0 unsure, Delete not an object,
-Tab / Shift+Tab for the outline size, a right-click on the object for precise editing (Space in round 1; in round 2
+Tab / Shift+Tab for the outline size, a click on the object for precise editing (Space in round 1; in round 2
 Space hides the drawings), Z undo and Enter to keep detection's call.
 
 ## Where types show

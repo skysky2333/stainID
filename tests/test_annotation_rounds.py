@@ -351,7 +351,7 @@ def test_an_area_marked_as_bad_saves_reloads_and_keeps_its_objects_out_of_scorin
     again = ann.get(f"/api/annotate/{name}/fields/{TILE}").json()
     marked = next(m for m in again["mine"] if m["task"] == "exclude")
     xs = [p[0] for p in marked["points"][0]]
-    assert 195 <= min(xs) <= 205 and 255 <= max(xs) <= 265 and marked["value"] == "holes:0"  # it comes back as it was painted
+    assert 195 <= min(xs) <= 205 and 255 <= max(xs) <= 265 and marked["value"] == "kinds:1;holes:0"  # it comes back as it was painted (type 1)
     decided = decisions.state(state.get_state().project, "6E10", state.get_state().tiles)
     hers = set(decided.rows.candidate[decided.rows.source == "Ann"])
     assert inside_id not in hers and len(hers) == len([o for o in field["objects"] if o["own"]]) - 1  # left out of scoring
