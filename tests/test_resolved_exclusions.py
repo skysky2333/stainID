@@ -136,3 +136,50 @@ def test_ai_reviewer_areas_are_edits_people_can_clear(project, tmp_path):
     edit(project, "Ann", [square(600 - ox, 600 - oy, 700 - ox, 700 - oy)], ["include"], first[0].time + 10)
     assert exclusions.resolved(project, CORE, STAIN).codes[650 // 8, 650 // 8] == 0
     assert [e.source for e in exclusions.edits(project, CORE, STAIN)] == [exclusions.REVIEWER, "Ann"]
+
+
+def test_area_edits_outdate_only_the_cores_they_change(project):
+    """A core's proposals record the digest of its edits they were made with: an edit makes that core (only) one to
+    re-detect, and the app's batch starts "Apply area edits" only when nothing else runs."""
+    import time as clock
+
+    from stainid.api import area_batch
+    from stainid.v2 import area_edits, manifest
+
+    write_mask(project)
+    made = manifest.make("proposals", {}, {"image": "x", area_edits.KEY: exclusions.edits_digest(project, CORE, STAIN)})
+    manifest.write(project, "proposals", STAIN, CORE, made)
+    manifest.write(project, "proposals", STAIN, "LIP-9_Z-9", manifest.make("proposals", {}, {"image": "x"}))  # made before: left alone
+    cache.forget()
+    assert area_edits.changed(project) == {}
+    edit(project, "Ann", [square(200, 200, 280, 280)], ["1"], 50.0)
+    cache.forget()
+    assert area_edits.changed(project) == {STAIN: [CORE]}
+
+    class Jobs:
+        def __init__(self, active):
+            self._active = active
+
+        def active(self):
+            return self._active
+
+    class State:
+        def __init__(self, active):
+            self.project, self.jobs = project, Jobs(active)
+
+    area_batch._started.clear()
+    assert area_batch.due(State(False), now=1e10) and not area_batch.due(State(True), now=1e10)  # a job running: wait
+    claims = project.output("v2") / "claims"
+    claims.mkdir(parents=True, exist_ok=True)
+    (claims / "calls_AT8_x.claim").write_text("")
+    assert not area_batch.due(State(False), now=clock.time())  # a detection run works on the project from outside: wait
+
+
+def test_edit_codes_give_the_net_effect_of_the_edits_for_stage_2(project):
+    edit(project, "Ann", [square(200, 200, 280, 280)], ["1"], 10.0)
+    edit(project, "Bob", [square(240, 200, 320, 280)], ["include"], 20.0)
+    before = exclusions.edits_digest(project, CORE, STAIN)
+    codes = exclusions.edit_codes(project, CORE, STAIN, (150, 150))
+    assert codes[cell(project, 220, 240)] == 1 and codes[cell(project, 300, 240)] == exclusions.EDIT_CLEARED and codes[5, 5] == exclusions.EDIT_NONE
+    edit(project, "Cy", [square(0, 0, 40, 40)], ["4"], 30.0)
+    assert exclusions.edits_digest(project, CORE, STAIN) != before  # no stage-2 mask needed: stage 2 reads it before writing one

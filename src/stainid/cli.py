@@ -112,7 +112,7 @@ def build_parser() -> argparse.ArgumentParser:
     _shard(p)
 
     p = sub.add_parser("v2", help="v2 detection: proposals, calls, outlines and measures (outputs.v2); resumable, redoes what is outdated")
-    p.add_argument("stage", choices=("proposals", "calls", "outlines", "measures", "status"))
+    p.add_argument("stage", choices=("proposals", "calls", "outlines", "measures", "status", "area-edits"))
     p.add_argument("--stain", action="append", choices=("NeuN", "6E10", "AT8"))
     p.add_argument("--core", action="append", help="only this core (repeat for several; a file with one core id per line works too)")
     p.add_argument("--workers", type=int, default=0, help="core images at once (0: as many as memory and processors allow)")
@@ -335,6 +335,10 @@ def run_v2(args: argparse.Namespace, project) -> None:
         run.run_calls(project, stains, cores, args.workers or None, args.redo)
     elif args.stage == "outlines":
         run.run_outlines(project, stains, cores, args.device or None, args.shard_index, args.shard_count, args.redo)
+    elif args.stage == "area-edits":  # people's edits of the excluded areas: decide the changed cores again, remake the tables
+        from stainid.v2 import area_edits
+
+        area_edits.apply(project)
     else:
         run.run_measures(project)
 

@@ -226,13 +226,26 @@ def remaining_fields(fields: list[str], finished: set[str], assigned: set[str]) 
     return [t for t in dict.fromkeys(fields) if t not in finished and t not in assigned]
 
 
-def draw_fields(remaining: list[str], n: int, seed: int) -> list[str]:
-    """n of the remaining fields drawn uniformly at random, without repeats (n < 0, or more than there are: all of them),
-    in the drawn order; the same seed gives the same draw."""
+def draw_fields(remaining: list[str], n: int, seed: int, first: set[str] | None = None) -> list[str]:
+    """n of the remaining fields drawn at random, without repeats (n < 0, or more than there are: all of them), in the
+    drawn order; the same seed gives the same draw. `first`: fields drawn before any other (those whose core image's
+    bad areas a person checked), at random among themselves, then the rest at random."""
     rng = np.random.default_rng(seed)
-    if n < 0 or n >= len(remaining):
-        return [remaining[i] for i in rng.permutation(len(remaining))]
-    return [remaining[i] for i in rng.choice(len(remaining), size=n, replace=False)]
+    if first is None:
+        if n < 0 or n >= len(remaining):
+            return [remaining[i] for i in rng.permutation(len(remaining))]
+        return [remaining[i] for i in rng.choice(len(remaining), size=n, replace=False)]
+    pools = [[t for t in remaining if t in first], [t for t in remaining if t not in first]]
+    drawn = [pool[i] for pool in pools for i in rng.permutation(len(pool))]
+    return drawn if n < 0 else drawn[:n]
+
+
+def from_checked(fields: list[str], tiles: pd.DataFrame, checked: dict[tuple[str, str], set[str]]) -> set[str]:
+    """The fields whose core image's bad areas someone checked ("Mark bad areas", `status.areas_checked`)."""
+    if tiles.empty or not checked:
+        return set()
+    rows = tiles[tiles.tile_id.isin(set(fields))].drop_duplicates("tile_id")
+    return {t for t, c, s in zip(rows.tile_id, rows.core_id.astype(str), rows.stain.astype(str)) if checked.get((c, s))}
 
 def field_states(meta: dict, reviewed: dict[str, set[str]], working: dict[str, set[str]], held: dict[str, set[str]], ready: set[str]) -> list[dict]:
     """Where each field of a round-2 session stands (as `sessions.field_states`); `open_by` are the people holding it now."""

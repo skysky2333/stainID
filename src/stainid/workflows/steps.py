@@ -256,6 +256,18 @@ LEGACY = "Legacy (v1)"  # the first detection: still runnable (Run page, Advance
 MAIN_STAGES = ("1 · Set up", DETECT, RESULTS)  # the stages "Run what's left" runs
 
 
+def _area_edits_status(project: Project) -> dict:
+    """Whether people's area edits are applied: how many core images were detected with other edits of their areas."""
+    from stainid.labels import store  # noqa: PLC0415
+    from stainid.v2 import area_edits  # noqa: PLC0415
+
+    folders = [project.output("v2") / "manifests" / "proposals" / stain for stain in STAINS]
+    inputs = [*folders, store.log_path(project.output("reviews"))]
+    found = cache.memo(("area edits status", str(project.root)), inputs, lambda: area_edits.status(project)["cores"], every=30.0, folders=True)
+    return _state(1, 1, "table", f"Re-detecting edited cores: {found:,} core images have edited areas to apply." if found else "",
+                  outdated=bool(found))
+
+
 def _v2_status(project: Project, stage: str) -> dict:
     """How many core images a v2 stage has done (up to date) of those it can do, and whether some are out of date."""
     from stainid.v2.run import cached_status
@@ -473,6 +485,14 @@ STEPS = (
          "skeletons, under the v2 folder (v2/measures); the legacy results tables are not touched.",
          ("v2_calls",), ("v2_measures",), ("v2", "measures"), (), view="/results", duration="a few minutes", uses=("v2_outlines",),
          status=lambda p: _state(int(_has_content(p.output("v2") / "measures" / "results_donor_region.csv")), 1, "table")),
+    Step("v2_area_edits", RESULTS, "Apply area edits", "Re-detect the edited cores: bring the results up to date with the bad areas people marked or cleared.",
+         "People's edits of the excluded areas (Mark bad areas, and the brush in the object rounds) change the layer at once, and "
+         "detection takes the excluded areas out of the tissue before it looks, so this re-detects only the edited core images "
+         "(find candidates, decide, outline) and remakes the results tables. It also runs by itself at most every 10 minutes while "
+         "the app is open, when there are edits to apply and no detection step is running.",
+         ("v2_proposals",), ("v2_measures",), ("v2", "area-edits"), (), heavy=True, view="/results",
+         duration="a few minutes per edited core image, then a few minutes",
+         status=lambda p: _area_edits_status(p)),
     Step("download_models", "Models", "Download public models", "Fetch the Cellpose-SAM, Segment Anything and Phikon weights.",
          "These models are published by their authors and are the same for every study. The NeuN, 6E10 and AT8 models are specific to "
          "your staining and are trained on the Models page instead.", (), ("model_cellpose", "model_sam", "model_phikon"), ("download-models",),
