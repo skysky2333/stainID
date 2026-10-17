@@ -3,11 +3,31 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from stainid.api import session
+from stainid.api import session, work
 from stainid.api.state import get_state
 
 router = APIRouter(tags=["session"])
 YEAR = 365 * 24 * 3600
+
+
+@router.get("/session/work/{task_id}")
+def work_status(task_id: str, request: Request):
+    """Where a slow request's background work stands (`stainid.api.work`): pending (202, with the queue position and an
+    estimate), its result once done, or its error."""
+    task = work.find(task_id)
+    if task is None:
+        raise HTTPException(404, "this work is not known (any more): ask again")
+    if task.admin and not session.is_admin(request):
+        raise HTTPException(401, "admin sign-in required")
+    if task.state in ("waiting", "running"):
+        return work.pending(task, "result")
+    return {"result": work.outcome(task)}
+
+
+@router.get("/session/work", dependencies=[Depends(session.require_admin)])
+def work_queue() -> dict:
+    """Everything the background pool is doing and has queued."""
+    return work.overview()
 
 
 class Register(BaseModel):

@@ -113,8 +113,23 @@ def scope_cores(tiles: pd.DataFrame, scope: list[str]) -> list[str]:
 def candidates_in(project: Project, stain: str, tiles: pd.DataFrame, scope: list[str], at: float | None) -> pd.DataFrame:
     """The candidates of these tiles (their own), at the session's level, with field-picture positions."""
     mine = tiles[(tiles.stain == stain) & tiles.tile_id.isin(set(scope))]
-    found = candidate_store.for_cores(project, stain, scope_cores(mine, scope))
+    found = candidate_store.for_cores(project, stain, scope_cores(mine, scope), candidate_store.LIGHT)  # no outlines: `with_shapes`
     return candidate_store.in_tiles(candidate_store.at_level(found, at), mine, project.context_px)
+
+
+SHAPES = ("outline", "sam_outline", "sam_masks", "sam_scores", "sam_default")
+
+
+def with_shapes(project: Project, stain: str, frame: pd.DataFrame, tile: dict) -> pd.DataFrame:
+    """These candidates of one tile (`candidates_in`) with their outlines and masks (core pixels), read for that tile only."""
+    if frame.empty:
+        return frame
+    rows = candidate_store.field_rows(project, stain, tile, project.context_px)
+    if rows is None or rows.empty:
+        return frame
+    rows = rows.drop_duplicates("candidate_id").set_index("candidate_id")
+    at = [rows.index.get_loc(c) if c in rows.index else -1 for c in frame.candidate_id]
+    return frame.assign(**{c: [rows[c].iloc[i] if i >= 0 else None for i in at] for c in SHAPES if c in rows})
 
 
 def choose(project: Project, stain: str, tiles: pd.DataFrame, scope: list[str], at: float | None, n: int, decided: State,

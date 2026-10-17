@@ -182,6 +182,12 @@ def _warm_up(state: ProjectState) -> None:
     from stainid.labels import overview
     from stainid.workflows.steps import describe
 
+    try:  # the annotation pages first: people may be waiting for them
+        from stainid.api.routes.rounds import warm_up
+
+        warm_up(state)
+    except Exception:  # noqa: BLE001 - the pages make what they need when they ask
+        pass
     try:
         describe(state.project)
         for stain in sorted(set(state.tiles.stain)) if "stain" in state.tiles else []:

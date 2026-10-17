@@ -252,6 +252,20 @@ def _work() -> None:
 
 # ---------------------------------------------------------------- what the routes call
 
+def load(state: ProjectState) -> None:
+    """Load the Segment Anything model now (server start, a background thread), so no request waits for torch."""
+    try:
+        clicks.outliner(checkpoint(state))
+    except Exception as error:  # noqa: BLE001 - a click loads it then, and says what is wrong
+        log.warning("Segment Anything not loaded ahead: %s", error)
+
+
+def busy() -> bool:
+    """Whether the encoder is making some field's features now (a click on a field not made yet waits for a window)."""
+    with _COND:
+        return any(t.running for t in _TASKS.values())
+
+
 def status(state: ProjectState, tile_id: str) -> dict:
     """Whether a field's clicks will be outlined at once ("ready"), or its features are being made ("preparing";
     asks for them first), or cannot be ("unavailable": no weights; "failed")."""

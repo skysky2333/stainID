@@ -14,6 +14,7 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass, field
 
+import numpy as np
 import pandas as pd
 
 from stainid import cache
@@ -25,6 +26,7 @@ COLUMNS = ["candidate", "source", "identity", "subtype", "role", "time", "sessio
 _LOCK = threading.Lock()
 _LEGACY: dict[tuple[str, str], tuple[tuple, pd.Series]] = {}  # (project, stain) -> (what it was made from, candidate of each old label)
 _STATE: dict[tuple[str, str], tuple[tuple, State]] = {}
+_MAKING: dict[tuple[str, str], threading.Lock] = {}
 
 
 def _has_candidate(labels: pd.DataFrame) -> pd.Series:
@@ -93,35 +95,79 @@ class State:
         return self.decided.get(candidate, [])
 
 
+def _most_common(frame: pd.DataFrame, column: str) -> pd.Series:
+    """Per candidate, the most common value of `column` among its rows (in their order); a tie goes to the value that
+    came first, as `value_counts` orders them."""
+    counted = frame.groupby(["candidate", column], sort=False).position.agg(["size", "min"]).reset_index()
+    counted = counted.sort_values(["size", "min"], ascending=[False, True], kind="stable").drop_duplicates("candidate")
+    return counted.set_index("candidate")[column]
+
+
 def _state_of(rows: pd.DataFrame) -> State:
+    """Who decided what, counted for every candidate at once (grouped, not candidate by candidate: a submitted tile
+    records each of its candidates)."""
     out = State(rows=rows)
     if rows.empty:
         return out
-    out.answered = {c: set(g) for c, g in rows.groupby("candidate").source}
+    for candidate, source in zip(rows.candidate.to_numpy(object), rows.source.to_numpy(object)):
+        out.answered.setdefault(candidate, set()).add(source)
     said = rows[rows.role != vocab.SKIP].sort_values("time", kind="stable")
-    for candidate, group in said.groupby("candidate", sort=False):
-        out.decided[candidate] = list(dict.fromkeys(group.source))
-        top = group.identity.value_counts()
-        identity = str(top.index[0])
-        typed = group.subtype[(group.identity == identity) & (group.subtype.fillna("") != "")]
-        out.calls[candidate] = (identity, str(typed.value_counts().index[0]) if len(typed) else "")
-        out.times[candidate] = float(group.time.max())
+    if said.empty:
+        return out
+    said = pd.DataFrame({"candidate": said.candidate.to_numpy(object), "source": said.source.to_numpy(object),
+                         "identity": said.identity.astype(str).to_numpy(object), "subtype": said.subtype.fillna("").astype(str).to_numpy(object),
+                         "time": said.time.to_numpy(float), "position": np.arange(len(said))})
+    for candidate, source in zip(*(said.drop_duplicates(["candidate", "source"])[c].to_numpy(object) for c in ("candidate", "source"))):
+        out.decided.setdefault(candidate, []).append(source)
+    identity = _most_common(said, "identity")
+    typed = said[(said.subtype != "") & (said.identity.to_numpy(object) == identity.reindex(said.candidate).to_numpy(object))]
+    subtype = _most_common(typed, "subtype") if len(typed) else pd.Series(dtype=object)
+    latest = said.groupby("candidate", sort=False).time.max()
+    subtypes = subtype.to_dict()
+    out.calls = {c: (identity[c], subtypes.get(c, "")) for c in out.decided}
+    out.times = {c: float(t) for c, t in latest.items()}
     return out
 
 
-def state(project: Project, stain: str, tiles: pd.DataFrame) -> State:
-    """The decisions as the label log stands now, made again whenever a label is saved."""
+def _signature(project: Project, stain: str) -> tuple:
+    return store.signature(project.output("reviews")), _store_signature(project, stain)
+
+
+def cached(project: Project, stain: str) -> bool:
+    """Whether `state` answers at once (made since the last label was saved)."""
+    with _LOCK:
+        kept = _STATE.get((str(project.root), stain))
+    return kept is not None and kept[0] == _signature(project, stain)
+
+
+def state(project: Project, stain: str, tiles: pd.DataFrame, stale_ok: bool = False) -> State:
+    """The decisions as the label log stands now, made again whenever a label is saved (once: parallel requests wait
+    for the one making it). `stale_ok` (the pages' heartbeat): while it is being made again, the previous one."""
     root = project.output("reviews")
-    signature = (store.signature(root), _store_signature(project, stain))
+    signature = _signature(project, stain)
     key = (str(project.root), stain)
     with _LOCK:
         kept = _STATE.get(key)
+        making = _MAKING.setdefault(key, threading.Lock())
     if kept is not None and kept[0] == signature:
         return kept[1]
-    made = _state_of(table(project, stain, exclusions.counted(store.current(root)), tiles))  # not what annotators marked as bad
-    with _LOCK:
-        _STATE[key] = (signature, made)
-    return made
+    if stale_ok and kept is not None:
+        if not making.acquire(blocking=False):
+            return kept[1]
+    else:
+        making.acquire()
+    try:
+        with _LOCK:
+            kept = _STATE.get(key)
+        signature = _signature(project, stain)
+        if kept is not None and kept[0] == signature:
+            return kept[1]
+        made = _state_of(table(project, stain, exclusions.counted(store.current(root)), tiles))  # not what annotators marked as bad
+        with _LOCK:
+            _STATE[key] = (signature, made)
+        return made
+    finally:
+        making.release()
 
 
 def forget() -> None:

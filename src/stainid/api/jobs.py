@@ -153,7 +153,12 @@ class JobManager:
 
     def describe(self, job: Job) -> dict:
         progress = job.outcome or self.progress(job)
-        return {**job.__dict__, "title": BY_ID[job.workflow].title if job.workflow in BY_ID else job.workflow, "progress": progress}
+        ahead = None
+        if job.status == "queued":  # how many queued jobs of this project start before it (oldest first) and how many run now
+            ahead = sum(1 for j in list(self.jobs.values()) if j.status == "queued" and j.created < job.created)
+        running = sum(1 for j in list(self.jobs.values()) if j.status == "running") if ahead is not None else None
+        return {**job.__dict__, "title": BY_ID[job.workflow].title if job.workflow in BY_ID else job.workflow, "progress": progress,
+                "queue": None if ahead is None else {"ahead": ahead, "running": running}}
 
     def close(self) -> None:
         self.open = False
