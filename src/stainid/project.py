@@ -34,9 +34,8 @@ DEFAULTS: dict = {
     "groups": [],
     # The label classes people choose from, per stain (`stainid.labels.vocabulary`): a stain not listed uses the built-in
     # identity classes and subtypes. `subtype_wait_s`: how long after a class key a number key picks its type.
-    # apply_exclusions: the areas annotators mark as bad (the field tool's brush) become hand-drawn exclusions of the
-    # analysis too; off: they only keep those objects out of scoring and training (labels.exclusions)
-    "labels": {"classes": {}, "subtype_wait_s": 1.0, "apply_exclusions": False},
+    # (The excluded areas, detection's and people's edits, always apply everywhere: `stainid.exclusions`.)
+    "labels": {"classes": {}, "subtype_wait_s": 1.0},
     # How donor ids are written when the guided setup reads TMA maps and case sheets: plain numbers with at least `digits`
     # digits (698 -> 0698; 0 keeps them as typed), prefixed ones as <PREFIX>_<number with `prefixed_digits` digits> (JOG3 -> JOG_003).
     "donor_ids": {"digits": 4, "prefixed_digits": 3},

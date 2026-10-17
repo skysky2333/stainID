@@ -1,35 +1,35 @@
-"""Areas annotators mark as bad on a field (the field tool's exclusion brush, key E): one `exclude` label per person and
-field (`exclude:<tile_id>`), its rings in field-picture pixels (`points`: a list of rings) with each ring's type and
-whether it is a hole in the area of its type (`value`, e.g. "kinds:1,1,include;holes:0,1,0"; older marks "holes:0,1",
-all of type 1). The types are `KINDS`: 1 fold or tissue damage, 2 artifact, 3 no tissue, 4 out of focus or bad
-staining, and "include": a part of an automatic exclusion (a fold, an artifact … the detection found) the annotator
-says is fine (Shift-drag), an override.
+"""The edits of the excluded areas as the label log stores them (the write side; `stainid.exclusions` owns the resolved
+layer every view, the analysis, training and scoring read).
+
+One edit is one `exclude` label: what a person painted and cleared on a field with the brush (key E) in one save, with
+id `exclude:<tile_id>:<token>` (a new one per save, so each save is its own edit and the log is the history), its rings
+in field-picture pixels (`points`: a list of rings), and each ring's type and whether it is a hole in the area of its
+type (`value`, e.g. "kinds:1,1,include;holes:0,1,0"; older labels "holes:0,1", all of type 1). The types are `KINDS`:
+1 fold or tissue damage, 2 artifact, 3 no tissue, 4 out of focus or bad staining, and "include": cleared, counted
+whatever detection or anyone earlier said (Shift-drag). Edits of the hand-drawn areas of the earlier AI-review rounds
+(source "AI reviewer") have the core id as `tile_id` and rings in core pixels (`stainid.exclusions.import_reviewer`).
 
 The page paints a mask per type and sends them as PNGs (at 1/`scale` of the field picture); `from_pngs` turns them into
-rings with cv2.findContours. Candidates whose centre lies inside a person's marked area (any type but "include") are
-"excluded by the annotator": that person's labels on them are left out of scoring, agreement and training (`counted`).
-The analyses do not use the marks unless the project setting `labels.apply_exclusions` is on (`for_analysis`, read by
-the v2 proposals as hand-drawn exclusions, types and include overrides carried along); it is off by default, as the
-study's rule is that every tile is analysed with no hand exclusions.
+rings with cv2.findContours.
 """
 from __future__ import annotations
 
 import base64
+import secrets
+import time
 
 import cv2
 import numpy as np
-import pandas as pd
-
-from stainid.labels import frames
 
 TASK = "exclude"
 INCLUDE = "include"
 KINDS = {"1": "fold or tissue damage", "2": "artifact (scratch, bubble, debris, linear artifact)", "3": "no tissue / empty",
-         "4": "out of focus or bad staining", INCLUDE: "cleared by the annotator (part of an automatic exclusion that is fine)"}
+         "4": "out of focus or bad staining", INCLUDE: "cleared: counted, whatever was said before"}
 
 
 def label_id(tile_id: str) -> str:
-    return f"{TASK}:{tile_id}"
+    """A new edit's id: one per save."""
+    return f"{TASK}:{tile_id}:{int(time.time() * 1000)}{secrets.token_hex(3)}"
 
 
 def from_png(data: str, scale: float) -> tuple[list[list[list[float]]], list[bool]]:
@@ -91,126 +91,3 @@ def parts_of(label) -> tuple[list[np.ndarray], list[bool], list[str]]:
     kinds = fields.get("kinds", "").split(",") if fields.get("kinds") else []
     return (rings, [flags[i] == "1" if i < len(flags) else False for i in range(len(rings))],
             [kinds[i] if i < len(kinds) and kinds[i] else "1" for i in range(len(rings))])
-
-
-def rings_of(label) -> tuple[list[np.ndarray], list[bool], list[str]]:
-    """The rings of an `exclude` label, which are holes and their types (`parts_of`)."""
-    return parts_of(label)
-
-
-def inside(rings: list[np.ndarray], holes: list[bool], kinds_or_x, x: float | None = None, y: float | None = None) -> bool:
-    """Whether a point is in the marked area: inside an outer ring of a type other than "include" and not inside one of
-    that type's holes. (Also `inside(rings, holes, x, y)` for rings all of one type.)"""
-    if y is None:
-        kinds, x, y = ["1"] * len(rings), kinds_or_x, x
-    else:
-        kinds = kinds_or_x
-    return bool(inside_many(rings, holes, kinds, [x], [y])[0])
-
-
-def _within(ring: np.ndarray, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
-    """Which of the points are inside a ring or on it (even-odd ray casting for all of them at once; the edge counts as
-    inside, as with cv2.pointPolygonTest >= 0)."""
-    x0, y0 = ring[:, 0][:, None], ring[:, 1][:, None]
-    x1, y1 = np.roll(ring[:, 0], -1)[:, None], np.roll(ring[:, 1], -1)[:, None]
-    px, py = xs[None, :], ys[None, :]
-    crosses = (y0 > py) != (y1 > py)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        at = x0 + (py - y0) * (x1 - x0) / (y1 - y0)
-    odd = (crosses & (px < at)).sum(axis=0) % 2 == 1
-    dx, dy = x1 - x0, y1 - y0  # on an edge (within 1e-6 px)
-    length = dx * dx + dy * dy
-    with np.errstate(divide="ignore", invalid="ignore"):
-        t = np.clip(np.where(length > 0, ((px - x0) * dx + (py - y0) * dy) / length, 0.0), 0.0, 1.0)
-    edge = (np.hypot(px - (x0 + t * dx), py - (y0 + t * dy)) <= 1e-6).any(axis=0)
-    return odd | edge
-
-
-def inside_many(rings: list[np.ndarray], holes: list[bool], kinds, xs, ys=None) -> np.ndarray:
-    """`inside` for many points at once (also `inside_many(rings, holes, xs, ys)` for rings all of one type)."""
-    if ys is None:
-        kinds, xs, ys = ["1"] * len(rings), kinds, xs
-    xs, ys = np.asarray(xs, np.float64), np.asarray(ys, np.float64)
-    out = np.zeros(len(xs), bool)
-    for kind in set(kinds) - {INCLUDE}:  # each type's area: its outer rings less its holes
-        outer = np.zeros(len(xs), bool)
-        hole = np.zeros(len(xs), bool)
-        for ring, is_hole, k in zip(rings, holes, kinds):
-            if k != kind:
-                continue
-            found = _within(np.asarray(ring, np.float64), xs, ys)
-            if is_hole:
-                hole |= found
-            else:
-                outer |= found
-        out |= outer & ~hole
-    return out
-
-
-def counted(labels: pd.DataFrame) -> pd.DataFrame:
-    """The labels without the ones a person made inside an area they marked as bad on that field (their class and
-    outline labels on objects whose centre lies there): what scoring, agreement and training read. Only the labels of
-    the (person, field) pairs that have a marked area are looked at, each pair's at once."""
-    if labels.empty or "task" not in labels or not (labels.task == TASK).any():
-        return labels
-    marks = labels[labels.task == TASK].drop_duplicates(["source", "tile_id"], keep="last")
-    areas = {(r.source, r.tile_id): rings_of(r) for r in marks.itertuples()}
-    keys = pd.MultiIndex.from_arrays([labels.source, labels.tile_id])
-    near = keys.isin(list(areas)) & labels.task.isin(["class", "outline"]).to_numpy() & labels.x.notna().to_numpy()
-    if not near.any():
-        return labels
-    objects = labels[near]
-    drop = []
-    for (source, tile_id), group in objects.groupby(["source", "tile_id"], sort=False):
-        rings, holes, kinds = areas[(source, tile_id)]
-        if rings:
-            hit = inside_many(rings, holes, kinds, group.x.astype(float).to_numpy(), group.y.astype(float).to_numpy())
-            drop.extend(group.index[hit])
-    return labels.drop(index=drop) if drop else labels
-
-
-def marked_area_px(labels: pd.DataFrame) -> dict[tuple[str, str], float]:
-    """(person, field) -> the area they marked as bad there, in field-picture pixels (outer rings less holes)."""
-    out = {}
-    for r in labels[labels.task == TASK].itertuples() if "task" in labels else []:
-        rings, holes, kinds = rings_of(r)
-        out[(r.source, r.tile_id)] = max(0.0, sum((-1 if h else 1) * float(cv2.contourArea(ring)) for ring, h, k in zip(rings, holes, kinds)
-                                                  if k != INCLUDE))
-    return out
-
-
-def in_core(labels: pd.DataFrame, tiles: pd.DataFrame, context_px: int, core_id: str, stain: str) -> list[dict]:
-    """The areas annotators marked on the fields of one core image, in core pixels: [{source, tile_id, rings, holes}]."""
-    if labels.empty or "task" not in labels:
-        return []
-    mine = tiles[(tiles.core_id.astype(str) == str(core_id)) & (tiles.stain == stain)].drop_duplicates("tile_id").set_index("tile_id")
-    marks = labels[(labels.task == TASK) & labels.tile_id.isin(set(mine.index))]
-    out = []
-    for r in marks.itertuples():
-        x0, y0 = frames.field_origin(mine.loc[r.tile_id], context_px)
-        rings, holes, kinds = rings_of(r)
-        out.append({"source": r.source, "tile_id": r.tile_id, "holes": holes, "kinds": kinds,
-                    "rings": [(ring + np.array([x0, y0], np.float32)).round(1).tolist() for ring in rings]})
-    return out
-
-
-def for_analysis(project, labels: pd.DataFrame, tiles: pd.DataFrame) -> dict[str, list[dict]]:
-    """The marked areas as hand-drawn exclusions per core image (the `manual_exclusions` format: image path ->
-    [{"polygon_core_px": …}]), only when the project setting `labels.apply_exclusions` is on (off by default)."""
-    if not (project.config.get("labels") or {}).get("apply_exclusions") or labels.empty or "task" not in labels:
-        return {}
-    marks = labels[labels.task == TASK]
-    boxes = tiles.drop_duplicates("tile_id").set_index("tile_id")
-    out: dict[str, list[dict]] = {}
-    for r in marks.itertuples():
-        if r.tile_id not in boxes.index:
-            continue
-        tile = boxes.loc[r.tile_id]
-        x0, y0 = frames.field_origin(tile, project.context_px)
-        rings, holes, kinds = rings_of(r)
-        for ring, hole, kind in zip(rings, holes, kinds):
-            if not hole:  # holes are left out: the analysis takes the outer areas
-                out.setdefault(str(tile["image_path"]), []).append(
-                    {"polygon_core_px": (ring + np.array([x0, y0], np.float32)).round().astype(int).tolist(), "source": f"annotator {r.source}",
-                     "kind": kind, "type": KINDS.get(kind, kind), "include": kind == INCLUDE})
-    return out

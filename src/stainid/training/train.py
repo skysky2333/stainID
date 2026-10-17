@@ -22,7 +22,8 @@ from sklearn.metrics import precision_score, recall_score, roc_auc_score
 from sklearn.model_selection import LeaveOneGroupOut, StratifiedGroupKFold
 from sklearn.pipeline import make_pipeline
 
-from stainid.labels import added, candidate_store, exclusions, frames, pool, store, vocabulary
+from stainid import exclusions as excluded_areas
+from stainid.labels import added, candidate_store, frames, pool, store, vocabulary
 from stainid.labels import sessions as label_sessions
 from stainid.labels.tasks import MODEL_KEY
 from stainid.project import Project, save_project
@@ -42,7 +43,8 @@ def forest():
 def labelled(project: Project, stain: str, sessions: list[str] | None = None) -> tuple[pd.DataFrame, list[str]]:
     """Consensus-labelled objects with their candidate features (one row per object), from the labels of these
     sessions (`labels.sessions.in_sessions`; all labels when None)."""
-    labels = frames.in_field_frame(exclusions.counted(store.current(project.output("reviews"))), known_tiles(project), project.context_px)
+    labels = frames.in_field_frame(excluded_areas.drop_excluded(project, store.current(project.output("reviews"))), known_tiles(project),
+                                  project.context_px)
     counts = added.measure(project, stain)
     if any(counts.values()):
         print(f"measured {counts['measured']} object(s) people added; {counts['could_not_be_measured']} could not be measured", flush=True)
@@ -235,7 +237,7 @@ def trained_on(project: Project, stain: str, sessions: list[str] | None) -> list
     how many objects each labelled, for the model's report."""
     root = project.output("reviews")
     titles = {name: label_sessions.meta(root, name).get("title", name) for name in label_sessions.names(root)}
-    used = label_sessions.label_sets(label_sessions.in_sessions(exclusions.counted(store.current(root)), sessions), stain, titles)
+    used = label_sessions.label_sets(label_sessions.in_sessions(excluded_areas.drop_excluded(project, store.current(root)), sessions), stain, titles)
     return [{"name": s["name"], "title": s["title"], "objects": s["objects"]} for s in used]
 
 
