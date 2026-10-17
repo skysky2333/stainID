@@ -358,7 +358,7 @@ function BadAreaDetector() {
                   <tr key={`${r.stain}-${r.tma ?? r.donor_id}-${r.type}`}><td>{r.stain}</td><td>{(by === 'tma' ? r.tma : r.donor_id) ?? '—'}</td><td>{r.type_name}</td>
                     <td>{r.images.toLocaleString()}</td><td>{fmt(r.added_mm2)}</td><td>{fmt(r.cleared_mm2)}</td>
                     <td>{r.f1 == null ? '—' : `${Math.round(100 * r.f1)}%`}</td></tr>
-                ))}</tbody>
+                ))}{!rows.length && <tr><td colSpan={7} className="muted">Nothing to compare yet: detection has not marked bad areas on the checked images (the v2 detection’s proposals make them).</td></tr>}</tbody>
               </table></div>
             </>}
           </>
