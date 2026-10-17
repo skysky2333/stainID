@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { Pending } from './api'
 import { api } from './api'
 
 export function useFetch<T>(url: string | null, refreshMs?: number) {
   const [data, setData] = useState<T | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [pending, setPending] = useState<Pending | null>(null)  // the server prepares it in the background: how far that is
   const [tick, setTick] = useState(0)
   const reload = useCallback(() => setTick((t) => t + 1), [])
   const inFlight = useRef(0)
@@ -14,10 +16,10 @@ export function useFetch<T>(url: string | null, refreshMs?: number) {
     let active = true
     setLoading(true)
     inFlight.current += 1
-    api.get<T>(url)
+    api.get<T>(url, { onPending: (p) => { if (active) setPending(p) } })
       .then((value) => { if (active) { setData(value); setError(null) } })
       .catch((reason: Error) => { if (active) setError(reason.message) })
-      .finally(() => { inFlight.current -= 1; if (active) setLoading(false) })
+      .finally(() => { inFlight.current -= 1; if (active) { setLoading(false); setPending(null) } })
     return () => { active = false }
   }, [url, tick])
 
@@ -28,7 +30,7 @@ export function useFetch<T>(url: string | null, refreshMs?: number) {
     return () => clearInterval(timer)
   }, [refreshMs, reload])
 
-  return { data, error, loading, reload }
+  return { data, error, loading, reload, pending }
 }
 
 export function useStored<T>(key: string, initial: T): [T, (value: T) => void] {

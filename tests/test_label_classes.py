@@ -143,7 +143,7 @@ def test_keys_pick_an_identity_then_its_type_by_place_or_both_at_once():
     plain = words.keymap(subtypes=False)  # a session that does not ask for types
     assert plain["then"] == {} and "q" not in plain["direct"] and plain["direct"]["1"] == ["tau+ neuron", None]
     neun = vocabulary.defaults("NeuN").keymap()
-    assert neun["then"]["NeuN+ neuron"] == {"1": "strong", "2": "weak"} and "e" not in neun["direct"]  # hidden: no key
+    assert neun["then"]["NeuN+ neuron"] == {"1": "strong", "2": "weak"} and "t" not in neun["direct"]  # hidden: no key
 
 
 def test_the_page_logic_of_the_keys(tmp_path):
@@ -154,6 +154,37 @@ def test_the_page_logic_of_the_keys(tmp_path):
     script = Path(__file__).parent / "js" / "class_keys.test.ts"
     done = subprocess.run([node, "--experimental-strip-types", "--no-warnings", str(script)], capture_output=True, text=True, timeout=60)
     assert done.returncode == 0, done.stdout + done.stderr
+
+
+def test_classes_are_listed_in_the_order_of_their_keys_with_unsure_last():
+    from stainid.api.routes.annotate import class_groups
+    from stainid.labels.overview import class_counts
+
+    for stain in ("NeuN", "6E10", "AT8"):
+        words = vocabulary.defaults(stain)
+        keys = {i: k for k, (i, sub) in words.keymap()["direct"].items() if sub is None}
+        listed = [c for c in words.by_key() if not c.hidden]
+        numbers = [int(keys[c.id]) for c in listed if c.role != SKIP and keys.get(c.id, "").isdigit()]
+        assert numbers == sorted(numbers), (stain, numbers)  # 1, 2, 3 … never 1, 3, 2
+        assert listed[-1].role == SKIP  # unsure (0 on the pages) last
+        assert [g["id"] for g in class_groups(words, set())][: len(listed)] == [c.id for c in listed]
+        assert [c["id"] for c in class_counts(pd.DataFrame(), words)] == [c.id for c in listed]
+
+
+def test_every_page_gives_a_class_the_same_colour():
+    """One palette for every page (webapp/src/classPalette.ts), in the order of `class_groups`, run by Node when installed."""
+    node = shutil.which("node") or str(Path.home() / ".local/node/bin/node")
+    if not Path(node).exists():
+        pytest.skip("Node.js is not installed")
+    script = Path(__file__).parent / "js" / "class_palette.test.ts"
+    done = subprocess.run([node, "--experimental-strip-types", "--no-warnings", str(script)], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stdout + done.stderr
+    from stainid.api.routes.annotate import class_groups
+
+    words = vocabulary.defaults("AT8")
+    slots = {g["id"]: g["colour"] for g in class_groups(words, set())}
+    order = sorted(words.classes, key=lambda c: c.role != vocabulary.POSITIVE)
+    assert all(slots[c.id] == i for i, c in enumerate(order) if c.id in slots)  # the slots the page turns into colours
 
 
 # ---------- the classes in the settings, and labelling with them ----------

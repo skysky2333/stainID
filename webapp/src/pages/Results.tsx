@@ -10,7 +10,7 @@ import { MeasureGuide } from '../measures/MeasureGuide'
 import { MeasurePicker } from '../measures/MeasurePicker'
 import { MeasureView } from '../measures/MeasureView'
 import type { TableColumns } from '../measures/data'
-import { CORE_TABLE, DONOR_REGION_TABLE, ResultsCache, tableUrl, useShared } from '../measures/data'
+import { ResultsCache, mainTables, tableUrl, useShared } from '../measures/data'
 import { Choice, Waiting } from '../measures/parts'
 import type { MeasureFilter, TableStats } from '../measures/stats'
 import { DEFAULT_FILTER } from '../measures/stats'
@@ -24,6 +24,7 @@ export default function Results() {
 
 function ResultsPage() {
   const tables = useShared<TableInfo[]>('/api/tables')
+  const { donorRegion: DONOR_REGION_TABLE } = mainTables((tables.data ?? []).map((t) => t.name))
   const main = tables.data?.find((t) => t.name === DONOR_REGION_TABLE)
   return (
     <>
@@ -44,7 +45,7 @@ function ResultsPage() {
         {(list) => list.some((t) => t.main) ? <ResultsBody tables={list} /> : (
           <Empty>
             <p style={{ marginTop: 0 }}>No results yet. They appear here once the run has made the results tables (its last step).</p>
-            <Link className="btn primary" to="/workflow#summarize">Go to Run</Link>
+            <Link className="btn primary" to="/workflow#v2_measures">Go to Run</Link>
           </Empty>
         )}
       </Waiting>
@@ -53,6 +54,7 @@ function ResultsPage() {
 }
 
 function ResultsBody({ tables }: { tables: TableInfo[] }) {
+  const { donorRegion: DONOR_REGION_TABLE, core: CORE_TABLE } = mainTables(tables.map((t) => t.name))
   const [stored, setTable] = useStored('stainid.results.table', DONOR_REGION_TABLE)
   const [tab, setTab] = useStored<Tab>('stainid.results.tab', 'plot')
   const [measure, setMeasure] = useStored('stainid.results.measure', '')

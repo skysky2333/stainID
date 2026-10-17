@@ -47,6 +47,19 @@ def test_most_informative_first():
     assert len(candidate_store.at_level(frame.assign(proposal_threshold=[0.5, 1, 1.5, np.nan, 0.75, 1, 1]), 1.0)) == 5
 
 
+def test_fields_are_drawn_at_random_from_the_remaining_ones():
+    fields = [f"T{i}" for i in range(50)]
+    left = rounds.remaining_fields(fields, finished={"T0", "T1"}, assigned={"T2"})
+    assert left == fields[3:]  # not annotated yet and not in another open session
+    assert sorted(rounds.draw_fields(left, rounds.ALL_FIELDS, seed=7)) == sorted(left)  # -1: every remaining field
+    some = rounds.draw_fields(left, 10, seed=7)
+    assert len(some) == 10 == len(set(some)) and set(some) <= set(left)  # n distinct remaining fields
+    assert rounds.draw_fields(left, 10, seed=7) == some and rounds.draw_fields(left, 10, seed=8) != some  # the seed reproduces the draw
+    assert sorted(rounds.draw_fields(left, 500, seed=1)) == sorted(left)  # more than remain: all of them
+    first = [rounds.draw_fields(left, 1, seed=s)[0] for s in range(2000)]  # uniform: every field comes up
+    assert set(first) == set(left)
+
+
 def test_a_tile_is_handed_to_one_person_at_a_time_until_enough_finished_it():
     tiles = ["t1", "t2", "t3"]
     one = {"t1": {"Ben"}}  # Ben finished t1
@@ -168,16 +181,16 @@ def test_round_one_hands_out_tiles_and_saves_a_tile_at_once(rounds_project):
     assert mine[ids[2]] is None
 
     before = _log_lines()
-    early = _save(ann, name, TILE, [{"task": "class", "candidate": ids[2], "value": "not a plaque"}], submit=True)
-    assert early.status_code == 400 and "3 objects" in early.text and _log_lines() == before  # all of a tile, or nothing
     wrong = _save(ann, name, TILE, [{"task": "class", "candidate": ids[2], "value": "not a plaque"}, {"task": "class", "candidate": ids[3], "value": "no such class"}])
     assert wrong.status_code == 400 and _log_lines() == before
     elsewhere = _save(ann, name, TILE, [{"task": "class", "candidate": other["objects"][0]["candidate_id"], "value": "CAA"}])
     assert elsewhere.status_code == 400 and _log_lines() == before
     assert ann.post(f"/api/annotate/{name}/labels", json={"records": [{"task": "class", "candidate": ids[2], "value": "CAA"}]}).status_code == 400
 
-    done = _save(ann, name, TILE, [{"task": "class", "candidate": c, "keep": True} for c in ids[2:]], submit=True)
+    done = _save(ann, name, TILE, [{"task": "class", "candidate": ids[2], "value": "not a plaque"}], submit=True)  # the rest left as they are
     assert done.status_code == 200, done.text
+    kept = [r for r in done.json()["saved"] if r["task"] == "class" and r.get("confirmed")]
+    assert {r["candidate"] for r in kept} == set(ids[3:])  # what she did not answer keeps detection's call, as her answer
     assert done.json()["saved"][-1]["task"] == "done" and done.json()["saved"][-1]["value"] == "calls"
     assert done.json()["progress"] == {"total": 2, "decided": 1, "open_now": 1, "left": 0, "people": [{"person": "Ann", "decided": 1}]}
     assert ann.get(f"/api/annotate/{name}/next").json()["tile_id"] is None  # her tile is done, Ben has the other
@@ -226,8 +239,8 @@ def test_round_two_fields_are_claimed_and_saved_as_a_whole(rounds_project):
 
     done = _save(ann, name, TILE, [{"task": "tag", "value": "fold or tear", "deleted": True}], submit=True).json()["saved"]
     confirmed = [r for r in done if r["task"] == "class"]
-    assert len(confirmed) == 5 and all(r["confirmed"] and r["candidate"] for r in confirmed)  # Ben's one is his
-    assert len([r for r in done if r["task"] == "outline"]) == 2  # the AI's outlines of the objects that stay plaques (Ben made one CAA)
+    assert len(confirmed) == 6 and all(r["confirmed"] and r["candidate"] for r in confirmed)  # the whole field is hers: also the one Ben decided
+    assert len([r for r in done if r["task"] == "outline"]) == 3  # detection's outlines of the objects that stay plaques in her answers
     assert done[-1]["id"] == f"done:{TILE}" and done[0]["deleted"]
     states = {f["tile_id"]: f["state"] for f in admin.get(f"/api/labels/sessions/{name}/fields").json()}
     assert states[TILE] == "done"
@@ -300,3 +313,89 @@ def test_the_tutorial_practises_on_a_real_field_and_keeps_nothing(rounds_project
     assert ann.post("/api/session/tutorial", json={"done": True}).json() == {"done": True}
     assert ann.get("/api/session/tutorial").json()["done"] is True
     assert ann.get("/api/annotate").json() == []  # practice sessions are not listed
+
+
+def test_finishing_a_field_records_every_candidate_as_checked_by_the_person(rounds_project):
+    admin, (ann, ben), _ = rounds_project
+    rows = [_store_row(320.0 + 14 * (i % 10), 320.0 + 14 * (i // 10), 0.3 + 0.01 * i, i % 3 != 0) for i in range(50)]
+    candidate_store.write_core(state.get_state().project, "6E10", "LIP-1_B-2", pd.DataFrame(rows))
+    decisions.forget()
+    name = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "open": True, "tile_ids": [TILE]}).json()["name"]
+    ann.get(f"/api/annotate/{name}/fields/{TILE}")
+    ben_first = rows[0]["candidate_id"]  # Ben decided one already: Ann's finished field still gives her own answer on it
+    assert _save(ben, name, TILE, [{"task": "class", "candidate": ben_first, "value": "CAA"}]).status_code == 200
+    edits = [{"task": "class", "candidate": rows[1]["candidate_id"], "value": "CAA"}, {"task": "class", "candidate": rows[2]["candidate_id"], "value": "not a plaque"}]
+    assert _save(ann, name, TILE, edits, submit=True).status_code == 200  # 2 edits of 50, then Save and continue
+    decided = decisions.state(state.get_state().project, "6E10", state.get_state().tiles)
+    hers = decided.rows[decided.rows.source == "Ann"]
+    assert hers.candidate.nunique() == 50  # the whole field is checked by her
+    calls = {r["candidate_id"]: ("plaque" if r["decision"] == "accepted" else "not a plaque") for r in rows}
+    same = [c for c, identity in zip(hers.candidate, hers.identity) if identity == calls[c]]
+    assert len(same) == 48 and hers.confirmed.sum() == 48  # her 48 untouched answers are detection's calls
+
+
+def test_an_area_marked_as_bad_saves_reloads_and_keeps_its_objects_out_of_scoring(rounds_project):
+    import base64
+
+    import cv2
+
+    admin, (ann, _), rows = rounds_project
+    name = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "open": True, "tile_ids": [TILE]}).json()["name"]
+    field = ann.get(f"/api/annotate/{name}/fields/{TILE}").json()
+    inside_id = next(o["candidate_id"] for o in field["objects"] if o["own"] and abs(o["x"] - 228) < 1 and abs(o["y"] - 228) < 1)  # (400, 400) on the core
+    painted = np.zeros((200, 200, 4), np.uint8)
+    painted[50:65, 50:65] = 255  # field pixels 200–260 at a quarter of the field picture's size
+    png = "data:image/png;base64," + base64.b64encode(cv2.imencode(".png", painted)[1].tobytes()).decode()
+    saved = _save(ann, name, TILE, [{"task": "exclude", "png": png, "scale": 4}], submit=True)
+    assert saved.status_code == 200, saved.text
+    again = ann.get(f"/api/annotate/{name}/fields/{TILE}").json()
+    marked = next(m for m in again["mine"] if m["task"] == "exclude")
+    xs = [p[0] for p in marked["points"][0]]
+    assert 195 <= min(xs) <= 205 and 255 <= max(xs) <= 265 and marked["value"] == "holes:0"  # it comes back as it was painted
+    decided = decisions.state(state.get_state().project, "6E10", state.get_state().tiles)
+    hers = set(decided.rows.candidate[decided.rows.source == "Ann"])
+    assert inside_id not in hers and len(hers) == len([o for o in field["objects"] if o["own"]]) - 1  # left out of scoring
+    from dataclasses import replace
+
+    from stainid.labels import exclusions, store
+    from stainid.v2.run import annotator_exclusions
+
+    project, tiles = state.get_state().project, state.get_state().tiles
+    labels = store.current(project.output("reviews"))
+    assert exclusions.for_analysis(project, labels, tiles) == {}  # the analyses ignore it by default
+    on = replace(project, config={**project.config, "labels": {**project.config["labels"], "apply_exclusions": True}})
+    marked = exclusions.for_analysis(on, labels, tiles)
+    (image, polygons), = marked.items()
+    assert polygons[0]["source"] == "annotator Ann" and min(p[0] for p in polygons[0]["polygon_core_px"]) >= 360  # core pixels
+    assert annotator_exclusions(on, {})[image] == polygons  # what the v2 proposals take as hand-drawn exclusions when it is on
+    cleared = _save(ann, name, TILE, [{"task": "exclude", "png": "", "scale": 4}])  # an empty area: the mark goes
+    assert cleared.status_code == 200 and not [m for m in ann.get(f"/api/annotate/{name}/fields/{TILE}").json()["mine"] if m["task"] == "exclude"]
+
+
+def test_a_fix_the_field_session_takes_every_remaining_field_by_default(rounds_project):
+    admin, _, _ = rounds_project
+    scope = admin.get("/api/labels/rounds/scope", params={"stain": "6E10"}).json()
+    assert scope["fields_remaining"] == 2
+    first = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "open": True, "seed": 3}).json()  # no n_fields: -1
+    assert sorted(first["fields"]) == sorted([TILE, OTHER]) and first["fields_asked"] == -1 and first["field_seed"] == 3
+    assert admin.get("/api/labels/rounds/scope", params={"stain": "6E10"}).json()["fields_remaining"] == 0  # both are in an open session
+    taken = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "n_fields": -1})
+    assert taken.status_code == 400 and "open session" in taken.text
+    admin.post(f"/api/labels/sessions/{first['name']}/open", json={"open": False})  # a closed session's fields are free again
+    again = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "n_fields": 5, "seed": 3}).json()
+    assert sorted(again["fields"]) == sorted([TILE, OTHER]) and again["fields_remaining"] == 2  # asked for more than remain: all
+    one = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "n_fields": 1, "seed": 3}).json()
+    assert one["fields"] == rounds.draw_fields([TILE, OTHER], 1, 3)  # the recorded seed reproduces the draw
+
+
+def test_the_admin_can_preview_the_tutorial_without_a_name(rounds_project):
+    admin, (ann, _), _ = rounds_project
+    preview = admin.get("/api/session/tutorial").json()  # the admin, signed in, with no annotator name
+    assert preview["done"] is False and preview["practice"]["round2"] == "practice-2-6E10"
+    field = admin.get(f"/api/annotate/practice-2-6E10/fields/{TILE}")
+    assert field.status_code == 200 and field.json()["objects"]
+    assert _save(admin, "practice-2-6E10", TILE, [], submit=True).status_code == 200  # echoed back, nothing kept
+    # the preview opens only the practice: real sessions still need a name
+    made = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "open": True, "tile_ids": [TILE]}).json()
+    assert admin.get(f"/api/annotate/{made['name']}/fields/{TILE}").status_code == 401
+    assert ann.get(f"/api/annotate/{made['name']}/fields/{TILE}").status_code == 200

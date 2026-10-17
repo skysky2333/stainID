@@ -21,11 +21,11 @@ export default function Cohort() {
   const cohort = useFetch<CohortInfo>('/api/cohort')
   return (
     <>
-      <PageHead title="Cores" subtitle="Every core of each TMA. Open one to look at it closely, with what the AI found drawn on top." />
+      <PageHead title="Cores" subtitle="Every core of each TMA. Open one to look at it closely, with what stainID detection found drawn on top." />
       <HelpBox id="cohort">
         Pick a TMA and a stain to see all its cores as they sit on the slide; the coloured frame is the diagnostic group. Click a core to open it:
-        you can zoom in down to single cells, and switch on what the AI detected (neurons, plaques, tau tangles), the stained area and the
-        tile grid. A <DetectionMark detection="not_run" /> marks a core the AI has not looked at yet, <DetectionMark detection="partial" /> one it is part-way through.
+        you can zoom in down to single cells, and switch on what detection found (neurons, plaques, tau tangles), the stained area and the
+        tile grid. A <DetectionMark detection="not_run" /> marks a core detection has not looked at yet, <DetectionMark detection="partial" /> one it is part-way through.
       </HelpBox>
       <Loaded state={cohort} label="Loading the TMAs…">
         {(data) => data.tmas.length ? <CohortGrid info={data} /> : (
@@ -108,7 +108,7 @@ function GridStatus({ grid }: { grid: TmaGrid }) {
   return (
     <div className="card cohort-status">
       <div className="row">
-        <span><b>AI detection</b> on {tmaName(grid.tma)} {grid.stain}:</span>
+        <span><b>Detection</b> on {tmaName(grid.tma)} {grid.stain}:</span>
         {done === total ? <StatusBadge status="done" /> : done === 0 ? <span className="badge status-todo">Not detected yet</span>
           : <span className="row" style={{ gap: 8 }}><span>{done} of {total} cores</span><span style={{ width: 120 }}><Progress done={done} total={total} /></span></span>}
         <span className="spacer" />
@@ -177,7 +177,7 @@ function CoreTable({ grid, onOpen }: { grid: TmaGrid; onOpen: (cell: GridCell) =
   return (
     <div className="table-wrap">
       <table>
-        <thead><tr><th>Position</th><th>Donor</th><th>Group</th><th>Region</th><th className="num">Replicate</th><th>AI detection</th></tr></thead>
+        <thead><tr><th>Position</th><th>Donor</th><th>Group</th><th>Region</th><th className="num">Replicate</th><th>Detection</th></tr></thead>
         <tbody>
           {cores.map((c) => (
             <tr key={c.core_label} className="clickable" onClick={() => onOpen(c)}>
@@ -192,7 +192,7 @@ function CoreTable({ grid, onOpen }: { grid: TmaGrid; onOpen: (cell: GridCell) =
   )
 }
 
-/** The small ring on a core the AI has not (fully) looked at: hollow = not yet, half filled = part-way. */
+/** The small ring on a core detection has not (fully) looked at: hollow = not yet, half filled = part-way. */
 function DetectionMark({ detection, corner = false }: { detection: Detection; corner?: boolean }) {
   return <span className={`det-mark det-${detection}${corner ? ' corner' : ''}`} aria-hidden="true" />
 }

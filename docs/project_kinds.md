@@ -172,28 +172,29 @@ objects?*, `stainid score-segmentation`; see docs/webapp.md): their outlines are
 detection step proposes and with the objects it counts, by IoU, on the fields where all of a rater's marks are
 polygons. That shows objects never proposed, cut into pieces or merged, which the matching below cannot.
 
-On the Models page, *Score the models on these labels* (or `stainid score`) compares the AI's objects (the v2 detection's calls where it has run, else the published detections) with
+On the Models page, *Score the models on these labels* (or `stainid score`) compares stainID detection's objects (the v2
+detection's calls where it has run, else the published detections) with
 every rater and with the consensus, per stain, and saves `scores.json` and `scores.csv` next to the imported labels:
 
-- **points**: an object the AI accepted finds a mark when it lies within 12 µm (plaques), 8 µm (tau) or 6 µm (neurons)
+- **points**: an object detection accepted finds a mark when it lies within 12 µm (plaques), 8 µm (tau) or 6 µm (neurons)
   of it, or within the object's own radius if larger; one object per mark, closest pairs first;
 - **boxes** (and polygons): an accepted object whose centre is in the box finds it; `iou_recall` gives the share of
   boxes whose best object overlaps them by IoU ≥ 0.5 (the object taken as a square of its diameter);
-- **image labels**: an image said to contain a class is found when the AI accepted any object of that class in it;
+- **image labels**: an image said to contain a class is found when detection accepted any object of that class in it;
 - **vessels**: `vascular` (CAA) marks are scored against the deposits the 6E10 step set aside as on a vessel or the
   tissue edge;
 - **other things**: a rater who marked only things that are not the stain's object (e.g. AT8 neuritic plaques, which
-  are not tau+ neurons) gets a `negatives` row per class: on how many marks the AI accepted an object (false alarms,
+  are not tau+ neurons) gets a `negatives` row per class: on how many marks detection accepted an object (false alarms,
   `found`) and the `specificity`, the share it rightly left alone.
 
-Recall ("Found") is the share of marks the AI found; precision ("Of the AI's, marked") the share of the AI's accepted
+Recall ("Found") is the share of marks detection found; precision ("Of detection's, marked") the share of detection's accepted
 objects in the annotated images that someone marked; F1 combines them. When a rater marked only some types (e.g. only
-cored plaques, as in the amyloid-YOLO set), precision counts only the AI's objects of those types, and `same_type` gives
-how often the AI's type agreed with the mark's. The AUC (where the AI gives probabilities) says how well its
+cored plaques, as in the amyloid-YOLO set), precision counts only detection's objects of those types, and `same_type` gives
+how often detection's type agreed with the mark's. The AUC (where detection gives probabilities) says how well its
 probability ranks marked objects above negative marks, or positive images above negative ones; `candidate_auc` how
 well it ranks the candidates a rater marked (the most probable one in each mark) above every other candidate, accepted
 or not, in the images the rater read, which also works when there are no negative marks. *How much the raters
-agree* gives every pair of raters' F1 (objects, matched the same way) and Cohen's kappa (image labels), so the AI's
+agree* gives every pair of raters' F1 (objects, matched the same way) and Cohen's kappa (image labels), so detection's
 figures can be read against human agreement. Precision assumes the raters marked every object of their types on the
 images they read: a rater who marked something on at least half of the annotated images is taken to have read them all
 (sets where every rater reads every image); otherwise only the images they marked count (sets that give each rater

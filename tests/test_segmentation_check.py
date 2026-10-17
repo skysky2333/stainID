@@ -159,7 +159,7 @@ def test_outline_session_from_set_up_to_scores(client):
     created = client.post("/api/segmentation/sessions", json={"stains": ["6E10"], "n_fields": 40}).json()
     assert [c["title"] for c in created] == ["Segmentation check – 6E10"] and created[0]["fields"] == [TILE] and created[0]["open"]
     name = created[0]["name"]
-    assert created[0]["kind"] == "outline" and created[0]["ai_view"] == "none" and created[0]["benchmark"]["tmas"] == ["1"]
+    assert created[0]["kind"] == "outline" and created[0]["ai_view"] == "full" and created[0]["benchmark"]["tmas"] == ["1"]
     assert client.jobs == [("6E10", name)]  # its candidates are found in the background
 
     ann = TestClient(client.app)

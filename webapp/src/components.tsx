@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { FsListing, Job, StepOption } from './api'
-import { downloadUrl, onActivity, reveal } from './api'
+import type { FsListing, Job, Pending, StepOption } from './api'
+import { downloadUrl, onActivity, onPending, pendingText, reveal } from './api'
 import { GLOSSARY } from './glossary'
 import { useFetch, useStored } from './hooks'
 import { useProject } from './project'
@@ -92,10 +92,11 @@ export function Loading({ label = 'Loading…', inline = false }: { label?: Reac
 /** Shows `children(data)` once a `useFetch` result has data; a loading placeholder before that, and the error if it failed.
  *  Later reloads keep showing the old data (no flashing). */
 export function Loaded<T>({ state, label, children }: {
-  state: { data: T | null; error: string | null }; label?: ReactNode; children: (data: T) => ReactNode
+  state: { data: T | null; error: string | null; pending?: Pending | null }; label?: ReactNode; children: (data: T) => ReactNode
 }) {
   if (state.data !== null && state.data !== undefined) return <>{children(state.data)}</>
   if (state.error) return <ErrorNote error={state.error} />
+  if (state.pending) return <Loading label={pendingText(state.pending)} />  // the server prepares it: how far, and how long still
   return <Loading label={label} />
 }
 
@@ -111,7 +112,12 @@ export function ActivityBar() {
     })
     return () => { clearTimeout(timer); stop() }
   }, [])
-  return busy ? <div className="activity-bar" role="progressbar" aria-label="Loading" /> : null
+  const [pending, setPending] = useState<Pending[]>([])
+  useEffect(() => onPending(setPending), [])
+  return <>
+    {busy && <div className="activity-bar" role="progressbar" aria-label="Loading" />}
+    {pending.length > 0 && <div className="activity-note" role="status" aria-live="polite">{pendingText(pending[0])}</div>}
+  </>
 }
 
 export function Empty({ children }: { children: ReactNode }) {

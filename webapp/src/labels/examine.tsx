@@ -1,12 +1,13 @@
 /* Looking at a session's labels (or the reference labels): every labelled object as the crop the model sees around
-   it, its outline or size drawn in its class colour, what people said and what the AI called it. Filter by class,
-   by how the AI compares, by field and by person; one object opens larger with everything known about it. */
+   it, its outline or size drawn in its class colour, what people said and what detection called it. Filter by class,
+   by how detection compares, by field and by person; one object opens larger with everything known about it. */
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { AiVerdict, ClassGroup, LabelledObject, SessionObjects } from '../api'
 import { api, apiUrl, enc, fieldImage } from '../api'
 import { Empty, ErrorNote, Loaded, Loading, Modal, Progress, fmt, timeAgo, withError } from '../components'
 import { useFetch } from '../hooks'
+import { slotColour } from '../classPalette'
 import { useProject } from '../project'
 import { Advanced } from '../setup/parts'
 
@@ -18,7 +19,7 @@ type AiFilter = '' | 'disagrees' | 'type' | 'unknown'
  *  colour whatever is shown. */
 export const classColor = (groups: ClassGroup[], value: string) => {
   const group = groups.find((g) => g.keys.includes(value))
-  return !group || group.colour == null ? 'var(--text-muted)' : `var(--series-${(group.colour % 8) + 1})`
+  return !group || group.colour == null ? 'var(--text-muted)' : slotColour(group.colour)
 }
 
 /** A class under its identity's chip, without the identity's name: "pretangle", "type not recorded". */
@@ -28,7 +29,7 @@ const typeName = (identity: string, key: string) =>
 /** Who made a label, in plain words: a person's name, or the earlier label set it was brought in from. */
 const who = (source: string) => source.replace(/^import: /, '')
 
-const AI_TEXT: Record<AiVerdict, string> = { agrees: 'AI agrees', type: 'AI: other type', disagrees: 'AI disagrees' }
+const AI_TEXT: Record<AiVerdict, string> = { agrees: 'Detection agrees', type: 'Detection: other type', disagrees: 'Detection disagrees' }
 
 const cropUrl = (stain: string, o: LabelledObject) => apiUrl(`/api/labels/crops/${enc(stain)}/${enc(o.tile_id)}.jpg?x=${o.x}&y=${o.y}`)
 
@@ -62,7 +63,7 @@ export function SessionLabelsView({ name, title, onClose }: { name: string; titl
           return (
             <div className="examine">
               <p className="small secondary" style={{ margin: 0 }}>
-                {d.reference ? 'Labels made before labelling sessions existed, brought in from earlier label sets. ' : ''}
+                {d.reference ? 'AI reference labels: made before labelling sessions existed, brought in from earlier label sets. ' : ''}
                 Each picture is what the model sees around one labelled object{crop ? ` (${fmt(crop.um)} µm across)` : ''}; the ring or outline
                 shows the object in the colour of the class people gave it.
               </p>
@@ -93,8 +94,8 @@ export function SessionLabelsView({ name, title, onClose }: { name: string; titl
                 {hidden.length > 0 && <button className="link-btn small" onClick={() => filter(() => setHidden([]))}>Show all classes</button>}
               </div>
               <div className="row examine-filters">
-                <div className="segmented" role="group" aria-label="Compared with the AI">
-                  {([['', 'All', d.all], ['disagrees', 'AI disagrees', d.ai.disagrees ?? 0], ['type', 'AI gives another type', d.ai.type ?? 0]] as [AiFilter, string, number][])
+                <div className="segmented" role="group" aria-label="Compared with detection">
+                  {([['', 'All', d.all], ['disagrees', 'Detection disagrees', d.ai.disagrees ?? 0], ['type', 'Detection gives another type', d.ai.type ?? 0]] as [AiFilter, string, number][])
                     .filter(([key, , n]) => key === '' || n > 0 || ai === key)
                     .map(([key, label, n]) => (
                       <button key={key} className={`btn small${ai === key ? ' chosen' : ''}`} aria-pressed={ai === key} onClick={() => filter(() => setAi(key))}>
@@ -118,7 +119,7 @@ export function SessionLabelsView({ name, title, onClose }: { name: string; titl
                 </div>
                 <Pages page={page} total={d.total} onPage={(p) => { setPage(p); setOpenAt(null) }} />
               </> : <Empty>
-                <p style={{ margin: 0 }}>No labelled objects{hidden.length ? ' of the classes shown' : ''}{ai ? ' where the AI differs like that' : ''}{tile ? ` in fields matching “${tile}”` : ''}.</p>
+                <p style={{ margin: 0 }}>No labelled objects{hidden.length ? ' of the classes shown' : ''}{ai ? ' where detection differs like that' : ''}{tile ? ` in fields matching “${tile}”` : ''}.</p>
                 {(hidden.length > 0 || ai || tile || person) && <button className="btn small" onClick={() => filter(() => { setHidden([]); setAi(''); setTile(''); setPerson('') })}>Show every object</button>}
               </Empty>}
               {openAt !== null && d.objects[openAt] && (
@@ -168,7 +169,7 @@ function usePlace() {
 
 function hoverText(o: LabelledObject, place: string) {
   const labels = o.labels.map((l) => `${l.value} — ${who(l.source)}${l.time ? `, ${timeAgo(l.time)}` : ''}`).join('\n')
-  const aiCall = o.ai_value ? `AI: ${o.ai_value}${o.ai_probability != null ? ` (score ${Math.round(100 * o.ai_probability)}%)` : ''}` : 'AI: no call here'
+  const aiCall = o.ai_value ? `Detection: ${o.ai_value}${o.ai_probability != null ? ` (score ${Math.round(100 * o.ai_probability)}%)` : ''}` : 'Detection: no call here'
   return `${labels}\n${aiCall}\n${place}${o.frame === 'field' ? ` · field ${o.tile_id}` : ''}`
 }
 
@@ -186,13 +187,13 @@ function ObjectCard({ o, d, onOpen }: { o: LabelledObject; d: SessionObjects; on
 }
 
 function AiLine({ o, long = false }: { o: LabelledObject; long?: boolean }) {
-  if (!o.ai_value) return <span className="small muted">{long ? 'The AI made no call here (a person added this object).' : 'no AI call'}</span>
+  if (!o.ai_value) return <span className="small muted">{long ? 'Detection made no call here (a person added this object).' : 'no detection call'}</span>
   const tone = o.ai === 'disagrees' ? 'ai-no' : o.ai === 'type' ? 'ai-type' : 'ai-yes'
   return (
     <span className={`small ai-line ${tone}`}>
       {o.ai === 'disagrees' && <span className="ai-mark" aria-label="disagrees">≠</span>}
-      <span className="ellipsis">{o.ai ? `${long ? AI_TEXT[o.ai] : 'AI'}: ` : 'AI: '}{o.ai_value}</span>
-      {long && o.ai_probability != null && <span className="muted" title="How likely the AI found it that this is a positive object"> · AI score {Math.round(100 * o.ai_probability)}%</span>}
+      <span className="ellipsis">{o.ai ? `${long ? AI_TEXT[o.ai] : 'Detection'}: ` : 'Detection: '}{o.ai_value}</span>
+      {long && o.ai_probability != null && <span className="muted" title="How likely detection’s model found it that this is a positive object"> · detection score {Math.round(100 * o.ai_probability)}%</span>}
     </span>
   )
 }
@@ -278,7 +279,7 @@ function ObjectDetail({ o, d, position, onPrevious, onNext, onClose }: {
           <AiLine o={o} long />
           <div className="small secondary">{place(o)}{o.disease_group ? ` · ${o.disease_group}` : ''}</div>
           <div className="small muted">
-            {o.outline ? `Outline drawn by ${o.outline_by === 'person' ? 'a person' : 'the AI'}` : o.radius_px ? 'Ring: the size the AI measured' : 'Dashed ring: size not known'}
+            {o.outline ? `Outline drawn by ${o.outline_by === 'person' ? 'a person' : 'detection'}` : o.radius_px ? 'Ring: the size detection measured' : 'Dashed ring: size not known'}
             {o.radius_px && um ? ` · about ${fmt(2 * o.radius_px * um, 2)} µm across` : ''}</div>
           <Advanced hint="where exactly, whole field">
             <table className="compact"><tbody>

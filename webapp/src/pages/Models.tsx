@@ -119,7 +119,7 @@ function StainModel({ info, versions, versionsLoading, job, otherTraining, label
             <div className="quality-line"><QualityLine m={inUse.new_model} stain={stain} d={inUse.person_added?.detection} /></div>
           </> : <p className="small secondary">The model in use was not trained in this project, so it has no test score here. Train one to compare.</p>}
         {info.exists && detection && detection.real > 0 && (
-          <div className="small detection-line" title="Every real object people labelled counts, also the ones they added where the AI circled nothing">
+          <div className="small detection-line" title="Every real object people labelled counts, also the ones they added where detection circled nothing">
             Checked on all labels so far (it learned from some of them): <DetectionLine d={detection} stain={stain} /></div>)}
       </div>
 
@@ -191,12 +191,12 @@ function StainModel({ info, versions, versionsLoading, job, otherTraining, label
   )
 }
 
-/** ", including 12 that people added": the objects the AI never proposed that a model learned from (measured where people added them). */
+/** ", including 12 that people added": the objects detection never proposed that a model learned from (measured where people added them). */
 function addedNote(model: TrainedModel): string {
   const added = model.person_added
   if (!added || !(added.objects || added.could_not_be_measured)) return ''
   const unmeasured = added.could_not_be_measured ? ` (${added.could_not_be_measured.toLocaleString()} more could not be measured)` : ''
-  return `, including ${added.objects.toLocaleString()} that people added where the AI proposed nothing${unmeasured}`
+  return `, including ${added.objects.toLocaleString()} that people added where detection proposed nothing${unmeasured}`
 }
 
 /** " · from Round 1 and AI reference labels": the sessions a model learned from (models trained before sessions were recorded say nothing). */

@@ -3,11 +3,12 @@ at the candidate as the one-click tool does, with SAM's predicted IoU and stabil
 
 The image encoder runs once per 1024-px window of a field (fp16 on the GPU, as `stainid.masks.clicks`; fp32 on the CPU
 without one) and the prompts of every candidate in that window are decoded in batches. An output that runs away (more
-than `runaway_factor` × its candidate's area), touches the window edge, or falls outside the stain's size limits is not
-a valid default; the default is the output the stain's outline step uses (NeuN large, 6E10 medium, AT8 the one with the
-best DAB contrast) when valid, else the valid one with the best predicted IoU. With no valid output the candidate keeps
-its own outline (`sam_status` fallback_runaway / fallback_window_edge / fallback_size). All three outputs are stored
-either way, so annotation can switch between them without calling SAM.
+than `runaway_factor` × its candidate's area), shrinks onto a part of it (under `shrink_factor` × the area of a candidate
+of at least `shrink_min_um2`: a dark speck of a pale diffuse plaque), touches the window edge, or falls outside the
+stain's size limits is not a valid default; the default is the output the stain's outline step uses (NeuN large, 6E10
+medium, AT8 the one with the best DAB contrast) when valid, else the valid one with the best predicted IoU. With no
+valid output the candidate keeps its own outline (`sam_status` fallback_runaway / fallback_window_edge / fallback_size /
+fallback_shrunk). All three outputs are stored either way, so annotation can switch between them without calling SAM.
 """
 from __future__ import annotations
 
@@ -126,9 +127,11 @@ def _ring_contrast(output: Output, dab: np.ndarray, ring_px: int = 4) -> float:
 
 
 def choose(outputs: list[Output], candidate_px: float, stain: str, pixel_size_um: float, dab: np.ndarray,
-           runaway_factor: float) -> tuple[int, str]:
-    """The default output among a candidate's three and the status ("ok" or the fallback reason)."""
+           runaway_factor: float, shrink_factor: float = 0.0, shrink_min_um2: float = np.inf) -> tuple[int, str]:
+    """The default output among a candidate's three and the status ("ok" or the fallback reason). An output under
+    `shrink_factor` × the area of a candidate of at least `shrink_min_um2` has shrunk onto a part of it (fallback_shrunk)."""
     lower, upper = AREA_LIMITS_UM2[stain]
+    shrinks = candidate_px * pixel_size_um ** 2 >= shrink_min_um2
     reasons = []
     for output in outputs:
         if output.area > runaway_factor * max(candidate_px, 1):
@@ -137,11 +140,13 @@ def choose(outputs: list[Output], candidate_px: float, stain: str, pixel_size_um
             reasons.append("fallback_window_edge")
         elif not lower <= output.area * pixel_size_um ** 2 <= upper:
             reasons.append("fallback_size")
+        elif shrinks and output.area < shrink_factor * candidate_px:
+            reasons.append("fallback_shrunk")
         else:
             reasons.append("")
     valid = [i for i, r in enumerate(reasons) if not r]
     if not valid:
-        order = ("fallback_runaway", "fallback_window_edge", "fallback_size")
+        order = ("fallback_runaway", "fallback_window_edge", "fallback_size", "fallback_shrunk")
         return -1, min(reasons, key=order.index)
     rule = MASK_RULES[stain]
     if rule == "contrast":
@@ -171,7 +176,7 @@ def _polygon(output: Output, origin: tuple[int, int]) -> list[int]:
 
 
 def outline_field(outliner: BatchOutliner, rgb: np.ndarray, field_origin: tuple[int, int], stain: str, threshold: float, pixel_size_um: float,
-                  rows: pd.DataFrame, runaway_factor: float) -> list[dict]:
+                  rows: pd.DataFrame, runaway_factor: float, shrink_factor: float = 0.0, shrink_min_um2: float = np.inf) -> list[dict]:
     """The three outputs and the default of every candidate row (core coordinates) in one field crop."""
     out = []
     dab = np.maximum(rgb_to_hed(rgb)[..., 2], 0).astype(np.float32)
@@ -187,7 +192,8 @@ def outline_field(outliner: BatchOutliner, rgb: np.ndarray, field_origin: tuple[
         decoded = outliner.decode(outliner.encode(window), np.column_stack((xs[index] - x0, ys[index] - y0)))
         for i, outputs in zip(index, decoded):
             row = rows.iloc[i]
-            chosen, status = choose(outputs, float(row.area_um2) / pixel_size_um ** 2, stain, pixel_size_um, local_dab, runaway_factor)
+            chosen, status = choose(outputs, float(row.area_um2) / pixel_size_um ** 2, stain, pixel_size_um, local_dab, runaway_factor,
+                                    shrink_factor, shrink_min_um2)
             polygons = [_polygon(o, (fx + x0, fy + y0)) for o in outputs]
             order = np.argsort([o.area for o in outputs], kind="stable")  # small → large
             result = {"candidate_id": row.candidate_id, "sam_status": status,
@@ -245,7 +251,8 @@ def outline_core(project, stain: str, core_id: str, tiles: list[dict], outliner:
     recorded = manifest.read(project, "outlines", stain, core_id)
     made = expected(project, stain, core_id)
     same_base = recorded is not None and recorded.get("version") == made["version"] and recorded["inputs"].get("proposals") == made["inputs"]["proposals"] and \
-        recorded["inputs"].get("sam") == made["inputs"]["sam"] and recorded.get("params", {}).get("runaway_factor") == settings["runaway_factor"]
+        recorded["inputs"].get("sam") == made["inputs"]["sam"] and \
+        all(recorded.get("params", {}).get(k) == settings.get(k) for k in ("runaway_factor", "shrink_factor", "shrink_min_um2"))
     done = set(previous.candidate_id) if same_base and not redo and not previous.empty else set()
     wanted = selected(frame, calls, settings)
     todo = wanted[~wanted.candidate_id.isin(done)]
@@ -260,7 +267,8 @@ def outline_core(project, stain: str, core_id: str, tiles: list[dict], outliner:
                 rgb, inner = context_crop(image, x, y, int(tile["width_px"]), int(tile["height_px"]), project.context_px)
                 pixel_size = float(np.sqrt(float(tile["pixel_width_um"]) * float(tile["pixel_height_um"])))
                 results += outline_field(outliner, rgb, (x - inner[1].start, y - inner[0].start), stain, threshold, pixel_size, rows,
-                                         float(settings["runaway_factor"]))
+                                         float(settings["runaway_factor"]), float(settings.get("shrink_factor", 0.0)),
+                                         float(settings.get("shrink_min_um2", np.inf)))
     kept = previous if done else previous.iloc[0:0]
     table = pd.concat([kept, pd.DataFrame(results, columns=COLUMNS)], ignore_index=True) if results else kept.reindex(columns=COLUMNS)
     store.write_table(target, table.reindex(columns=COLUMNS))

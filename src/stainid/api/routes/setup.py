@@ -20,10 +20,10 @@ from stainid.setup.naming import Groups, IdStyle
 from stainid.slides.dearray import ORIENTATIONS, slide_slug
 from stainid.slides.table import read_slides, set_slide_grid
 from stainid.tables import read_csv
-from stainid.workflows.steps import BY_ID
+from stainid.workflows.steps import BY_ID, MAIN_STAGES
 
 router = APIRouter(prefix="/setup", tags=["setup"])
-MAIN = ("1 · Set up", "2 · Detect", "3 · Results")
+MAIN = MAIN_STAGES  # the legacy (v1) detection steps are not run by "Run what's left"
 
 
 class GridRequest(BaseModel):
@@ -86,7 +86,7 @@ def _steps() -> list[dict]:
 
 def _remaining(steps: list[dict]) -> list[dict]:
     busy = {s["id"] for s in steps if s.get("job") and s["job"]["status"] in ("running", "queued")}
-    return [s for s in steps if s["stage"] in MAIN and s["command"] and s["id"] != "masks" and s["id"] not in busy
+    return [s for s in steps if s["stage"] in MAIN and s["command"] and s["id"] not in busy
             and (s["progress"]["state"] != "done" or s["progress"].get("outdated"))]
 
 

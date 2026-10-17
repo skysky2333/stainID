@@ -19,7 +19,7 @@ CORE_COLUMNS = ["core_id", "tma", "core_label", "donor_id", "sample_region_id", 
 GRID_THUMB = 256
 IMAGE_COLUMNS = 6  # pictures per row of an image set or whole-slide project on the Cores page
 OBJECT_COLUMNS = ["x", "y", "radius_px", "model_class", "probability", "area_um2"]
-V2_OBJECT_COLUMNS = [*OBJECT_COLUMNS, "reason", "candidate_id"]
+V2_OBJECT_COLUMNS = [*OBJECT_COLUMNS, "reason", "candidate_id", "class", "subtype"]  # class, subtype: the label class (its colour)
 OUTLINE_COLUMNS = ["x", "y", "area_um2", "rings"]
 MATCH_PX = 2.0  # an outline's prompt point lies on its detection (up to rounding)
 GZIP_MIN_BYTES = 1024
@@ -211,14 +211,19 @@ def core_objects(core_id: str, stain: str) -> dict:
 
 
 @router.get("/cores/{core_id}/{stain}/outlines")
-def core_outlines(core_id: str, stain: str, request: Request) -> Response:
+def core_outlines(core_id: str, stain: str, request: Request, outline: str = "default") -> Response:
     """The Segment Anything outline of each detection of `objects` that has one: rows of `columns`, where `x`, `y` are
     exactly that detection's position (to match them up), `area_um2` the outlined area and `rings` its polygons
     (flat [x0, y0, x1, y1, …] in core-image pixel indices). `status` is "not_made" until the step has outlined the core.
+    `outline` picks which outline of each v2 candidate (`store_view.OUTLINE_CHOICES`: default, stain, sam0, sam1, sam2;
+    `outline` in the answer says which); the current outputs have one outline per object, sent for every choice.
     Sent gzip-compressed when the browser accepts it (a busy core is ~1.5 MB of JSON, ~0.6 MB compressed)."""
+    if outline not in store_view.OUTLINE_CHOICES:
+        raise HTTPException(400, f"outline must be one of {', '.join(store_view.OUTLINE_CHOICES)}")
     state = get_state()
     if store_view.available(state.project, core_id, stain):
-        return _json({"status": "done", "columns": OUTLINE_COLUMNS, "rows": store_view.outline_rows(state.project, core_id, stain)}, request)
+        return _json({"status": "done", "columns": OUTLINE_COLUMNS, "outline": outline,
+                      "rows": store_view.outline_rows(state.project, core_id, stain, outline)}, request)
     tiles = _core_tiles(state, core_id, stain)
     made = outlines.core_outlines(state, core_id, stain, tiles) if not tiles.empty else None
     rows = []
@@ -259,6 +264,25 @@ def core_unproposed(core_id: str, stain: str, request: Request) -> Response:
     """Stained regions (brown at or above the slide threshold, at least the stain's minimum size) that no v2 candidate
     covers: rows of `columns` (core-image pixels; `rings` as for outlines). `status` "not_run" before the v2 proposals."""
     return _json(store_view.unproposed(get_state().project, core_id, stain), request)
+
+
+@router.get("/cores/{core_id}/{stain}/excluded")
+def core_excluded(core_id: str, stain: str) -> dict:
+    """The "Excluded areas" layer of one core image: `status` ("not_made" before the v2 proposals), the mask's `width` and
+    `height` (mask px) and `scale` (core-image px per mask px), and per kind its `id`, `label`, `color`, `hatch` and the
+    `fraction` of the analysed area it covers (`store_view.EXCLUDED_KINDS`), and `version` (changes with the mask). The
+    picture is `excluded.png?v=<version>`."""
+    return store_view.excluded_info(get_state().project, core_id, stain)
+
+
+@router.get("/cores/{core_id}/{stain}/excluded.png")
+def core_excluded_png(core_id: str, stain: str) -> Response:
+    """The excluded areas as a translucent, hatched RGBA picture at the mask's resolution (`core_excluded`); 404 before
+    the v2 proposals made the mask."""
+    png = store_view.excluded_png(get_state().project, core_id, stain)
+    if png is None:
+        raise HTTPException(404, f"the excluded areas of {core_id} {stain} are not made yet (the v2 proposals make them)")
+    return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
 
 
 def _json(content: dict, request: Request) -> Response:

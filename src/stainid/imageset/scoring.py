@@ -276,7 +276,7 @@ def score_negatives(project: Project, marks: pd.DataFrame, found: pd.DataFrame, 
         out.append({"class": cls, "images": int(group.image_id.nunique()), "marks": len(group), "found": alarms, "missed": len(group) - alarms,
                     "ai_objects": None, "ai_unmarked": None, "precision": None, "recall": None, "f1": None, "auc": None, "candidate_auc": None,
                     "iou_recall": None, "same_type": None, "specificity": _ratio(len(group) - alarms, len(group)),
-                    "scope": f"not {OBJECT[stain]}: the AI's accepted objects on them are false alarms"})
+                    "scope": f"not {OBJECT[stain]}: detection's accepted objects on them are false alarms"})
     return out
 
 
@@ -377,15 +377,15 @@ def summary_text(stain: str, row: dict, people: list[dict]) -> str:
     """One sentence in plain words for the Models page."""
     who = "the consensus of the raters" if row["rater"] == CONSENSUS else row["rater"]
     if row.get("kind") == "negatives":
-        return (f"{stain}: {who} marked {row['marks']:,} {row['class']}s, which are not {OBJECT[stain]}s; the AI accepted a {OBJECT[stain]} "
+        return (f"{stain}: {who} marked {row['marks']:,} {row['class']}s, which are not {OBJECT[stain]}s; stainID detection accepted a {OBJECT[stain]} "
                 f"on {row['found']:,} of them ({1 - row['specificity']:.0%}).") if row.get("specificity") is not None else ""
     if row.get("recall") is None:
         return ""
     scope = row.get("scope") or "all accepted"
     thing = ("images" if row["kind"] == "image" else "vessel deposits (CAA)" if row["class"] == "vascular"
              else _plural(scope) if scope != "all accepted" and "," not in scope else "objects")
-    text = (f"{stain}: of the {row['marks']:,} {thing} {who} marked, the AI found {row['recall']:.0%}"
-            + (f"; {row['precision']:.0%} of what the AI found was marked (F1 {row['f1']:.2f})" if row.get("precision") is not None else "") + ".")
+    text = (f"{stain}: of the {row['marks']:,} {thing} {who} marked, stainID detection found {row['recall']:.0%}"
+            + (f"; {row['precision']:.0%} of what detection found was marked (F1 {row['f1']:.2f})" if row.get("precision") is not None else "") + ".")
     values = [p["object_f1"] if row["kind"] != "image" else p["image_kappa"] for p in people if p["stain"] == stain]
     values = [v for v in values if v is not None]
     if values:
@@ -417,7 +417,7 @@ def score(project: Project) -> dict:
             if len(labels):
                 rows += [{"stain": stain, "rater": rater, "kind": "image", **r} for r in score_images(labels, found, stain)]
     if not rows:
-        raise ValueError("The AI has not looked at these images yet: run detection (Run → Run everything) first, then score again")
+        raise ValueError("Detection has not looked at these images yet: run detection (Run → Run everything) first, then score again")
     people = agreement(project, placed)
     main = [r for r in rows if r["rater"] == CONSENSUS] or rows
     result = {"time": time.time(), "dataset": project.config.get("dataset", {}).get("id", ""), "rows": rows, "agreement": people,

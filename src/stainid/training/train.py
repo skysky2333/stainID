@@ -22,12 +22,14 @@ from sklearn.metrics import precision_score, recall_score, roc_auc_score
 from sklearn.model_selection import LeaveOneGroupOut, StratifiedGroupKFold
 from sklearn.pipeline import make_pipeline
 
-from stainid.labels import added, candidate_store, frames, pool, store, vocabulary
+from stainid.labels import added, candidate_store, exclusions, frames, pool, store, vocabulary
 from stainid.labels import sessions as label_sessions
 from stainid.labels.tasks import MODEL_KEY
 from stainid.project import Project, save_project
 from stainid.sampling.tiles import known_tiles
 from stainid.stains.amyloid.model import MORPHOTYPE_MINIMUM_DIAMETER_UM, morphotype_threshold
+from stainid.v2 import amyloid as v2_amyloid
+from stainid.v2.params import params as v2_params
 
 MINIMUM_PER_CLASS = 10
 
@@ -40,7 +42,7 @@ def forest():
 def labelled(project: Project, stain: str, sessions: list[str] | None = None) -> tuple[pd.DataFrame, list[str]]:
     """Consensus-labelled objects with their candidate features (one row per object), from the labels of these
     sessions (`labels.sessions.in_sessions`; all labels when None)."""
-    labels = frames.in_field_frame(store.current(project.output("reviews")), known_tiles(project), project.context_px)
+    labels = frames.in_field_frame(exclusions.counted(store.current(project.output("reviews"))), known_tiles(project), project.context_px)
     counts = added.measure(project, stain)
     if any(counts.values()):
         print(f"measured {counts['measured']} object(s) people added; {counts['could_not_be_measured']} could not be measured", flush=True)
@@ -127,9 +129,40 @@ def _current(project: Project, stain: str, x: np.ndarray, names: list[str]) -> t
     return probability, load(path)
 
 
-def train_model(project: Project, stain: str, sessions: list[str] | None = None) -> Path:
-    """A new model from the labels of these sessions (all when None), checked by leaving one TMA out at a time."""
+def slide_scaled(project: Project, stain: str) -> bool:
+    """Whether a new model of this stain takes slide-scaled inputs (`v2.training.<stain>.slide_scaled`; 6E10 only)."""
+    return stain == "6E10" and bool(((v2_params(project).get("training") or {}).get(stain) or {}).get("slide_scaled", False))
+
+
+def with_scaled(project: Project, stain: str, data: pd.DataFrame, names: list[str]) -> tuple[pd.DataFrame, list[str]]:
+    """The labelled objects with the slide-scaled version of each input that has one (`s_<name>`, as stage 2 stores
+    them), and those names. Where a row lacks one (a candidate of the old pool, a store made before the `s_` columns), an
+    intensity is its OD over the slide threshold of the object's TMA; a dense-core / seed measure stays empty (the
+    model's imputer fills it)."""
+    from stainid.workflows import calibration_table
+
+    scaled = v2_amyloid.scaled_names(names)
+    calibration = calibration_table(project.input("calibration")) if project.input("calibration").exists() else {}
+    threshold = data.tma.astype(str).map(lambda t: calibration.get((t, stain), np.nan)).astype(float)
+    out = data.copy()
+    for name, base in zip(scaled, names):
+        if name == base:
+            continue
+        values = pd.to_numeric(out[name], errors="coerce") if name in out else pd.Series(np.nan, index=out.index)
+        if base in v2_amyloid.SCALED_INTENSITY and base in out:
+            values = values.fillna(pd.to_numeric(out[base], errors="coerce") / threshold)
+        out[name] = values
+    return out, scaled
+
+
+def train_model(project: Project, stain: str, sessions: list[str] | None = None, scaled: bool | None = None) -> Path:
+    """A new model from the labels of these sessions (all when None), checked by leaving one TMA out at a time. `scaled`
+    (default: `slide_scaled`, on for 6E10): slide-scaled inputs instead of absolute DAB OD."""
     data, names = labelled(project, stain, sessions)
+    scaled = slide_scaled(project, stain) if scaled is None else bool(scaled and stain == "6E10")
+    current_names = names
+    if scaled:
+        data, names = with_scaled(project, stain, data, names)
     y = data.positive.to_numpy(bool)
     if y.sum() < MINIMUM_PER_CLASS or (~y).sum() < MINIMUM_PER_CLASS:
         raise ValueError(f"Need at least {MINIMUM_PER_CLASS} positive and {MINIMUM_PER_CLASS} negative labels; have {int(y.sum())} and {int((~y).sum())}. "
@@ -137,7 +170,7 @@ def train_model(project: Project, stain: str, sessions: list[str] | None = None)
     x = data[names].to_numpy(float)
     groups = data.tma.astype(str).to_numpy()
     ids = (data.tile_id + ":" + data.x.round().astype(int).astype(str) + ":" + data.y.round().astype(int).astype(str)).tolist()
-    current, old = _current(project, stain, x, names)
+    current, old = _current(project, stain, data[current_names].to_numpy(float), current_names)
     sources = data.sources.str.split(", ").explode().value_counts()
     extra = int(data.added_by_person.sum())
     print(f"[1/3] {len(y)} labelled objects ({int(y.sum())} positive) from {len(sources)} source(s)"
@@ -169,6 +202,7 @@ def train_model(project: Project, stain: str, sessions: list[str] | None = None)
         morph = morphotype_threshold(data.normalized_inner_dab.to_numpy(float)[plaques & typed], compact[plaques & typed]) if enough \
             else float(old.get("morphotype_threshold", 1.5))
         bundle = {"identity_classifier": forest().fit(x, y), "identity_feature_names": names, "identity_threshold": threshold,
+                  "slide_scaled": bool(scaled),
                   "identity_training_candidate_ids": ids, "morphotype_feature": "inner_mean_dab_od / slide 6E10 calibration threshold",
                   "morphotype_threshold": float(morph), "morphotype_minimum_diameter_um": MORPHOTYPE_MINIMUM_DIAMETER_UM,
                   "morphotype_training_n": int((plaques & typed).sum()) if enough else int(old.get("morphotype_training_n", 0))}
@@ -177,6 +211,7 @@ def train_model(project: Project, stain: str, sessions: list[str] | None = None)
     folder.mkdir(parents=True)
     dump(bundle, folder / "bundle.joblib")
     report = {"stain": stain, "created": time.time(), "validation": scheme, "threshold": threshold, "sources": sources.to_dict(),
+              "slide_scaled": bool(scaled),
               "new_model": metrics(y, oof, threshold), "current_model": metrics(y, current, threshold) if current is not None else None,
               "current_model_path": project.relative(project.model(MODEL_KEY[stain])),
               "sessions": trained_on(project, stain, sessions), "person_added": person_added(data, oof, threshold)}
@@ -191,7 +226,7 @@ def trained_on(project: Project, stain: str, sessions: list[str] | None) -> list
     how many objects each labelled, for the model's report."""
     root = project.output("reviews")
     titles = {name: label_sessions.meta(root, name).get("title", name) for name in label_sessions.names(root)}
-    used = label_sessions.label_sets(label_sessions.in_sessions(store.current(root), sessions), stain, titles)
+    used = label_sessions.label_sets(label_sessions.in_sessions(exclusions.counted(store.current(root)), sessions), stain, titles)
     return [{"name": s["name"], "title": s["title"], "objects": s["objects"]} for s in used]
 
 

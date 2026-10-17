@@ -366,12 +366,12 @@ def plain(stain_report: dict) -> str:
     if not stain_report.get("fields_scored"):
         return f"{name}: no field is outlined completely yet."
     if not n:
-        return (f"{name}: {stain_report['fields_scored']} fields outlined, with no object in them; the AI counted "
+        return (f"{name}: {stain_report['fields_scored']} fields outlined, with no object in them; detection counted "
                 f"{stain_report.get('counted', 0)} objects there.")
     words = WORDS.get(stain_report["stain"], "objects")
     o = stain_report["outcomes"]
     pct = lambda v: "—" if v is None else f"{100 * v:.0f}%"  # noqa: E731
-    return (f"{stain_report.get('title', stain_report['stain'])}: of {n} {words} outlined in {stain_report['fields_scored']} fields, the AI proposed "
+    return (f"{stain_report.get('title', stain_report['stain'])}: of {n} {words} outlined in {stain_report['fields_scored']} fields, detection proposed "
             f"{pct(stain_report['proposal_recall'])} with a fitting outline and counted {pct(stain_report['detection_recall'])}. "
             f"{o['missed']} were never proposed, {o['split']} were cut into pieces, {o['merged']} were merged with a neighbour, "
             f"{o['poor outline']} had a poor outline and {o['rejected']} were proposed but not counted. "

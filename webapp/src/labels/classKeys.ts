@@ -47,7 +47,7 @@ export function expire(waiting: Waiting | null, now: number, waitMs: number): Cl
   return waiting && !live(waiting, now, waitMs) ? { identity: waiting.identity, subtype: null } : null
 }
 
-/** A stored label (or an AI call) as identity and type ids: labels made before types existed through the aliases,
+/** A stored label (or a detection call) as identity and type ids: labels made before types existed through the aliases,
  *  "identity / type" by id or name, else as it is. */
 export function resolveClass(vocabulary: Vocabulary, value: string | null | undefined, subtype?: string | null): ClassPick {
   const v = (value ?? '').trim()
@@ -85,6 +85,22 @@ export function classText(vocabulary: Vocabulary, pick: ClassPick, typesAsked = 
   if (!found) return pick.identity
   if (pick.subtype && typesAsked) return `${found.name} · ${found.subtypes.find((s) => s.id === pick.subtype)?.name ?? pick.subtype}`
   return found.subtypes.length && found.role === 'positive' && typesAsked ? `${found.name} (${vocabulary.untyped})` : found.name
+}
+
+/** The classes in the order every page lists them: by their key (1, 2, … 9, then letters), classes without a key after
+ *  them, "unsure" (skip; key 0) last (the server's `Vocabulary.by_key`). Hidden ones are left out unless `hidden`. */
+export function byKey(vocabulary: Vocabulary, keys: KeyMap, hidden = false): ClassDef[] {
+  const place = new Map(vocabulary.classes.map((c, i) => [c.id, i]))
+  const rank = (c: ClassDef) => {
+    const key = keyOf(keys, c.id) ?? c.key ?? ''
+    const number = /^\d+$/.test(key) ? Number(key) : 0
+    return [c.role === 'skip' ? 1 : 0, key ? 0 : 1, /^\d+$/.test(key) ? 0 : 1, number, key, place.get(c.id) ?? 0] as const
+  }
+  return vocabulary.classes.filter((c) => hidden || !c.hidden).sort((a, b) => {
+    const x = rank(a), y = rank(b)
+    for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1
+    return 0
+  })
 }
 
 /** The key that answers this class (and type) at once, if there is one. */

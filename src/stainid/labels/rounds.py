@@ -33,7 +33,7 @@ from stainid.tables import write_text_atomic
 
 SOURCE = "candidates"
 KIND = {1: "queue", 2: "fields"}
-TITLE = {1: "Check the AI’s calls", 2: "Fix the field"}
+TITLE = {1: "Check detection’s calls", 2: "Fix the field"}
 RULE = "informative"
 NEAR = 0.15  # how close to the decision threshold a score is "near" it
 LEVELS = {"all": None, "0.5": 0.5, "0.75": 0.75, "1": 1.0, "1.5": 1.5}  # how generous: lowest proposal level shown (× the slide threshold)
@@ -113,8 +113,23 @@ def scope_cores(tiles: pd.DataFrame, scope: list[str]) -> list[str]:
 def candidates_in(project: Project, stain: str, tiles: pd.DataFrame, scope: list[str], at: float | None) -> pd.DataFrame:
     """The candidates of these tiles (their own), at the session's level, with field-picture positions."""
     mine = tiles[(tiles.stain == stain) & tiles.tile_id.isin(set(scope))]
-    found = candidate_store.for_cores(project, stain, scope_cores(mine, scope))
+    found = candidate_store.for_cores(project, stain, scope_cores(mine, scope), candidate_store.LIGHT)  # no outlines: `with_shapes`
     return candidate_store.in_tiles(candidate_store.at_level(found, at), mine, project.context_px)
+
+
+SHAPES = ("outline", "sam_outline", "sam_masks", "sam_scores", "sam_default")
+
+
+def with_shapes(project: Project, stain: str, frame: pd.DataFrame, tile: dict) -> pd.DataFrame:
+    """These candidates of one tile (`candidates_in`) with their outlines and masks (core pixels), read for that tile only."""
+    if frame.empty:
+        return frame
+    rows = candidate_store.field_rows(project, stain, tile, project.context_px)
+    if rows is None or rows.empty:
+        return frame
+    rows = rows.drop_duplicates("candidate_id").set_index("candidate_id")
+    at = [rows.index.get_loc(c) if c in rows.index else -1 for c in frame.candidate_id]
+    return frame.assign(**{c: [rows[c].iloc[i] if i >= 0 else None for i in at] for c in SHAPES if c in rows})
 
 
 def choose(project: Project, stain: str, tiles: pd.DataFrame, scope: list[str], at: float | None, n: int, decided: State,
@@ -201,6 +216,23 @@ def progress(tiles: list[str], finished: dict[str, set[str]], held: dict[str, se
 
 
 # ---------- round 2: fields ----------
+
+ALL_FIELDS = -1  # "how many fields": every remaining one
+
+
+def remaining_fields(fields: list[str], finished: set[str], assigned: set[str]) -> list[str]:
+    """The fields a new "Fix the field" session can draw from: those not annotated yet (nobody finished them) and not
+    assigned to an open session, in the given order."""
+    return [t for t in dict.fromkeys(fields) if t not in finished and t not in assigned]
+
+
+def draw_fields(remaining: list[str], n: int, seed: int) -> list[str]:
+    """n of the remaining fields drawn uniformly at random, without repeats (n < 0, or more than there are: all of them),
+    in the drawn order; the same seed gives the same draw."""
+    rng = np.random.default_rng(seed)
+    if n < 0 or n >= len(remaining):
+        return [remaining[i] for i in rng.permutation(len(remaining))]
+    return [remaining[i] for i in rng.choice(len(remaining), size=n, replace=False)]
 
 def field_states(meta: dict, reviewed: dict[str, set[str]], working: dict[str, set[str]], held: dict[str, set[str]], ready: set[str]) -> list[dict]:
     """Where each field of a round-2 session stands (as `sessions.field_states`); `open_by` are the people holding it now."""

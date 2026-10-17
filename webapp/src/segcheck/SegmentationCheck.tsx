@@ -1,5 +1,5 @@
 /* "How well does detection outline objects?" on the Models page: the segmentation check per stain (people outline every
-   object of a few fields; the AI's candidates and counted objects are compared with them), how far the outlining is,
+   object of a few fields; detection's candidates and counted objects are compared with them), how far the outlining is,
    the scores in plain words, and every figure and file under Advanced. */
 import { useState } from 'react'
 import type { Job } from '../api'
@@ -12,12 +12,12 @@ import { Advanced } from '../setup/parts'
 import type { CheckGroup, CheckOverview, CheckSession, Outcome, RaterScores, SizeBin, StainScores } from './types'
 
 const OUTCOMES: { key: Outcome; label: string; hint: string }[] = [
-  { key: 'counted', label: 'found and counted', hint: 'the AI counted it, with an outline that fits (IoU ≥ 0.5)' },
-  { key: 'rejected', label: 'proposed, not counted', hint: 'the AI outlined it well but its model decided it was not one' },
-  { key: 'poor outline', label: 'poor outline', hint: 'the AI looked at it but its outline does not fit' },
-  { key: 'split', label: 'cut into pieces', hint: 'the AI saw several objects where people see one' },
-  { key: 'merged', label: 'merged with a neighbour', hint: 'the AI saw one object where people see two or more' },
-  { key: 'missed', label: 'never proposed', hint: 'the AI did not look at it at all' },
+  { key: 'counted', label: 'found and counted', hint: 'detection counted it, with an outline that fits (IoU ≥ 0.5)' },
+  { key: 'rejected', label: 'proposed, not counted', hint: 'detection outlined it well but its model decided it was not one' },
+  { key: 'poor outline', label: 'poor outline', hint: 'detection looked at it but its outline does not fit' },
+  { key: 'split', label: 'cut into pieces', hint: 'detection saw several objects where people see one' },
+  { key: 'merged', label: 'merged with a neighbour', hint: 'detection saw one object where people see two or more' },
+  { key: 'missed', label: 'never proposed', hint: 'detection did not look at it at all' },
 ]
 const active = (job: Job | undefined) => !!job && (job.status === 'running' || job.status === 'queued')
 
@@ -34,10 +34,10 @@ export function SegmentationCheck() {
     <section className="card segcheck">
       <div className="row"><h2 style={{ margin: 0 }}>How well does detection outline objects?</h2><span className="spacer" />
         {overview.data && (overview.data.checks.length > 0 || overview.data.imported_sessions > 0) && <button className="btn small" disabled={running || !scorable}
-          title={scorable ? 'Compares every complete field with what the AI found' : 'No field is marked complete yet'}
+          title={scorable ? 'Compares every complete field with what detection found' : 'No field is marked complete yet'}
           onClick={score}>{running ? 'Scoring…' : 'Score now'}</button>}</div>
-      <p className="secondary small" style={{ marginTop: 4 }}>The model scores above are measured only on the objects the AI proposed. Here people outline
-        <i> every</i> object in a few fields, so the check also counts objects the AI never proposed, cut into pieces or merged with a neighbour.</p>
+      <p className="secondary small" style={{ marginTop: 4 }}>The model scores above are measured only on the objects detection proposed. Here people outline
+        <i> every</i> object in a few fields, so the check also counts objects detection never proposed, cut into pieces or merged with a neighbour.</p>
       <Loaded state={overview} label="Loading the segmentation check…">
         {(data) => data.checks.length || data.imported_sessions ? <>
           {running && job && <JobLine job={job} />}
@@ -53,7 +53,7 @@ export function SegmentationCheck() {
         </> : (
           <Empty>
             <p style={{ marginTop: 0 }}>No segmentation check yet. stainID picks about {data.default_fields} fields per stain, spread over TMAs, groups, regions and
-              how much stain they hold; people outline every object in them, blind to the AI. That takes about 5–15 minutes per field.</p>
+              how much stain they hold; people outline every object in them, with what detection found shown. That takes about 5–15 minutes per field.</p>
             <button className="btn primary" onClick={() => setSettingUp(true)}>Set up the check…</button>
           </Empty>
         )}
@@ -76,7 +76,7 @@ function Imported({ raters, scored }: { raters: RaterScores[]; scored: boolean }
           {r.objects > 0 ? <Scores s={r} words={objectsOf(r.stain)} /> : <p className="small muted">No polygon of the stain’s classes.</p>}
         </div>
       ))}</div> : <p className="small muted">{scored ? 'None of the imported raters drew polygons (boxes and points cannot measure outlines).'
-        : 'Press Score now to compare the polygons the dataset’s raters drew with what the AI found.'}</p>}
+        : 'Press Score now to compare the polygons the dataset’s raters drew with what detection found.'}</p>}
     </div>
   )
 }
@@ -85,7 +85,7 @@ function JobLine({ job }: { job: Job }) {
   return (
     <div className="training-now">
       <div className="row"><span className="pulse" /><b>{job.status === 'queued' ? 'Waiting to start…' : job.options.proposals_only
-        ? 'Finding the AI’s candidates in the check’s fields…' : 'Scoring…'}</b></div>
+        ? 'Finding detection’s candidates in the check’s fields…' : 'Scoring…'}</b></div>
       {job.progress.total > 0 && <><Progress done={job.progress.done} total={job.progress.total} />
         <span className="muted small">{job.progress.done.toLocaleString()} of {job.progress.total.toLocaleString()} fields · 10–30 s each, once per field</span></>}
     </div>
@@ -109,9 +109,9 @@ function StainCheck({ stain, checks, scores, onSetUp }: { stain: string; checks:
       <div className="small secondary">{complete.toLocaleString()} of {fields.toLocaleString()} fields outlined completely
         {checks.some((c) => !c.open) && <span className="muted"> · closed to labellers (open it on Labels)</span>}</div>
       {scores && scores.objects > 0 ? <Scores s={scores} words={words} />
-        : scores && scores.fields_scored > 0 ? <p className="small secondary">The {scores.fields_scored} fields outlined so far hold no {words}; the AI counted
+        : scores && scores.fields_scored > 0 ? <p className="small secondary">The {scores.fields_scored} fields outlined so far hold no {words}; detection counted
           {' '}{(scores.counted ?? 0).toLocaleString()} there{scores.counted ? ', all wrong' : ''}.</p>
-        : <p className="small muted">{complete ? 'Press Score now to compare the complete fields with what the AI found.'
+        : <p className="small muted">{complete ? 'Press Score now to compare the complete fields with what detection found.'
           : 'Scores appear once people have outlined fields completely. Send them the link on the Labels page.'}</p>}
     </div>
   )
@@ -194,9 +194,9 @@ function FigureTable({ sections }: { sections: [string, CheckGroup[]][] }) {
     <div className="table-scroll">
       <table className="compact segcheck-table">
         <thead><tr><th /><th className="num">Fields</th><th className="num">Objects</th><th className="num" title="proposed with a fitting outline">Proposed</th>
-          <th className="num">Found and counted</th><th className="num" title="of what the AI counted">Right</th>
+          <th className="num">Found and counted</th><th className="num" title="of what detection counted">Right</th>
           <th className="num" title="proposed · found and counted · right, at IoU 0.3">At IoU 0.3</th>
-          {OUTCOMES.slice(1).map((k) => <th key={k.key} className="num" title={k.hint}>{k.label}</th>)}<th className="num">AI counted</th></tr></thead>
+          {OUTCOMES.slice(1).map((k) => <th key={k.key} className="num" title={k.hint}>{k.label}</th>)}<th className="num">Detection counted</th></tr></thead>
         {sections.filter(([title, rows]) => rows.length && (!title || rows.length > 1)).map(([title, rows]) => (
           <tbody key={title || 'all'}>
             {title && <tr className="section-row"><th colSpan={columns}>{title}</th></tr>}
@@ -267,9 +267,9 @@ function SetUp({ data, onClose, onDone }: { data: CheckOverview; onClose: () => 
   }
   return (
     <Modal title="Set up the segmentation check" onClose={onClose}>
-      <p className="secondary" style={{ marginTop: 0 }}>One session per stain, “Segmentation check – <i>stain</i>”. People outline <b>every</b> object in each field, without
-        seeing what the AI found, and mark the field complete. Fields are ready ones, spread over TMAs, diagnosis groups, regions and sparse, medium and dense
-        staining. Meanwhile stainID finds the AI’s candidates in those fields in the background.</p>
+      <p className="secondary" style={{ marginTop: 0 }}>One session per stain, “Segmentation check – <i>stain</i>”. People outline <b>every</b> object in each field, with
+        what detection found shown (they may hide it), and mark the field complete. Fields are ready ones, spread over TMAs, diagnosis groups, regions and sparse, medium and dense
+        staining. Meanwhile stainID finds detection’s candidates in those fields in the background.</p>
       <fieldset className="field"><legend>Stains</legend>
         <div className="row">{data.stains.map((s) => {
           const exists = !missing.includes(s)

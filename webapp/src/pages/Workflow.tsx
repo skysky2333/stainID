@@ -1,24 +1,26 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import type { Job, ResourceInfo, SetupOverview, SlideRow, SlidesInfo, Step, StepOption } from '../api'
-import { api, apiUrl, runStep } from '../api'
+import { api, apiUrl, queueText, runStep } from '../api'
 import { CommandLineTag, Empty, ErrorNote, FilePicker, HelpBox, Loaded, OptionField, PageHead, PathLine, Progress, StatusBadge, Term, timeAgo, withError } from '../components'
 import { useFetch } from '../hooks'
-import { MAIN_STAGES, OPTIONAL, PipelineMap, STAGE, V2_STAGE, duration, groupState, isActive, runFacts, stepState, stopJobs } from '../pipeline'
+import { LEGACY_STAGE, MAIN_STAGES, OPTIONAL, PipelineMap, STAGE, duration, groupState, isActive, runFacts, stepState, stopJobs } from '../pipeline'
 import { useProject } from '../project'
 import { Advanced } from '../setup/parts'
 import { SlideTable, slideProblems } from '../slides'
 
 export { MAIN_STAGES, stepState }
 
-/** The Run page: every step of the analysis by stage, with one button for everything that is left. */
+/** The Run page: the flow chart of the analysis at the top (click a step for its details), one button for everything
+ *  that is left, then every step by stage; the first detection (legacy v1) under Advanced. */
 export default function Workflow() {
   const steps = useFetch<Step[]>('/api/steps', 3000)
   const setup = useFetch<SetupOverview>('/api/setup', 8000)
-  const navigate = useNavigate()
   const { hash } = useLocation()
+  const [chosen, setChosen] = useState<string | null>(null)
   const list = (steps.data ?? []).filter((s) => MAIN_STAGES.includes(s.stage))
-  const v2 = (steps.data ?? []).filter((s) => s.stage === V2_STAGE)
+  const legacy = (steps.data ?? []).filter((s) => s.stage === LEGACY_STAGE)
+  const picked = list.find((s) => s.id === chosen)
   useEffect(() => {
     if (hash && steps.data) document.getElementById(hash.slice(1))?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }, [hash, steps.data === null])
@@ -29,22 +31,33 @@ export default function Workflow() {
       <PageHead title="Run" subtitle="Every step from slide scans to results tables. Steps run in the background: you can switch pages or close the browser.">
         <Link className="btn" to="/setup">Guided set-up</Link>
       </PageHead>
-      <HelpBox id="workflow">
-        <ul>
-          <li><b>Run what’s left</b> starts every step that is not done yet, in the right order. Or open a step and press <b>Run</b> on it alone.</li>
-          <li>Steps can be stopped and run again: they continue where they stopped and skip what is finished.</li>
-          <li>Open a step to see what it needs and makes, its options and its log. Technical options are under <b>Advanced</b>.</li>
-        </ul>
-      </HelpBox>
       <Loaded state={steps} label="Reading where every step stands…">
         {() => (
           <>
+            <section className="card flow-card" aria-label="How the data flows">
+              <PipelineMap steps={list} state={stepState} stages={MAIN_STAGES} chosen={chosen} onOpen={(id) => setChosen(chosen === id ? null : id)} />
+              {picked && <div className="flow-details">
+                <div className="row small"><b>{picked.title}</b><span className="muted">— details</span><span className="spacer" />
+                  <button className="link-btn small" onClick={() => setChosen(null)}>Close</button></div>
+                <StepCard key={picked.id} step={picked} onChanged={refresh} anchor={false} startOpen />
+              </div>}
+            </section>
             <RunSummary steps={list} setup={setup.data} onChanged={refresh} />
+            <HelpBox id="workflow">
+              <ul>
+                <li><b>Run what’s left</b> starts every step that is not done yet, in the right order. Or open a step and press <b>Run</b> on it alone.</li>
+                <li>Steps can be stopped and run again: they continue where they stopped and skip what is finished.</li>
+                <li>Click a step in the flow chart, or open it below, to see what it needs and makes, its options and its log. Technical options are under <b>Advanced</b>.</li>
+              </ul>
+            </HelpBox>
             {MAIN_STAGES.map((stage) => <StageSection key={stage} stage={stage} steps={list.filter((s) => s.stage === stage)} onChanged={refresh} />)}
-            {v2.length > 0 && <StageSection stage={V2_STAGE} steps={v2} onChanged={refresh} />}
-            <Advanced title="Pipeline map" hint="which step needs which">
-              <PipelineMap steps={list} state={stepState} onOpen={(id) => navigate(`/workflow#${id}`)} />
-            </Advanced>
+            {legacy.length > 0 && (
+              <details className="advanced legacy-steps" open={legacy.some((s) => hash === `#${s.id}` || isActive(s.job?.status))}>
+                <summary><span>Legacy detection (v1)</span><span className="muted small"> · the first detection and its results tables: still runnable, never run by
+                  “Run what’s left”</span></summary>
+                <div className="advanced-body"><StageSection stage={LEGACY_STAGE} steps={legacy} onChanged={refresh} /></div>
+              </details>
+            )}
           </>
         )}
       </Loaded>
@@ -136,7 +149,7 @@ function initialValues(options: StepOption[], outdated: boolean): Record<string,
 }
 
 /** One step: where it stands and its main button; opened, what it needs and makes, its options and its log. */
-export function StepCard({ step, onChanged }: { step: Step; onChanged: () => void }) {
+export function StepCard({ step, onChanged, anchor = true, startOpen = false }: { step: Step; onChanged: () => void; anchor?: boolean; startOpen?: boolean }) {
   const optionsKey = JSON.stringify(step.options)
   const outdated = Boolean(step.progress.outdated)
   const defaults = useMemo(() => initialValues(JSON.parse(optionsKey) as StepOption[], outdated), [optionsKey, outdated])
@@ -147,7 +160,7 @@ export function StepCard({ step, onChanged }: { step: Step; onChanged: () => voi
   const [error, setError] = useState<string | null>(null)
   const state = stepState(step)
   const { hash } = useLocation()
-  const [open, setOpen] = useState(hash === `#${step.id}`)
+  const [open, setOpen] = useState(startOpen || hash === `#${step.id}`)
   useEffect(() => { if (hash === `#${step.id}`) setOpen(true) }, [hash, step.id])
   const missing = step.needs.filter((n) => !n.exists)
   const job = step.job
@@ -168,7 +181,7 @@ export function StepCard({ step, onChanged }: { step: Step; onChanged: () => voi
   const blocked = missing.length > 0
 
   return (
-    <div className={`card step-card state-${state}${open ? ' open' : ''}`} id={step.id}>
+    <div className={`card step-card state-${state}${open ? ' open' : ''}`} id={anchor ? step.id : undefined}>
       <div className="step-row">
         <button className="step-head" onClick={() => setOpen(!open)} aria-expanded={open}>
           <span className="chevron">{open ? '▾' : '▸'}</span>
@@ -227,7 +240,9 @@ export function StepCard({ step, onChanged }: { step: Step; onChanged: () => voi
                 {job && <button className="link-btn small" onClick={() => setLog(!log)}>{log ? 'Hide log' : 'Show log'}</button>}
               </div>
               {log && job && <JobLog id={job.id} job={job} />}
-              <Advanced hint={extra.length ? 'more options, start over, the files and the command' : 'the files and the command'}>
+              <Advanced hint={step.id === 'v2_outlines' ? 'which outline each stain shows, more options, the files and the command'
+                : extra.length ? 'more options, start over, the files and the command' : 'the files and the command'}>
+                {step.id === 'v2_outlines' && <OutlineDefaults onSaved={onChanged} />}
                 {extra.length > 0 && <div className="row options">{extra.map((o) => <OptionField key={o.key} option={o} value={values[o.key]} onChange={(v) => setValues({ ...values, [o.key]: v })} />)}</div>}
                 <div>
                   <div className="io-title">Files</div>
@@ -260,7 +275,7 @@ function StepNotes({ step, state, parts, blocked, onDetails }: { step: Step; sta
         <div className="small muted step-note">Needs first: {step.needs.filter((n) => !n.exists).map((m) => m.download ? `${m.label} (download on the Models page)` : m.format ? `${m.label} (yours to provide)` : m.label).join(', ')}.
           {' '}<button className="link-btn small" onClick={onDetails}>How to get it</button></div>
       )}
-      {step.progress.outdated && (step.stage === V2_STAGE ? (
+      {step.progress.outdated && (step.id.startsWith('v2_') ? (
         <div className="warning-note">{step.progress.note || 'Some cores are out of date.'} Something they were made from changed since (a
           setting, a model, or an earlier step). Run the step again: it redoes only those cores.</div>
       ) : (
@@ -322,6 +337,50 @@ function NeedRow({ need, onChanged, optional = false }: { need: ResourceInfo; on
       <ErrorNote error={error} />
       {picking && <FilePicker title={`Choose the ${need.label.toLowerCase()}`} pickFiles={need.id.startsWith('model_')} show={need.id.startsWith('model_') ? 'models' : 'slides'}
         onClose={() => setPicking(false)} onPick={choose} />}
+    </div>
+  )
+}
+
+/** The outline each stain shows first (the Cores view, the annotation pages and the results' shape measures):
+ *  `v2.outlines.default_outline` in stainid.yaml. */
+const OUTLINE_DEFAULTS: Record<string, 'stain' | 'sam'> = { NeuN: 'sam', '6E10': 'stain', AT8: 'stain' }
+
+function OutlineDefaults({ onSaved }: { onSaved: () => void }) {
+  const { info, reload } = useProject()
+  const stored = ((info?.config as unknown as { v2?: { outlines?: { default_outline?: Record<string, string> } } })?.v2?.outlines?.default_outline) ?? {}
+  const current = useMemo(() => Object.fromEntries(Object.entries(OUTLINE_DEFAULTS).map(([s, d]) => [s, stored[s] === 'sam' || stored[s] === 'stain' ? stored[s] : d])),
+    [JSON.stringify(stored)])  // eslint-disable-line react-hooks/exhaustive-deps
+  const [values, setValues] = useState<Record<string, string>>(current)
+  useEffect(() => setValues(current), [current])
+  const [busy, setBusy] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const changed = JSON.stringify(values) !== JSON.stringify(current)
+  const save = () => withError(async () => {
+    setBusy(true)
+    try {
+      await api.put('/api/project/config', { changes: { v2: { outlines: { default_outline: values } } } })
+      reload(); onSaved(); setSaved(true)
+    } finally { setBusy(false) }
+  }, setError)
+  return (
+    <div className="outline-defaults">
+      <div className="io-title">Outline shown for each stain</div>
+      <p className="small secondary" style={{ margin: '2px 0 8px' }}>Which outline an object shows first, on the Cores view and when people label: its
+        stain outline (the brown-stained shape detection found) or Segment Anything’s. Changing it only puts the candidate tables together again
+        (quick); Segment Anything does not run again.</p>
+      <div className="row options">
+        {Object.keys(OUTLINE_DEFAULTS).map((stain) => (
+          <label key={stain} className="field">{stain}
+            <select value={values[stain]} onChange={(e) => { setSaved(false); setValues({ ...values, [stain]: e.target.value }) }}>
+              <option value="stain">Stain outline</option>
+              <option value="sam">Segment Anything</option>
+            </select></label>
+        ))}
+        <button className="btn small" disabled={!changed || busy} onClick={save}>{busy ? 'Saving…' : 'Save'}</button>
+        {saved && !changed && <span className="small status-finished">Saved. The candidate tables are put together again with it (the quick “Decide” step); Segment Anything does not run again.</span>}
+      </div>
+      <ErrorNote error={error} />
     </div>
   )
 }
@@ -407,7 +466,7 @@ const PAGE = 20
 function jobFacts(job: Job): string {
   const { done, total } = job.progress
   const took = job.started && job.ended ? ` · took ${duration(job.ended - job.started)}` : ''
-  if (job.status === 'queued') return job.waiting || 'Starts in a moment'
+  if (job.status === 'queued') return queueText(job)
   if (job.status === 'failed' || job.status === 'skipped') return job.progress.error || 'See the log'
   if (job.status === 'running') return total ? `${done.toLocaleString()} of ${total.toLocaleString()} done` : 'Starting…'
   return (total ? `${done.toLocaleString()} of ${total.toLocaleString()} done` : '') + took

@@ -3,8 +3,7 @@ for the admin their set-up and the scores (`segmentation.report`).
 
 People outlining (`/api/annotate/<session>/outline/<field>`): their own objects in a field; click-to-outline with
 Segment Anything (`masks.clicks`, from features made ahead by `api.sam_embeddings`); saving, editing and deleting
-objects; marking the field complete; and, only when they ask for it, what the pipeline found there as a reference
-(hidden at first, so the check is blind).
+objects; marking the field complete; and what stainID detection found there (shown from the start; people may hide it).
 """
 from __future__ import annotations
 
@@ -218,7 +217,7 @@ def _default_tmas(stain: str) -> list[str]:
 
 
 def create_outline_session(body: NewSession) -> dict:
-    """A segmentation check for one stain: `n_fields` fields chosen by `outline.pick_fields` (or `tile_ids`), blind."""
+    """A segmentation check for one stain: `n_fields` fields chosen by `outline.pick_fields` (or `tile_ids`), detection shown."""
     if body.stain not in STAINS:
         raise HTTPException(400, f"unknown stain {body.stain}")
     title = body.title.strip() or outline.title(body.stain)
@@ -227,10 +226,10 @@ def create_outline_session(body: NewSession) -> dict:
         raise HTTPException(409, "a session with this name exists")
     tmas = body.tmas or _default_tmas(body.stain)
     seed = len(sessions.names(root()))
-    fields = _known_fields(body.stain, body.tile_ids) if body.tile_ids else _pick(body.stain, max(1, body.n_fields), [str(t) for t in tmas], seed)
+    fields = _known_fields(body.stain, body.tile_ids) if body.tile_ids else _pick(body.stain, max(1, outline.DEFAULT_FIELDS if body.n_fields is None else body.n_fields), [str(t) for t in tmas], seed)
     benchmark = {"tmas": [str(t) for t in tmas], "density": _density_of(body.stain, fields, seed),
-                 "density_measure": "objects the AI counted per mm² of tissue, in thirds of the stain's ready fields on these TMAs"}
-    meta = sessions.create(root(), name, title=title, stain=body.stain, kind=outline.KIND, tools=["outline"], ai_view="none",
+                 "density_measure": "objects detection counted per mm² of tissue, in thirds of the stain's ready fields on these TMAs"}
+    meta = sessions.create(root(), name, title=title, stain=body.stain, kind=outline.KIND, tools=["outline"], ai_view="full",
                            per_field=max(1, body.per_field), rule="random", fields=fields, instructions=body.instructions, benchmark=benchmark)
     proposals_job(body.stain, name)
     if body.open:

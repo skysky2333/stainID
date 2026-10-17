@@ -10,6 +10,14 @@ table, TMA map, whole-core tiles, nuclei and outline label images, NeuN / 6E10 /
 sessions by three invented annotators, trained stain models with their validation reports, and the results tables.
 The cheap stainid steps run for real on the demo: stain calibration, model training and the results tables.
 
+The v2 detection is written as if its stages had run: a candidate store per core image and stain (every candidate the
+simulated detector saw, accepted and rejected, with three outline sizes standing in for the Segment Anything masks; the
+objects it missed are left for people to add), stage manifests with the digests the stages would record (so the Run
+page shows every v2 stage done and up to date), the v2 results tables and finished runs of each step in the job store.
+On that store sit two AT8 annotation rounds, "Fix the field" and "Check detection's calls", with Ann's saved work on a field
+she has not finished, fields finished by Ben and Carla, and the tutorial done by the three of them (so a new name gets
+it). demo.json names the sessions and fields the screenshots open.
+
 Nothing is read from a real study: all values come from the random generator (fixed by --seed). The published model
 files (Cellpose-SAM, Segment Anything, Phikon, plaque CNNs) are small placeholder files, and the "slide scans" are
 low-resolution overview pictures, so the demo shows every page but the slide-reading and deep-learning steps cannot
@@ -34,7 +42,7 @@ import numpy as np
 import pandas as pd
 
 from stainid.labels import pool, sessions, store
-from stainid.labels.tasks import CLASSES, FIELD_TAGS, NEGATIVE, ai_value, positive
+from stainid.labels.tasks import FIELD_TAGS, NEGATIVE, ai_value, positive
 from stainid.project import DEFAULTS, Project, load_project, save_project
 from stainid.sampling.tiles import labelling_tiles
 from stainid.training.train import train_model
@@ -62,6 +70,13 @@ TRUTH = {
     "speck": "not a plaque", "vascular": "not a plaque",
     "tangle": "tau+ neuron: tangle", "pretangle": "tau+ neuron: pretangle", "missed_pretangle": "tau+ neuron: pretangle",
     "tau_dot": "not a tau+ neuron",
+}
+# The classes the simulated annotators choose from, in the words of the labels made before types existed
+# (`stainid.labels.vocabulary.LEGACY` reads them as identity and type).
+CLASSES = {
+    "NeuN": ["NeuN+ neuron", "not a neuron", "artifact or unclear", "unsure"],
+    "6E10": ["compact plaque", "diffuse plaque", "small plaque", "not a plaque", "unsure"],
+    "AT8": ["tau+ neuron: tangle", "tau+ neuron: pretangle", "not a tau+ neuron", "unsure"],
 }
 POSITIVE_KINDS = {"neuron", "missed_neuron", "compact", "diffuse", "small_plaque", "missed_plaque", "tangle", "pretangle", "missed_pretangle"}
 META = ("core_id", "tma", "donor_id", "sample_region_id", "region", "disease_group", "technical_replicate")
@@ -378,7 +393,7 @@ def pool_row(stain: str, o: dict, tile: dict, rng: np.random.Generator) -> dict:
 
 
 class Labeller:
-    """Simulated annotators: mostly right, a little careless, and they mostly keep the AI's call when it is plausible."""
+    """Simulated annotators: mostly right, a little careless, and they mostly keep detection's call when it is plausible."""
 
     def __init__(self, rng: np.random.Generator):
         self.rng, self.clock, self.records = rng, START, []
@@ -526,9 +541,9 @@ def make_labels(root: Path, project, cores: list[dict], drawn: dict, tiles: pd.D
 PLACEHOLDER = "Placeholder written by tools/demo/make_demo_project.py: the synthetic demo project ships no model weights.\n"
 
 
-def train_models(root: Path, labels: dict) -> None:
+def train_models(root: Path, labels: dict) -> float:
     """Train each stain model twice with stainid's own training (after the imported labels, then after the sessions),
-    under fixed folder names, and switch to the models a user would have chosen."""
+    under fixed folder names, and switch to the models a user would have chosen. Returns when the last one was made."""
     trained = root / "data" / "models" / "trained"
     reviews = root / "data" / "annotations"
     store.append(reviews, labels["imported"])
@@ -549,6 +564,7 @@ def train_models(root: Path, labels: dict) -> None:
                 key = {"NeuN": "neun", "6E10": "amyloid", "AT8": "tau"}[stain]
                 use[key] = project.relative(final / "bundle.joblib")
                 save_project(load_project(root), {"models": {key: use[key]}})
+    return stamp
 
 
 # ---------------------------------------------------------------- pictures of slides, grids and QC
@@ -575,6 +591,238 @@ def slide_pictures(root: Path, cores: list[dict], drawn: dict) -> None:
     (root / "data" / "qc" / "cores").mkdir(parents=True, exist_ok=True)
     for (core_id, stain), result in drawn.items():
         cv2.imwrite(str(root / "data" / "qc" / "cores" / f"{core_id}_{stain}.jpg"), cv2.cvtColor(result["thumb"], cv2.COLOR_RGB2BGR))
+
+
+# ---------------------------------------------------------------- the v2 detection: candidate store, stage manifests, results
+
+REJECT_RULES = {  # (stain, kind): the rule that rejects some of these before the model, and how often
+    ("6E10", "speck"): ("rule:speck", 0.7), ("6E10", "vascular"): ("rule:vascular_or_edge", 0.6),
+    ("AT8", "tau_dot"): ("rule:low_contrast", 0.35), ("NeuN", "glia"): ("rule:pale_nucleus", 0.3), ("NeuN", "precipitate"): ("rule:shape", 0.4),
+}
+SIZES = (0.8, 1.08, 1.38)  # the three Segment Anything masks of a candidate (its smoothed hull, small to large); the stain outline is the drawn one
+
+
+def _scaled(outline, x: float, y: float, factor: float, hull: bool = False) -> np.ndarray:
+    """An object's outline (or, with `hull`, its convex hull: the smoother look of a Segment Anything mask), simplified,
+    grown or shrunk about its centre."""
+    ring = np.asarray(outline, float)
+    if hull:
+        ring = cv2.convexHull(ring.astype(np.float32).reshape(-1, 1, 2))[:, 0, :].astype(float)
+    simple = cv2.approxPolyDP(ring.astype(np.float32).reshape(-1, 1, 2), 1.2, True)[:, 0, :].astype(float)
+    if len(simple) >= 3:
+        ring = simple
+    return np.c_[x + (ring[:, 0] - x) * factor, y + (ring[:, 1] - y) * factor]
+
+
+def _call_class(stain: str, o: dict) -> tuple[str, str]:
+    """An accepted call as label-vocabulary ids (identity, type)."""
+    if stain == "NeuN":
+        return "NeuN+ neuron", "strong" if o["dab"] > 0.55 else "weak"
+    if stain == "6E10":
+        return "plaque", {"compact": "compact", "diffuse": "diffuse", "small_plaque": "small"}.get(o["model_class"] or "", "diffuse")
+    return "tau+ neuron", "mature tangle" if o["mature"] else "pretangle"
+
+
+def candidate_store_outputs(project, drawn: dict, rng: np.random.Generator) -> dict[tuple[str, str], int]:
+    """The v2 candidate store (`stainid.candidates`, read by the annotation rounds and the viewer): every candidate the
+    simulated detector saw in each core image, accepted and rejected (not the missed objects, which people add), with
+    three outline sizes, the call, its reason and class. Returns the number of candidates per (core, stain)."""
+    from stainid import candidates as v2store
+
+    out = {}
+    for (core_id, stain), result in sorted(drawn.items()):
+        objects = [o for o in result["objects"] if o["candidate"]]
+        ids = v2store.unique_ids(stain, core_id, [o["x"] for o in objects], [o["y"] for o in objects])
+        rows = []
+        for cid, o in zip(ids, objects):
+            masks = [_scaled(o["outline"], o["x"], o["y"], f, hull=True) for f in SIZES]
+            own = _scaled(o["outline"], o["x"], o["y"], 1.0)  # the stain-based outline
+            rule, chance = REJECT_RULES.get((stain, o["kind"]), ("", 0.0))
+            if o["accepted"]:
+                decision, reason = "accepted", "accepted"
+                klass, subtype = _call_class(stain, o)
+            else:
+                decision, klass, subtype = "rejected", "", ""
+                reason = rule if rule and rng.random() < chance else "rejected_by_model"
+            level = float(rng.choice([0.5, 0.75, 1.0, 1.5], p=[0.1, 0.2, 0.5, 0.2]))
+            rows.append({
+                "candidate_id": cid, "x_core": round(o["x"], 1), "y_core": round(o["y"], 1), "tile_id": o["tile_id"],
+                "area_um2": round(o["area_um2"], 2), "radius_px": round(0.5 * o["diameter_um"] / PIXEL_UM, 1),
+                "sources": {"NeuN": "legacy_profile", "6E10": "legacy_deposit", "AT8": "ring"}[stain] if level >= 1.0 else f"dab@{level:g}",
+                "proposal_threshold": level, "equivalent_diameter_um": round(o["diameter_um"], 2), "solidity": round(o["solidity"], 4),
+                "perimeter_um": round(o["perimeter_um"], 2), "mean_dab_od": round(0.08 + 0.4 * o["dab"], 4),
+                "outline": v2store.encode_points(own), "sam_outline": v2store.encode_points(masks[1]), "sam_status": "ok",
+                "sam_masks": "|".join(v2store.encode_points(m) for m in masks),
+                "sam_scores": "|".join(f"{v:.3f}" for v in (rng.uniform(0.72, 0.86), rng.uniform(0.86, 0.97), rng.uniform(0.7, 0.88))),
+                "sam_stability": "|".join(f"{v:.3f}" for v in rng.uniform(0.8, 0.98, 3)), "sam_default": 1,
+                "probability": np.nan if reason.startswith("rule:") else o["probability"], "threshold": THRESHOLD[stain], "model_id": "demo",
+                "decision": decision, "reason": reason, "class": klass, "subtype": subtype})
+        frame = pd.DataFrame(rows) if rows else pd.DataFrame(columns=["candidate_id", "x_core", "y_core", "tile_id", "decision", "class", "subtype"])
+        v2store.write_table(v2store.root(project) / "candidates" / stain / f"{core_id}.csv.gz", frame)
+        # and each stage's own table, as the stages write them (proposals, calls, outlines: the store is their join)
+        calls = [c for c in ("candidate_id", *v2store.CALL_COLUMNS) if c in frame]
+        shapes = [c for c in ("candidate_id", *v2store.OUTLINE_COLUMNS) if c in frame]
+        proposed = [c for c in frame.columns if c == "candidate_id" or (c not in calls and c not in shapes)]
+        for kind, columns in (("proposals", proposed), ("calls", calls), ("outlines", shapes)):
+            v2store.write_table(v2store.root(project) / kind / stain / f"{core_id}.csv.gz", frame[columns])
+        out[(core_id, stain)] = len(frame)
+    return out
+
+
+def v2_manifests(project, counts: dict[tuple[str, str], int]) -> None:
+    """Stage manifests with the digests the stages would record now (as `stainid.v2.run.status` works them out), so every
+    v2 stage shows as done and up to date; and the v2 results tables (the same as the current ones: the demo has one
+    detection)."""
+    from stainid.v2 import classify, manifest, outlines, proposals
+    from stainid.v2.run import groups, proposal_inputs
+
+    calibration, manual, nuclei = proposal_inputs(project)
+    models = {stain: classify.load_model(project, stain) for stain in STAINS}
+    for (core_id, stain), tiles in groups(project, STAINS).items():
+        threshold = calibration[(tiles[0]["tma"], stain)]
+        n = counts.get((core_id, stain), 0)
+        manifest.write(project, "proposals", stain, core_id,
+                       proposals.expected(project, stain, core_id, tiles, threshold, manual.get(tiles[0]["image_path"], []), nuclei), candidates=n)
+        manifest.write(project, "calls", stain, core_id, classify.expected(project, stain, core_id, models[stain]), candidates=n)
+        manifest.write(project, "outlines", stain, core_id, outlines.expected(project, stain, core_id), outlined=n)
+        manifest.write(project, "candidates", stain, core_id, classify.assembled_expected(project, stain, core_id), candidates=n)
+    measures = project.output("v2") / "measures"
+    measures.mkdir(parents=True, exist_ok=True)
+    for name in ("results_donor_region.csv", "results_core.csv"):
+        shutil.copyfile(project.output("tables") / name, measures / name)
+
+
+# ---------------------------------------------------------------- the runs of the steps (the Run page's history)
+
+def job_records(project, cores: list[dict], tiles: int, models_at: float) -> None:
+    """Finished runs of the steps that "made" the demo's tables, with plausible times, as the app's job store keeps them."""
+    from stainid.jobs import APP, Job, JobStore
+    from stainid.workflows.steps import BY_ID, to_argv
+
+    jobs = JobStore(project.output("jobs"))
+    slides, images = TMAS * len(STAINS), len(cores) * len(STAINS)
+    setup = START - 11 * 86400
+    plan = [  # step, start, seconds, units done
+        ("dearray", setup, 9 * 62, slides), ("export", setup + 700, 9 * 95, slides), ("qc", setup + 1700, 170, images),
+        ("tiles", setup + 1900, 95, images), ("calibrate", setup + 2100, 9 * 41, slides),
+        ("nuclei", setup + 3000, int(tiles * 4.1), tiles), ("v2_proposals", setup + 86400, int(images * 96), images),
+        ("v2_outlines", setup + 2 * 86400, int(images * 31), images), ("train", models_at - 240, 52, 3),
+        ("v2_calls", models_at + 900, 140, images), ("v2_measures", models_at + 1100, 210, 1),
+    ]
+    for n, (step, start, seconds, units) in enumerate(plan):
+        options = {o.key: o.default for o in BY_ID[step].options}
+        job = Job(id=time.strftime("%Y%m%d-%H%M%S-", time.localtime(start)) + f"de{n:04x}", workflow=step, options=options,
+                  argv=to_argv(step, options), status="finished", created=start - 2, started=start, ended=start + seconds, returncode=0, source=APP)
+        jobs.save(job)
+        lines = [f"[{k}/{units}] {BY_ID[step].title}" for k in sorted({max(1, units * i // 4) for i in range(1, 5)})]
+        jobs.log_path(job).write_text("\n".join([f"{BY_ID[step].title}: {units} to do", *lines, "done"]) + "\n")
+        jobs.exit_path(job.id).write_text("0")
+
+
+# ---------------------------------------------------------------- the annotation rounds (over the v2 candidate store)
+
+def round_sessions(project, tiles: pd.DataFrame, drawn: dict, rng: np.random.Generator, when: float) -> dict:
+    """A "Fix the field" (round 2) and a "Check detection's calls" (round 1) session of AT8, made as the Labels page makes
+    them (`stainid.api.routes.rounds.create_round_session`), with Ann's saved work on one field she has not finished
+    (calls changed, candidates removed, a rejected one taken back, one unsure, one object she added), fields finished by
+    Ben and Carla, and the tutorial done by the three of them (a new name still gets it)."""
+    from stainid.labels import candidate_store, decisions, frames, rounds
+    from stainid.labels import vocabulary as vocab
+
+    reviews = project.output("reviews")
+    stain = "AT8"
+    words = vocab.of(project, stain)
+    remove = candidate_store.negative_class(words)
+    unsure = next(c.id for c in words.classes if c.role == vocab.SKIP)
+    mine = tiles[tiles.stain == stain]
+    taken = set(sessions.taken(reviews)) | set(store.reviewed_fields(store.current(reviews), stain))
+    free = mine[~mine.tile_id.isin(taken)]
+    common = {"stain": stain, "instructions": "", "subtypes": True, "ai_view": "full", "source": rounds.SOURCE, "level": None,
+              "labels_needed": 1, "per_field": 1}
+    missed = {}
+    for (core_id, s), result in drawn.items():
+        if s == stain:
+            for o in result["objects"]:
+                if not o["candidate"]:
+                    missed.setdefault(o["tile_id"], []).append(o)
+
+    def own(tile_id: str) -> tuple[pd.DataFrame, tuple[int, int]]:
+        tile = mine[mine.tile_id == tile_id].iloc[0]
+        found = candidate_store.read_core(project, stain, str(tile.core_id))
+        found = found[found.tile_id == tile_id].rename(columns={"class": "klass"})
+        x0, y0 = frames.field_origin(tile, project.context_px)
+        return found.assign(x=(found.x_core - x0).round(1), y=(found.y_core - y0).round(1)), (x0, y0)
+
+    # round 2: six fields; the first (most candidates, and an object detection missed) is Ann's field in progress
+    fields = [str(t) for t in sessions.pick_fields(free, set(), 14, seed=int(rng.integers(1000)))]
+    fields.sort(key=lambda t: (not missed.get(t), -len(own(t)[0])))
+    fix, rest = fields[:6], fields[6:]
+    fix_name, check_name = "at8_fix_fields", "at8_check_calls"
+    sessions.create(reviews, fix_name, kind="fields", tools=["class", "point", "outline", "tag"], rule="random", fields=fix, scope=fix,
+                    title="AT8: fix the fields", round=2, **common)
+    sessions.update(reviews, fix_name, open=True, created=when)
+    ids = rounds.choose(project, stain, tiles, rest, None, 120, decisions.state(project, stain, tiles), 1)
+    sessions.create(reviews, check_name, kind="queue", tools=["class"], rule=rounds.RULE, fields=[], scope=rest, objects=len(ids),
+                    title="AT8: check detection’s calls", round=1, **common)
+    rounds.save_items(reviews, check_name, ids)
+    sessions.update(reviews, check_name, open=True, created=when + 60)
+
+    records, clock = [], [when + 3600]
+
+    def add(**record) -> None:
+        clock[0] += float(rng.exponential(9.0))
+        records.append({"confirmed": False, "deleted": False, "points": None, "subtype": None, "candidate": None, "stain": stain, **record,
+                        "time": clock[0]})
+
+    def call(person: str, session: str, tile_id: str, row, value: str, subtype: str = "", confirmed: bool = False) -> None:
+        x, y = round(float(row.x), 1), round(float(row.y), 1)
+        add(id=store.object_id("class", tile_id, x, y), source=person, task="class", session=session, tile_id=tile_id, x=x, y=y,
+            value=value, subtype=subtype or None, candidate=row.candidate_id, confirmed=confirmed)
+
+    # Ann, on the first field: her changes are saved, the field is not finished
+    ann_field = fix[0]
+    found, (x0, y0) = own(ann_field)
+    picks = list(found[found.decision == "accepted"].sort_values("probability").itertuples())
+    rejected = list(found[found.decision != "accepted"].sort_values("probability", ascending=False, na_position="last").itertuples())
+    for row, value in zip(picks[:2], ("thread", "neuritic plaque")):
+        call("Ann", fix_name, ann_field, row, value)
+    for row in picks[2:4]:
+        call("Ann", fix_name, ann_field, row, remove)
+    if len(picks) > 4:  # another type, and the larger outline
+        row = picks[4]
+        call("Ann", fix_name, ann_field, row, "tau+ neuron", "pretangle" if row.subtype == "mature tangle" else "mature tangle")
+        add(id=store.object_id("outline", ann_field, row.x, row.y), source="Ann", task="outline", session=fix_name, tile_id=ann_field, x=row.x,
+            y=row.y, value="mask 2", points=[[round(px - x0, 1), round(py - y0, 1)] for px, py in row.sam_masks[2]], candidate=row.candidate_id)
+    if len(picks) > 5:
+        call("Ann", fix_name, ann_field, picks[5], unsure)
+    for row in rejected[:1]:  # a rejected candidate taken back
+        call("Ann", fix_name, ann_field, row, "tau+ neuron", "pretangle")
+    for o in missed.get(ann_field, [])[:1]:  # an object detection missed, added with one click
+        x, y = round(o["x"] - x0), round(o["y"] - y0)
+        add(id=store.object_id("class", ann_field, x, y), source="Ann", task="class", session=fix_name, tile_id=ann_field, x=x, y=y,
+            value="tau+ neuron", subtype="pretangle")
+        add(id=store.object_id("outline", ann_field, x, y), source="Ann", task="outline", session=fix_name, tile_id=ann_field, x=x, y=y,
+            points=(_scaled(o["outline"], o["x"], o["y"], 1.0) - [x0, y0]).round(1).tolist())
+
+    # Ben and Carla finished one field each: the calls they left as they were count as checked
+    for person, tile_id in (("Ben", fix[1]), ("Carla", fix[2])):
+        for row in own(tile_id)[0].itertuples():
+            identity, subtype = candidate_store.ai_call(words, row.decision, row.klass, row.subtype)
+            changed = rng.random() < 0.06 and identity != remove
+            call(person, fix_name, tile_id, row, remove if changed else identity, "" if changed else subtype, confirmed=not changed)
+        add(id=rounds.done_id({"round": 2, "kind": "fields"}, tile_id), source=person, task="done", session=fix_name, tile_id=tile_id, value=None)
+
+    # Ben checked the calls of the first field of round 1
+    items = rounds.items(project, sessions.meta(reviews, check_name), tiles).rename(columns={"class": "klass"})
+    if len(items):
+        first = items.tile_id.iloc[0]
+        for row in items[items.tile_id == first].itertuples():
+            identity, subtype = candidate_store.ai_call(words, row.decision, row.klass, row.subtype)
+            call("Ben", check_name, first, row, identity, subtype, confirmed=True)
+        add(id=rounds.done_id({"round": 1, "kind": "queue"}, first), source="Ben", task="done", session=check_name, tile_id=first, value=rounds.CALLS)
+    store.append(reviews, records)
+    (reviews / "tutorials.json").write_text(json.dumps({p: when - 3600 + 60 * i for i, p in enumerate(PEOPLE)}, indent=1))
+    return {"fix": fix_name, "check": check_name, "ann_field": ann_field}
 
 
 # ---------------------------------------------------------------- main
@@ -663,12 +911,19 @@ def build(out: Path, seed: int, workers: int) -> None:
     print("stain calibration (stainid calibrate)", flush=True)
     calibrate_slides(load_project(root))
     print("model training (stainid train)", flush=True)
-    train_models(root, labels)
+    models_at = train_models(root, labels)
     print("results tables (stainid summarize)", flush=True)
     for level in ("sample_region_id", "core_id"):
         summarize_results(load_project(root), level)
+    print("v2 detection: candidate store, stage manifests and results tables", flush=True)
+    project = load_project(root)
+    counts = candidate_store_outputs(project, drawn, rng)
+    v2_manifests(project, counts)
+    job_records(project, cores, len(whole), models_at)
+    print("annotation rounds", flush=True)
+    rounds_made = round_sessions(project, labelling_tiles(project), drawn, rng, models_at + 2 * 86400)
     shutil.rmtree(root / "data" / "cache", ignore_errors=True)
-    (root / "demo.json").write_text(json.dumps({"seed": seed, "annotate": labels["annotate"]}, indent=1))
+    (root / "demo.json").write_text(json.dumps({"seed": seed, "annotate": labels["annotate"], "rounds": rounds_made}, indent=1))
     print(f"done: {root} ({time.time() - started:.0f} s)", flush=True)
 
 
