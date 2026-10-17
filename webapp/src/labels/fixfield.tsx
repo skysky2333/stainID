@@ -106,7 +106,7 @@ function Fixer({ detail, reload, tile, field, onEvent, onFinished, coach }: { de
   const [hovered, setHovered] = useState<string | null>(null)
   const [precise, setPrecise] = useState<Precise | null>(null)
   const [dragging, setDragging] = useState<number | null>(null)
-  const [focus, setFocus] = useState<{ x: number; y: number; key: number } | null>(null)  // where precise editing zooms in
+  const [focus, setFocus] = useState<{ x: number; y: number; key: number; back?: boolean } | null>(null)  // where precise editing zooms in (and back)
   const [draft, setDraft] = useState<number[][]>([])  // drawing a missed object by hand (when one click cannot outline it)
   const [byHand, setByHand] = useState(false)  // the next click on empty tissue starts an outline drawn by hand
   const [cursor, setCursor] = useState<number[] | null>(null)
@@ -264,6 +264,15 @@ function Fixer({ detail, reload, tile, field, onEvent, onFinished, coach }: { de
     chooseMask(s, stepMask(list, index, bigger))
   }, [target, precise, chooseMask])  // eslint-disable-line react-hooks/exhaustive-deps
 
+  /** Out of precise editing: the view goes back to exactly where it was before (zoom and position), the object stays
+   *  the one the keys act on. */
+  const leavePrecise = () => {
+    const key = precise?.key
+    setPrecise(null)
+    setFocus({ x: 0, y: 0, key: Date.now(), back: true })
+    if (key) setHovered(key)
+  }
+
   /** Space: precise editing of the object under the cursor, in and (saving) out. */
   const togglePrecise = useCallback(() => {
     if (draft.length) return
@@ -277,7 +286,7 @@ function Fixer({ detail, reload, tile, field, onEvent, onFinished, coach }: { de
     }
     const s = byKey.get(precise.key)
     const points = precise.points.map((p) => p.map(Math.round))
-    setPrecise(null)
+    leavePrecise()
     if (!s || !precise.history.length) return  // nothing changed
     if (s.fresh) { const f = s.fresh; setFresh((all) => ({ ...all, [f.key]: { ...f, options: [...f.options.slice(0, f.chosen), points, ...f.options.slice(f.chosen + 1)] } })); return }
     save([s.candidate ? { task: 'outline', candidate: s.candidate.candidate_id, points, value: 'edited' } : { task: 'outline', x: s.x, y: s.y, points, value: 'edited' }], {})
@@ -310,7 +319,7 @@ function Fixer({ detail, reload, tile, field, onEvent, onFinished, coach }: { de
     onUndo: () => { tell('undo'); undo() },
     onEnter: () => { if (draft.length >= 3) closeDraft() },
     onEscape: () => {
-      if (precise) { setPrecise(null); return }
+      if (precise) { leavePrecise(); return }
       if (draft.length || byHand) { setDraft([]); setByHand(false); return }
       if (target?.fresh) { const f = target.fresh; setFresh((all) => { const next = { ...all }; delete next[f.key]; return next }) }
     },
@@ -470,10 +479,10 @@ function Fixer({ detail, reload, tile, field, onEvent, onFinished, coach }: { de
   const busy = saving || !!pending
   const px = field.pixel_size_um
   const mayLeave = useLeaveGuard(unsaved + unclassed)
-  const canFinish = !busy && !precise && !draft.length && !unclassed
+  const canFinish = !busy && !precise && !draft.length  // detection's calls stand unless changed: no object needs a class first
   useSaveKeys(() => { if (!precise) void saveAll(false) }, () => { if (canFinish) void saveAll(true) })
   const finishTitle = precise ? 'Leave precise editing first (Space keeps the edit, Esc cancels it)'
-    : unclassed ? 'Give the new candidates a class first (or Delete them)'
+    : unclassed ? `Save your changes and finish this field. ${unclassed} new candidate${unclassed === 1 ? '' : 's'} without a class ${unclassed === 1 ? 'is' : 'are'} left out (Ctrl+Enter)`
       : 'Save your changes and finish this field: every call and outline you left as it is counts as checked by you (Ctrl+Enter)'
   const locked = precise ? 'Precise editing: only this object can change now. Space keeps the edit, Esc cancels it.' : undefined
 
@@ -599,8 +608,11 @@ function Fixer({ detail, reload, tile, field, onEvent, onFinished, coach }: { de
           <div className="card side-block">
             <h3>This field</h3>
             <p className="small field-counts"><b>{checkedNow.toLocaleString()}</b> of {own.length.toLocaleString()} checked · <b>{changed}</b> changed by you ·{' '}
-              <b>{added.length}</b> added{unclassed > 0 && <b className="warning-text"> · {unclassed} new without a class</b>}</p>
-            <p className="small muted" style={{ margin: 0 }}>What you leave as it is counts as checked by you when you press Save and continue.</p>
+              <b>{added.length}</b> added</p>
+            {unclassed > 0 && <p className="small warning-text" style={{ margin: '0 0 4px' }}>{unclassed} new candidate{unclassed === 1 ? '' : 's'} without a class:
+              {' '}left out when you save, unless you give {unclassed === 1 ? 'it' : 'them'} a class.</p>}
+            <p className="small muted" style={{ margin: 0 }}>Detection’s calls stand unless you change them: nothing needs a class first. Save and continue
+              counts the whole field as checked by you, every object you left as it is with detection’s call.</p>
             <details className="side-details compact">
               <summary className="small">Tags and a note</summary>
               <div className="tag-list">{meta.tags.map((t) => (

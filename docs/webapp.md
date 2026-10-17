@@ -286,9 +286,10 @@ open sessions, and on the CPU the field someone has open and their next ones. Th
 unsaved changes there are, and a small orange dot marks each changed object. A draft is kept in the browser in case of
 a reload, and leaving the page with unsaved changes asks first. *Save and continue* finishes the field:
 
-- in round 1 every object needs an answer first;
-- in round 2 every call nobody decided and every outline left as it is counts as checked by this person;
-- new objects need a class first.
+- detection's call counts as right unless the person changed it: nothing needs a class or an answer first;
+- every candidate of the tile is then recorded as checked by this person, the ones they left as they are with
+  detection's call as their answer (also where someone else decided it), and every outline left as it is too;
+- objects the person added and gave no class are left out (the panel says so).
 
 A tile's labels are written all at once (`routes.rounds.save_tile`) or not at all.
 

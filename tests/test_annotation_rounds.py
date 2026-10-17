@@ -181,16 +181,16 @@ def test_round_one_hands_out_tiles_and_saves_a_tile_at_once(rounds_project):
     assert mine[ids[2]] is None
 
     before = _log_lines()
-    early = _save(ann, name, TILE, [{"task": "class", "candidate": ids[2], "value": "not a plaque"}], submit=True)
-    assert early.status_code == 400 and "3 objects" in early.text and _log_lines() == before  # all of a tile, or nothing
     wrong = _save(ann, name, TILE, [{"task": "class", "candidate": ids[2], "value": "not a plaque"}, {"task": "class", "candidate": ids[3], "value": "no such class"}])
     assert wrong.status_code == 400 and _log_lines() == before
     elsewhere = _save(ann, name, TILE, [{"task": "class", "candidate": other["objects"][0]["candidate_id"], "value": "CAA"}])
     assert elsewhere.status_code == 400 and _log_lines() == before
     assert ann.post(f"/api/annotate/{name}/labels", json={"records": [{"task": "class", "candidate": ids[2], "value": "CAA"}]}).status_code == 400
 
-    done = _save(ann, name, TILE, [{"task": "class", "candidate": c, "keep": True} for c in ids[2:]], submit=True)
+    done = _save(ann, name, TILE, [{"task": "class", "candidate": ids[2], "value": "not a plaque"}], submit=True)  # the rest left as they are
     assert done.status_code == 200, done.text
+    kept = [r for r in done.json()["saved"] if r["task"] == "class" and r.get("confirmed")]
+    assert {r["candidate"] for r in kept} == set(ids[3:])  # what she did not answer keeps detection's call, as her answer
     assert done.json()["saved"][-1]["task"] == "done" and done.json()["saved"][-1]["value"] == "calls"
     assert done.json()["progress"] == {"total": 2, "decided": 1, "open_now": 1, "left": 0, "people": [{"person": "Ann", "decided": 1}]}
     assert ann.get(f"/api/annotate/{name}/next").json()["tile_id"] is None  # her tile is done, Ben has the other
@@ -239,8 +239,8 @@ def test_round_two_fields_are_claimed_and_saved_as_a_whole(rounds_project):
 
     done = _save(ann, name, TILE, [{"task": "tag", "value": "fold or tear", "deleted": True}], submit=True).json()["saved"]
     confirmed = [r for r in done if r["task"] == "class"]
-    assert len(confirmed) == 5 and all(r["confirmed"] and r["candidate"] for r in confirmed)  # Ben's one is his
-    assert len([r for r in done if r["task"] == "outline"]) == 2  # the AI's outlines of the objects that stay plaques (Ben made one CAA)
+    assert len(confirmed) == 6 and all(r["confirmed"] and r["candidate"] for r in confirmed)  # the whole field is hers: also the one Ben decided
+    assert len([r for r in done if r["task"] == "outline"]) == 3  # detection's outlines of the objects that stay plaques in her answers
     assert done[-1]["id"] == f"done:{TILE}" and done[0]["deleted"]
     states = {f["tile_id"]: f["state"] for f in admin.get(f"/api/labels/sessions/{name}/fields").json()}
     assert states[TILE] == "done"
@@ -313,6 +313,25 @@ def test_the_tutorial_practises_on_a_real_field_and_keeps_nothing(rounds_project
     assert ann.post("/api/session/tutorial", json={"done": True}).json() == {"done": True}
     assert ann.get("/api/session/tutorial").json()["done"] is True
     assert ann.get("/api/annotate").json() == []  # practice sessions are not listed
+
+
+def test_finishing_a_field_records_every_candidate_as_checked_by_the_person(rounds_project):
+    admin, (ann, ben), _ = rounds_project
+    rows = [_store_row(320.0 + 14 * (i % 10), 320.0 + 14 * (i // 10), 0.3 + 0.01 * i, i % 3 != 0) for i in range(50)]
+    candidate_store.write_core(state.get_state().project, "6E10", "LIP-1_B-2", pd.DataFrame(rows))
+    decisions.forget()
+    name = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "open": True, "tile_ids": [TILE]}).json()["name"]
+    ann.get(f"/api/annotate/{name}/fields/{TILE}")
+    ben_first = rows[0]["candidate_id"]  # Ben decided one already: Ann's finished field still gives her own answer on it
+    assert _save(ben, name, TILE, [{"task": "class", "candidate": ben_first, "value": "CAA"}]).status_code == 200
+    edits = [{"task": "class", "candidate": rows[1]["candidate_id"], "value": "CAA"}, {"task": "class", "candidate": rows[2]["candidate_id"], "value": "not a plaque"}]
+    assert _save(ann, name, TILE, edits, submit=True).status_code == 200  # 2 edits of 50, then Save and continue
+    decided = decisions.state(state.get_state().project, "6E10", state.get_state().tiles)
+    hers = decided.rows[decided.rows.source == "Ann"]
+    assert hers.candidate.nunique() == 50  # the whole field is checked by her
+    calls = {r["candidate_id"]: ("plaque" if r["decision"] == "accepted" else "not a plaque") for r in rows}
+    same = [c for c, identity in zip(hers.candidate, hers.identity) if identity == calls[c]]
+    assert len(same) == 48 and hers.confirmed.sum() == 48  # her 48 untouched answers are detection's calls
 
 
 def test_a_fix_the_field_session_takes_every_remaining_field_by_default(rounds_project):

@@ -35,7 +35,7 @@ function stepsFor(typed: boolean): Step[] {
     { round: 2, title: 'Save and continue', text: 'When the field looks right, press “Save and continue”. Everything you left as it is counts as checked by you, the field is done, nobody else is asked to do it again, and your next field opens.', done: ['finish'] },
     { round: 1, title: 'One object at a time', text: 'The other kind of session goes through objects one at a time. If detection is right, press Enter to keep its call.', done: ['keep'] },
     { round: 1, title: 'Correct it', text: 'If detection is wrong, press the right class number, 0 for unsure or Delete for not an object. The same keys as on the field — Tab, Space and Z work here too.', done: ['class', 'subtype', 'unsure', 'remove'] },
-    { round: 1, title: 'Save here too', text: 'Your answers stay on the page until you press Save (Ctrl+S). Once every object of the field has an answer, “Save and continue” finishes the field and brings the next one. If you close the page by mistake, your unsaved answers come back when you return.', done: ['save', 'finish'] },
+    { round: 1, title: 'Save here too', text: 'Your answers stay on the page until you press Save (Ctrl+S). “Save and continue” finishes the field and brings the next one: objects you did not answer keep detection’s call, as your answer. If you close the page by mistake, your unsaved answers come back when you return.', done: ['save', 'finish'] },
   ]
   return typed ? steps : steps.filter((s) => s.title !== 'Say which type')
 }

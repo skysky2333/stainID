@@ -6,7 +6,7 @@
    Anything masks come with the object: no waiting), Space precise editing (right-click a spot to include, left-click one
    to leave out, drag the corners; Space again keeps it), Z undoes the last unsaved answer. Answers stay on this page
    ("3 unsaved changes", with a draft in this browser in case of a reload) until Save (stays on the field) or Save and
-   continue (finishes the field, every object answered, and brings the next one). */
+   continue (finishes the field: objects not answered keep detection's call, as this person's answer; and brings the next one). */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import { Link } from 'react-router-dom'
@@ -171,7 +171,7 @@ export function CheckCalls({ detail, onEvent }: { detail: SessionDetail; onEvent
     }
   }
   const open = objects.filter((o) => !answered(o)).length
-  const canFinish = !!tile?.tile_id && !open && !precise
+  const canFinish = !!tile?.tile_id && !precise  // objects not answered keep detection's call
   useSaveKeys(() => void save(false), () => { if (canFinish) void save(true) })
   const skip = () => { if (tile?.tile_id && mayLeave()) void ask(tile.tile_id) }
 
@@ -245,7 +245,7 @@ export function CheckCalls({ detail, onEvent }: { detail: SessionDetail; onEvent
   const outline = item ? (precise ? precise.points : outlineNow(item)) : null
   const unit = item ? item.crop_px / 300 : 1
   const mine = item ? (local ? asSaved(item, local) : item.mine) : null
-  const continueTitle = open ? `${open} object${open === 1 ? '' : 's'} on this field still need${open === 1 ? 's' : ''} an answer`
+  const continueTitle = open ? `Save and finish this field: the ${open} object${open === 1 ? '' : 's'} you did not answer keep detection’s call, as your answer (Ctrl+Enter)`
     : 'Save your answers; this field is then done and the next one comes (Ctrl+Enter)'
   return (
     <div className="annotate-page round-page">

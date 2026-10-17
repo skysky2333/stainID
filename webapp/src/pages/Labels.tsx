@@ -9,6 +9,7 @@ import { SessionLabelsView } from '../labels/examine'
 import { FIELD_TEXT, FieldChoice, SessionFields } from '../labels/fields'
 import { NewRoundSession } from '../labels/newround'
 import { ROUND_TITLE } from '../labels/rounds'
+import { byKey } from '../labels/classKeys'
 import { Advanced } from '../setup/parts'
 
 interface Defaults {
@@ -378,7 +379,7 @@ function StainDetails({ s, onChanged }: { s: StainOverview; onChanged: () => voi
 
 /** The classes people will choose from, and whether they are also asked for each object's type (pretangle or mature tangle…). */
 function SessionClasses({ vocabulary, typesAsked, onTypesAsked }: { vocabulary: Vocabulary; typesAsked: boolean; onTypesAsked: (on: boolean) => void }) {
-  const shown = vocabulary.classes.filter((c) => !c.hidden)
+  const shown = byKey(vocabulary, { direct: {}, then: {} })  // in the order of the keys, unsure last
   const typed = shown.filter((c) => c.subtypes.some((s) => !s.hidden))
   return (
     <div className="session-classes">

@@ -31,7 +31,8 @@ export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, on
   src: string
   layers?: string[]
   title: ReactNode
-  focus?: { x: number; y: number; key: number } | null
+  /** zoom in on this spot (remembering the view before); with `back`, return to the view remembered */
+  focus?: { x: number; y: number; key: number; back?: boolean } | null
   cursor?: string
   onClick?: (point: ImagePoint, event: React.MouseEvent) => void
   onMove?: (point: ImagePoint) => void
@@ -47,6 +48,9 @@ export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, on
   const room = useRef<HTMLDivElement>(null)
   const [space, setSpace] = useState<{ w: number; h: number } | null>(null)  // the room a fitted picture has
   const { zoom } = view
+  const viewNow = useRef(view)
+  viewNow.current = view
+  const before = useRef<{ zoom: number; x: number; y: number } | null>(null)  // the view before a `focus` zoomed in
 
   useEffect(() => {
     const element = room.current
@@ -88,6 +92,12 @@ export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, on
 
   useEffect(() => {
     if (!focus) return
+    if (focus.back) {  // back to exactly where the person was before the zoom-in
+      if (before.current) setView(before.current)
+      before.current = null
+      return
+    }
+    before.current = before.current ?? viewNow.current
     const width = box.current?.clientWidth ?? 600
     const scale = width / size.w
     setView({ zoom: 4, x: width / 2 - focus.x * scale * 4, y: width / 2 - focus.y * scale * 4 })

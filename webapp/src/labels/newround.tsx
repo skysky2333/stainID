@@ -12,6 +12,7 @@ import { useProject } from '../project'
 import { Advanced } from '../setup/parts'
 import { FieldPicker } from './fields'
 import { ROUND_TEXT, ROUND_TITLE } from './rounds'
+import { byKey } from './classKeys'
 
 type Where = 'all' | 'tmas' | 'pick'
 /** What the project's pictures and their groups are called: cores on TMAs, or slides / images in batches. */
@@ -146,7 +147,7 @@ export function NewRoundSession({ stains, onClose, onCreated, onOlder }: {
           </div>}
           <label className="field">Note for labellers (optional)<textarea rows={2} value={instructions} placeholder="e.g. Count only neurons with a visible nucleus."
             onChange={(e) => setInstructions(e.target.value)} /></label>
-          {vocabulary && <p className="muted small" style={{ margin: 0 }}>Classes: {vocabulary.classes.filter((c) => !c.hidden).map((c) => c.name).join(' · ')}.
+          {vocabulary && <p className="muted small" style={{ margin: 0 }}>Classes: {byKey(vocabulary, { direct: {}, then: {} }).map((c) => c.name).join(' · ')}.
             {' '}<Link to="/settings#label-classes">Change the classes</Link></p>}
           {typed.length > 0 && <label className="layer-toggle"><input type="checkbox" checked={subtypes} onChange={(e) => setSubtypes(e.target.checked)} />
             Also ask for the type ({typed.map((c) => c.name).join(', ')})</label>}

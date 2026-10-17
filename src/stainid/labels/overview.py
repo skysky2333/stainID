@@ -67,10 +67,10 @@ def detection(matched: pd.DataFrame) -> dict:
 
 
 def class_counts(consensus: pd.DataFrame, vocabulary: vocab.Vocabulary) -> list[dict]:
-    """Labelled objects per identity (in the vocabulary's order, then classes it no longer has), with how many of
+    """Labelled objects per identity (in the order of their keys, then classes it no longer has), with how many of
     them carry each subtype and how many no type; objects people are split on are left out."""
     by_identity = {i: g for i, g in consensus.groupby("value") if i} if len(consensus) else {}
-    known = [c.id for c in vocabulary.classes]
+    known = [c.id for c in vocabulary.by_key()]  # the order of the keys, as every page lists the classes
     out = []
     for identity in [*known, *sorted(set(by_identity) - set(known))]:
         found, group = vocabulary.identity(identity), by_identity.get(identity)

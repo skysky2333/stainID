@@ -360,7 +360,7 @@ function Outliner({ detail, reload, tile, field }: { detail: SessionDetail; relo
           <div className="card side-block">
             <h3>Classes</h3>
             <ul className="class-legend small">
-              {classes.map((c, i) => (
+              {classes.map((c, i) => [c, i] as const).sort((a, b) => Number(!scored(a[0])) - Number(!scored(b[0]))).map(([c, i]) => (  // unsure (0) last
                 <li key={c}>
                   <button className={`link-btn class-pick${c === label ? ' chosen' : ''}`} aria-pressed={c === label} title={classOf(c)?.description}
                     onClick={() => { setLabelIndex(i); if (chosen && chosen.value !== c) save([{ ref: chosen.ref, value: c, points: chosen.points }]) }}>
