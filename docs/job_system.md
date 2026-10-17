@@ -33,6 +33,10 @@ only get what is spare. If it would fit once lower-class jobs stopped, those are
 next unit boundary, stopped hard (SIGTERM, then SIGKILL 30 s later) if they have not done so within their class's grace,
 and queued again at their place. GPUs are handed out by index (`CUDA_VISIBLE_DEVICES`).
 
+Work outside the queue counts too, looked at every 10 s: a job starts only while the computer has its memory free (plus
+2 GB), a GPU on which a program the queue did not start (not the app) uses 1.5 GB or more is not handed out, and the
+public and download classes start only while the load average leaves their processors spare.
+
 ## Units: pause, resume, crash
 
 Every step works in units (a tile, a core image × stain, a slide, a file, a field) and writes each unit atomically

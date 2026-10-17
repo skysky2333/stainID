@@ -15,9 +15,10 @@ Priority classes, highest first (interactive requests are not queued: they run i
 
 Within a class jobs start first in, first out (`order`, which Move up / down changes). Each job declares what it
 needs (processors, GPUs, memory); the budget (`budget.json`, default: this computer's processors and GPUs and its
-memory less what the app keeps) decides what runs at once. A job that does not fit waits and keeps its resources
-reserved from lower classes, so they only use what is spare (a smaller job of the same class may use what is left); when it could run if lower-class jobs stopped, those are
-pre-empted: asked to stop at their next unit boundary (`stainid.jobs.units`), stopped hard after their class's grace
+memory less what the app keeps) decides what runs at once, and work outside the queue is looked at too (free memory,
+GPUs other programs use, the load average for the lowest classes). A job that does not fit waits and keeps what it needs
+reserved from lower classes, so they only use what is spare (a smaller job of its own class may use what is left); when
+it could run if lower-class jobs stopped, those are pre-empted: asked to stop at their next unit boundary (`stainid.jobs.units`), stopped hard after their class's grace
 time, and queued again at their place. They resume by running again: every step skips the units it has done.
 
 Jobs run in transient systemd user units (`stainid-job-<id>`, in `stainid-jobs.slice`, with their class's Nice,
@@ -52,6 +53,8 @@ CLASS_TITLES = {"annotation": "Annotation and area edits", "pipeline": "Main-stu
 WEIGHTS = {"annotation": (0, 400, 400), "pipeline": (5, 100, 100), "models": (10, 50, 50), "public": (15, 20, 20), "downloads": (19, 10, 10)}
 GRACE = {"annotation": 300.0, "pipeline": 300.0, "models": 120.0, "public": 30.0, "downloads": 10.0}  # seconds to reach a unit boundary
 COMMAND_GRACE = 30.0
+OUTSIDE_RAM_MARGIN_GB = 2.0  # memory left free on the computer when a job starts
+OUTSIDE_GPU_MB = 1500  # a GPU on which a program the queue did not start uses this much memory counts as busy
 KILL_AFTER = 30.0  # seconds from the polite stop (SIGTERM) to SIGKILL
 MAX_ATTEMPTS = 5  # runs that vanished without an exit code (reboot, killed) before the job is given up
 FINAL = ("finished", "failed", "cancelled", "skipped", "interrupted")
@@ -71,6 +74,15 @@ STEP_NEEDS = {
     "train": {"cpus": 4, "ram_gb": 6}, "score_segmentation": {"cpus": 2, "ram_gb": 4},
 }
 EXEC_NEEDS = {"cpus": 2, "ram_gb": 4}
+
+
+def _in_queue(pid: int) -> bool:
+    """Whether a process belongs to a job the queue started (its systemd unit), or is the app itself."""
+    try:
+        groups = Path(f"/proc/{pid}/cgroup").read_text()
+    except OSError:
+        return False
+    return "stainid-job-" in groups or "stainid-app" in groups
 
 
 def queue_dir() -> Path:
@@ -288,7 +300,11 @@ class Scheduler:
     when another process leads) it only reads the records and leaves requests for the leader."""
 
     def __init__(self, directory: Path | str | None = None, lead: bool = True, launcher: ProcessLauncher | None = None,
-                 budget: Budget | None = None):
+                 budget: Budget | None = None, outside: bool | None = None):
+        """`outside`: also look at what this computer is doing outside the queue (free memory, busy GPUs, load) before
+        starting a job; on by default unless a budget is given (tests)."""
+        self.watch_outside = budget is None if outside is None else outside
+        self._outside: tuple[float, dict] = (0.0, {})
         self.store = JobStore(Path(directory) if directory else queue_dir())
         self.dir = self.store.dir
         (self.dir / "requests").mkdir(exist_ok=True)
@@ -761,7 +777,12 @@ class Scheduler:
                 if step is not None and (missing := self._missing(job, step)):
                     self._skip(job, missing)
                     continue
-                gpus = [g for g in range(budget.gpus) if g not in busy_gpus][: int(counted.get("gpus", 0))]
+                outside = self.outside()["gpus"] if self.watch_outside and counted.get("gpus") else set()
+                gpus = [g for g in range(budget.gpus) if g not in busy_gpus and g not in outside][: int(counted.get("gpus", 0))]
+                if why := self._no_room_outside(job, counted, gpus, used):
+                    self._wait(job, why)
+                    waiting.append((rank, counted))
+                    continue
                 try:
                     self._start(job, gpus)
                 except Exception as error:  # noqa: BLE001 - one job that cannot start does not stop the queue
@@ -805,6 +826,50 @@ class Scheduler:
                 names = {"cpus": "processors", "gpus": "GPUs", "ram_gb": "GB of memory"}
                 self._wait(job, "Waits for free capacity: needs " + ", ".join(f"{counted[k]:g} {names[k]} ({max(0, free[k]):g} free)" for k in short))
             waiting.append((rank, counted))
+
+    def outside(self) -> dict:
+        """What work outside the queue (other programs, runs started by hand) leaves for it, looked at every 10 s: free
+        memory (GB), GPUs whose memory is mostly taken by processes the queue did not start, and the load average."""
+        when, found = self._outside
+        if time.time() - when < 10:
+            return found
+        found = {"ram_gb": None, "gpus": set(), "load": None}
+        try:
+            with open("/proc/meminfo") as handle:
+                info = {line.split(":")[0]: int(line.split()[1]) for line in handle}
+            found["ram_gb"] = info.get("MemAvailable", 0) / 2**20
+        except (OSError, ValueError, IndexError):
+            pass
+        try:
+            found["load"] = os.getloadavg()[0]
+        except OSError:
+            pass
+        if shutil.which("nvidia-smi"):
+            try:
+                query = lambda what: [r.split(", ") for r in subprocess.run(  # noqa: E731
+                    ["nvidia-smi", f"--query-{what}", "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=10).stdout.splitlines()]
+                index = {uuid: int(i) for i, uuid in query("gpu=index,uuid")}
+                for uuid, pid, used in query("compute-apps=gpu_uuid,pid,used_memory"):
+                    if float(used) >= OUTSIDE_GPU_MB and int(pid) != os.getpid() and not _in_queue(int(pid)):
+                        found["gpus"].add(index[uuid])
+            except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+                pass
+        self._outside = (time.time(), found)
+        return found
+
+    def _no_room_outside(self, job: Job, need: dict, gpus: list[int], used: dict) -> str:
+        """Why a job that fits the budget cannot start because of work outside the queue ("" when it can)."""
+        if not self.watch_outside:
+            return ""
+        found = self.outside()
+        if found["ram_gb"] is not None and need.get("ram_gb", 0) > found["ram_gb"] - OUTSIDE_RAM_MARGIN_GB:
+            return f"Waits for memory: needs {need['ram_gb']:g} GB, {max(0.0, found['ram_gb'] - OUTSIDE_RAM_MARGIN_GB):.0f} GB free on this computer"
+        if need.get("gpus") and len(gpus) < int(need["gpus"]):
+            return "Waits for a GPU: the free ones are in use by work outside the queue"
+        if RANK[job_class(job)] >= RANK["public"] and found["load"] is not None and not need.get("network"):
+            if found["load"] + need.get("cpus", 0) > self.budget.cpus:  # the lowest classes run only on spare processors
+                return f"Waits for spare processors (this computer's load is {found['load']:.0f})"
+        return ""
 
     def _wait(self, job: Job, reason: str) -> None:
         if job.waiting != reason:
@@ -923,7 +988,8 @@ class Scheduler:
         return {"classes": [{"id": c, "title": CLASS_TITLES[c], "rank": RANK[c], "jobs": [self.describe(j) for j in live if job_class(j) == c]}
                             for c in CLASSES],
                 "recent": [self.describe(j) for j in recent], "paused_all": self.paused_all(), "led": self.leader or self.led_elsewhere(),
-                "budget": asdict(budget), "used": used}
+                "budget": asdict(budget), "used": used,
+                "outside": {**(found := self.outside()), "gpus": sorted(found["gpus"])} if self.watch_outside else None}
 
 
 _SHARED: Scheduler | None = None
