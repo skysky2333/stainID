@@ -1,13 +1,16 @@
 """The "Mark bad areas" round (`stainid.labels.areas`) and the Cores view's review layers.
 
 Round pages (annotators): the next core for a person (held for them while their page is open), one core's stain
-images with their deep-zoom pyramids, thumbnails and resolved excluded areas (`stainid.exclusions`), and saving a core:
-an edit per stain image painted or cleared, and every stain image checked (`done`, value "areas"), also with no edits.
+images with their deep-zoom pyramids, thumbnails, detection's automatic areas (`stainid.exclusions.automatic`, the
+starting point) and people's areas so far (`annotated`), and saving a core: an edit of people's areas per stain image
+painted or cleared, and every stain image checked (`done`, value "areas"), also with no edits. People's areas only train
+and evaluate models (the bad-area detector, `GET /models/bad-areas`, and the object models); the analysis never reads
+them.
 The tutorial practises on a made-up session `practice-areas` whose saves are echoed and never kept.
 
 Admin pages: where the areas round stands (images checked per stain, people's agreement on the double-checked cores,
-the disagreements to settle, and detection's areas against people's final ones), and for the Cores view the review
-status of a core image's tiles (`labels.status`) and the "Annotations" layer (`labels.compare`).
+the disagreements to settle), the bad-area detector against people (Models page), and for the Cores view the review
+status of a core image's tiles (`labels.status`) and the "Annotations" layer (`labels.compare`, people's areas).
 """
 from __future__ import annotations
 
@@ -239,6 +242,15 @@ def core_excluded_png(name: str, core_id: str, stain: str, request: Request, per
     return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
 
 
+@router.get("/annotate/{name}/cores/{core_id}/{stain}/annotated")
+def core_annotated(name: str, core_id: str, stain: str, request: Request, person: str = Depends(annotator)) -> dict:
+    """People's areas of a core image so far (`store_view.people_areas`, core px): what the brush edits."""
+    meta = areas_meta(name, request)
+    if stain not in _core(meta, core_id):
+        raise HTTPException(404, f"{core_id} has no {stain} image in this session")
+    return store_view.people_areas(get_state().project, core_id, stain)
+
+
 @router.get("/annotate/{name}/cores/{core_id}/{stain}/objects")
 def core_objects(name: str, core_id: str, stain: str, request: Request, person: str = Depends(annotator)) -> dict:
     """Detection's objects of a core image for context in "Mark bad areas" (they cannot be changed there): rows of
@@ -305,9 +317,8 @@ def save_route(name: str, core_id: str, body: CoreSave, request: Request, person
 
 @router.get("/labels/areas", dependencies=admin)
 def areas_overview() -> dict:
-    """Where "Mark bad areas" stands: core images checked per stain (of those with analysed tiles), people's agreement
-    on the double-checked ones (with the disagreements to settle in the Cores view) and detection's areas against
-    people's final areas, per type and TMA."""
+    """Where "Mark bad areas" stands: core images checked per stain (of those with analysed tiles) and people's
+    agreement on the double-checked ones, with the disagreements to settle in the Cores view."""
     state = get_state()
     found = checked()
     stains_of = areas.core_stains(state.tiles)
@@ -321,7 +332,18 @@ def areas_overview() -> dict:
             entry["double_checked"] += len(people) >= 2
     return {"stains": list(per_stain.values()), "cores": len(stains_of),
             "cores_checked": sum(all(found.get((c, s)) for s in stains) for c, stains in stains_of.items()),
-            "agreement": areas.agreement(state.project, found), "evaluation": areas.evaluation(state.project, found, state.tiles)}
+            "agreement": areas.agreement(state.project, found)}
+
+
+@router.get("/models/bad-areas", dependencies=admin)
+def bad_area_detector() -> dict:
+    """The bad-area detector against people: detection's automatic areas (today's rules) against people's final say on
+    the core images checked in "Mark bad areas", per stain, type and TMA, and per donor; `model` is the trained bad-area
+    model's evaluation once there is one (none yet: the rules are the detector)."""
+    state = get_state()
+    found = checked()
+    return {"images": len(found), "by_tma": areas.evaluation(state.project, found, state.tiles, "tma"),
+            "by_donor": areas.evaluation(state.project, found, state.tiles, "donor_id"), "detector": "rules", "model": None}
 
 
 @router.get("/cores/{core_id}/{stain}/status", dependencies=admin)
@@ -399,6 +421,6 @@ def core_annotations(core_id: str, stain: str) -> dict:
     objects = [{**r, "outline_fixed": outlines.get(r["candidate_id"], [])} for r in found.to_dict("records")]
     known = set(found.candidate_id) if len(found) else set()
     objects += [{"candidate_id": c, "core_id": core_id, "kind": "outline", "outline_fixed": v} for c, v in outlines.items() if c not in known]
-    return {"objects": objects, "added": added.to_dict("records"),
+    return {"objects": objects, "added": added.to_dict("records"), "areas": store_view.people_areas(state.project, core_id, stain),
             "counts": {**{k: int((found.kind == k).sum()) if len(found) else 0 for k in compare.KINDS}, "added": int(len(added)),
                        "outline_fixed": len(outlines)}}
