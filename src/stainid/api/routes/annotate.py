@@ -67,7 +67,16 @@ def viewer(request: Request) -> str | None:
     return name
 
 
+def _areas():
+    """The routes of "Mark bad areas" (imported late: they build on this module)."""
+    from stainid.api.routes import areas as area_routes
+
+    return area_routes
+
+
 def session_meta(name: str, request: Request) -> dict:
+    if name == "practice-areas":  # the tutorial's practice of "Mark bad areas" (`routes.areas`): nothing is saved
+        return _areas().practice_meta()
     if name.startswith("practice-"):  # the tutorial's practice (`routes.rounds`): nothing is saved
         return _rounds().practice_meta(name)
     if not re.fullmatch(r"[A-Za-z0-9_\-]+", name) or name not in sessions.names(root()):
@@ -141,6 +150,8 @@ def session_progress(meta: dict, labels: pd.DataFrame) -> dict:
     now = {p for open_by in busy(meta["name"]).values() for p in open_by}
     progress = {"people": len(people), "labels": int(mine.task.isin(("class", "object")).sum()), "labellers": people,
                 "labelling_now": sum(time.time() - p["last_active"] < BUSY_SECONDS or p["person"] in now for p in people)}
+    if meta["kind"] == "areas":
+        return progress | {"round_progress": _areas().progress(meta, labels), "cores": len(meta.get("cores") or [])}
     if rounds.is_round(meta):
         progress |= {"round_progress": _rounds().progress(meta)}
     if rounds.is_round(meta) and meta["kind"] == "queue":
@@ -233,6 +244,7 @@ class NewSession(BaseModel):
     n_objects: int = 500  # round 1: how many candidates (0: every one)
     level: float | None = None  # rounds: how generous (lowest proposal level shown; None: every candidate)
     labels_needed: int = 1  # rounds: people who must decide a candidate (or finish a field) before it is done for everyone
+    order: str = "problems"  # "Mark bad areas" (kind "areas"): "problems" (likely problems first, then at random) or "random"
 
 
 class Opening(BaseModel):
@@ -534,6 +546,8 @@ def _create_session(body: NewSession) -> dict:
         raise HTTPException(400, "name may contain letters, digits, - and _ only")
     if body.name == sessions.REFERENCE:
         raise HTTPException(400, f"{sessions.REFERENCE} is the name of the imported reference labels; choose another name")
+    if body.kind == "areas":
+        return _areas().create(body)
     if body.round:
         return _rounds().create_round_session(body)
     if body.kind == outline.KIND:
@@ -767,6 +781,8 @@ def list_open(request: Request, person: str | None = Depends(viewer)) -> list[di
         reviewed = finished_fields(meta, labels)
         done = sum(person in reviewed.get(t, set()) for t in meta["fields"]) if person else 0
         extra = {"round": rounds.round_of(meta), "progress": _rounds().progress(meta)} if rounds.is_round(meta) else {"round": None}
+        if meta["kind"] == "areas":
+            extra = {"round": "areas", "progress": _areas().progress(meta, labels), "cores": len(meta.get("cores") or [])}
         out.append({**{k: meta.get(k) for k in ("name", "title", "stain", "kind", "open", "instructions")}, **extra, "fields": len(meta["fields"]), "done_by_me": done,
                     "my_labels": int(((labels.session == name) & (labels.source == person) & labels.task.isin(("class", "object"))).sum()),
                     "link": annotate_path(name)})
@@ -776,6 +792,8 @@ def list_open(request: Request, person: str | None = Depends(viewer)) -> list[di
 @router.get("/annotate/{name}")
 def session_detail(name: str, request: Request, person: str | None = Depends(viewer)) -> dict:
     meta = session_meta(name, request)
+    if meta["kind"] == "areas":
+        return {"meta": {**meta, **_areas().detail(meta, person)}, "fields": [], "annotator": person}
     labels = store.current(root())
     reviewed = finished_fields(meta, labels)
     prepared = ready_fields(meta)

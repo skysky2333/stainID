@@ -13,7 +13,7 @@ import pandas as pd
 
 from stainid import cache
 from stainid import exclusions as excluded_areas
-from stainid.labels import added, candidate_store, frames, pool, store
+from stainid.labels import added, candidate_store, compare, frames, pool, store
 from stainid.labels import vocabulary as vocab
 from stainid.labels.tasks import positive
 from stainid.project import Project
@@ -127,6 +127,8 @@ def stain_overview(project: Project, stain: str, labels: pd.DataFrame, tiles: pd
         "detection": detection(matched),
         "added": added.summary(project, stain, labels),
         "tags": {k: int(v) for k, v in mine[mine.task == "tag"].drop_duplicates(["tile_id", "value"]).value.value_counts().items()},
+        # people against detection on the candidates they decided (the comparison the Cores view's Annotations layer shows)
+        "vs_detection": compare.summary(project, stain, tiles) if on_store else None,
     }
 
 

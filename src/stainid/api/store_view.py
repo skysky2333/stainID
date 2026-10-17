@@ -131,7 +131,7 @@ def unproposed_count(project, core_id: str, stain: str) -> int | None:
 # ---------------------------------------------------------------- excluded areas
 
 class ExcludedKind:
-    """One type of area left out of the analysis as the "Excluded areas" layer draws it: its code in the resolved layer
+    """One type of area left out of the analysis as the "Excluded from analysis" layer draws it: its code in the layer
     (`stainid.exclusions.CODES`), colour, hatching (a backslash, "/", "|", "-", or "" for none) and the brush type it is
     (`labels.exclusions.KINDS`; "" for the AT8 edge guard, which only detection makes)."""
 
@@ -168,10 +168,10 @@ def _shares(codes: np.ndarray) -> list[dict]:
 
 
 def excluded_info(project, core_id: str, stain: str) -> dict:
-    """The "Excluded areas" layer of one core image, the resolved layer as the views draw it (`stainid.exclusions.view`:
-    detection's areas with every edit applied, and the tissue in no analysed tile): status ("done", or "not_made" before
-    the v2 proposals), its size in layer px and scale (core-image px per layer px), `version` (changes with the layer)
-    and each type with its colour, hatching and share of the core's area."""
+    """The "Excluded from analysis" layer of one core image as the views draw it (`stainid.exclusions.view`: detection's
+    automatic areas, what the analysis uses, and the tissue in no analysed tile; people's areas are not in it): status
+    ("done", or "not_made" before the v2 proposals), its size in layer px and scale (core-image px per layer px),
+    `version` (changes with the layer) and each type with its colour, hatching and share of the core's area."""
     layer = excluded_areas.view(project, core_id, stain)
     if layer is None:
         return {"status": "not_made", "kinds": [kind_info(k, None) for k in EXCLUDED_KINDS]}
@@ -229,13 +229,13 @@ def _cells(layer, x0: float, y0: float, x1: float, y1: float) -> tuple[slice, sl
 
 
 def excluded_png(project, core_id: str, stain: str) -> bytes | None:
-    """The resolved layer as an RGBA PNG at its own resolution (`_rgba`); None before the v2 proposals."""
+    """The automatic layer as an RGBA PNG at its own resolution (`_rgba`); None before the v2 proposals."""
     layer = excluded_areas.view(project, core_id, stain)
     return None if layer is None else _picture(project, core_id, stain, layer)
 
 
 def field_excluded(project, tile: dict) -> tuple[dict, bytes | None]:
-    """The excluded areas of one field for the annotation pages: its part of the core's resolved layer (the same pixels
+    """The excluded areas of one field for the annotation pages: its part of the core's automatic layer (the same pixels
     as the Cores view), where that part lies in the field picture (`x`, `y`, `width`, `height` in field px, `scale` field
     px per pixel of the picture), the types present in it, and the PNG."""
     from stainid.labels import frames  # noqa: PLC0415
@@ -253,3 +253,28 @@ def field_excluded(project, tile: dict) -> tuple[dict, bytes | None]:
             "width": codes.shape[1] * scale, "height": codes.shape[0] * scale, "version": layer.version,
             "kinds": [k for k in _shares(codes) if k["fraction"]]}
     return info, _picture(project, core_id, stain, layer, window)
+
+
+def people_areas(project, core_id: str, stain: str, origin: tuple[int, int] = (0, 0),
+                 box: tuple[float, float, float, float] | None = None) -> dict:
+    """People's areas of a core image for the Annotations layers (`stainid.exclusions.annotated`; they train and evaluate
+    models, the analysis never reads them): each painted or cleared area as polygons (core px less `origin`; only those
+    reaching into `box`, x0 y0 x1 y1 core px), how they compare with detection's areas, and the edits (who, when, type)."""
+    found = excluded_areas.annotated(project, core_id, stain)
+    if found is None:
+        return {"regions": [], "agreement": None, "edits": []}
+    regions = found.regions()
+    if box is not None:
+        x0, y0, x1, y1 = box
+
+        def reaches(ring) -> bool:
+            xs, ys = [p[0] for p in ring], [p[1] for p in ring]
+            return min(xs) < x1 and max(xs) > x0 and min(ys) < y1 and max(ys) > y0
+
+        regions = [r for r in regions if reaches(r["rings"][0])]
+    ox, oy = origin
+    if ox or oy:
+        regions = [{"kind": r["kind"], "rings": [[[round(x - ox, 1), round(y - oy, 1)] for x, y in ring] for ring in r["rings"]]} for r in regions]
+    auto = excluded_areas.automatic(project, core_id, stain)
+    return {"regions": regions, "agreement": excluded_areas.agreement(auto, found) if auto is not None else None,
+            "edits": [{"person": e.source, "time": e.time, "kinds": sorted(set(e.kinds))} for e in found.edits]}

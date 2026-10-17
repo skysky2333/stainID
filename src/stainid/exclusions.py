@@ -1,27 +1,32 @@
-"""The excluded areas: one resolved layer per core image and stain, which every view, the analysis, training and scoring
-read. This module owns it; nothing else combines detection's areas with people's edits.
+"""The excluded areas, in two layers per core image and stain, each with one reader. This module owns both.
 
-The layer is made from
-- detection's automatic areas, the stage-2 mask (`<outputs.v2>/masks/<stain>/<core_id>.png`, 1/`SCALE` of the core image,
-  bit flags `v2.proposals.BITS`): no tissue, linear artifacts, folds (6E10 and AT8; NeuN counts folded tissue) and the
-  AT8 edge guard (the hand-drawn bit is not read: hand-drawn areas are edits, below);
-- the edits, `exclude` labels in the label log (`labels.store`, written by `labels.exclusions`): rings, each with a type.
-  Painting type T sets its pixels to T; clearing ("include", Shift-drag) sets them to counted, whatever detection said.
-  The edits are applied in time order, so the latest edit wins at each pixel. Their sources are people (the field
-  tool's brush, on a field: rings in field-picture pixels) and "AI reviewer" (the hand-drawn polygons of the earlier
-  AI-review rounds, `import_reviewer`: rings in core pixels, the label's `tile_id` the core id).
+- `automatic(project, core_id, stain)`: what the analysis uses, and nothing else does. It is detection's own areas from
+  the stage-2 mask (`<outputs.v2>/masks/<stain>/<core_id>.png`, 1/`SCALE` of the core image, bit flags
+  `v2.proposals.BITS`): no tissue, linear artifacts, folds (6E10 and AT8; NeuN counts folded tissue) and the AT8 edge
+  guard. The hand-drawn bit is not read. Tissue in no analysed tile is "not analysed" in the views (`view`).
+- `annotated(project, core_id, stain)`: people's areas. These are the `exclude` labels in the label log (written by
+  `labels.exclusions`: the brush of "Mark bad areas" and of the object rounds, and "AI reviewer" for the hand-drawn
+  polygons of the earlier AI-review rounds, `import_reviewer`), applied in time order with the latest edit winning. A
+  painted part has its type (1–4); a cleared part says "this area is fine". Like every human annotation they only train
+  and evaluate models (the object models, and the bad-area detector: `automatic` against people's areas). The analysis
+  never reads them.
 
-The label log keeps every edit (who, when, which type) as history; only the resolved layer is ever drawn or used.
+`final_say` puts people's areas over detection's: what people last said about each pixel, else detection's area. It is
+the label set for training and evaluating, never an analysis input. Labels on objects there are left out of training,
+scoring and the model comparison (`drop_excluded`), and the object rounds draw those objects faded and do not ask about
+them.
 
-Codes (`CODES`): 0 counted, 1 fold or tissue damage, 2 artifact, 3 no tissue / empty, 4 out of focus or bad staining,
-5 AT8 edge guard, `OUTSIDE` (255) outside every tile (not analysed; edits do not change it). The views draw `view`: the
-same codes with the tissue outside every tile as 6, "not analysed" (from the core image's tissue at 1/8, as the tiling
-finds it), so what is drawn matches what the analysis counts; an image without tiles is all "not analysed".
+Codes (`CODES`): 0 counted, 1 fold or tissue damage, 2 artifact, 3 no tissue / empty, 4 out of focus or bad staining
+(people only), 5 AT8 edge guard, 6 not analysed (views only), `OUTSIDE` (255) outside every tile.
 
-Read API: `resolved(project, core_id, stain) -> Layer | None` (None before stage 2 made the core's mask), `digest` (changes
-exactly when the layer can change: for manifests), `shares` / `candidate_fractions` (candidates' excluded shares),
-`codes_at`, `drop_excluded` (labels on excluded objects left out of scoring, agreement and training) and `signature`
-(for caches of results made from the layer).
+Read API:
+- `automatic(...) -> Layer | None`, None before stage 2. `digest` is the stage-2 mask's content, for the manifests of
+  the stages that read it.
+- `annotated(...) -> Annotated | None`: codes 0 untouched, 1–4 painted, `CLEARED` (9) marked fine; `regions()` as
+  polygons; `edits`, the history.
+- `final_say(...)`, `shares` / `codes_at` (objects' shares in it) and `drop_excluded`.
+- `candidate_fractions` (shares in the automatic layer, for stage 4) and `view` (what the views draw of the automatic
+  layer).
 """
 from __future__ import annotations
 
@@ -41,6 +46,7 @@ from stainid import cache
 SCALE = 8  # core-image px per layer px (stainid.v2.proposals.MASK_SCALE)
 TISSUE, LINEAR, FOLD, MANUAL, EDGE_GUARD, TILE = 1, 2, 4, 8, 16, 32  # stainid.v2.proposals.BITS
 COUNTED, OUTSIDE = 0, 255
+CLEARED = 9  # `annotated`: a part people marked fine
 CODES = {1: "fold or tissue damage", 2: "artifact (scratch, bubble, debris, linear artifact)", 3: "no tissue / empty",
          4: "out of focus or bad staining", 5: "AT8 edge guard (brown rim along an edge)",
          6: "not analysed: tissue in no analysed tile (an image QC calls empty, a square with too little tissue)"}
@@ -150,7 +156,7 @@ def masks_folder(project, stain: str) -> Path:
     return candidates.root(project) / "masks" / stain
 
 
-def automatic(bits: np.ndarray, stain: str) -> np.ndarray:
+def codes_of(bits: np.ndarray, stain: str) -> np.ndarray:
     """Detection's own areas as codes: counted tissue, linear artifacts (2), folds (1, not NeuN), the AT8 edge guard (5)
     and no tissue (3); outside every tile `OUTSIDE`."""
     codes = np.full(bits.shape, OUTSIDE, np.uint8)
@@ -187,8 +193,8 @@ def apply(codes: np.ndarray, edit: Edit) -> None:
 
 @dataclass
 class Layer:
-    """The resolved excluded areas of one core image and stain at 1/`scale`: `codes` (`CODES`, 0 counted, `OUTSIDE`),
-    `bits` (the stage-2 mask as made) and `digest` (`digest`)."""
+    """Excluded areas of one core image and stain at 1/`scale` (the automatic layer, or people's final say):
+    `codes` (`CODES`, 0 counted, `OUTSIDE`), `bits` (the stage-2 mask as made) and `digest`."""
     codes: np.ndarray
     bits: np.ndarray
     digest: str
@@ -269,17 +275,115 @@ def _mask_digest(path: Path) -> str | None:
 
 
 def digest(project, core_id: str, stain: str) -> str | None:
-    """What the core's layer is made from, as a short text: changes exactly when the stage-2 mask's content or the core's
-    edits change (for the manifests of the stages that use the layer); None before stage 2 made the mask."""
+    """The automatic layer's digest (the stage-2 mask's content), for the manifests of the stages that read it; None
+    before stage 2 made the mask. People's edits never change it."""
     found = _mask_digest(mask_path(project, core_id, stain))
-    if found is None:
-        return None
-    keys = [e.key() for e in edits(project, core_id, stain)]
-    return hashlib.sha1(json.dumps([found, keys], default=str).encode()).hexdigest()[:16]
+    return None if found is None else found[:16]
 
 
 def digests(project, stain: str, core_ids) -> dict[str, str | None]:
     return {str(c): digest(project, str(c), stain) for c in core_ids}
+
+
+def edits_digest(project, core_id: str, stain: str) -> str:
+    """People's edits of a core image, as a short text: changes exactly when one is saved."""
+    keys = [e.key() for e in edits(project, core_id, stain)]
+    return hashlib.sha1(json.dumps(keys, default=str).encode()).hexdigest()[:16]
+
+
+@dataclass
+class Annotated:
+    """People's areas of one core image and stain on the 1/`scale` grid: `codes` (0 untouched, 1–4 painted that type,
+    `CLEARED` marked fine; the latest edit wins), the `edits` (the history) and `digest` (`edits_digest`)."""
+    codes: np.ndarray
+    edits: list
+    digest: str
+    scale: int = SCALE
+
+    def painted(self) -> np.ndarray:
+        return (self.codes >= 1) & (self.codes <= 4)
+
+    def cleared(self) -> np.ndarray:
+        return self.codes == CLEARED
+
+    def regions(self, simplify_px: float = 0.6) -> list[dict]:
+        """The areas as polygons in core pixels: [{kind: "1"–"4" or "include", rings: [outer, hole, …]}], one entry per
+        connected area."""
+        out = []
+        for code in sorted(set(np.unique(self.codes).tolist()) - {0}):
+            mask = (self.codes == code).astype(np.uint8)
+            contours, hierarchy = cv2.findContours(mask, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+            if hierarchy is None:
+                continue
+            kind = INCLUDE if code == CLEARED else str(code)
+            for i, contour in enumerate(contours):
+                if hierarchy[0][i][3] >= 0:
+                    continue  # a hole: with its outer ring
+                rings = [contour]
+                child = hierarchy[0][i][2]
+                while child >= 0:
+                    rings.append(contours[child])
+                    child = hierarchy[0][child][0]
+                shaped = []
+                for ring in rings:
+                    simple = cv2.approxPolyDP(ring, simplify_px, True)[:, 0, :] if len(ring) > 4 else ring[:, 0, :]
+                    if len(simple) >= 3:
+                        shaped.append([[round((float(x) + 0.5) * self.scale, 1), round((float(y) + 0.5) * self.scale, 1)] for x, y in simple])
+                if shaped:
+                    out.append({"kind": kind, "rings": shaped})
+        return out
+
+
+def _grid_shape(project, core_id: str, stain: str) -> tuple[int, int] | None:
+    """The 1/`SCALE` grid of a core image: the stage-2 mask's, else from the image's size."""
+    path = mask_path(project, core_id, stain)
+    if path.exists():
+        bits = _bits(path)
+        if bits is not None:
+            return bits.shape
+    from stainid.tables import read_csv  # noqa: PLC0415
+
+    table = project.input("core_images")
+    for row in read_csv(table) if table.exists() else []:
+        if str(row.get("core_id")) == str(core_id) and row.get("stain") == stain and row.get("native_width_px"):
+            return -(-int(float(row["native_height_px"])) // SCALE), -(-int(float(row["native_width_px"])) // SCALE)
+    return None
+
+
+def annotated(project, core_id: str, stain: str) -> Annotated | None:
+    """People's areas of one core image and stain (every edit in time order, the latest winning); None when the image
+    is unknown. Only training and evaluation read them."""
+    shape = _grid_shape(project, core_id, stain)
+    if shape is None:
+        return None
+    found = edits(project, core_id, stain)
+    codes = np.zeros(shape, np.uint8)
+    for edit in found:
+        for kind in dict.fromkeys(edit.kinds):
+            rings = [r for r, k in zip(edit.rings, edit.kinds) if k == kind]
+            holes = [h for h, k in zip(edit.holes, edit.kinds) if k == kind]
+            codes[rasterize(rings, holes, shape)] = CLEARED if kind == INCLUDE else int(kind) if str(kind).isdigit() else 1
+    return Annotated(codes, found, edits_digest(project, core_id, stain))
+
+
+def agreement(auto: "Layer", people: Annotated) -> dict:
+    """How people's areas compare with detection's on one core image (cells of the layer grid): what people say is
+    excluded (detection's areas they left, plus what they painted, less what they cleared) against detection's areas."""
+    analysed = auto.analysed()
+    detected = auto.excluded() & analysed
+    final = (detected & ~people.cleared()) | (people.painted() & analysed)
+    both = int((detected & final).sum())
+    total = int(detected.sum()) + int(final.sum())
+    return {"cells_people_excluded": int(final.sum()), "cells_auto_excluded": int(detected.sum()), "cells_both": both,
+            "cleared_auto_cells": int((detected & people.cleared()).sum()), "painted_new_cells": int((people.painted() & analysed & ~detected).sum()),
+            "cells_analysed": int(analysed.sum()), "f1": round(2 * both / total, 3) if total else None}
+
+
+def _bits(path: Path) -> np.ndarray | None:
+    bits = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    if bits is None:
+        return None
+    return bits if bits.ndim == 2 else bits[..., 0]
 
 
 _LAYERS: OrderedDict[tuple, Layer] = OrderedDict()
@@ -288,25 +392,24 @@ _SHARES: OrderedDict[tuple, tuple[tuple, dict]] = OrderedDict()  # (project, sta
 _LOCK = threading.Lock()
 
 
-def resolved(project, core_id: str, stain: str) -> Layer | None:
-    """The resolved layer of one core image and stain (detection's areas, then every edit in time order); None before
-    stage 2 made the core's mask. Kept (a few cores) until the mask or the core's edits change."""
+def _layer(project, core_id: str, stain: str, people: bool) -> Layer | None:
     path = mask_path(project, core_id, stain)
     made_from = digest(project, core_id, stain)
     if made_from is None:
         return None
-    key = (str(project.root), stain, str(core_id))
+    found = edits(project, core_id, stain) if people else []
+    if people:
+        made_from = made_from + ":" + edits_digest(project, core_id, stain)
+    key = (str(project.root), stain, str(core_id), people)
     with _LOCK:
         kept = _LAYERS.get(key)
         if kept is not None and kept.digest == made_from:
             _LAYERS.move_to_end(key)
             return kept
-    bits = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    bits = _bits(path)
     if bits is None:
         return None
-    bits = bits if bits.ndim == 2 else bits[..., 0]
-    codes = automatic(bits, stain)
-    found = edits(project, core_id, stain)
+    codes = codes_of(bits, stain)
     for edit in found:
         apply(codes, edit)
     layer = Layer(codes, bits, made_from, SCALE, found)
@@ -316,6 +419,19 @@ def resolved(project, core_id: str, stain: str) -> Layer | None:
         while len(_LAYERS) > _LAYERS_LIMIT:
             _LAYERS.popitem(last=False)
     return layer
+
+
+def automatic(project, core_id: str, stain: str) -> Layer | None:
+    """Detection's automatic areas of one core image and stain, what the analysis uses (and only it); None before stage 2
+    made the core's mask. People's edits never change it."""
+    return _layer(project, core_id, stain, people=False)
+
+
+def final_say(project, core_id: str, stain: str) -> Layer | None:
+    """People's final say over detection's areas: detection's areas with every edit on top in time order (a painted
+    part excluded with its type, a cleared part counted). It is the label set for training and evaluating (objects there
+    are left out of training and scoring, `drop_excluded`), never an analysis input; None before stage 2."""
+    return _layer(project, core_id, stain, people=True)
 
 
 _TISSUE: OrderedDict[tuple, np.ndarray] = OrderedDict()  # (image, its signature, shape) -> tissue cells
@@ -364,18 +480,18 @@ def _image_of(project, core_id: str, stain: str) -> tuple[str | None, bool]:
 
 @dataclass
 class View:
-    """What the views draw of one core image and stain: the resolved codes with tissue outside every tile as
-    `NOT_ANALYSED`, the scale and a version (changes with the layer)."""
+    """What the views draw of one core image and stain as "Excluded from analysis": the automatic codes with tissue
+    outside every tile as `NOT_ANALYSED`, the scale and a version (changes with the layer)."""
     codes: np.ndarray
     scale: int
     version: str
 
 
 def view(project, core_id: str, stain: str) -> View | None:
-    """The layer as the Cores view and the annotation pages draw it (`resolved`, plus "not analysed" tissue); an image
-    without any analysed tile is all "not analysed"; None before stage 2 made the mask of an image with tiles."""
+    """The automatic layer as the Cores view and the annotation pages draw it (`automatic`, plus "not analysed" tissue);
+    an image without any analysed tile is all "not analysed"; None before stage 2 made the mask of an image with tiles."""
     image, tiled = _image_of(project, core_id, stain)
-    layer = resolved(project, core_id, stain)
+    layer = automatic(project, core_id, stain)
     if layer is None and (tiled or image is None):
         return None
     if layer is not None:
@@ -418,7 +534,7 @@ def _known(project, stain: str, core_id: str) -> dict | None:
     if made_from is None:
         return None
     path = candidates.path(project, stain, core_id, "candidates")
-    stamp = (made_from, cache.signature(path))
+    stamp = (made_from, edits_digest(project, core_id, stain), cache.signature(path))
     key = (str(project.root), stain, str(core_id))
     with _LOCK:
         kept = _SHARES.get(key)
@@ -432,7 +548,7 @@ def _known(project, stain: str, core_id: str) -> dict | None:
 
 
 def shares(project, stain: str, core_id: str, ids) -> dict[str, float]:
-    """The excluded share of these candidates of one core by the resolved layer (`Layer.fractions` of their stain
+    """The excluded share of these candidates of one core in people's final say (`final_say`, `Layer.fractions` of their stain
     outlines; a candidate the store no longer has by the cell at the position in its id); empty before stage 2. Only
     the candidates asked about are worked out (and kept until the layer or the store changes)."""
     from stainid import candidates  # noqa: PLC0415
@@ -443,7 +559,7 @@ def shares(project, stain: str, core_id: str, ids) -> dict[str, float]:
     ids = [str(c) for c in dict.fromkeys(ids)]
     missing = [c for c in ids if ("share", c) not in known]
     if missing:
-        layer = resolved(project, core_id, stain)
+        layer = final_say(project, core_id, stain)
         rows = candidates.read_core(project, stain, core_id, ["candidate_id", "x_core", "y_core", "outline"])
         rows = rows[rows.candidate_id.isin(missing)].drop_duplicates("candidate_id") if len(rows) else rows
         found = dict(zip(rows.candidate_id, layer.fractions(rows.outline.tolist(), rows.x_core, rows.y_core))) if len(rows) else {}
@@ -458,14 +574,14 @@ def shares(project, stain: str, core_id: str, ids) -> dict[str, float]:
 
 
 def codes_at(project, stain: str, core_id: str, xs, ys) -> np.ndarray:
-    """The layer's code at core-pixel positions (rounded to the pixel; `OUTSIDE` before stage 2)."""
+    """People's final say at core-pixel positions (`final_say`; rounded to the pixel; `OUTSIDE` before stage 2)."""
     known = _known(project, stain, core_id)
     points = [(round(float(x)), round(float(y))) for x, y in zip(xs, ys)]
     if known is None:
         return np.full(len(points), OUTSIDE, np.uint8)
     missing = [p for p in dict.fromkeys(points) if ("at",) + p not in known]
     if missing:
-        layer = resolved(project, core_id, stain)
+        layer = final_say(project, core_id, stain)
         xy = np.array(missing, np.float64)
         codes = layer.at(xy[:, 0], xy[:, 1])
         with _LOCK:
@@ -473,16 +589,10 @@ def codes_at(project, stain: str, core_id: str, xs, ys) -> np.ndarray:
     return np.array([known[("at",) + p] for p in points], np.uint8)
 
 
-def candidate_fractions(project, stain: str, core_id: str, frame: pd.DataFrame | None = None) -> pd.Series:
-    """Each candidate's excluded share by the resolved layer, by candidate id: of `frame` (candidate_id, x_core,
-    y_core, outline: stage 4 before the store is written), else of every candidate in the store; empty before stage 2."""
-    if frame is None:
-        from stainid import candidates  # noqa: PLC0415
-
-        rows = candidates.read_core(project, stain, core_id, ["candidate_id"])
-        found = shares(project, stain, core_id, rows.candidate_id.tolist()) if len(rows) else {}
-        return pd.Series(found, dtype=float)
-    layer = resolved(project, core_id, stain)
+def candidate_fractions(project, stain: str, core_id: str, frame: pd.DataFrame) -> pd.Series:
+    """Each candidate's share in detection's automatic areas (`automatic`), by candidate id, for stage 4: of `frame`
+    (candidate_id, x_core, y_core, outline); empty before stage 2."""
+    layer = automatic(project, core_id, stain)
     if layer is None:
         return pd.Series(dtype=float)
     outline = frame["outline"].tolist() if "outline" in frame else [None] * len(frame)
@@ -490,9 +600,10 @@ def candidate_fractions(project, stain: str, core_id: str, frame: pd.DataFrame |
 
 
 def drop_excluded(project, labels: pd.DataFrame, tasks=("class", "outline")) -> pd.DataFrame:
-    """The labels (as the log stores them) without those about objects in excluded areas, what scoring, agreement and
-    training read: a label naming a candidate goes when the candidate's excluded share is at least `EXCLUDED_AT`; one
-    without (an object a person added, an older label) when the cell at its position is excluded."""
+    """The labels (as the log stores them) without those about objects in excluded areas by people's final say
+    (`final_say`: their areas over detection's), what training, scoring and the model comparison read: a label naming a
+    candidate goes when its excluded share is at least `EXCLUDED_AT`; one without (an object a person added, an older
+    label) when the cell at its position is excluded."""
     if labels.empty or "task" not in labels:
         return labels
     about = labels.task.isin(list(tasks)).to_numpy()
@@ -532,9 +643,9 @@ def drop_excluded(project, labels: pd.DataFrame, tasks=("class", "outline")) -> 
 
 def import_reviewer(project, path: Path, kind: str = "2", source: str = REVIEWER) -> int:
     """The hand-drawn areas of the earlier AI-review rounds (the `manual_exclusions` format: core image path ->
-    [{"polygon_core_px", "exclusion_id", …}]) as edits of source `source` (type `kind`, default artifact), dated when the
-    file was written, so people's later edits (clearing them, say) win. Areas already imported are not added again.
-    Returns how many were added."""
+    [{"polygon_core_px", "exclusion_id", …}]) as people's areas of source `source` (type `kind`, default artifact),
+    dated when the file was written, so later edits (clearing them, say) win. Areas already imported are not added
+    again. Returns how many were added."""
     from stainid.labels import exclusions as marks  # noqa: PLC0415
     from stainid.labels import store  # noqa: PLC0415
 

@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 
 from stainid.api import state
 from stainid.api.routes import analysis, annotate, cohort, images, imageset, jobs, models, project, projects, session, setup, slides
+from stainid.api.routes import areas as area_routes
 from stainid.api.routes import cache as cache_routes
 from stainid.api.routes import classes as label_classes
 from stainid.api.routes import outline as outline_routes
@@ -61,7 +62,7 @@ async def _lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     app = FastAPI(title="stainID", version="2.0", docs_url=None, redoc_url=None, openapi_url=None, lifespan=_lifespan)
-    for module in (projects, project, slides, setup, imageset, cohort, images, jobs, analysis, models, session, annotate, cache_routes, label_classes, outline_routes, round_routes):
+    for module in (projects, project, slides, setup, imageset, cohort, images, jobs, analysis, models, session, annotate, cache_routes, label_classes, outline_routes, round_routes, area_routes):
         app.include_router(module.router, prefix="/api")
 
     @app.exception_handler(state.UnknownProject)

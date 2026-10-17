@@ -33,6 +33,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from stainid import cache
+from stainid import candidates as candidate_store_ids
 from stainid.api import label_crops, queue_pictures, render, sam_embeddings, work
 from stainid.api.routes.annotate import (
     LAYERS,
@@ -52,7 +53,7 @@ from stainid.api.routes.annotate import (
 from stainid.api.session import PREVIEW, annotator, require_admin
 from stainid.api.state import get_state
 from stainid.api.util import fast_json
-from stainid.labels import added, candidate_store, decisions, exclusions, readiness, rounds, sessions, store
+from stainid.labels import added, candidate_store, decisions, exclusions, readiness, rounds, sessions, status, store
 from stainid.labels import vocabulary as vocab
 from stainid.labels.tasks import STAINS
 from stainid.tables import write_text_atomic
@@ -165,6 +166,7 @@ def create_round_session(body: NewSession) -> dict:
         else:
             fields, left = _pick_fields(body.stain, scope, asked, seed, body.spread)
         draw = {} if body.tile_ids else {"field_seed": seed, "fields_asked": asked, "fields_remaining": left, "fields_spread": body.spread}
+        draw["fields_from_checked_areas"] = len(checked_areas_fields(body.stain, fields))
         meta = sessions.create(root(), name, kind="fields", tools=["class", "point", "outline", "tag"], rule="random", fields=fields, scope=fields,
                                **common, **draw)
     if body.open:
@@ -188,17 +190,28 @@ def remaining(stain: str, scope: list[str], but: str = "") -> list[str]:
     return rounds.remaining_fields(scope, set(store.reviewed_fields(store.current(root()), stain)), assigned_fields(but))
 
 
+def checked_areas_fields(stain: str, fields: list[str]) -> set[str]:
+    """The fields whose core image's bad areas a person checked (`labels.status.areas_checked`, as the minimap reads)."""
+    return rounds.from_checked(fields, get_state().tiles[get_state().tiles.stain == stain], status.areas_checked(store.current(root()), stain))
+
+
 def _pick_fields(stain: str, scope: list[str], n: int, seed: int, spread: bool = False, but: str = "") -> tuple[list[str], int]:
     """The fields of a new "Fix the field" session and how many remained: n drawn at random from the remaining ones
-    (`rounds.draw_fields`; -1 or more than there are: every one), or with `spread` spread over TMAs and groups."""
+    (`rounds.draw_fields`; -1 or more than there are: every one), first from the fields whose core image's bad areas a
+    person checked, then the rest; with `spread` spread over TMAs and groups (within each of the two pools)."""
     left = remaining(stain, scope, but)
     if not left:
         raise HTTPException(400, f"Every {stain} field there has been checked or belongs to an open session already.")
+    first = checked_areas_fields(stain, left)
     if spread:
         tiles = get_state().labelling_tiles
         tiles = tiles[(tiles.stain == stain) & tiles.tile_id.isin(set(left))]
-        return sessions.pick_fields(tiles, set(), len(left) if n < 0 else n, seed), len(left)
-    return rounds.draw_fields(left, n, seed), len(left)
+        wanted = len(left) if n < 0 else n
+        picked = sessions.pick_fields(tiles[tiles.tile_id.isin(first)], set(), min(wanted, len(first)), seed) if first else []
+        if len(picked) < wanted:
+            picked += sessions.pick_fields(tiles[~tiles.tile_id.isin(first)], set(), wanted - len(picked), seed)
+        return picked, len(left)
+    return rounds.draw_fields(left, n, seed, first or None), len(left)
 
 
 def add_fields(meta: dict, n: int, tile_ids: list[str] | None, seed: int | None = None) -> dict:
@@ -213,7 +226,8 @@ def add_fields(meta: dict, n: int, tile_ids: list[str] | None, seed: int | None 
     if not picked:
         raise HTTPException(400, f"no more {meta['stain']} fields can be added")
     updated = sessions.add_fields(root(), meta["name"], picked)
-    updated = sessions.update(root(), meta["name"], scope=updated["fields"])
+    updated = sessions.update(root(), meta["name"], scope=updated["fields"],
+                              fields_from_checked_areas=len(checked_areas_fields(meta["stain"], updated["fields"])))
     warm(updated, force=True)
     return updated
 
@@ -382,6 +396,8 @@ def next_tile_objects(meta: dict, person: str, skip: str = "") -> dict:
     complete = set() if made is None else {t for t, ok in frame.assign(made=made.to_numpy(bool)).groupby("tile_id").made.all().items() if ok}
     tile, taken = hand_out(meta, person, skip, prefer=complete)
     chosen = frame[frame.tile_id == tile] if tile else frame.iloc[:0]
+    if len(chosen):  # objects in excluded areas are not asked about
+        chosen = chosen[~chosen.candidate_id.isin(excluded_ids(meta, list(chosen.candidate_id)))]
     if tile and len(chosen):
         chosen = rounds.with_shapes(state.project, stain, chosen, state.tile(tile))
     size, words = label_crops.size_px(state, stain), vocabulary(stain)
@@ -498,9 +514,30 @@ def _field_shapes(meta: dict, tile: dict) -> tuple[list[dict], dict[str, list]]:
     return objects, masks
 
 
+def excluded_ids(meta: dict, ids) -> set[str]:
+    """Which of these candidates lie in an excluded area (`stainid.exclusions`: share at least `EXCLUDED_AT`): drawn
+    faded on the round pages and not asked about."""
+    from stainid import exclusions as excluded_areas  # noqa: PLC0415
+
+    by_core: dict[str, list[str]] = {}
+    for c in ids:
+        try:
+            by_core.setdefault(candidate_store_ids.parse_id(c)[1], []).append(c)
+        except ValueError:
+            continue
+    out: set[str] = set()
+    for core_id, group in by_core.items():
+        shares = excluded_areas.shares(get_state().project, meta["stain"], core_id, group)
+        out |= {c for c, v in shares.items() if v >= excluded_areas.EXCLUDED_AT}
+    return out
+
+
 def field_objects(meta: dict, tile: dict) -> list[dict]:
-    """The field's candidates with only their default outline (flat whole pixels; the others: `field_masks`)."""
-    return _field_shapes(meta, tile)[0]
+    """The field's candidates with only their default outline (flat whole pixels; the others: `field_masks`), each
+    with whether it lies in an excluded area (`excluded`: drawn faded, not asked about)."""
+    found = _field_shapes(meta, tile)[0]
+    out = excluded_ids(meta, [o["candidate_id"] for o in found])
+    return [{**o, "excluded": o["candidate_id"] in out} for o in found]
 
 
 def field_masks(meta: dict, tile: dict) -> dict[str, list]:
@@ -795,7 +832,9 @@ def _unanswered(meta: dict, tile_id: str, mine: pd.DataFrame) -> list[str]:
     """Round 1: the session's candidates on this tile this person has no answer on."""
     frame = round_items(meta)
     answered = set(mine.candidate[mine.task == "class"].dropna()) if "candidate" in mine else set()
-    return [c for c in frame.candidate_id[frame.tile_id == tile_id] if c not in answered]
+    asked = [c for c in frame.candidate_id[frame.tile_id == tile_id] if c not in answered]
+    out = excluded_ids(meta, asked)  # in an excluded area: not asked, not confirmed
+    return [c for c in asked if c not in out]
 
 
 def _confirmations(meta: dict, tile: dict, person: str, mine: pd.DataFrame) -> list[dict]:
@@ -805,6 +844,7 @@ def _confirmations(meta: dict, tile: dict, person: str, mine: pd.DataFrame) -> l
     tile_id = str(tile["tile_id"])
     found = _field_candidates(meta, tile)
     own = found[found.own]
+    own = own[~own.candidate_id.isin(excluded_ids(meta, list(own.candidate_id)))]  # in an excluded area: not asked, not confirmed
     words = vocabulary(meta["stain"])
     classes = mine[mine.task == "class"]
     said = {k: words.positive(v, s) for k, v, s in zip(classes.id, classes.value, classes.subtype)}
@@ -890,8 +930,9 @@ def _round_meta(name: str, request: Request) -> dict:
 
 @router.get("/annotate/{name}/fields/{tile_id}/excluded")
 def field_excluded(name: str, tile_id: str, request: Request, person: str = Depends(annotator)) -> dict:
-    """The excluded areas over a field: its part of the core's resolved layer (`store_view.field_excluded`), the same
-    pixels the Cores view, the analysis, training and scoring use. The page draws its unsaved edits over it."""
+    """The areas detection excludes from the analysis over a field: its part of the core's automatic layer
+    (`store_view.field_excluded`), the same pixels the Cores view draws and the analysis uses. People's areas are
+    `…/annotated`; the page draws its unsaved strokes over both."""
     from stainid.api import store_view  # noqa: PLC0415
 
     meta = _round_meta(name, request)
@@ -907,6 +948,20 @@ def field_excluded_png(name: str, tile_id: str, request: Request, person: str = 
     if png is None:
         raise HTTPException(404, f"the excluded areas of {tile_id} are not made yet (the v2 proposals make them)")
     return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
+
+
+@router.get("/annotate/{name}/fields/{tile_id}/annotated")
+def field_annotated(name: str, tile_id: str, request: Request, person: str = Depends(annotator)) -> dict:
+    """People's areas over a field (`store_view.people_areas`, field-picture px): painted areas by type and the parts
+    marked fine, with how they compare with detection's. They train and evaluate models; the analysis never reads them."""
+    from stainid.api import store_view  # noqa: PLC0415
+
+    meta = _round_meta(name, request)
+    tile = field_tile(meta, tile_id)
+    x0, y0 = render.crop_origin(tile, get_state().project.context_px)
+    x1 = int(tile["x_px"]) + int(tile["width_px"]) + get_state().project.context_px
+    y1 = int(tile["y_px"]) + int(tile["height_px"]) + get_state().project.context_px
+    return store_view.people_areas(get_state().project, str(tile["core_id"]), str(tile["stain"]), (x0, y0), (x0, y0, x1, y1))
 
 
 @router.get("/annotate/{name}/fields/{tile_id}/segment")
