@@ -419,7 +419,7 @@ export interface ClassCount { id: string; name: string; role: ClassRole; objects
 /** The classes the labels view shows, by identity: its colour (place in the series colours; null: none) and its classes as shown. */
 export interface ClassGroup { id: string; name: string; role: ClassRole; colour: number | null; keys: string[] }
 /** Every stain's classes (as used, and as built in) and how long a type may follow a class key. */
-export interface ClassSettings { stains: Record<string, Vocabulary>; builtin: Record<string, Vocabulary>; subtype_wait_s: number }
+export interface ClassSettings { stains: Record<string, Vocabulary>; builtin: Record<string, Vocabulary>; keys: Record<string, KeyMap>; subtype_wait_s: number }
 export const classExample = (stain: string, file: string) => apiUrl(`/api/annotate/class-examples/${enc(stain)}/${enc(file)}`)
 /* ---- project kinds: image sets, whole slides, dataset packages, scoring on imported labels ---- */
 export type ProjectKind = 'tma' | 'images' | 'slides'
@@ -501,6 +501,8 @@ export interface RoundObject<Shape = number[][]> {
   /** as RoundItem's: SAM small, medium, large, then the stain outline when there are four; `mask` shown first (the
    *  field sends only that one: the others, `more_masks` of them, come from /masks) */
   ai_probability: number | null; decision: string; reason: string; masks: (Shape | null)[]; mask: number; more_masks?: number
+  /** in an excluded area (people's final say): drawn faint, not asked about */
+  excluded?: boolean
 }
 export interface RoundField<Shape = number[][]> {
   tile_id: string; box: { x: number; y: number; width: number; height: number }; objects: RoundObject<Shape>[]; checked: Record<string, RoundCheck>

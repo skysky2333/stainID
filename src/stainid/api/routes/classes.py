@@ -58,6 +58,7 @@ def examples_folder(root: Path, stain: str) -> Path:
 def all_classes() -> dict:
     project = get_state().project
     return {"stains": {stain: vocab.of(project, stain).to_api() for stain in project.stains},
+            "keys": {stain: vocab.of(project, stain).keymap() for stain in project.stains},  # `vocabulary.assign_keys`, as the pages get them
             "subtype_wait_s": float((project.config.get("labels") or {}).get("subtype_wait_s", vocab.DEFAULT_SUBTYPE_WAIT_S)),
             "builtin": {stain: vocab.defaults(stain).to_api() for stain in project.stains}}
 

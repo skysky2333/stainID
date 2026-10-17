@@ -23,15 +23,16 @@ def test_each_stain_has_identities_with_subtypes_and_plain_descriptions():
     at8, plaques, neun = (vocabulary.defaults(s) for s in ("AT8", "6E10", "NeuN"))
     tau = at8.identity("tau+ neuron")
     assert tau.role == POSITIVE and [s.id for s in tau.subtypes] == ["pretangle", "mature tangle", "ghost tangle"]
-    assert [c.id for c in at8.classes] == ["tau+ neuron", "neuritic plaque", "astroglial tau", "thread", "not tau", "artifact or unclear", "unsure"]
+    assert [c.id for c in at8.classes] == ["tau+ neuron", "neuritic plaque", "astroglial tau", "thread", "not tau", "unsure"]
     assert [s.name for s in at8.identity("astroglial tau").subtypes] == ["tufted astrocyte", "thorn-shaped astrocyte"]
     assert [s.id for s in plaques.identity("plaque").subtypes] == ["compact", "diffuse", "cored-neuritic", "small"]
-    assert {"CAA", "intraneuronal", "not a plaque", "artifact or unclear"} <= {c.id for c in plaques.classes}
-    assert [(s.id, s.hidden) for s in neun.identity("NeuN+ neuron").subtypes] == [("strong", False), ("weak", False), ("large pyramidal", True)]
+    assert {"CAA", "intraneuronal", "not a plaque"} <= {c.id for c in plaques.classes} and plaques.identity("artifact or unclear") is None
+    assert [(s.id, s.hidden) for s in neun.identity("NeuN+ neuron").subtypes] == [("strong", True), ("weak", True), ("large pyramidal", True)]
     for words in (at8, plaques, neun, vocabulary.defaults("Iba1")):  # a stain stainID has no classes for gets generic ones
         assert vocabulary.problems(words) == []
         assert [c.role for c in words.classes if c.role == POSITIVE] == [POSITIVE]  # one positive identity: what the model finds
-        assert words.identity("unsure").role == SKIP and words.identity("artifact or unclear").role == NEGATIVE
+        assert words.identity("unsure").role == SKIP and words.identity(words.reject).role == NEGATIVE
+        assert words.role(words.resolve("artifact or unclear")[0]) == NEGATIVE  # old labels of the class that is gone
         assert all(c.description for c in words.classes) and all(s.description for c in words.classes for s in c.subtypes)
     assert at8.display("tau+ neuron", "pretangle") == "tau+ neuron · pretangle" and at8.display("tau+ neuron") == "tau+ neuron (type not recorded)"
     assert at8.display("thread") == "thread or dystrophic neurite"
@@ -50,7 +51,9 @@ def test_each_stain_has_identities_with_subtypes_and_plain_descriptions():
     ("6E10", "small plaque", None, ("plaque", "small")),
     ("6E10", "not a plaque", None, ("not a plaque", "")),
     ("NeuN", "NeuN+ neuron", None, ("NeuN+ neuron", "")),
-    ("NeuN", "artifact or unclear", None, ("artifact or unclear", "")),
+    ("NeuN", "artifact or unclear", None, ("not a neuron", "")),  # the class is gone: its labels are the reject
+    ("6E10", "artifact or unclear", None, ("not a plaque", "")),
+    ("AT8", "artifact or unclear", None, ("not tau", "")),
     ("AT8", "tau+ neuron", "ghost tangle", ("tau+ neuron", "ghost tangle")),  # a new label: identity and subtype
     ("AT8", "", None, ("", "")),
     ("AT8", float("nan"), float("nan"), ("", "")),
@@ -133,17 +136,54 @@ def test_dataset_class_maps_may_name_types(tmp_path):
 # ---------- the keys ----------
 
 
-def test_keys_pick_an_identity_then_its_type_by_place_or_both_at_once():
-    words = vocabulary.defaults("AT8")
+@pytest.mark.parametrize("stain, direct, summary", [
+    ("6E10", {"1": ["plaque", "compact"], "2": ["plaque", "diffuse"], "3": ["plaque", "cored-neuritic"], "4": ["plaque", "small"],
+              "q": ["CAA", None], "w": ["intraneuronal", None], "delete": ["not a plaque", None], "`": ["unsure", None]},
+     "Plaques 1–4 · Not plaques Q–W · Del not a plaque · ` unsure · B brush"),
+    ("AT8", {"1": ["tau+ neuron", "pretangle"], "2": ["tau+ neuron", "mature tangle"], "3": ["tau+ neuron", "ghost tangle"],
+             "q": ["neuritic plaque", None], "w": ["astroglial tau", None], "e": ["thread", None], "delete": ["not tau", None], "`": ["unsure", None]},
+     "Tau+ neurons 1–3 · Not tau+ neurons Q–E · Del not tau · ` unsure · B brush"),
+    ("NeuN", {"1": ["NeuN+ neuron", None], "delete": ["not a neuron", None], "`": ["unsure", None]},
+     "NeuN+ neurons 1 · Del not a neuron · ` unsure · B brush"),
+])
+def test_one_key_picks_a_type_per_stain(stain, direct, summary):
+    """Numbers pick the counted types, Q W E R the named look-alikes, Del the single reject and ` unsure (0 too): one
+    key each, no second step; the panel's groups and line come from the same assignment."""
+    words = vocabulary.defaults(stain)
     keys = words.keymap(subtypes=True)
-    assert keys["direct"]["1"] == ["tau+ neuron", None] and keys["direct"]["4"] == ["thread", None] and keys["direct"]["7"] == ["unsure", None]
-    assert keys["then"]["tau+ neuron"] == {"1": "pretangle", "2": "mature tangle", "3": "ghost tangle"}
-    assert keys["then"]["astroglial tau"] == {"1": "tufted astrocyte", "2": "thorn-shaped astrocyte"}
-    assert keys["direct"]["q"] == ["tau+ neuron", "pretangle"] and keys["direct"]["w"] == ["tau+ neuron", "mature tangle"]
-    plain = words.keymap(subtypes=False)  # a session that does not ask for types
-    assert plain["then"] == {} and "q" not in plain["direct"] and plain["direct"]["1"] == ["tau+ neuron", None]
-    neun = vocabulary.defaults("NeuN").keymap()
-    assert neun["then"]["NeuN+ neuron"] == {"1": "strong", "2": "weak"} and "t" not in neun["direct"]  # hidden: no key
+    assert keys["direct"] == direct and keys["summary"] == summary and "then" not in keys
+    assert keys["aliases"] == {"0": "`", "backspace": "delete"} and keys["brush"] == "b"
+    assert [g["group"] for g in keys["groups"]] == [g for g in ("counted", "lookalike", "reject", "unsure") if g != "lookalike" or stain != "NeuN"]
+    clashes = {" ", "enter", "escape", "shift", "tab", "arrowleft", "arrowright", "arrowup", "arrowdown", "b", "s", "z", "v", "a", "o"}
+    assert not clashes & set(keys["direct"])  # nothing the pages or the browser use (no Ctrl/Cmd keys are taken at all)
+    assert vocabulary.problems(words) == []
+
+
+def test_roles_of_the_reject_and_unsure_and_sessions_without_types():
+    for stain in ("6E10", "AT8", "NeuN"):
+        words = vocabulary.defaults(stain)
+        assert words.role(words.reject) == NEGATIVE and words.role(words.unsure) == SKIP and words.skipped(words.unsure)
+        assert words.reject not in words.colour_slots() and words.unsure not in words.colour_slots()  # dotted grey, dotted amber
+    plain = vocabulary.defaults("AT8").keymap(subtypes=False)  # a session that does not ask for types: the identity on 1
+    assert plain["direct"]["1"] == ["tau+ neuron", None] and "2" not in plain["direct"] and plain["direct"]["e"] == ["thread", None]
+    slots = vocabulary.defaults("6E10").colour_slots()
+    assert len(set(slots.values())) == len(slots) and slots["plaque/compact"] != slots["plaque/diffuse"]  # each type its own colour
+
+
+def test_classes_people_add_take_5_to_9_and_t_y_u():
+    words = vocabulary.from_config("6E10", [
+        {"id": "plaque", "subtypes": [{"id": "compact"}, {"id": "diffuse"}, {"id": "cored-neuritic"}, {"id": "small"}, {"id": "burnt-out", "name": "burnt-out"}]},
+        {"id": "pigment", "name": "pigment", "role": "negative", "description": "Brown pigment."},
+        {"id": "artifact or unclear", "name": "artifact or unclear", "role": "negative", "key": "5"},  # a class no more
+    ])
+    direct = words.keymap()["direct"]
+    assert direct["5"] == ["plaque", "burnt-out"] and direct["t"] == ["pigment", None] and direct["q"] == ["CAA", None]
+    assert words.identity("artifact or unclear") is None
+    old = vocabulary.from_config("6E10", [{"id": "plaque", "key": "1", "subtypes": [{"id": "compact", "key": "q"}, {"id": "diffuse", "key": "w"}]},
+                                          {"id": "CAA", "key": "2"}, {"id": "not a plaque", "key": "4"}])
+    assert old.keymap()["direct"] == vocabulary.defaults("6E10").keymap()["direct"]  # settings saved with the old keys get today's
+    wrong = vocabulary.from_config("6E10", [{"id": "CAA", "key": "7"}])
+    assert any("must be a letter" in p for p in vocabulary.problems(wrong))
 
 
 def test_the_page_logic_of_the_keys(tmp_path):
@@ -183,8 +223,8 @@ def test_every_page_gives_a_class_the_same_colour():
 
     words = vocabulary.defaults("AT8")
     slots = {g["id"]: g["colour"] for g in class_groups(words, set())}
-    order = sorted(words.classes, key=lambda c: c.role != vocabulary.POSITIVE)
-    assert all(slots[c.id] == i for i, c in enumerate(order) if c.id in slots)  # the slots the page turns into colours
+    assert all(slots[c] == i for c, i in words.colour_slots().items() if c in slots)  # the slots the page turns into colours
+    assert slots[words.reject] == -2 and slots[words.unsure] == -3
 
 
 # ---------- the classes in the settings, and labelling with them ----------
@@ -233,7 +273,7 @@ def test_quick_check_answers_carry_identity_and_type(client):
     assert made.status_code == 200 and made.json()["subtypes"] is True
     ann = _annotator(client)
     meta = ann.get("/api/annotate/q").json()["meta"]
-    assert meta["subtypes"] and meta["keys"]["then"]["plaque"]["1"] == "compact" and meta["keys"]["direct"]["w"] == ["plaque", "diffuse"]
+    assert meta["subtypes"] and meta["keys"]["direct"]["1"] == ["plaque", "compact"] and meta["keys"]["direct"]["2"] == ["plaque", "diffuse"]
     assert [c["id"] for c in meta["vocabulary"]["classes"]][:3] == ["plaque", "CAA", "intraneuronal"]
     assert meta["vocabulary"]["aliases"]["compact plaque"] == ["plaque", "compact"]
     item = ann.get("/api/annotate/q/next").json()["object"]
@@ -255,7 +295,7 @@ def test_quick_check_answers_carry_identity_and_type(client):
 def test_fields_without_types_confirm_only_the_identity(client):
     client.post("/api/labels/sessions", json={"name": "f", "stain": "6E10", "tile_ids": [TILE], "open": True, "subtypes": False})
     ann = _annotator(client)
-    assert ann.get("/api/annotate/f").json()["meta"]["keys"]["then"] == {}
+    assert ann.get("/api/annotate/f").json()["meta"]["keys"]["direct"]["1"] == ["plaque", None]
     ann.post(f"/api/annotate/f/fields/{TILE}/finish")
     confirmed = store.current(state.get_state().project.output("reviews"))
     confirmed = confirmed[(confirmed.task == "class") & (confirmed.session == "f")].iloc[0]
@@ -269,9 +309,9 @@ def test_classes_in_the_settings_round_trip(client):
     tau = classes[0]
     tau["subtypes"][0]["name"] = "early tangle (pretangle)"  # rename (the id stays)
     tau["subtypes"][2]["hidden"] = True
-    tau["subtypes"].append({"id": "globose", "name": "globose tangle", "description": "A round tangle.", "key": "r"})
+    tau["subtypes"].append({"id": "globose", "name": "globose tangle", "description": "A round tangle.", "key": "4"})
     tau["role"] = "negative"  # a built-in class keeps its role
-    classes.append({"id": "microglial tau", "name": "microglial tau", "role": "negative", "description": "Tau in microglia.", "key": "8", "subtypes": []})
+    classes.append({"id": "microglial tau", "name": "microglial tau", "role": "negative", "description": "Tau in microglia.", "key": "t", "subtypes": []})
     del classes[3]  # a built-in class left out comes back
     saved = client.put("/api/labels/classes/AT8", json={"classes": classes, "subtype_wait_s": 1.5})
     assert saved.status_code == 200, saved.text
@@ -284,10 +324,12 @@ def test_classes_in_the_settings_round_trip(client):
     written = yaml.safe_load((state.get_state().root / "stainid.yaml").read_text())
     assert set(written["labels"]["classes"]) == {"AT8"} and written["labels"]["subtype_wait_s"] == 1.5
     words = vocabulary.of(state.get_state().project, "AT8")
-    assert words.keymap()["then"]["tau+ neuron"] == {"1": "pretangle", "2": "mature tangle", "3": "globose"}
+    direct = words.keymap()["direct"]
+    assert (direct["1"], direct["2"], direct["4"], direct["t"]) == (["tau+ neuron", "pretangle"], ["tau+ neuron", "mature tangle"],
+                                                                   ["tau+ neuron", "globose"], ["microglial tau", None]) and "3" not in direct
     assert words.display("tau+ neuron", "pretangle") == "tau+ neuron · early tangle (pretangle)"
 
-    clash = [{**c, "key": "1"} if c["id"] == "thread" else c for c in again["stains"]["AT8"]["classes"]]
+    clash = [{**c, "key": "q"} if c["id"] == "thread" else c for c in again["stains"]["AT8"]["classes"]]
     refused = client.put("/api/labels/classes/AT8", json={"classes": clash})
     assert refused.status_code == 400 and "same key" in refused.json()["detail"]
     reserved = [{**c, "key": "z"} if c["id"] == "thread" else c for c in again["stains"]["AT8"]["classes"]]

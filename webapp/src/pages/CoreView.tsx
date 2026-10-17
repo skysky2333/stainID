@@ -9,7 +9,7 @@ import { useFetch, useStored } from '../hooks'
 import { useProject } from '../project'
 import { Advanced } from '../setup/parts'
 import { CLASS_STYLE, RASTER_LAYERS } from '../viewer'
-import { INACTIVE_GREY, MODEL_CLASSES, classColour } from '../classPalette'
+import { INACTIVE_GREY, MODEL_CLASSES, UNSURE_AMBER, classColour } from '../classPalette'
 import type { Vocabulary } from '../labels/classKeys'
 
 interface CoreInfo extends CoreDetail {
@@ -80,13 +80,16 @@ type Layers = typeof LAYER_DEFAULTS
 /* The colours of the objects on the core picture: saturated, and clear of DAB brown and haematoxylin blue, each drawn
    over a thin dark halo (deepzoom.tsx). Rejected candidates are dotted light grey. The names stay those of CLASS_STYLE. */
 const UNPROPOSED_COLOR = '#b98cff'  // stained areas no candidate covers: no label class
-/** An object's colour: its label class's, the same on every page (classPalette.ts; the store's class, else detection's
- *  class name mapped onto the label classes); rejected candidates dotted light grey. */
+/** An object's colour: its label type's, the same on every page (classPalette.ts; the store's class, else detection's
+ *  class name mapped onto the label classes and types: a compact plaque is the compact colour); rejected candidates
+ *  dotted light grey. */
 function objectColor(vocabulary: Vocabulary | undefined, cls: string, identity?: string): string {
   if (cls === 'rejected') return INACTIVE_GREY
   if (cls === 'unproposed') return UNPROPOSED_COLOR
-  const id = identity && vocabulary?.classes.some((c) => c.id === identity) ? identity : MODEL_CLASSES[cls]?.[0]
-  return vocabulary && id ? classColour(vocabulary, id) : CLASS_STYLE[cls]?.color ?? '#ffffff'
+  const mapped = MODEL_CLASSES[cls]
+  const id = identity && vocabulary?.classes.some((c) => c.id === identity) ? identity : mapped?.[0]
+  const type = mapped && mapped[0] === id ? mapped[1] || null : null
+  return vocabulary && id ? classColour(vocabulary, id, type) : CLASS_STYLE[cls]?.color ?? '#ffffff'
 }
 /** A legend swatch drawn as the object is (dotted grey for rejected candidates). */
 const swatchOf = (color: string, dotted = false) => (dotted ? { background: 'transparent', border: `2px dotted ${color}`, boxShadow: '0 0 0 1px rgb(0 0 0 / 35%)' }
@@ -286,7 +289,8 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
       if (x === undefined || y === undefined) continue
       const r = o?.r ?? 8
       const rejected = a.kind === 'rejected', unsure = a.kind === 'unsure'
-      const color = rejected ? INACTIVE_GREY : unsure ? '#ffffff' : classColour(vocabulary, a.kind === 'outline' ? a.detection_identity ?? o?.cls : a.identity)
+      const color = rejected ? INACTIVE_GREY : unsure ? UNSURE_AMBER : a.kind === 'outline'
+        ? classColour(vocabulary, a.detection_identity ?? o?.cls, a.detection_subtype || null) : classColour(vocabulary, a.identity, a.subtype || null)
       out.push({ x: x + r * 0.8, y: y - r * 0.8, r: Math.max(2.5, r * 0.3), color, dashed: rejected || unsure, circle: true })
       about.push({ object: a, at: o })
       if (rejected) {  // crossed out: not an object
@@ -296,7 +300,7 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
     }
     const typical = objects.length ? [...objects].sort((a, b) => a.r - b.r)[Math.floor(objects.length / 2)].r : 10
     for (const a of notes.added) {
-      const color = classColour(vocabulary, a.identity)
+      const color = classColour(vocabulary, a.identity, a.subtype || null)
       const ring = a.points && a.points.length >= 3 ? [flat(a.points)] : undefined
       const r = ring ? Math.max(...a.points!.map(([x, y]) => Math.hypot(x - a.x_core, y - a.y_core))) : typical
       out.push({ x: a.x_core, y: a.y_core, r, color, dashed: true, rings: ring, circle: !ring })

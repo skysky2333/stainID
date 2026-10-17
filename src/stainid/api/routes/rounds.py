@@ -1012,8 +1012,9 @@ def practice_name(round_: int, stain: str) -> str:
 
 
 def practice_tile(stain: str) -> str | None:
-    """The field the tutorial practises on: of the first cores with candidates, the ready field with most of them (kept
-    until the store changes)."""
+    """The field the tutorial practises on: of the first cores with candidates, the ready field with most of them, one
+    with a candidate detection rejected itself first (the tutorial shows that people's rejects look the same); kept
+    until the store changes."""
     state = get_state()
 
     def make() -> str | None:
@@ -1024,15 +1025,17 @@ def practice_tile(stain: str) -> str | None:
         with_candidates = candidate_store.cores(state.project, stain)  # a folder listing: only these cores' fields are checked
         first = sorted(set(tiles.core_id.astype(str)) & with_candidates)[:3]
         ready = store_ready(stain, tiles[tiles.core_id.astype(str).isin(first)])
-        best, most = None, 0
+        best, most = None, (False, 0)
         for core_id in sorted(set(ready.core_id.astype(str)))[:3]:
-            found = candidate_store.read_core(state.project, stain, core_id, candidate_store.POSITIONS)  # only what is counted
+            found = candidate_store.read_core(state.project, stain, core_id, [*candidate_store.POSITIONS, "decision"])
             if found is None or found.empty:
                 continue
             counts = found.tile_id.value_counts()
+            rejected = set(found.tile_id[~found.decision.astype(str).map(candidate_store.accepted)])
             for tile_id in ready.tile_id[ready.core_id.astype(str) == core_id]:
-                if counts.get(tile_id, 0) > most:
-                    best, most = tile_id, int(counts[tile_id])
+                rank = (tile_id in rejected, int(counts.get(tile_id, 0)))
+                if rank[1] and rank > most:
+                    best, most = tile_id, rank
         return best
 
     return cache.memo(("practice field", str(state.root), stain), [candidate_store.folder(state.project, stain)], make, folders=True)

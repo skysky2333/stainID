@@ -117,21 +117,22 @@ page:
 
 What annotators see:
 
-- **Everything, nothing hidden.** Every chosen class is solid in its own colour (unsure, key 0, too). Dotted grey means
-  not active: rejected by detection, removed by a person (Delete), or just added and waiting for its class. Pointing at
+- **Everything, nothing hidden.** Every type is solid in its own colour; unsure is dotted amber with a "?". Dotted grey
+  means not active: rejected by detection or by a person (Delete), or just added and waiting for its type. Pointing at
   an object lights it up, shows its name beside it and its facts at the side: class, detection's call and score, area,
   and which of its three outlines shows.
 - **One key per object.** The keys act on the object under the mouse:
 
   | Key | What it does |
   |---|---|
-  | **1–9** | its class; for a class with types, the type's number right after (or the type's letter key) |
-  | **0** | unsure (left out of training) |
-  | **Delete** | not an object (it turns dotted grey and stays visible; a class key brings it back) |
+  | **1–4** | its counted type (6E10: compact, diffuse, cored-neuritic, small; AT8: pretangle, mature tangle, ghost tangle; NeuN: neuron) |
+  | **Q W E** | a named look-alike, not counted (6E10: CAA, staining inside a neuron; AT8: neuritic crown, tau in an astrocyte, thread) |
+  | **`** (or 0) | unsure: dotted amber "?", left out of training and evaluation |
+  | **Delete** | reject (not a plaque / tau / neuron): it turns dotted grey like detection's own rejects; a number key makes it solid again |
   | **Tab** / **Shift+Tab** | a bigger or smaller outline: each object has three Segment Anything outlines ready |
   | **Click** an object | precise editing of that object only: click a spot to add it, Shift+click one to leave it out, drag the dots (Z one step back); a click beyond the faint frame around it, or Enter, keeps it, Esc cancels |
   | **Space** | hide / show everything drawn over the picture, for a clean look at the tissue |
-  | **E** | the exclusion brush: paint bad areas (folds, smudges); their objects are left out of scoring and training |
+  | **B** | the brush: paint bad areas (1–4 the type while it is on); they teach and test bad-area detection and their objects are left out of training and scoring — the analysis keeps detection's own areas |
   | **Z** | undo |
   | **Enter** | keep detection's call (round 1) |
   | **Ctrl+S** / **Ctrl+Enter** | save / save and continue |

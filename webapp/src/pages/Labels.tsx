@@ -440,7 +440,7 @@ function StainDetails({ s, onChanged }: { s: StainOverview; onChanged: () => voi
 
 /** The classes people will choose from, and whether they are also asked for each object's type (pretangle or mature tangle…). */
 function SessionClasses({ vocabulary, typesAsked, onTypesAsked }: { vocabulary: Vocabulary; typesAsked: boolean; onTypesAsked: (on: boolean) => void }) {
-  const shown = byKey(vocabulary, { direct: {}, then: {} })  // in the order of the keys, unsure last
+  const shown = byKey(vocabulary, { direct: {} })  // in the order of the keys, unsure last
   const typed = shown.filter((c) => c.subtypes.some((s) => !s.hidden))
   return (
     <div className="session-classes">

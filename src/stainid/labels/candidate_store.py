@@ -31,7 +31,6 @@ from scipy.spatial import cKDTree
 from stainid import cache
 from stainid.labels import frames
 from stainid.labels import vocabulary as vocab
-from stainid.labels.tasks import NEGATIVE
 from stainid.project import Project
 from stainid.tables import write_text_atomic
 
@@ -444,12 +443,9 @@ def by_model(frame: pd.DataFrame) -> pd.Series:
 
 
 def negative_class(vocabulary: vocab.Vocabulary) -> str:
-    """The class meaning "not the stain's object" (what "remove" records): the stain's usual negative call, else its
-    first shown negative class."""
-    identity = vocabulary.resolve(NEGATIVE.get(vocabulary.stain, ""))[0]
-    if vocabulary.identity(identity) is not None:
-        return vocabulary.identity(identity).id
-    return next((c.id for c in vocabulary.visible if c.role == vocab.NEGATIVE), "")
+    """The class meaning "not the stain's object" (what Del records, drawn dotted grey like detection's own rejects): the
+    stain's single reject (`Vocabulary.reject`)."""
+    return vocabulary.reject
 
 
 def ai_call(vocabulary: vocab.Vocabulary, decision: str, klass: str, subtype: str) -> tuple[str, str]:

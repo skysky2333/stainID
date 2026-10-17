@@ -145,7 +145,6 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
   const [mine, setMine] = useState<Record<string, Label>>({})
   const [tool, setTool] = useState<Tool | null>(null)
   const { vocabulary, keys, subtypes: typesAsked } = meta
-  const waitMs = Math.round(1000 * vocabulary.subtype_wait_s)
   const [label, setLabel] = useState<ClassPick>(() => ({ identity: vocabulary.classes.find((c) => !c.hidden)?.id ?? '', subtype: null }))
   const [selected, setSelected] = useState<string | null>(null)
   const [draft, setDraft] = useState<number[][]>([])
@@ -165,9 +164,8 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
     setAddedStates(work.data.added ?? [])
   }, [work.data])
 
-  const classKeys = useClassKeys(keys, waitMs, setLabel)
-  useEffect(() => { if (classKeys.waiting) setLabel({ identity: classKeys.waiting.identity, subtype: null }) }, [classKeys.waiting])
-  const color = (v: ClassPick | undefined) => (v ? classColour(vocabulary, v.identity) : '#ffffff')  // the same colour on every page
+  const classKeys = useClassKeys(keys, setLabel)
+  const color = (v: ClassPick | undefined) => (v ? classColour(vocabulary, v.identity, v.subtype) : '#ffffff')  // the same colour on every page
   const negativePick = (v: ClassPick | undefined) => !v || roleOf(vocabulary, v.identity) !== 'positive'
   const pickOf = (m: Label | undefined) => (m ? resolveClass(vocabulary, m.value, m.subtype) : undefined)
   const aiPick = (o: FieldObjectLite | undefined) => (o?.ai_value ? resolveClass(vocabulary, o.ai_value) : undefined)
@@ -316,15 +314,16 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
     const onKey = (e: KeyboardEvent) => {
       if (typing(e) || e.metaKey || e.ctrlKey) return
       if (e.key === 'Enter' && draft.length) { closeDraft(); return }
-      if (!e.repeat && classKeys.press(e.key)) return
-      const chosen = tools.find((t) => t.key === e.key.toLowerCase())
-      if (chosen) { setTool(chosen.id); setDraft([]); return }
-      if (e.key === 'Escape') { classKeys.cancel(); setDraft([]); setRedrawing(false); setSelected(null) }
-      if (e.key === 'Backspace' || e.key === 'Delete') {
+      if (e.key === 'Backspace' || e.key === 'Delete') {  // on this page Delete takes away the selected mark (the reject is a click)
         e.preventDefault()
         if (draft.length) setDraft(draft.slice(0, -1))
         else removeSelected()
+        return
       }
+      if (!e.repeat && classKeys.press(e.key)) return
+      const chosen = tools.find((t) => t.key === e.key.toLowerCase())
+      if (chosen) { setTool(chosen.id); setDraft([]); return }
+      if (e.key === 'Escape') { setDraft([]); setRedrawing(false); setSelected(null) }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -418,7 +417,7 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
                   </>}
                 </>}
               </ZoomViewer>
-              <KeyHelp classes={<ClassKeyHint vocabulary={vocabulary} keys={keys} typesAsked={typesAsked} waitMs={waitMs} />} tools={tools} />
+              <KeyHelp classes={<ClassKeyHint vocabulary={vocabulary} keys={keys} />} tools={tools} />
             </div>
             <aside className="annotate-side">
               <div className="card">
@@ -433,9 +432,7 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
                 {active && <p className="small secondary tool-hint">{redrawing ? 'Click the corners of the new outline, then the first corner or press Enter.' : active.hint}</p>}
                 {tools.some((t) => t.id === 'add') && <MissedCallout adding={active?.id === 'add'} count={added.length} onAdd={() => { setTool('add'); setDraft([]) }} />}
                 <h3 style={{ marginTop: 14 }}>2 · Class</h3>
-                <ClassChooser vocabulary={vocabulary} keys={keys} typesAsked={typesAsked} active={label} waiting={classKeys.waiting} waitMs={waitMs}
-                  counts={counts} onPick={(identity) => { classKeys.cancel(); setLabel({ identity, subtype: null }) }}
-                  onPickType={(subtype) => { classKeys.cancel(); setLabel((l) => ({ identity: classKeys.waiting?.identity ?? l.identity, subtype })) }} />
+                <ClassChooser vocabulary={vocabulary} keys={keys} active={label} counts={counts} onPick={(identity, subtype) => setLabel({ identity, subtype })} />
               </div>
               {selectedObject && (
                 <div className="card">

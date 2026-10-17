@@ -1,13 +1,14 @@
-/* The exclusion brush of the field tool (key E): an edit of the excluded areas, painted on masks at a quarter of the field
-   picture's size, one mask per type (`EXCLUDE_TYPES`: 1 fold or tissue damage, 2 artifact, 3 no tissue, 4 out of focus
-   or bad staining; the keys 1–4 choose it while the brush is on). A drag paints the chosen type, Shift-drag clears: the
-   part is counted, whatever detection or anyone earlier said. Each stroke is one step Z takes back.
+/* The brush of the field tool (key B): an edit of people's areas, painted on masks at a quarter of the field picture's
+   size, one mask per type (`EXCLUDE_TYPES`: 1 fold or tissue damage, 2 artifact, 3 no tissue, 4 out of focus or bad
+   staining; the keys 1–4 choose it while the brush is on, and the class keys rest). A drag paints the chosen type,
+   Shift-drag marks the part fine, whatever detection or anyone earlier said. Each stroke is one step Z takes back.
 
-   The masks hold only what was painted since the last Save: the page draws the field's part of the resolved layer from
-   the server (detection's areas with every saved edit applied, the same pixels as the Cores view and the analysis) and
-   these strokes over it, with the server picture cut away under them (`cover`), so the page shows what the layer will
-   be. Save sends the masks as PNGs (labels/exclusions.py turns them into one new edit); then they are emptied (`reset`)
-   once the server's layer has the edit. */
+   People's areas teach and test bad-area detection and leave the objects in them out of training and scoring; the
+   analysis never reads them. The masks hold only what was painted since the last Save: the page draws detection's
+   automatic layer from the server ("Excluded from analysis", hatched, never cut), people's saved areas outlined, and
+   these strokes hatched over both. Save sends the masks as PNGs (labels/exclusions.py turns them into one new edit);
+   then they are emptied (`reset`) once the server's people's areas have the edit. (`cover`, the union of the strokes,
+   is kept for pages that want it.) */
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 export const BRUSH_SCALE = 4  // the masks are a quarter of the field picture in each direction
@@ -21,7 +22,7 @@ export const EXCLUDE_TYPES: { key: string; name: string; colour: string }[] = [
   { key: '4', name: 'out of focus or bad staining', colour: '#00e5ff' },
 ]
 /** Clearing (Shift-drag): only the brush cursor shows this colour; a cleared part simply shows no hatch. */
-export const CLEARED = { key: INCLUDE, name: 'clear: counted after all', colour: '#22c55e' }
+export const CLEARED = { key: INCLUDE, name: 'marked fine', colour: '#22c55e' }
 const KINDS = [...EXCLUDE_TYPES.map((t) => t.key), INCLUDE]
 
 function painted(c: HTMLCanvasElement): boolean {
