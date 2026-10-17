@@ -106,9 +106,11 @@ def test_scoring_reads_the_v2_calls_where_the_v2_detection_has_run(tmp_path):
         candidates.write_table(target, frame)
     found = scoring.detections(project, "6E10", set(tiles.core_id))
     assert found.accepted.sum() == 12 and set(found.value[found.accepted]) == {"plaque/compact"} and (~found.accepted).sum() == 3
-    rows = {(r["rater"], r["kind"]): r for r in scoring.score(project)["rows"]}
+    result = scoring.score(project)
+    rows = {(r["rater"], r["kind"]): r for r in result["rows"]}
     consensus = rows[("consensus", "objects")]
     assert consensus["marks"] == 12 and consensus["found"] == 9 and consensus["ai_objects"] == 12 and consensus["precision"] == 0.75
+    assert "of the 12 compact plaques the consensus" in result["summary"][0]
     assert consensus["recall"] == 0.75  # the candidate on the fourth plaque was rejected: not found
 
 

@@ -311,6 +311,12 @@ def agreement(project: Project, placed: pd.DataFrame) -> list[dict]:
     return out
 
 
+def _plural(kind: str) -> str:
+    """A kind in words: "plaque/compact" -> "compact plaques", "tau+ neuron/mature tangle" -> "mature tangle tau+ neurons"."""
+    identity, _, subtype = kind.partition("/")
+    return f"{subtype} {identity}s" if subtype else f"{identity}s"
+
+
 def summary_text(stain: str, row: dict, people: list[dict]) -> str:
     """One sentence in plain words for the Models page."""
     if row.get("recall") is None:
@@ -318,7 +324,7 @@ def summary_text(stain: str, row: dict, people: list[dict]) -> str:
     who = "the consensus of the raters" if row["rater"] == CONSENSUS else row["rater"]
     scope = row.get("scope") or "all accepted"
     thing = ("images" if row["kind"] == "image" else "vessel deposits (CAA)" if row["class"] == "vascular"
-             else f"{scope}s" if scope != "all accepted" and "," not in scope else "objects")
+             else _plural(scope) if scope != "all accepted" and "," not in scope else "objects")
     text = (f"{stain}: of the {row['marks']:,} {thing} {who} marked, the AI found {row['recall']:.0%}"
             + (f"; {row['precision']:.0%} of what the AI found was marked (F1 {row['f1']:.2f})" if row.get("precision") is not None else "") + ".")
     values = [p["object_f1"] if row["kind"] != "image" else p["image_kappa"] for p in people if p["stain"] == stain]
