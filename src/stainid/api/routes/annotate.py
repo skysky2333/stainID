@@ -219,8 +219,10 @@ class NewSession(BaseModel):
     ai_view: str = "full"
     per_field: int = 1
     rule: str = "uncertain"
-    n_fields: int = 20
+    n_fields: int | None = None  # how many fields: round sessions -1 (every remaining field) by default, the older kinds 20
     tile_ids: list[str] | None = None
+    seed: int | None = None  # round sessions: the seed of the random draw of fields (a new one when empty; kept with the session)
+    spread: bool = False  # round sessions: spread the drawn fields over TMAs and groups instead of a plain random draw
     instructions: str = ""
     open: bool = False
     subtypes: bool = True  # people are asked for the type (subtype) of the objects, where a class has types
@@ -236,8 +238,9 @@ class Opening(BaseModel):
 
 
 class MoreFields(BaseModel):
-    n: int = 10
+    n: int = 10  # -1: every remaining field (round sessions)
     tile_ids: list[str] | None = None
+    seed: int | None = None
 
 
 class FieldList(BaseModel):
@@ -295,12 +298,15 @@ def _session_objects(name: str, labels: pd.DataFrame, stain: str) -> pd.DataFram
 
 
 def class_groups(vocabulary: vocab.Vocabulary, shown: set[str]) -> list[dict]:
-    """The classes the labels view shows, grouped by identity in the vocabulary's order (positive ones first): each
-    identity's name, its colour (its place, so a class keeps its colour whatever is shown) and the classes under it
+    """The classes the labels view shows, grouped by identity in the order of their keys (`Vocabulary.by_key`): each
+    identity's name, its colour slot (its place among the classes, positive ones first, so a class keeps its colour
+    whatever is shown: webapp classPalette.ts) and the classes under it
     (`Vocabulary.display` names: the identity itself, typed or not, and each of its subtypes). Classes the vocabulary
     no longer has, and objects people split on, come last."""
     groups, known = [], set()
-    for colour, c in enumerate(sorted(vocabulary.classes, key=lambda c: c.role != vocab.POSITIVE)):
+    slot = {c.id: i for i, c in enumerate(sorted(vocabulary.classes, key=lambda c: c.role != vocab.POSITIVE))}  # colours never move
+    for c in vocabulary.by_key():  # listed in the order of their keys, as on every page
+        colour = slot[c.id]
         keys = [*(vocabulary.display(c.id, s.id) for s in c.subtypes if not s.hidden or vocabulary.display(c.id, s.id) in shown), vocabulary.display(c.id)]
         keys += [vocabulary.disputed(c.id)] if c.subtypes and vocabulary.disputed(c.id) in shown else []
         known |= set(keys)
@@ -521,7 +527,7 @@ def create_session(body: NewSession) -> dict:
         return create_outline_session(body)
     fields: list[str] = []
     if body.kind == "fields":
-        fields = _known_fields(body.stain, body.tile_ids) if body.tile_ids else _pick(body.stain, body.n_fields, len(sessions.names(root())))
+        fields = _known_fields(body.stain, body.tile_ids) if body.tile_ids else _pick(body.stain, 20 if body.n_fields is None else body.n_fields, len(sessions.names(root())))
         if not fields:
             raise HTTPException(400, f"no {body.stain} fields left to review")
     try:
@@ -532,7 +538,7 @@ def create_session(body: NewSession) -> dict:
         raise HTTPException(409, "a session with this name exists")
     except ValueError as error:
         raise HTTPException(400, str(error))
-    prepare_job(body.stain, 0 if fields else body.n_fields, body.name if fields else "")
+    prepare_job(body.stain, 0 if fields else (20 if body.n_fields is None else body.n_fields), body.name if fields else "")
     if body.kind == "queue":
         queue_pictures.prepare(get_state(), meta, pool.all_objects(get_state().project, body.stain), store.current(root()), force=True)
     return sessions.update(root(), body.name, open=True) if body.open else meta
@@ -558,7 +564,7 @@ def add_fields(name: str, body: MoreFields, request: Request) -> dict:
 
         return add_outline_fields(meta, body.n, body.tile_ids)
     if rounds.is_round(meta):
-        return _rounds().add_fields(meta, body.n, body.tile_ids)
+        return _rounds().add_fields(meta, body.n, body.tile_ids, body.seed)
     if meta["kind"] != "fields":
         prepare_job(meta["stain"], body.n)
         return meta
@@ -726,6 +732,8 @@ class Mark(BaseModel):
     candidate: str = ""  # annotation rounds: the v2 candidate the label is about (its field and position come from the store)
     keep: bool = False  # annotation rounds: the AI's call on `candidate` is right (recorded as confirmed)
     mask: int | None = None  # annotation rounds: which of the candidate's Segment Anything masks is right (small to large)
+    png: str = ""  # round 2, task "exclude": the area marked as bad, painted (a PNG data URL at 1/`scale` of the field picture)
+    scale: float = 1.0
 
 
 class Marks(BaseModel):

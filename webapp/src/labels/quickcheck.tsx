@@ -216,7 +216,7 @@ export function QuickCheck({ detail }: { detail: SessionDetail }) {
         <div className="annotate-heading">
           <Link to="/annotate" className="small">← All sessions</Link>
           <h1>{meta.title}</h1>
-          <div className="muted small">{meta.stain} · one object at a time{meta.ai_view === 'full' ? ' · the AI’s guess is shown' : ' · decide for yourself'}</div>
+          <div className="muted small">{meta.stain} · one object at a time{meta.ai_view === 'full' ? ' · detection’s call is shown' : ' · decide for yourself'}</div>
         </div>
         <div className="annotate-progress">
           <span className="small secondary">{done ? `${done.toLocaleString()} labelled by you this visit` : 'Press a number key to answer'}
@@ -254,7 +254,7 @@ export function QuickCheck({ detail }: { detail: SessionDetail }) {
           <div className="card queue-choices">
             <h2>What is under the cross?</h2>
             {meta.ai_view === 'full' && <p className="small secondary" title={`probability ${fmt(item.ai_probability, 2)}`}>
-              The AI’s guess: <b>{classText(vocabulary, resolveClass(vocabulary, item.ai_value), typesAsked)}</b></p>}
+              Detection’s call: <b>{classText(vocabulary, resolveClass(vocabulary, item.ai_value), typesAsked)}</b></p>}
             <fieldset className="plain-fieldset" disabled={picture !== 'ready'}>
               <ClassChooser vocabulary={vocabulary} keys={keys} typesAsked={typesAsked} active={null} waiting={classKeys.waiting} waitMs={waitMs} big
                 onPick={classKeys.pick} onPickType={classKeys.pickType} />

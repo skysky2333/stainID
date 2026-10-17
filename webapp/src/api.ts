@@ -148,12 +148,12 @@ export interface StainOverview {
   ai: { n: number; agreement: number | null; precision: number | null; recall: number | null }; tags: Record<string, number>
   detection?: Detection & { not_checked: number }; added?: AddedObjects; classes?: ClassCount[]
 }
-/** Of the real objects people labelled: how many the AI finds, and why it misses the others (never proposed, or proposed but rejected). */
+/** Of the real objects people labelled: how many detection finds, and why it misses the others (never proposed, or proposed but rejected). */
 export interface Detection {
   real: number; found: number; never_proposed: number; rejected: number
   recall: number | null; never_proposed_share: number | null; rejected_share: number | null
 }
-/** Objects people added where the AI proposed nothing, and whether each could be measured (so it can train the model). */
+/** Objects people added where detection proposed nothing, and whether each could be measured (so it can train the model). */
 export interface AddedObjects { objects: number; measured: number; could_not_be_measured: number; waiting: number }
 export interface AddedState { x: number; y: number; state: 'proposed' | 'measured' | 'could_not_be_measured' | 'measuring'; reason: string }
 export interface SessionInfo {
@@ -177,7 +177,7 @@ export interface SessionDetail {
   fields: SessionField[]; annotator: string | null
 }
 export interface Label {
-  id: string; source: string; stain: string; task: 'class' | 'outline' | 'tag' | 'note' | 'done'; tile_id: string
+  id: string; source: string; stain: string; task: 'class' | 'outline' | 'tag' | 'note' | 'done' | 'exclude'; tile_id: string  // exclude: an area marked as bad (points: its rings)
   x: number | null; y: number | null; value: string; subtype?: string | null; points: number[][] | null; session: string; confirmed: boolean; time: number; deleted?: boolean
 }
 export interface FieldObjectLite { x: number; y: number; radius_px: number; ai_value?: string; ai_probability?: number }
@@ -398,13 +398,15 @@ export interface ImportedLabels {
 export interface RoundProgress { total: number; decided: number; people: { person: string; decided: number }[]; open_now?: number; left?: number }
 /** What a round session's pages get besides the session's settings. */
 export interface RoundDetail { round: 1 | 2; labels_needed: number; level: number | null; remove_class: string; segment_anything: boolean; progress: RoundProgress }
-/** This person's saved answer on a round-1 candidate: its class (`keep`: the AI's call confirmed), the mask chosen
+/** This person's saved answer on a round-1 candidate: its class (`keep`: detection's call confirmed), the mask chosen
  *  with it, or an outline they edited (crop pixels). */
 export interface RoundAnswer { identity: string; subtype: string; keep: boolean; mask: number | null; outline: number[][] | null }
-/** One candidate to check in round 1: the AI's call, its masks (crop pixels, small to large) and the one shown first. */
+/** One candidate to check in round 1: detection's call, its masks (crop pixels, small to large) and the one shown first. */
 export interface RoundItem {
   key: string; candidate_id: string; tile_id: string; x: number; y: number; radius_px: number
   ai_value: string; ai_subtype: string; ai_probability: number | null; decision: string; reason: string; tier: number | null
+  /** the outlines to switch between: Segment Anything's three (small, medium, large), then the stain outline when there are
+   *  four (saved answers name them by this index); `mask` is the one shown first (the stain's default) */
   masks: (number[][] | null)[]; mask: number; crop_px: number; mine: RoundAnswer | null
 }
 /** Round 1: the field (tile) handed to this person, with every candidate on it to check, in order. */
@@ -419,6 +421,7 @@ export interface RoundCheck { by: string[]; identity: string; subtype: string; t
 /** One candidate on a round-2 field: field-picture pixels, `own` false for a neighbouring field's candidate in the margin. */
 export interface RoundObject {
   candidate_id: string; x: number; y: number; own: boolean; radius_px: number; ai_value: string; ai_subtype: string
+  /** as RoundItem's: SAM small, medium, large, then the stain outline when there are four; `mask` shown first */
   ai_probability: number | null; decision: string; reason: string; masks: (number[][] | null)[]; mask: number
 }
 export interface RoundField {
@@ -429,8 +432,10 @@ export interface RoundField {
 export interface RoundSessionField extends SessionField { open_by?: string[]; done?: boolean; done_by?: string[] }
 /** What a new round session can draw from, per TMA. */
 export interface RoundScope {
-  stain: string; tmas: { tma: string; cores: number; cores_ready: number; fields: number; fields_ready: number }[]
+  stain: string; tmas: { tma: string; cores: number; cores_ready: number; fields: number; fields_ready: number; fields_remaining?: number }[]
   cores: number; cores_ready: number; fields_ready: number; levels: Record<string, number | null>; default_objects: number; from_pool: boolean
+  /** ready fields not annotated yet and not in an open session: what "Fix the field" draws from */
+  fields_remaining?: number
 }
 /** Segment Anything's outlines of a clicked object, smallest first, and the one it would choose. */
 export interface RoundSamOptions { options: { points: number[][]; area_px: number; score: number }[]; chosen: number }

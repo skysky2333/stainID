@@ -251,7 +251,9 @@ def _segmentation_status(project: Project) -> dict:
     return _state(1, 1, "report", f"{scored} fields scored")
 
 
-V2 = "2 · Detect (v2)"
+DETECT, RESULTS = "2 · Detect", "3 · Results"
+LEGACY = "Legacy (v1)"  # the first detection: still runnable (Run page, Advanced), never by "Run what's left"
+MAIN_STAGES = ("1 · Set up", DETECT, RESULTS)  # the stages "Run what's left" runs
 
 
 def _v2_status(project: Project, stage: str) -> dict:
@@ -309,10 +311,10 @@ RESOURCES = {r.id: r for r in (
              "from them.", lambda p: p.analysis_tiles()),
     Resource("calibration", "Stain thresholds", "One brown-stain (DAB) threshold per slide.", lambda p: p.input("calibration")),
     Resource("nuclei", "Nuclei", "Every cell nucleus found by Cellpose, one file per tile.", lambda p: p.output("nuclei")),
-    Resource("neun_results", "NeuN results", "Neuron detections and per-tile counts.", lambda p: p.output("neun")),
-    Resource("field_results", "6E10 / AT8 results", "Plaque and tau detections and per-tile measurements.", lambda p: p.output("fields")),
-    Resource("mask_results", "Object outlines", "An outline and shape measurements for every detected object.", lambda p: p.output("masks")),
-    Resource("results", "Results table", "One row per donor and brain region with every measurement (results_donor_region.csv).",
+    Resource("neun_results", "NeuN results (legacy v1)", "Neuron detections and per-tile counts of the first detection.", lambda p: p.output("neun")),
+    Resource("field_results", "6E10 / AT8 results (legacy v1)", "Plaque and tau detections and per-tile measurements of the first detection.", lambda p: p.output("fields")),
+    Resource("mask_results", "Object outlines (legacy v1)", "An outline and shape measurements for every object of the first detection.", lambda p: p.output("masks")),
+    Resource("results", "Results table (legacy v1)", "The first detection's results: one row per donor and brain region (results_donor_region.csv).",
              lambda p: p.output("tables") / "results_donor_region.csv"),
     Resource("model_neun", "NeuN model", "Decides which candidate objects are neurons.", lambda p: p.model("neun"),
              setting="models.neun", format="A model bundle file (.joblib) made by stainID's training. Train one on the Models page from objects you label, "
@@ -327,17 +329,17 @@ RESOURCES = {r.id: r for r in (
     Resource("model_sam", "Segment Anything weights", "Draws object outlines.", lambda p: p.model("sam"), download="sam"),
     Resource("model_phikon", "Phikon weights", "Image features used by the 6E10 model.", lambda p: p.model("huggingface_home"), download="huggingface_home"),
     Resource("label_store", "Labels", "Every label people made (and imported earlier label sets).", lambda p: p.output("reviews") / "labels" / "labels.jsonl"),
-    Resource("candidate_pool", "Candidate objects", "The objects of each prepared field, with their measurements and the AI's call.",
+    Resource("candidate_pool", "Candidate objects", "The objects of each prepared field, with their measurements and detection's call.",
              lambda p: p.output("reviews") / "pool"),
     Resource("trained_models", "Trained models", "Models you trained, with their accuracy reports.", lambda p: p.output("trained_models")),
     Resource("segmentation_check", "Segmentation check", "How well detection finds and outlines the objects people outlined, and the "
              "candidates of the check's fields.", lambda p: p.output("tables") / "segmentation_benchmark"),
     # v2 detection (stainid.v2): each stage reads the previous stage's saved outputs
-    Resource("v2_proposals", "Candidates (v2)", "Every object the new detection proposes in each core, with its outline and measurements, "
+    Resource("v2_proposals", "Candidates", "Every object the new detection proposes in each core, with its outline and measurements, "
              "the neuropil threads and stained areas nothing proposed.", lambda p: p.output("v2") / "proposals"),
-    Resource("v2_calls", "AI calls (v2)", "The model's call on every candidate: kept or rejected, why, and its class.", lambda p: p.output("v2") / "calls"),
-    Resource("v2_outlines", "Exact outlines (v2)", "Segment Anything's three outline sizes for the likely objects.", lambda p: p.output("v2") / "outlines"),
-    Resource("v2_measures", "Results tables (v2)", "Per-core and per-donor-region tables made from the v2 calls.",
+    Resource("v2_calls", "Calls", "Detection's call on every candidate: kept or rejected, why, and its class.", lambda p: p.output("v2") / "calls"),
+    Resource("v2_outlines", "Exact outlines", "Segment Anything's three outline sizes for the likely objects.", lambda p: p.output("v2") / "outlines"),
+    Resource("v2_measures", "Results tables", "One row per donor and brain region (and per core) with every measurement, made from the calls (v2/measures).",
              lambda p: p.output("v2") / "measures" / "results_donor_region.csv"),
 )}
 
@@ -406,7 +408,7 @@ STEPS = (
          (Option("redo", "Calibrate again", "bool", False, "Work out the thresholds again for slides that already have one. The detection "
                  "steps must then run again with Start over.", advanced=True),),
          heavy=True, view="/calibration", duration="about a minute per slide", status=_calibration_status),
-    Step("nuclei", "2 · Detect", "Find nuclei", "Outline every cell with Cellpose-SAM, for all stains.",
+    Step("nuclei", DETECT, "Find nuclei", "Outline every cell with Cellpose-SAM, for all stains.",
          "The slow step (about 90 s per tile on an Apple GPU, about 4 s on an NVIDIA A100-class GPU), and the only one that needs a GPU. "
          "NeuN and AT8 detection read these outlines; 6E10 uses them for plaque-neighbourhood features.",
          ("tiles", "model_cellpose"), ("nuclei",), ("nuclei",),
@@ -415,7 +417,7 @@ STEPS = (
           Option("workers", "Tiles at once", "number", 2, "Two tiles in flight keep the GPU busy while the other one's CPU steps run.",
                  advanced=True), *SHARD),
          heavy=True, duration="about 90 s per tile on a Mac GPU, 4 s with CUDA", status=_nuclei_status),
-    Step("neun", "2 · Detect", "Detect NeuN neurons", "Find and classify NeuN-stained neuronal profiles.",
+    Step("neun", LEGACY, "Detect NeuN neurons (legacy v1)", "The first detection of NeuN neurons, before the staged detection.",
          "Candidates come from brown-stain contours and the Cellpose cells of Find nuclei (computed here for tiles that have none yet); "
          "the NeuN model scores each one with its shape, stain and 55 µm neighbourhood.",
          ("tiles", "calibration", "model_neun", "model_cellpose"), ("neun_results",), ("neun",),
@@ -423,25 +425,25 @@ STEPS = (
                  "outlines can differ slightly.", ("cpu", "mps", "cuda")),
           Option("threads", "CPU threads", "number", 8, advanced=True), FRESH, *SHARD),
          heavy=True, view="/cohort", duration="seconds per tile once Find nuclei has run", status=_neun_status, uses=("nuclei",)),
-    Step("fields", "2 · Detect", "Detect plaques and tau", "6E10 plaques (compact / diffuse) and AT8 tau+ neurons and threads.",
+    Step("fields", LEGACY, "Detect plaques and tau (legacy v1)", "The first detection of 6E10 plaques and AT8 tau+ neurons and threads.",
          "6E10: segments deposits, keeps real plaques with the 6E10 model and sorts them into compact and diffuse. AT8: finds tau+ neurons "
          "around nuclei and traces neuropil threads, so run Find nuclei for AT8 first (AT8 cores without nuclei are skipped).",
          ("tiles", "calibration", "model_amyloid", "model_tau"), ("field_results",), ("fields",),
          (Option("stain", "Stains", "stains", ["6E10", "AT8"], choices=("6E10", "AT8")), FRESH, *SHARD),
          heavy=True, view="/cohort", duration="about 1 minute per core", status=_fields_status, uses=("nuclei", "model_phikon")),
-    Step("masks", "2 · Detect", "Outline objects", "Draw an exact outline around every detected object with Segment Anything.",
+    Step("masks", LEGACY, "Outline objects (legacy v1)", "Segment Anything outlines of the first detection's objects.",
          "Adds precise size and shape measurements (area, roundness, dense cores). Optional: the main counts do not need it.",
          ("model_sam",), ("mask_results",), ("masks",),
          (Option("stain", "Stains", "stains", ["NeuN", "6E10", "AT8"], "Stains without detections yet are skipped.", ("NeuN", "6E10", "AT8")),
           DEVICE, FRESH, *SHARD),
          heavy=True, view="/cohort", duration="about 1 minute per core", status=_masks_status, uses=("neun_results", "field_results")),
-    Step("summarize", "3 · Results", "Make results tables", "Combine everything into one row per donor and brain region.",
+    Step("summarize", LEGACY, "Make results tables (legacy v1)", "The results tables of the first detection, one row per donor and brain region.",
          "Sums counts and areas over tiles and replicate cores before dividing, so every density is area-weighted. Writes "
          "results_donor_region.csv (and per-core tables) that open in Excel, R or Python.",
          (), ("results",), ("summarize",),
          (Option("level", "One row per", "select", "sample_region_id", "donor-region (recommended) or single core.", ("sample_region_id", "core_id")),),
          view="/results", duration="about a minute", status=_summary_status, uses=("neun_results", "field_results", "mask_results")),
-    Step("v2_proposals", V2, "Find candidates (v2)", "Propose every stained object in each core, generously, and measure it.",
+    Step("v2_proposals", DETECT, "Find candidates", "Propose every stained object in each core, generously, and measure it.",
          "Reads each core image once and proposes candidates from several brown-stain thresholds, the local background and the "
          "Find nuclei cells (it never runs Cellpose again), splits merged neurons, and saves every candidate with its outline and "
          "measurements, the AT8 thread skeleton and the stained areas no candidate covers. Nothing is decided here, so a new model "
@@ -452,25 +454,25 @@ STEPS = (
           Option("redo", "Redo all", "bool", False, "Redo every core, not only new and out-of-date ones.", advanced=True), *SHARD),
          heavy=True, view="/cohort", duration="about 3–10 minutes per core image (several at once)", status=lambda p: _v2_status(p, "proposals"),
          kinds=("tma", "images", "slides")),
-    Step("v2_calls", V2, "Decide (v2)", "Let the model decide on every candidate, from the saved measurements.",
+    Step("v2_calls", DETECT, "Decide", "Let the model decide on every candidate, from the saved measurements.",
          "Scores every candidate with the stain's model and applies the stain's rules (specks, vessel walls, duplicates, …), saving a "
          "call, a reason and a class for each. No picture is read, so after a new model or threshold this takes minutes.",
          ("v2_proposals", "model_neun", "model_amyloid", "model_tau"), ("v2_calls",), ("v2", "calls"),
          (Option("stain", "Stains", "stains", list(STAINS), choices=tuple(STAINS)),
           Option("redo", "Redo all", "bool", False, "Decide on every core again, not only new and out-of-date ones.", advanced=True)),
          heavy=True, view="/cohort", duration="seconds per core image", status=lambda p: _v2_status(p, "calls")),
-    Step("v2_outlines", V2, "Outline objects (v2)", "Draw Segment Anything outlines (three sizes) around the likely objects.",
-         "Optional. Outlines the kept and the likely candidates with Segment Anything and saves all three sizes it offers, so people can "
-         "switch between them while checking. Run one per GPU with Part / of parts.",
+    Step("v2_outlines", DETECT, "Outline objects", "Draw Segment Anything outlines (three sizes) around the likely objects.",
+         "Outlines the kept and the likely candidates with Segment Anything and saves all three sizes it offers, so people can switch "
+         "between them while checking, and the results tables get exact shapes. Run one per GPU with Part / of parts.",
          ("v2_calls", "model_sam"), ("v2_outlines",), ("v2", "outlines"),
          (Option("stain", "Stains", "stains", list(STAINS), choices=tuple(STAINS)), Option("device", "Processor", "text", "",
                  "cuda, cuda:1 or cpu (empty: a GPU when there is one).", advanced=True),
           Option("redo", "Redo all", "bool", False, advanced=True), *SHARD),
          heavy=True, view="/cohort", duration="about a minute per core image on a GPU", status=lambda p: _v2_status(p, "outlines")),
-    Step("v2_measures", V2, "Make results tables (v2)", "Count and measure from the v2 calls, per core and per donor-region.",
+    Step("v2_measures", RESULTS, "Make results tables", "Count and measure from the calls, per core and per donor-region.",
          "Writes the results tables (and the tables the R analyses read) from the saved candidates, calls, outlines and thread "
-         "skeletons, under the v2 folder; the current results are not touched.",
-         ("v2_calls",), ("v2_measures",), ("v2", "measures"), (), view="/results", duration="a few minutes",
+         "skeletons, under the v2 folder (v2/measures); the legacy results tables are not touched.",
+         ("v2_calls",), ("v2_measures",), ("v2", "measures"), (), view="/results", duration="a few minutes", uses=("v2_outlines",),
          status=lambda p: _state(int(_has_content(p.output("v2") / "measures" / "results_donor_region.csv")), 1, "table")),
     Step("download_models", "Models", "Download public models", "Fetch the Cellpose-SAM, Segment Anything and Phikon weights.",
          "These models are published by their authors and are the same for every study. The NeuN, 6E10 and AT8 models are specific to "
@@ -479,7 +481,7 @@ STEPS = (
          heavy=True, view="/models", duration="a few minutes (about 2 GB)", status=lambda p: _state(
              sum(p.model(k).exists() for k in ("cellpose", "sam", "huggingface_home")), 3, "models")),
     Step("prepare_labels", "Models", "Prepare fields for labelling", "Find every candidate object in fields people will label.",
-         "Finds the candidates exactly as the detection step does, stores their measurements and the AI's call, so labelling sessions open "
+         "Finds the candidates exactly as the detection step does, stores their measurements and detection's call, so labelling sessions open "
          "instantly and every label can train a model. Fields are full ~560 µm tiles, mostly tissue, spread over TMAs and groups. Labelling "
          "sessions run this for their own fields.",
          ("tiles", "calibration"), ("candidate_pool",), ("labels", "prepare"),

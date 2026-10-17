@@ -63,7 +63,7 @@ def blockers(project: Project, tiles: pd.DataFrame) -> list[dict | None]:
         elif (str(tile.tma), stain) not in calibrated:
             out.append(_blocker("This slide has no stain threshold yet: run “Calibrate stain thresholds” first.", "calibrate", "Calibrate stain thresholds"))
         elif (f"{tile.tile_id}_objects.csv" not in neun_done) if stain == "NeuN" else (f"{tile.core_id}_{stain}_objects.csv" not in field_done):
-            out.append(_blocker(f"The AI has not looked at this core yet, so there are no calls to check: run “{title}” first.", detection, title))
+            out.append(_blocker(f"Detection has not looked at this core yet, so there are no calls to check: run “{title}” first.", detection, title))
         elif stain in ("NeuN", "AT8") and not cellpose and f"{tile.tile_id}.npz" not in nuclei:
             out.append(_blocker("This field has no cell outlines yet and the Cellpose weights are missing: run “Find nuclei” or download the public "
                                 "models first.", "nuclei", "Find nuclei"))
@@ -91,7 +91,7 @@ def store_blockers(project: Project, tiles: pd.DataFrame) -> list[dict | None]:
         if not images[tile.image_path]:
             out.append(_blocker("The picture of this core has not been cut out yet: run “Export cores” first.", "export", "Export cores"))
         elif str(tile.core_id) not in have[tile.stain]:
-            out.append(_blocker("The AI has not proposed candidates on this core yet: run the v2 detection (“Find candidates”) first.",
+            out.append(_blocker("Detection has not proposed candidates on this core yet: run the v2 detection (“Find candidates”) first.",
                                 "candidates", "Find candidates"))
         else:
             out.append(None)

@@ -10,10 +10,11 @@ from stainid.project import Project
 from stainid.setup.checks import project_issues
 from stainid.slides.dearray import slide_slug
 from stainid.slides.table import find_slides
-from stainid.workflows.steps import best_device
+from stainid.workflows.steps import MAIN_STAGES, best_device
 
 # seconds per unit of work, roughly (the step cards give the same figures in words)
-SECONDS = {"dearray": 60, "export": 90, "qc": 3, "tiles": 3, "images": 3, "calibrate": 60, "neun": 5, "fields": 60, "summarize": 60}
+SECONDS = {"dearray": 60, "export": 90, "qc": 3, "tiles": 3, "images": 3, "calibrate": 60, "neun": 5, "fields": 60, "summarize": 60,
+           "v2_proposals": 120, "v2_calls": 2, "v2_outlines": 60, "v2_measures": 180}  # v2: per core image (several at once), measures in all
 NUCLEI_SECONDS = {"cuda": 4, "mps": 90, "cpu": 400}  # Cellpose-SAM per ~560 µm tile
 TILE_UM = 560
 
@@ -71,7 +72,8 @@ def estimate(project: Project, remaining: list[str]) -> dict:
     tiles = len(_rows(project.analysis_tiles())) or int(biological * max(1.0, 0.85 * (diameter / TILE_UM) ** 2))
     device = best_device()
     units = {"dearray": slides, "export": slides, "qc": biological, "tiles": biological, "images": biological, "calibrate": slides,
-             "neun": tiles / 3, "fields": biological * 2 / 3, "summarize": 1}
+             "neun": tiles / 3, "fields": biological * 2 / 3, "summarize": 1,
+             "v2_proposals": biological, "v2_calls": biological, "v2_outlines": biological, "v2_measures": 1}
     steps = []
     for step in remaining:
         if step == "nuclei":
@@ -124,7 +126,7 @@ def screens(project: Project, steps: list[dict] | None = None) -> list[dict]:
     issues = project_issues(project) if slides else []
     problems = [i for i in issues if i["level"] == "problem"]
     warnings = [i for i in issues if i["level"] == "warning"]
-    remaining = [s for s in steps if s["stage"] in ("1 · Set up", "2 · Detect", "3 · Results") and s["command"] and s["id"] != "masks"
+    remaining = [s for s in steps if s["stage"] in MAIN_STAGES and s["command"]
                  and (s["progress"]["state"] != "done" or s["progress"].get("outdated"))]
 
     def entry(id_: str, title: str, state: str, summary: str) -> dict:
@@ -163,7 +165,7 @@ def image_screens(project: Project, steps: list[dict]) -> list[dict]:
     issues = project_issues(project) if images else []
     problems = [i for i in issues if i["level"] == "problem"]
     warnings = [i for i in issues if i["level"] == "warning"]
-    remaining = [s for s in steps if s["stage"] in ("1 · Set up", "2 · Detect", "3 · Results") and s["command"] and s["id"] != "masks"
+    remaining = [s for s in steps if s["stage"] in MAIN_STAGES and s["command"]
                  and (s["progress"]["state"] != "done" or s["progress"].get("outdated"))]
     ready = bool(images) and all(r.get("donor_id") for r in images) and bool(analysed)
     on_images = {r["donor_id"] for r in images if r.get("donor_id")}

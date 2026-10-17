@@ -62,15 +62,15 @@ default; sessions made before this choice ask for it). On the quick check and on
 - for a class with types, a number right after it (within 1 s, `labels.subtype_wait_s`) picks the type by its place
   (tau+ neuron: 1 pretangle, 2 mature tangle, 3 ghost tangle); 0 or Enter means no type; when nothing follows, the
   class stands without a type;
-- a type's own key (Q, W, E… by default) answers class and type in one press;
+- a type's own key (Q, W, T… by default; E is the field tool's exclusion brush) answers class and type in one press;
 - with the mouse: click the class, then its type or *No type / not sure*.
 
 The keys are shown on screen next to the classes and under the picture. Without types asked, only the class keys apply
-and the AI's confirmed calls (fields sessions, *Finished*) are stored without a type.
+and detection's confirmed calls (fields sessions, *Finished*) are stored without a type.
 
 The annotation rounds use the same class and type keys, acting on the object under the mouse (round 2) or on screen
 (round 1). Their other keys are listed in [webapp.md](webapp.md#annotation-rounds): 0 unsure, Delete not an object,
-Tab / Shift+Tab for the outline size, Space for precise editing, Z undo and Enter to keep the AI's call.
+Tab / Shift+Tab for the outline size, Space for precise editing, Z undo and Enter to keep detection's call.
 
 ## Where types show
 
@@ -80,7 +80,7 @@ Tab / Shift+Tab for the outline size, Space for precise editing, Z undo and Ente
 - **Labelled so far** counts objects per class and per type (*tau+ neuron 420 (pretangle 170 · mature tangle 250)*).
 - **Download all labels** adds `identity`, `subtype`, `role` and `class` (as the page shows it) to every class label;
   `value` stays as stored.
-- The AI's calls read in the same words (*tau+ neuron · mature tangle*); "AI gives another type" compares types.
+- Detection's calls read in the same words (*tau+ neuron · mature tangle*); "Detection gives another type" compares types.
 
 ## Changing the classes (Settings → Label classes)
 
@@ -88,7 +88,7 @@ The list of each stain's classes, keys and types is always shown; *Change the cl
 descriptions, example pictures, hides classes or types, adds types and adds classes (choosing their role), and sets the
 time for the type key. Built-in classes can be hidden and renamed but not removed, and keep their role, so a project's
 settings never change what the identity models learn from existing labels. Keys are one letter or number, unique per
-stain; V, A, O (field-page tools), Z (undo) and 0 (no type) are taken, and types cannot have number keys.
+stain; V, A, O (field-page tools), E (the exclusion brush), Z (undo) and 0 (no type) are taken, and types cannot have number keys.
 
 The classes are kept in `stainid.yaml`, per stain, only when they differ from the built-in ones:
 
@@ -108,7 +108,7 @@ Example pictures are stored with the labels, `outputs.reviews/class_examples/<st
 
 A package's class map (`dataset.class_map`, label → stainID class) may target a type: `plaque/compact`,
 `tau+ neuron/pretangle`. Imported labels are stored as identity and type like any other, and the scores against
-the models compare types through the same vocabulary (a rater's `plaque/compact` is the AI's *compact plaque*; a
+the models compare types through the same vocabulary (a rater's `plaque/compact` is detection's *compact plaque*; a
 rater who marked plaques without a type is compared with every accepted plaque). The import page offers every class
 and `class/type` of the stain's family.
 

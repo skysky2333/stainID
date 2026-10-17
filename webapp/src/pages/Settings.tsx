@@ -20,7 +20,8 @@ const COLOURS = [1, 2, 3, 4, 5, 6, 7, 8]
 /** The settings this page edits (stainid.yaml may hold others; they are kept as they are). */
 const EDITED = ['name', 'pixel_size_um', 'field_context_px', 'tma', 'groups', 'inputs', 'models', 'outputs'] as const
 
-const edited = (config: ProjectConfig) => Object.fromEntries(EDITED.map((key) => [key, config[key]]))
+const edited = (config: ProjectConfig) => ({ ...Object.fromEntries(EDITED.map((key) => [key, config[key]])),
+  labels: { apply_exclusions: !!(config as unknown as { labels?: { apply_exclusions?: boolean } }).labels?.apply_exclusions } })
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 
 /** What is wrong with the settings, in plain words (empty when they can be saved). */
@@ -115,6 +116,18 @@ function StudySettings({ info }: { info: ProjectInfo }) {
             onChange={(e) => update({ ...config, field_context_px: Number(e.target.value) })} /></label>
         </div>
         <p className="muted small" style={{ margin: 0 }}>{info.help.pixel_size_um} {info.help.field_context_px}</p>
+        {(() => {  // the areas annotators mark as bad (the field tool's brush): off, they only keep objects out of scoring and training
+          const labels = (config as unknown as { labels?: Record<string, unknown> }).labels ?? {}
+          return (
+            <label className="layer-toggle" style={{ marginTop: 8 }}>
+              <input type="checkbox" checked={!!labels.apply_exclusions}
+                onChange={(e) => update({ ...config, labels: { ...labels, apply_exclusions: e.target.checked } } as unknown as ProjectConfig)} />
+              Apply annotators’ excluded areas to the analysis
+              <span className="muted small"> — off: the areas people mark as bad while labelling only keep those objects out of scoring and training, and
+                the analyses use every tile as it is. On: they are added to the hand-drawn exclusions, and the detection redoes the cores they touch.</span>
+            </label>
+          )
+        })()}
         {PATH_SECTIONS.map(([section, title, text]) => (
           <section key={section} className="settings-paths">
             <h3>{title}</h3>

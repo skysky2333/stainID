@@ -7,16 +7,16 @@ import { CommandLineTag, ErrorNote, Progress, StatusBadge, withError } from './c
 
 /** The three stages of the analysis, as the server names them, and the words the app shows for them. */
 export const MAIN_STAGES = ['1 · Set up', '2 · Detect', '3 · Results']
+/** The first detection (v1): still runnable from the Run page (under Advanced), never by “Run what’s left”. */
+export const LEGACY_STAGE = 'Legacy (v1)'
 export const STAGE: Record<string, { name: string; about: string }> = {
   '1 · Set up': { name: 'Set up', about: 'Slides, cores, TMA maps, tiles and stain thresholds' },
-  '2 · Detect': { name: 'Run', about: 'Nuclei, neurons, plaques and tau found in every tile' },
+  '2 · Detect': { name: 'Detect', about: 'Nuclei, then every candidate, detection’s call on it and its outline, core by core' },
   '3 · Results': { name: 'Results', about: 'One table row per donor and brain region' },
-  '2 · Detect (v2)': { name: 'New detection (v2)', about: 'Candidates, AI calls, outlines and tables, stage by stage (not used by the results yet)' },
+  [LEGACY_STAGE]: { name: 'Legacy detection (v1)', about: 'The first detection and its tables: still runnable, not run by “Run what’s left”' },
 }
-/** The v2 detection stages: shown on the Run page under the main stages, each run on its own (not by “Run what’s left”). */
-export const V2_STAGE = '2 · Detect (v2)'
 /** Steps the results do not need (they never count as “left to run”). */
-export const OPTIONAL = new Set(['masks'])
+export const OPTIONAL = new Set<string>()
 
 export const isActive = (status: string | undefined) => status === 'running' || status === 'queued'
 
@@ -77,77 +77,113 @@ export async function stopJobs(title: string, jobs: Job[]): Promise<boolean> {
   return true
 }
 
-const W = 118
-const H = 50
-const COL = 134
-const ROW = 62
+/* ---- the flow chart of the Run page: the data flowing from slide scans to results tables ---- */
 
-function wrap(text: string, width = 17): string[] {
-  const lines: string[] = []
-  for (const word of text.split(' ')) {
-    const last = lines[lines.length - 1]
-    if (last && (last + ' ' + word).length <= width) lines[lines.length - 1] = last + ' ' + word
-    else lines.push(word)
-  }
-  return lines.slice(0, 2)
+/** What a step hands on to the next one: the labels of what it makes that the other reads. */
+function handedOn(from: Step, to: Step): string[] {
+  const reads = new Set([...to.needs, ...to.uses].map((r) => r.id))
+  return from.produces.filter((r) => reads.has(r.id)).map((r) => r.label)
 }
 
-/** The steps as a dependency map: columns are the order things can run in; arrows point from a step to the steps that need it. */
-export function PipelineMap({ steps, state, onOpen }: { steps: Step[]; state: (s: Step) => string; onOpen: (id: string) => void }) {
+/** How long the step's last finished run took (all its parts), or ''. */
+function took(step: Step): string {
+  const job = step.job
+  if (!job || job.status !== 'finished' || !job.started || !job.ended) return ''
+  return duration(job.ended - job.started)
+}
+
+const STATE_WORD: Record<string, string> = {
+  done: 'done', partial: 'part done', running: 'running', queued: 'waiting', failed: 'stopped with an error', outdated: 'out of date', todo: 'not started',
+}
+
+/** One step of the flow chart: where it stands, its counts, what it makes, how long it took. */
+function FlowNode({ step, state, lit, dim, chosen, onOpen, onHover }: {
+  step: Step; state: string; lit: boolean; dim: boolean; chosen: boolean; onOpen: () => void; onHover: (on: boolean) => void
+}) {
+  const parts = step.active ?? (step.job && isActive(step.job.status) ? [step.job] : [])
+  const running = parts.length ? runFacts(parts, step, false) : null
+  const { done, total, unit } = step.progress
+  const outdated = step.progress.outdated
+  const time = took(step)
+  const makes = step.produces.map((r) => r.label).join(', ')
+  return (
+    <button type="button" className={`flow-node node-${state}${lit ? ' lit' : ''}${dim ? ' dim' : ''}${chosen ? ' chosen' : ''}`} onClick={onOpen}
+      onMouseEnter={() => onHover(true)} onMouseLeave={() => onHover(false)} onFocus={() => onHover(true)} onBlur={() => onHover(false)}
+      aria-pressed={chosen} title={`${step.title}: ${step.summary}`}>
+      <span className="flow-node-head"><span className="flow-dot" aria-hidden="true" /><b>{step.title}</b></span>
+      <span className="flow-state small">{STATE_WORD[state] ?? state}{time && state === 'done' ? ` · took ${time}` : ''}</span>
+      {total > 0 && <>
+        <span className="flow-bar" aria-hidden="true"><span style={{ width: `${Math.min(100, (100 * done) / total)}%` }} /></span>
+        <span className="flow-count small">{done.toLocaleString()} of {total.toLocaleString()} {unit}</span>
+      </>}
+      {outdated && <span className="flow-warn small">{step.progress.note || 'some out of date'}</span>}
+      {running && <span className="flow-running small">{running.text}</span>}
+      {makes && <span className="flow-makes small">makes <b>{makes}</b></span>}
+    </button>
+  )
+}
+
+/** An arrow between two steps, labelled with the data passed on. */
+function FlowArrow({ labels, lit, down = false }: { labels: string[]; lit: boolean; down?: boolean }) {
+  return (
+    <span className={`flow-arrow${lit ? ' lit' : ''}${down ? ' down' : ''}`} aria-hidden="true">
+      {labels.length > 0 && <span className="flow-arrow-label">{labels.slice(0, 2).join(', ')}{labels.length > 2 ? ' …' : ''}</span>}
+      <span className="flow-arrow-line" />
+    </span>
+  )
+}
+
+/** The steps as a flow chart, stage by stage: each step's state, counts, what it makes and how long it took, with arrows
+ *  labelled with the data each passes on. Hover a step to light up what it needs and what needs it; click one to open its
+ *  details (`onOpen`). */
+export function PipelineMap({ steps, state, stages, chosen, onOpen }: {
+  steps: Step[]; state: (s: Step) => string; stages: string[]; chosen?: string | null; onOpen: (id: string) => void
+}) {
   const [hover, setHover] = useState<string | null>(null)
   const byId = useMemo(() => Object.fromEntries(steps.map((s) => [s.id, s])), [steps])
   const deps = (s: Step) => s.after.filter((a) => byId[a])
-  const level = useMemo(() => {
-    const memo: Record<string, number> = {}
-    const depth = (id: string): number => (memo[id] ??= Math.max(-1, ...deps(byId[id]).map(depth)) + 1)
-    steps.forEach((s) => depth(s.id))
-    return memo
-  }, [steps, byId])
-  const position = useMemo(() => {
-    const rows: Record<number, number> = {}
-    return Object.fromEntries(steps.map((s) => { const col = level[s.id]; const row = (rows[col] = (rows[col] ?? -1) + 1); return [s.id, { x: col * COL + 4, y: row * ROW + 4 }] }))
-  }, [steps, level])
   const related = useMemo(() => {
-    if (!hover) return null
+    if (!hover || !byId[hover]) return null
     const up = new Set<string>(); const down = new Set<string>()
-    const climb = (id: string) => deps(byId[id]).forEach((d) => { up.add(d); climb(d) })
-    const fall = (id: string) => steps.filter((s) => deps(s).includes(id)).forEach((s) => { down.add(s.id); fall(s.id) })
+    const climb = (id: string) => deps(byId[id]).forEach((d) => { if (!up.has(d)) { up.add(d); climb(d) } })
+    const fall = (id: string) => steps.filter((s) => deps(s).includes(id)).forEach((s) => { if (!down.has(s.id)) { down.add(s.id); fall(s.id) } })
     climb(hover); fall(hover)
     return { up, down }
-  }, [hover, steps, byId])
-  const width = Math.max(...steps.map((s) => position[s.id].x)) + W + 8
-  const height = Math.max(...steps.map((s) => position[s.id].y)) + H + 8
+  }, [hover, steps, byId])  // eslint-disable-line react-hooks/exhaustive-deps
+  const lanes = stages.map((stage) => ({ stage, steps: steps.filter((s) => s.stage === stage) })).filter((l) => l.steps.length)
+  const isLit = (id: string) => !!related && (id === hover || related.up.has(id) || related.down.has(id))
+  const edgeLit = (a: Step, b: Step) => !!related && isLit(a.id) && isLit(b.id) && deps(b).includes(a.id)
+  /** What one lane hands on to the next: everything made in it that a step of the next reads. */
+  const between = (from: Step[], to: Step[]) => [...new Set(from.flatMap((a) => to.flatMap((b) => handedOn(a, b))))]
 
   return (
-    <div className="pipeline-map">
-      <svg viewBox={`0 0 ${width} ${height}`} width="100%" style={{ maxWidth: width }} role="img" aria-label="Order of the workflow steps">
-        {steps.flatMap((s) => deps(s).map((d) => {
-          const a = position[d]; const b = position[s.id]
-          const lit = related && ((hover === s.id && related.up.has(d)) || (hover === d && related.down.has(s.id)) || (related.up.has(s.id) && related.up.has(d)) || (related.down.has(s.id) && related.down.has(d)))
-          return <path key={`${d}-${s.id}`} className={`map-edge${lit ? ' lit' : ''}`}
-            d={`M${a.x + W},${a.y + H / 2} C${a.x + W + 22},${a.y + H / 2} ${b.x - 22},${b.y + H / 2} ${b.x},${b.y + H / 2}`} markerEnd="url(#arrow)" />
-        }))}
-        <defs><marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" className="map-arrow" /></marker></defs>
-        {steps.map((s) => {
-          const p = position[s.id]
-          const dim = related && hover !== s.id && !related.up.has(s.id) && !related.down.has(s.id)
-          return (
-            <g key={s.id} transform={`translate(${p.x},${p.y})`} className={`map-node node-${state(s)}${dim ? ' dim' : ''}`} tabIndex={0}
-              onMouseEnter={() => setHover(s.id)} onMouseLeave={() => setHover(null)} onFocus={() => setHover(s.id)} onBlur={() => setHover(null)}
-              onClick={() => onOpen(s.id)} onKeyDown={(e) => e.key === 'Enter' && onOpen(s.id)}>
-              <title>{`${s.title}: ${s.summary}`}</title>
-              <rect width={W} height={H} rx={9} />
-              {wrap(s.title).map((line, i, all) => (
-                <text key={i} x={W / 2} y={H / 2 + (i - (all.length - 1) / 2) * 13 + 4} textAnchor="middle">{line}</text>
-              ))}
-            </g>
-          )
-        })}
-      </svg>
+    <div className="flow" role="group" aria-label="How the data flows through the steps">
+      {lanes.map((lane, li) => (
+        <div key={lane.stage} className="flow-lane-wrap">
+          {li > 0 && <FlowArrow down labels={between(lanes[li - 1].steps, lane.steps)}
+            lit={!!related && lanes[li - 1].steps.some((a) => lane.steps.some((b) => edgeLit(a, b)))} />}
+          <section className="flow-lane">
+            <h3 className="flow-lane-name">{STAGE[lane.stage]?.name ?? lane.stage}</h3>
+            <div className="flow-row">
+              {lane.steps.map((s, i) => {
+                const previous = lane.steps[i - 1]
+                return (
+                  <span key={s.id} className="flow-cell">
+                    {previous && <FlowArrow labels={handedOn(previous, s)} lit={edgeLit(previous, s)} />}
+                    <FlowNode step={s} state={state(s)} lit={isLit(s.id)} dim={!!related && !isLit(s.id)} chosen={chosen === s.id}
+                      onOpen={() => onOpen(s.id)} onHover={(on) => setHover(on ? s.id : null)} />
+                  </span>
+                )
+              })}
+            </div>
+          </section>
+        </div>
+      ))}
       <div className="map-legend small muted">
-        <span><i className="node-done" /> done</span><span><i className="node-partial" /> partly done</span><span><i className="node-running" /> running</span>
-        <span><i className="node-queued" /> waiting</span><span><i className="node-failed" /> failed</span><span><i className="node-outdated" /> older model</span><span><i className="node-todo" /> not started</span>
-        <span>Arrows: “needs the result of”. Hover a step to see what it needs and what needs it; click to open it.</span>
+        <span><i className="node-done" /> done</span><span><i className="node-partial" /> part done</span><span><i className="node-running" /> running</span>
+        <span><i className="node-queued" /> waiting</span><span><i className="node-failed" /> error</span><span><i className="node-outdated" /> out of date</span>
+        <span><i className="node-todo" /> not started</span>
+        <span>Arrows carry what one step makes to the next. Hover a step to see what it needs and what needs it; click it for its details.</span>
       </div>
     </div>
   )

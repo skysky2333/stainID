@@ -36,19 +36,19 @@ export function ScoreOnLabels() {
           <>
             <ul className="score-summary">{scores.summary.map((line) => <li key={line}>{line}</li>)}</ul>
             <div className="table-wrap"><table className="compact small score-table">
-              <thead><tr><th>Labels of</th><th>Stain</th><th>What</th><th className="num">Marked</th><th className="num">Found</th><th className="num">Of the AI's, marked</th>
+              <thead><tr><th>Labels of</th><th>Stain</th><th>What</th><th className="num">Marked</th><th className="num">Found</th><th className="num">Of detection's, marked</th>
                 <th className="num">F1</th><th className="num">AUC</th></tr></thead>
               <tbody>{rows.map((r) => (
                 <tr key={`${r.rater}-${r.stain}-${r.kind}-${r.class}`}>
                   <td>{who(r.rater)}</td><td>{r.stain}</td><td>{r.kind === 'image' ? `images with ${r.class}` : 'objects'}</td>
                   <td className="num">{r.marks.toLocaleString()}</td><td className="num" title={`${r.found} found, ${r.missed} missed`}>{percent(r.recall)}</td>
-                  <td className="num" title={`${r.ai_objects} found by the AI, ${r.ai_unmarked} of them not marked`}>{percent(r.precision)}</td>
+                  <td className="num" title={`${r.ai_objects} found by detection, ${r.ai_unmarked} of them not marked`}>{percent(r.precision)}</td>
                   <td className="num">{two(r.f1)}</td><td className="num">{two(r.auc)}</td>
                 </tr>
               ))}</tbody>
             </table></div>
-            <p className="small muted">“Found” (recall): the share of what people marked that the AI found. “Of the AI's, marked” (precision): the share of what the AI
-              found that people marked. F1 combines both (1 is perfect). AUC: how well the AI's confidence ranks marked objects above the rest (0.5 is chance).
+            <p className="small muted">“Found” (recall): the share of what people marked that stainID detection found. “Of detection's, marked” (precision): the share of what detection
+              found that people marked. F1 combines both (1 is perfect). AUC: how well detection's confidence ranks marked objects above the rest (0.5 is chance).
               Scored {timeAgo(scores.time)}.</p>
           </>
         ) : <p className="small secondary">Not scored yet. Run the detection first (Set up → Run), then score.</p>}
@@ -69,8 +69,8 @@ export function ScoreOnLabels() {
                 ))}</tbody>
               </table></div>
             ) : <p className="small muted">One rater only: there is no agreement to measure.</p>}
-            <p className="small muted">A mark is found when an object the AI accepted lies within 12 µm (plaques), 8 µm (tau) or 6 µm (neurons) of it, or within the
-              object's own size; a box when the object's centre is in it (the IoU ≥ 0.5 rule is in the CSV); an image label when the AI accepted any object of
+            <p className="small muted">A mark is found when an object detection accepted lies within 12 µm (plaques), 8 µm (tau) or 6 µm (neurons) of it, or within the
+              object's own size; a box when the object's centre is in it (the IoU ≥ 0.5 rule is in the CSV); an image label when detection accepted any object of
               that class in the image. Models scored: {Object.values(scores.models).join(', ')}.</p>
           </Advanced>
         )}

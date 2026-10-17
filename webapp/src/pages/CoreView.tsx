@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import type { CoreDetail } from '../api'
 import { apiUrl, coreThumb, enc } from '../api'
@@ -9,6 +9,8 @@ import { useFetch, useStored } from '../hooks'
 import { useProject } from '../project'
 import { Advanced } from '../setup/parts'
 import { CLASS_STYLE, RASTER_LAYERS } from '../viewer'
+import { INACTIVE_GREY, MODEL_CLASSES, classColour } from '../classPalette'
+import type { Vocabulary } from '../labels/classKeys'
 
 interface CoreInfo extends CoreDetail {
   images: (CoreDetail['images'][number] & { pixel_width_um?: number })[]
@@ -24,9 +26,28 @@ interface CoreObjects {
   source?: 'v2' | 'current'; unproposed?: number | null
 }
 /** Stained regions no v2 candidate covers: rows of [x, y, area µm², DAB / threshold, rings] in core-image pixels. */
+/** The areas left out of the analysis (v2 proposals' mask, `scale` core px per mask px): each kind with its colour,
+ *  hatching and share of the analysed area; the picture is excluded.png. */
+interface ExcludedKind { id: string; label: string; color: string; hatch: string; fraction: number | null }
+interface CoreExcluded { status: 'done' | 'not_made'; scale?: number; width?: number; height?: number; version?: number; kinds: ExcludedKind[] }
 interface CoreUnproposed { status: 'done' | 'not_run'; columns: string[]; rows: [number, number, number, number, number[][]][] }
 /** Segment Anything outlines: per detection (its exact x, y) the outlined area and polygons, in core-image pixels. */
-interface CoreOutlines { status: 'done' | 'not_made'; columns: string[]; rows: [number, number, number | null, number[][]][] }
+interface CoreOutlines { status: 'done' | 'not_made'; columns: string[]; rows: [number, number, number | null, number[][]][]; outline?: OutlineChoice }
+/** Which outline of every candidate the picture shows (v2 store): the stain's default, the candidate's own outline as
+ *  the stain's segmentation found it, or one of Segment Anything's three sizes (the own outline where it gave none). */
+type OutlineChoice = 'default' | 'stain' | 'sam0' | 'sam1' | 'sam2'
+const OUTLINE_CHOICES: OutlineChoice[] = ['default', 'stain', 'sam0', 'sam1', 'sam2']
+const OUTLINE_NAME: Record<OutlineChoice, string> = { default: 'default', stain: 'stain', sam0: 'SAM small', sam1: 'SAM medium', sam2: 'SAM large' }
+const OUTLINE_HINT: Record<OutlineChoice, string> = {
+  default: 'The outline this stain uses by default', stain: 'The outline the stain’s segmentation found each object with',
+  sam0: 'Segment Anything’s small outline (objects without one keep their stain outline)',
+  sam1: 'Segment Anything’s medium outline (objects without one keep their stain outline)',
+  sam2: 'Segment Anything’s large outline (objects without one keep their stain outline)',
+}
+const typing = (target: EventTarget | null) => {
+  const element = target as HTMLElement | null
+  return !!element && (['INPUT', 'SELECT', 'TEXTAREA'].includes(element.tagName) || element.isContentEditable)
+}
 /** AT8 neuropil threads traced on the server (the first time, a few minutes; tiles done so far meanwhile): per piece its
  *  mean width (µm) and polyline, in core-image pixels. */
 interface CoreThreads {
@@ -34,17 +55,32 @@ interface CoreThreads {
   pieces: number; length_mm: number; measured: ThreadTotals | null; rows: [number, number[]][]; error?: string; ahead?: number
 }
 interface Outline { area: number | null; rings: number[][] }
-interface Found { index: number; x: number; y: number; r: number; cls: string; p: number | null; area: number | null; outline?: Outline; reason?: string }
+interface Found { index: number; x: number; y: number; r: number; cls: string; color: string; p: number | null; area: number | null; outline?: Outline; reason?: string }
 
-// exact outlines are drawn instead of circles wherever the Outline objects step has made them
-const LAYER_DEFAULTS = { objects: true, rejected: false, outlines: true, threads: false, unproposed: false, dab: false, tiles: false }
+// exact outlines are drawn instead of circles wherever the Outline objects step has made them; every candidate is shown,
+// rejected ones dotted grey (stored under a new key, so the choice of hiding them made before applies no more)
+const LAYER_DEFAULTS = { objects: true, rejected: true, outlines: true, threads: false, unproposed: false, excluded: false, dab: false, tiles: false }
 type Layers = typeof LAYER_DEFAULTS
+/* The colours of the objects on the core picture: saturated, and clear of DAB brown and haematoxylin blue, each drawn
+   over a thin dark halo (deepzoom.tsx). Rejected candidates are dotted light grey. The names stay those of CLASS_STYLE. */
+const UNPROPOSED_COLOR = '#b98cff'  // stained areas no candidate covers: no label class
+/** An object's colour: its label class's, the same on every page (classPalette.ts; the store's class, else detection's
+ *  class name mapped onto the label classes); rejected candidates dotted light grey. */
+function objectColor(vocabulary: Vocabulary | undefined, cls: string, identity?: string): string {
+  if (cls === 'rejected') return INACTIVE_GREY
+  if (cls === 'unproposed') return UNPROPOSED_COLOR
+  const id = identity && vocabulary?.classes.some((c) => c.id === identity) ? identity : MODEL_CLASSES[cls]?.[0]
+  return vocabulary && id ? classColour(vocabulary, id) : CLASS_STYLE[cls]?.color ?? '#ffffff'
+}
+/** A legend swatch drawn as the object is (dotted grey for rejected candidates). */
+const swatchOf = (color: string, dotted = false) => (dotted ? { background: 'transparent', border: `2px dotted ${color}`, boxShadow: '0 0 0 1px rgb(0 0 0 / 35%)' }
+  : { background: color, boxShadow: '0 0 0 1px rgb(0 0 0 / 35%)' })
 const TILE_COLOR = 'rgb(30 30 30 / 55%)'
-const THREAD_COLOR = RASTER_LAYERS.threads.color
+const THREAD_COLOR = '#00e5ff'  // cyan over a dark halo: the shared mid blue of RASTER_LAYERS.threads vanished on haematoxylin
 const TRACING = ['waiting', 'tracing']
 /** A thread's line on screen (px), by its measured width: thin, medium (1–2 µm) or thick (2 µm or more). */
 const threadLine = (widthUm: number) => (widthUm < 1 ? 1.2 : widthUm < 2 ? 1.9 : 2.8)
-/** Why the AI kept or rejected a candidate (the v2 reason codes), in plain words. */
+/** Why detection kept or rejected a candidate (the v2 reason codes), in plain words. */
 const REASON_TEXT: Record<string, string> = {
   accepted: 'kept by the model', rejected_by_model: 'the model judged it not an object', 'rule:speck': 'smaller than a plaque (a speck)',
   'rule:vascular_or_edge': 'on a vessel wall or tissue edge', 'rule:duplicate': 'a second detection of a nearby object',
@@ -105,18 +141,51 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
   const [poll, setPoll] = useState(true)
   const picture = useFetch<PictureState>(`${base}/picture`, poll ? 1500 : undefined)
   const found = useFetch<CoreObjects>(`${base}/objects`)
-  const [stored, setLayers] = useStored<Layers>('stainid.core.layers.v3', LAYER_DEFAULTS)
+  const defaults = useFetch<{ vocabularies: Record<string, Vocabulary> }>('/api/labels/defaults')  // the label classes, for their colours
+  const vocabulary = defaults.data?.vocabularies[stain]
+  const [stored, setLayers] = useStored<Layers>('stainid.core.layers.v4', LAYER_DEFAULTS)
   const layers = { ...LAYER_DEFAULTS, ...stored }
   const outlinesMade = !!found.data?.outlines
   const [wantOutlines, setWantOutlines] = useState(false)  // fetched once asked for, kept when the layer is turned off
   useEffect(() => { if (layers.outlines) setWantOutlines(true) }, [layers.outlines])
-  const shapes = useFetch<CoreOutlines>(wantOutlines && outlinesMade ? `${base}/outlines` : null)
+  const [choice, setChoice] = useStored<OutlineChoice>('stainid.core.outline', 'default')
+  const outlineChoice: OutlineChoice = OUTLINE_CHOICES.includes(choice) ? choice : 'default'
+  const kept = useRef(new Map<string, CoreOutlines>())  // each outline choice fetched once per core and stain: switching back is instant
+  const keptKey = `${base}|${outlineChoice}`
+  const fetched = useFetch<CoreOutlines>(wantOutlines && outlinesMade && !kept.current.has(keptKey) ? `${base}/outlines?outline=${outlineChoice}` : null)
+  const fresh = fetched.data && (!fetched.data.outline || fetched.data.outline === outlineChoice) ? fetched.data : null  // the current outputs have one outline for every choice
+  if (fresh && !kept.current.has(keptKey)) kept.current.set(keptKey, fresh)
+  const current = kept.current.get(keptKey) ?? null
+  const switching = !current && !!fetched.data  // the previous choice stays on the picture until the new one is here
+  const shapes = { data: current ?? fetched.data, error: fetched.error, reload: fetched.reload }
+  const v2 = found.data?.source === 'v2'
+  const cycle = (step: number) => {
+    setChoice(OUTLINE_CHOICES[(OUTLINE_CHOICES.indexOf(outlineChoice) + step + OUTLINE_CHOICES.length) % OUTLINE_CHOICES.length])
+    if (!layers.outlines) setLayers({ ...layers, outlines: true })
+  }
+  const cycleRef = useRef(cycle)
+  cycleRef.current = cycle
+  useEffect(() => {  // Tab: the next outline for every object (Shift+Tab the previous); never while typing in a field
+    if (!v2 || !outlinesMade) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab' || e.ctrlKey || e.metaKey || e.altKey || typing(e.target)) return
+      e.preventDefault()
+      cycleRef.current(e.shiftKey ? -1 : 1)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [v2, outlinesMade])
   const threadsMeasured = found.data?.threads ?? null
   const [threadPoll, setThreadPoll] = useState(true)
   const traced = useFetch<CoreThreads>(layers.threads && threadsMeasured ? `${base}/threads` : null, threadPoll ? 3000 : undefined)
   const tracing = TRACING.includes(traced.data?.status ?? 'waiting')
   const unproposedCount = found.data?.unproposed ?? null
   const stainedOnly = useFetch<CoreUnproposed>(layers.unproposed && unproposedCount !== null ? `${base}/unproposed` : null)
+  const excluded = useFetch<CoreExcluded>(layers.excluded ? `${base}/excluded` : null)
+  const excludedData = excluded.data
+  const overlays = useMemo(() => (layers.excluded && excludedData?.status === 'done' && excludedData.width && excludedData.height && excludedData.scale
+    ? [{ src: apiUrl(`${base}/excluded.png?v=${excludedData.version ?? 0}`), width: excludedData.width * excludedData.scale,
+      height: excludedData.height * excludedData.scale }] : []), [layers.excluded, excludedData, base])
   useEffect(() => { setThreadPoll(tracing) }, [tracing])
   const [selected, setSelected] = useState<number | null>(null)
   const [target, setTarget] = useState<ViewTarget | null>(start ? { ...start, scale: 0.5, key: 0 } : null)
@@ -131,9 +200,11 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
     const col = Object.fromEntries(data.columns.map((c, i) => [c, i]))
     const outlines = new Map((shapes.data?.rows ?? []).map(([x, y, area, rings]) => [`${x},${y}`, { area, rings }]))
     return data.rows.map((r, index) => ({ index, x: Number(r[col.x]), y: Number(r[col.y]), r: Number(r[col.radius_px] ?? 6), cls: String(r[col.model_class]),
+      color: objectColor(vocabulary, String(r[col.model_class]), col.class === undefined ? undefined : String(r[col.class] ?? '')),
       p: r[col.probability] === null ? null : Number(r[col.probability]), area: r[col.area_um2] === null ? null : Number(r[col.area_um2]),
       outline: outlines.get(`${r[col.x]},${r[col.y]}`), reason: col.reason === undefined ? undefined : String(r[col.reason] ?? '') }))
-  }, [found.data, shapes.data])
+  }, [found.data, shapes.data, vocabulary])
+  const colorOfClass = useMemo(() => Object.fromEntries(objects.map((o) => [o.cls, o.color])), [objects])
   const counts = useMemo(() => objects.reduce<Record<string, number>>((acc, o) => ({ ...acc, [o.cls]: (acc[o.cls] ?? 0) + 1 }), {}), [objects])
   const classes = Object.keys(counts).filter((c) => c !== 'rejected').sort()
   const showOutlines = layers.outlines && outlinesMade && !!shapes.data
@@ -142,10 +213,10 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
   // an object with an exact outline shown is drawn by its outline instead of the circle
   const marks = useMemo<Mark[]>(() => drawn.map((o) => {
     const outlined = showOutlines && !!o.outline
-    return { x: o.x, y: o.y, r: o.r, color: CLASS_STYLE[o.cls]?.color ?? '#fff', rings: outlined ? o.outline!.rings : undefined, circle: !outlined }
+    return { x: o.x, y: o.y, r: o.r, color: o.color, dashed: o.cls === 'rejected', rings: outlined ? o.outline!.rings : undefined, circle: !outlined }
   }), [drawn, showOutlines])
   const regions = useMemo<Mark[]>(() => (layers.unproposed && stainedOnly.data ? stainedOnly.data.rows.map(([x, y, , , rings]) =>
-    ({ x, y, color: CLASS_STYLE.unproposed.color, rings, circle: false })) : []), [layers.unproposed, stainedOnly.data])
+    ({ x, y, color: UNPROPOSED_COLOR, rings, circle: false })) : []), [layers.unproposed, stainedOnly.data])
   const shown = useMemo(() => [...marks, ...regions], [marks, regions])
   const lines = useMemo<Line[]>(() => (layers.threads && traced.data ? traced.data.rows.map(([width, points]) => ({ points, width: threadLine(width) })) : []),
     [layers.threads, traced.data])
@@ -168,10 +239,19 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
       <div className="card core-picture">
         {ready && tileUrl ? (
           <DeepZoom pyramid={ready} tileUrl={tileUrl} layers={layers.dab ? ['dab'] : []} marks={shown} lines={lines} lineColor={THREAD_COLOR}
-            boxes={boxes} pixelUm={image?.pixel_width_um}
+            boxes={boxes} overlays={overlays} pixelUm={image?.pixel_width_um} height="auto"
             selected={pick ? drawn.indexOf(pick) : null} describe={describe} target={target}
             onPick={(i) => setSelected(i === null || i >= drawn.length ? null : drawn[i].index)} onTileError={() => setPoll(true)}
-            toolbar={<span className="small muted">Scroll to zoom · drag to move · click an object for details</span>} />
+            toolbar={<span className="row dz-toolbar-info"><span className="small muted">Scroll to zoom · drag to move · click an object for details</span>
+              {v2 && outlinesMade && layers.outlines && (
+                <label className="outline-choice small" title={`${OUTLINE_HINT[outlineChoice]}. Tab: the next outline for every object, Shift+Tab: the previous`}>
+                  <span className="badge">Outlines: {OUTLINE_NAME[outlineChoice]}</span>
+                  <select value={outlineChoice} onChange={(e) => setChoice(e.target.value as OutlineChoice)} aria-label="Outline shown for every object">
+                    {OUTLINE_CHOICES.map((c) => <option key={c} value={c}>{OUTLINE_NAME[c]}</option>)}
+                  </select>
+                  <span className="kbd">Tab</span>{switching && <span className="muted"> loading…</span>}
+                </label>
+              )}</span>} />
         ) : (
           <Preparing core={core} stain={stain} state={picture.data} error={picture.error} />
         )}
@@ -183,16 +263,16 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
           {found.data && found.data.status !== 'not_run' && (
             <>
               <label className="layer-toggle"><input type="checkbox" checked={layers.objects} onChange={() => toggle('objects')} />
-                <b>What the AI found</b><span className="spacer" /><span className="muted">{(objects.length - (counts.rejected ?? 0)).toLocaleString()}</span></label>
+                <b>What detection found</b><span className="spacer" /><span className="muted">{(objects.length - (counts.rejected ?? 0)).toLocaleString()}</span></label>
               {classes.map((c) => (
                 <div key={c} className="layer-toggle indent">
-                  <span className="swatch" style={{ background: CLASS_STYLE[c]?.color ?? '#999' }} />{CLASS_STYLE[c]?.label ?? c}<span className="spacer" /><span className="muted">{counts[c].toLocaleString()}</span>
+                  <span className="swatch" style={swatchOf(colorOfClass[c] ?? objectColor(vocabulary, c))} />{CLASS_STYLE[c]?.label ?? c}<span className="spacer" /><span className="muted">{counts[c].toLocaleString()}</span>
                 </div>
               ))}
               {!!counts.rejected && (
-                <label className="layer-toggle indent" title="Candidates the AI looked at and decided were not real objects">
+                <label className="layer-toggle indent" title="Candidates detection looked at and decided were not real objects (drawn dotted grey)">
                   <input type="checkbox" checked={layers.rejected} disabled={!layers.objects} onChange={() => toggle('rejected')} />
-                  <span className="swatch" style={{ background: CLASS_STYLE.rejected.color }} />also show rejected candidates<span className="spacer" /><span className="muted">{counts.rejected.toLocaleString()}</span>
+                  <span className="swatch" style={swatchOf(INACTIVE_GREY, true)} />also show rejected candidates<span className="spacer" /><span className="muted">{counts.rejected.toLocaleString()}</span>
                 </label>
               )}
               <OutlinesToggle made={outlinesMade} on={layers.outlines} onToggle={() => toggle('outlines')} state={shapes}
@@ -201,6 +281,7 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
               {unproposedCount !== null && <UnproposedToggle count={unproposedCount} on={layers.unproposed} onToggle={() => toggle('unproposed')} state={stainedOnly} />}
             </>
           )}
+          <ExcludedToggle on={layers.excluded} onToggle={() => toggle('excluded')} state={excluded} />
           <label className="layer-toggle"><input type="checkbox" checked={layers.dab} onChange={() => toggle('dab')} />
             <span className="swatch" style={{ background: RASTER_LAYERS.dab.color }} />Stained area (brown above this slide’s threshold)</label>
           {(found.data?.tiles.length ?? 0) > 0 && <label className="layer-toggle"><input type="checkbox" checked={layers.tiles} onChange={() => toggle('tiles')} />
@@ -209,9 +290,9 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
         {pick && (
           <div className="card">
             <h3>Selected object</h3>
-            <p className="row" style={{ margin: '0 0 6px' }}><span className="swatch" style={{ background: CLASS_STYLE[pick.cls]?.color }} /><b>{CLASS_STYLE[pick.cls]?.label ?? pick.cls}</b></p>
+            <p className="row" style={{ margin: '0 0 6px' }}><span className="swatch" style={swatchOf(pick.color, pick.cls === 'rejected')} /><b>{CLASS_STYLE[pick.cls]?.label ?? pick.cls}</b></p>
             <dl className="facts">
-              {pick.p !== null && <><dt>AI confidence</dt><dd>{Math.round(pick.p * 100)}%</dd></>}
+              {pick.p !== null && <><dt>Detection score</dt><dd>{Math.round(pick.p * 100)}%</dd></>}
               {pick.reason && <><dt>Why</dt><dd>{reasonText(pick.reason)}</dd></>}
               {pick.area !== null && <><dt>Area</dt><dd>{area(pick.area)} µm²</dd></>}
               {showOutlines && pick.outline?.area != null && <><dt title="The area inside the Segment Anything outline">Outlined area</dt><dd>{area(pick.outline.area)} µm²</dd></>}
@@ -242,7 +323,7 @@ function Preparing({ core, stain, state, error }: { core: CoreInfo; stain: strin
   const failed = error ?? (state && !state.ready && state.state === 'failed' ? state.error ?? 'unknown error' : null)
   const ahead = state && !state.ready ? state.ahead ?? 0 : 0
   return (
-    <div className="dz-preparing" style={{ height: 'min(72vh, 760px)' }}>
+    <div className="dz-preparing">
       {state && !state.ready && state.thumb_size && <img src={coreThumb(core.core_id, stain, state.thumb_size)} alt="" />}
       <div className="dz-preparing-note">
         {failed ? <><b>This picture could not be prepared.</b><ErrorNote error={failed} /></>
@@ -262,7 +343,7 @@ function OutlinesToggle({ made, on, onToggle, state, count, v2 = false }: {
   const ready = made && state.data?.status !== 'not_made'
   return (
     <>
-      <label className="layer-toggle" title={v2 ? 'The exact shape of each object: its Segment Anything outline where the outline step has made one, else the outline the AI found it with'
+      <label className="layer-toggle" title={v2 ? 'The exact shape of each object: its Segment Anything outline where the outline step has made one, else the outline detection found it with'
         : 'The exact shape of each object, drawn by Segment Anything (the optional Outline objects step)'}>
         <input type="checkbox" checked={on && ready} disabled={!ready} onChange={onToggle} />
         <span className="swatch outline" />{v2 ? 'Exact outlines' : 'Exact outlines (Segment Anything)'}<span className="spacer" />
@@ -285,12 +366,12 @@ function ThreadsToggle({ measured, on, onToggle, state }: {
   const tracing = !!data && TRACING.includes(data.status)
   return (
     <>
-      <label className="layer-toggle" title="Thin tau-positive threads in the neuropil, as the AI traced them; line thickness shows each thread’s width">
+      <label className="layer-toggle" title="Thin tau-positive threads in the neuropil, as detection traced them; line thickness shows each thread’s width">
         <input type="checkbox" checked={on && !!measured} disabled={!measured} onChange={onToggle} />
         <span className="swatch" style={{ background: THREAD_COLOR }} />Neuropil threads<span className="spacer" />
-        {measured && <span className="muted" title="Total length of the threads the AI measured in this core">{lengthMm(measured.length_mm)}</span>}
+        {measured && <span className="muted" title="Total length of the threads detection measured in this core">{lengthMm(measured.length_mm)}</span>}
       </label>
-      {!measured && <p className="layer-note small">Threads are measured when the AI detects tau on this core; it has not finished this core yet.</p>}
+      {!measured && <p className="layer-note small">Threads are measured when detection finds tau on this core; it has not finished this core yet.</p>}
       {on && measured && !data && !state.error && <div className="layer-toggle indent"><Loading inline label="Loading the threads…" /></div>}
       {on && tracing && (
         <div className="layer-note small">
@@ -313,12 +394,44 @@ function UnproposedToggle({ count, on, onToggle, state }: {
 }) {
   return (
     <>
-      <label className="layer-toggle" title="Brown areas above this slide's threshold, at least the size of an object, that the AI never looked at">
+      <label className="layer-toggle" title="Brown areas above this slide's threshold, at least the size of an object, that detection never looked at">
         <input type="checkbox" checked={on} onChange={onToggle} />
-        <span className="swatch" style={{ background: CLASS_STYLE.unproposed.color }} />Stained but never proposed<span className="spacer" />
+        <span className="swatch" style={swatchOf(UNPROPOSED_COLOR)} />Stained but never proposed<span className="spacer" />
         <span className="muted">{count.toLocaleString()}</span>
       </label>
       {on && !state.data && !state.error && <div className="layer-toggle indent"><Loading inline label="Loading the stained areas…" /></div>}
+      {on && state.error && <div className="layer-toggle indent wrap"><ErrorNote error={state.error} />
+        <button className="btn small" onClick={state.reload}>Try again</button></div>}
+    </>
+  )
+}
+
+/** A legend swatch hatched like the excluded-areas picture (\ / | - or a plain translucent fill). */
+function hatchSwatch(kind: ExcludedKind) {
+  const angle: Record<string, string> = { '\\': '135deg', '/': '45deg', '|': '90deg', '-': '0deg' }
+  const fill = `${kind.color}55`
+  return { background: kind.hatch ? `repeating-linear-gradient(${angle[kind.hatch] ?? '45deg'}, ${kind.color} 0 1.5px, ${fill} 1.5px 4px)` : fill,
+    boxShadow: '0 0 0 1px rgb(0 0 0 / 35%)' }
+}
+
+/** The "Excluded areas" layer: folds, hand-drawn exclusions, linear artifacts, the AT8 edge guard and empty areas,
+ *  hatched over the picture (from the v2 proposals), with a legend per kind and its share of the analysed area. */
+function ExcludedToggle({ on, onToggle, state }: { on: boolean; onToggle: () => void; state: { data: CoreExcluded | null; error: string | null; reload: () => void } }) {
+  const data = state.data
+  return (
+    <>
+      <label className="layer-toggle" title="The areas the analysis leaves out of this core: folds, areas drawn by hand, linear artifacts and empty glass">
+        <input type="checkbox" checked={on} onChange={onToggle} />
+        <span className="swatch" style={hatchSwatch({ id: '', label: '', color: '#ff3b3b', hatch: '\\', fraction: null })} />Excluded areas</label>
+      {on && !data && !state.error && <div className="layer-toggle indent"><Loading inline label="Loading the excluded areas…" /></div>}
+      {on && data?.status === 'not_made' && <p className="layer-note small">Not made for this core yet: the new detection’s “Find candidates”
+        step maps them (<Link to="/workflow">Run</Link>).</p>}
+      {on && data?.status === 'done' && data.kinds.filter((k) => k.fraction !== 0).map((k) => (
+        <div key={k.id} className="layer-toggle indent" title={k.label}>
+          <span className="swatch" style={hatchSwatch(k)} />{k.label}<span className="spacer" />
+          <span className="muted">{k.fraction == null ? '' : k.fraction > 0 && k.fraction < 0.001 ? '<0.1%' : `${(k.fraction * 100).toFixed(1)}%`}</span>
+        </div>
+      ))}
       {on && state.error && <div className="layer-toggle indent wrap"><ErrorNote error={state.error} />
         <button className="btn small" onClick={state.reload}>Try again</button></div>}
     </>
@@ -351,7 +464,7 @@ function Detections({ status, error, stain, tma, tissue }: { status: CoreObjects
   if (!status.tiles_total && (tissue === 'empty' || tissue === 'sparse')) {
     return (
       <div className="note-box">
-        <b>Skipped: the tissue check found {tissue === 'empty' ? 'no' : 'too little'} tissue on this {stain} picture.</b> The AI only looks
+        <b>Skipped: the tissue check found {tissue === 'empty' ? 'no' : 'too little'} tissue on this {stain} picture.</b> Detection only looks
         at pictures with tissue, so nothing was detected here. If you can see tissue, the check was wrong: ask whoever runs the analysis
         to look at this core again.
       </div>
@@ -359,7 +472,7 @@ function Detections({ status, error, stain, tma, tissue }: { status: CoreObjects
   }
   return (
     <div className="note-box">
-      <b>Not detected yet.</b> The AI has not looked at the {stain} slide of {tmaName(tma)} yet{status.tiles_total ? '' : ' (no tiles were chosen for it)'}, so only the picture is shown.
+      <b>Not detected yet.</b> Detection has not looked at the {stain} slide of {tmaName(tma)} yet{status.tiles_total ? '' : ' (no tiles were chosen for it)'}, so only the picture is shown.
       {' '}<Link to="/workflow">See progress on the Run page.</Link>
     </div>
   )
@@ -381,7 +494,7 @@ function ObjectList({ objects, selected, onPick }: { objects: Found[]; selected:
           <tbody>
             {sorted.slice(page * size, (page + 1) * size).map((o) => (
               <tr key={o.index} className={`clickable${o.index === selected ? ' selected' : ''}`} onClick={() => onPick(o)}>
-                <td><span className="swatch" style={{ background: CLASS_STYLE[o.cls]?.color }} /> {CLASS_STYLE[o.cls]?.short ?? o.cls}</td>
+                <td><span className="swatch" style={swatchOf(o.color, o.cls === 'rejected')} /> {CLASS_STYLE[o.cls]?.short ?? o.cls}</td>
                 <td className="num">{o.p === null ? '—' : `${Math.round(o.p * 100)}%`}</td><td className="num">{o.area === null ? '—' : area(o.area)}</td>
               </tr>
             ))}

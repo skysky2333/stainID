@@ -12,7 +12,7 @@ from pathlib import Path
 import pandas as pd
 
 from stainid import cache
-from stainid.labels import added, candidate_store, frames, pool, store
+from stainid.labels import added, candidate_store, exclusions, frames, pool, store
 from stainid.labels import vocabulary as vocab
 from stainid.labels.tasks import positive
 from stainid.project import Project
@@ -67,10 +67,10 @@ def detection(matched: pd.DataFrame) -> dict:
 
 
 def class_counts(consensus: pd.DataFrame, vocabulary: vocab.Vocabulary) -> list[dict]:
-    """Labelled objects per identity (in the vocabulary's order, then classes it no longer has), with how many of
+    """Labelled objects per identity (in the order of their keys, then classes it no longer has), with how many of
     them carry each subtype and how many no type; objects people are split on are left out."""
     by_identity = {i: g for i, g in consensus.groupby("value") if i} if len(consensus) else {}
-    known = [c.id for c in vocabulary.classes]
+    known = [c.id for c in vocabulary.by_key()]  # the order of the keys, as every page lists the classes
     out = []
     for identity in [*known, *sorted(set(by_identity) - set(known))]:
         found, group = vocabulary.identity(identity), by_identity.get(identity)
@@ -135,5 +135,5 @@ def cached_stain_overview(project: Project, stain: str, root: Path, tiles: pd.Da
     stamp = (store.signature(root), pool.signature(project, stain), added.signature(project, stain), len(tiles), vocab.of(project, stain),
              cache.signature(candidate_store.folder(project, stain)))
     if key not in _CACHE or _CACHE[key][0] != stamp:
-        _CACHE[key] = (stamp, stain_overview(project, stain, frames.in_field_frame(store.current(root), tiles, project.context_px), tiles))
+        _CACHE[key] = (stamp, stain_overview(project, stain, frames.in_field_frame(exclusions.counted(store.current(root)), tiles, project.context_px), tiles))
     return _CACHE[key][1]

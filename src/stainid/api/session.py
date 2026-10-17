@@ -124,8 +124,14 @@ def _annotator(token: str) -> str | None:
     return name if hmac.compare_digest(signature, _signature(f"annotator:{name}")) else None
 
 
+PREVIEW = "admin (preview)"  # the admin trying the tutorial without a name: only on the practice sessions, where nothing is kept
+
+
 def annotator(request: Request) -> str:
     name = annotator_name(request)
+    if name is None and is_admin(request) and (str(request.path_params.get("name", "")).startswith("practice-")
+                                               or request.url.path.endswith("/session/tutorial") and request.method == "GET"):
+        return PREVIEW
     if name is None:
         raise HTTPException(401, "register with your name first")
     return name

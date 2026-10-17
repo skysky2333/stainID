@@ -279,8 +279,8 @@ def summary_text(stain: str, row: dict, people: list[dict]) -> str:
     scope = row.get("scope") or "all accepted"
     thing = ("images" if row["kind"] == "image" else "vessel deposits (CAA)" if row["class"] == "vascular"
              else f"{scope}s" if scope != "all accepted" and "," not in scope else "objects")
-    text = (f"{stain}: of the {row['marks']:,} {thing} {who} marked, the AI found {row['recall']:.0%}"
-            + (f"; {row['precision']:.0%} of what the AI found was marked (F1 {row['f1']:.2f})" if row.get("precision") is not None else "") + ".")
+    text = (f"{stain}: of the {row['marks']:,} {thing} {who} marked, stainID detection found {row['recall']:.0%}"
+            + (f"; {row['precision']:.0%} of what detection found was marked (F1 {row['f1']:.2f})" if row.get("precision") is not None else "") + ".")
     values = [p["object_f1"] if row["kind"] != "image" else p["image_kappa"] for p in people if p["stain"] == stain]
     values = [v for v in values if v is not None]
     if values:
@@ -310,7 +310,7 @@ def score(project: Project) -> dict:
             if len(labels):
                 rows += [{"stain": stain, "rater": rater, "kind": "image", **r} for r in score_images(labels, found, stain)]
     if not rows:
-        raise ValueError("The AI has not looked at these images yet: run detection (Run → Run everything) first, then score again")
+        raise ValueError("Detection has not looked at these images yet: run detection (Run → Run everything) first, then score again")
     people = agreement(project, placed)
     main = [r for r in rows if r["rater"] == CONSENSUS] or rows
     result = {"time": time.time(), "dataset": project.config.get("dataset", {}).get("id", ""), "rows": rows, "agreement": people,

@@ -24,6 +24,17 @@ def test_relative_paths_fold_dot_dot(tmp_path):
     assert load_project(tmp_path / "study").input("slides_dir") == tmp_path.resolve() / "scans"
 
 
+def test_the_run_buttons_run_the_staged_detection_and_keep_the_first_one_as_legacy():
+    from stainid.workflows.steps import BY_ID, LEGACY, MAIN_STAGES, depends_on
+
+    main = [s for s in BY_ID.values() if s.stage in MAIN_STAGES]
+    assert {"v2_proposals", "v2_calls", "v2_outlines", "v2_measures", "nuclei"} <= {s.id for s in main}
+    assert not {"neun", "fields", "masks", "summarize"} & {s.id for s in main}  # "Run what's left" never queues them
+    assert all(BY_ID[s].stage == LEGACY and BY_ID[s].command for s in ("neun", "fields", "masks", "summarize"))  # still runnable
+    assert "legacy" in BY_ID["neun"].title and "v2" not in BY_ID["v2_proposals"].title
+    assert depends_on(BY_ID["v2_measures"]) == ["v2_calls", "v2_outlines"]  # the tables wait for the outlines
+
+
 def test_job_argv():
     assert to_argv("nuclei", {"stain": ["AT8", "6E10"], "device": "mps", "shard_index": 0, "reverse": False}) == [
         "nuclei", "--stain", "AT8", "--stain", "6E10", "--device", "mps", "--shard-index", "0"]

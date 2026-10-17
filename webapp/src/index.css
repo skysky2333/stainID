@@ -152,7 +152,7 @@ tr.clickable:hover td, tr.selected td { background: var(--accent-soft); }
 .viewer { position: relative; background: #000; border-radius: 10px; overflow: hidden; }
 .viewer img, .viewer svg { position: absolute; inset: 0; width: 100%; height: 100%; }
 .layer-toggle { display: flex; align-items: center; gap: 6px; font-size: 12.5px; padding: 3px 0; }
-.swatch { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+.swatch { width: 11px; height: 11px; border-radius: 3px; display: inline-block; box-shadow: 0 0 0 1px rgb(0 0 0 / 28%); }  /* a thin edge: the class colours are made for the tissue, some are light */
 
 .log { background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; white-space: pre-wrap; max-height: 320px; overflow: auto; }
 .empty-state { color: var(--text-muted); padding: 24px; text-align: center; border: 1px dashed var(--border); border-radius: 10px; }
@@ -593,7 +593,10 @@ button.core-cell:focus-visible { outline: 2px solid var(--accent); outline-offse
 
 .back-link { display: inline-block; margin-bottom: 6px; font-size: 12.5px; }
 .core-facts { gap: 4px 12px; color: var(--text-secondary); }
-.core-layout { display: grid; grid-template-columns: minmax(0, 1fr) 290px; gap: 16px; align-items: start; }
+/* The core picture is square (tiles and cores are square): the largest square that fits the window's height beside the
+   side panel, and the column's width when they stack. */
+.core-layout { --core-square: max(320px, calc(100dvh - 250px)); display: grid; grid-template-columns: minmax(0, calc(var(--core-square) + 26px)) minmax(270px, 380px);
+  gap: 16px; align-items: start; }
 .core-side { display: grid; gap: 12px; }
 .core-side .advanced { margin: 0; }
 @media (max-width: 1180px) {
@@ -601,6 +604,7 @@ button.core-cell:focus-visible { outline: 2px solid var(--accent); outline-offse
   .core-side { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); align-items: start; }
 }
 .core-picture { padding: 12px; }
+.core-picture .dz, .core-picture .dz-preparing { width: min(100%, var(--core-square)); aspect-ratio: 1 / 1; height: auto; margin-inline: auto; }
 .layer-toggle.indent { padding-left: 22px; color: var(--text-secondary); }
 .layer-toggle input:disabled + .swatch { opacity: 0.5; }
 .note-box { background: var(--surface-1); border: 1px solid var(--border); border-left: 3px solid var(--warning); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; font-size: 12.5px; color: var(--text-secondary); }
@@ -612,6 +616,9 @@ button.core-cell:focus-visible { outline: 2px solid var(--accent); outline-offse
 .dz-wrap { display: grid; gap: 8px; }
 .dz-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .dz-zoom-buttons { gap: 6px; }
+.dz-toolbar-info { gap: 6px 12px; flex-wrap: wrap; }
+.outline-choice { display: inline-flex; align-items: center; gap: 6px; }
+.outline-choice select { font: inherit; padding: 2px 4px; }
 .dz-zoom { min-width: 44px; text-align: center; font-variant-numeric: tabular-nums; }
 .dz { position: relative; overflow: hidden; border-radius: 10px; background: var(--surface-0); border: 1px solid var(--border); cursor: grab; touch-action: none; user-select: none; overscroll-behavior: contain; }
 .dz.dragging { cursor: grabbing; }
@@ -1133,3 +1140,133 @@ tr.significant-row td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 .tile-dot.saved { background: var(--good); border-color: var(--good); }
 .tile-dot.unsaved { background: var(--warning); border-color: var(--warning); }
 .tile-dot.now { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---------- the annotation pages take the window exactly: no page scrollbar (it fought panning the picture with the
+   middle button), the picture the largest it can be, the side panel scrolling by itself (labels/rounds.tsx useFitScreen) ---------- */
+@media (min-width: 901px) {
+  html.fit-screen, html.fit-screen body { height: 100%; overflow: hidden; overscroll-behavior: none; }
+  html.fit-screen .annotator-shell { height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+  html.fit-screen .annotator-shell > header { flex: none; }
+  html.fit-screen .annotator-shell > main { flex: 1 1 auto; min-height: 0; padding: 10px 18px 12px; display: flex; flex-direction: column; overflow: hidden; }
+  html.fit-screen .annotator-shell > main > * { flex: 1 1 auto; min-height: 0; }
+  .fit-page { display: flex; flex-direction: column; min-height: 0; }
+  .fit-page > * { flex: none; }
+  .fit-page .annotate-top { margin-bottom: 8px; gap: 6px 20px; }
+  .fit-page .annotate-heading h1 { font-size: 1.15rem; margin: 0; }
+  .fit-page > .instructions, .fit-page > .found, .fit-page > .error { margin: 0 0 8px; }
+  .fit-page .annotate-workspace { flex: 1 1 auto; min-height: 0; grid-template-columns: minmax(0, 1fr) minmax(280px, 340px); align-items: stretch; gap: 12px; }
+  .fit-page .annotate-image { min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+  .fit-page .annotate-image > .card.viewer-card-fit { flex: 1 1 auto; }
+  .fit-page .annotate-side { min-height: 0; overflow-y: auto; overscroll-behavior: contain; align-content: start; padding-right: 2px; }
+  .fit-page .annotate-image > .key-help { flex: none; }
+}
+.viewer-card-fit { min-height: 0; display: flex; flex-direction: column; padding: 10px; }
+.viewer-card-fit > .row { flex: none; margin-bottom: 8px !important; }
+.viewer-room { flex: 1 1 auto; min-height: 0; min-width: 0; display: flex; align-items: center; justify-content: center; }
+.viewer-room > .viewer { flex: none; }
+@media (max-width: 900px) { .viewer-room > .viewer { width: 100% !important; height: auto !important; aspect-ratio: 1; } }
+
+/* the side panel of the field tools: short blocks, keys first, long help behind "?" */
+.annotate-side .card.side-block { padding: 10px 12px; }
+.annotate-side .side-block h3 { margin: 0 0 6px; font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-secondary); }
+.round-target { border-left: 4px solid var(--border); }
+.round-target.empty { border-left-color: var(--border); }
+.target-head { gap: 8px; flex-wrap: nowrap; min-width: 0; }
+.target-facts { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 6px 0 0; }
+.target-facts dt { color: var(--text-muted); }
+.target-facts dd { margin: 0; min-width: 0; }
+.round-target .mask-switch { margin: 8px 0 0; }
+.key-slot { min-width: 1.6em; text-align: center; display: inline-block; }
+.class-legend li { min-width: 0; }
+.class-legend li.waiting { font-weight: 600; }
+.key-list, .look-legend { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.key-list li { line-height: 1.5; }
+.key-list .key-now { color: var(--accent); }
+.look-legend { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+.look-legend li { display: flex; align-items: center; gap: 6px; }
+.look-swatch { box-shadow: 0 0 0 1px rgb(0 0 0 / 30%); }
+.look-swatch.look-removed, .look-swatch.look-new { border-color: #8a9099 !important; box-shadow: none; }
+.look-diamond { width: 8px; height: 8px; transform: rotate(45deg); background: #fff; border: 1px solid #000; flex: none; margin: 0 2px; }
+.field-counts { margin: 0 0 4px; }
+details.side-details.compact { margin-top: 6px; }
+details.side-details.compact > summary { font-weight: 500; }
+.side-save { display: grid; gap: 6px; position: sticky; bottom: 0; z-index: 2; box-shadow: 0 -6px 14px rgb(0 0 0 / 8%); }
+.side-save .save-state { text-align: left; min-width: 0; }
+.side-save-buttons { gap: 6px; flex-wrap: nowrap; }
+.side-save-buttons .btn { flex: 1 1 auto; justify-content: center; }
+.side-save-buttons .btn.big { padding-top: 7px; padding-bottom: 7px; }
+.side-foot { display: flex; align-items: center; gap: 10px; padding: 0 4px; }
+.help-toggle { min-width: 28px; font-weight: 700; border-radius: 50%; }
+.round-help .round-steps { margin-bottom: 8px; }
+.object-tag { fill: #fff; stroke: #000; stroke-opacity: 0.75; paint-order: stroke; font-weight: 600; font-family: inherit; }
+.tutorial-coach.in-panel { position: static; width: auto; box-shadow: none; margin: 0; }
+@media (min-width: 901px) {
+  html.fit-screen .tutorial { display: flex; flex-direction: column; min-height: 0; padding-bottom: 0; }
+  html.fit-screen .tutorial > .fit-page { flex: 1 1 auto; min-height: 0; }
+}
+.class-pick { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--text-primary); text-decoration: none; padding: 1px 4px; border-radius: 6px; }
+.class-pick.chosen { background: var(--accent-soft); font-weight: 600; }
+.kbd.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.annotate-older { margin: 22px 0 10px; font-size: 1rem; color: var(--text-secondary); }
+
+/* ---------- Run page: the flow chart (pipeline.tsx PipelineMap) ---------- */
+.flow-card { padding: 14px 16px 10px; margin-bottom: 16px; }
+.flow { display: grid; gap: 0; }
+.flow-lane-wrap { display: grid; gap: 0; }
+.flow-lane { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 10px; align-items: center; }
+.flow-lane-name { margin: 0; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); }
+.flow-row { display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px 0; min-width: 0; }
+.flow-cell { display: flex; align-items: stretch; min-width: 0; }
+.flow-node { display: flex; flex-direction: column; gap: 3px; width: 168px; min-height: 92px; padding: 8px 10px; text-align: left; font: inherit; color: var(--text-primary);
+  background: var(--surface-1); border: 1.5px solid var(--border); border-radius: 10px; cursor: pointer; transition: opacity 0.15s, border-color 0.15s; }
+.flow-node:hover, .flow-node:focus-visible, .flow-node.lit { border-color: var(--accent); }
+.flow-node.chosen { box-shadow: 0 0 0 3px var(--accent-soft); border-color: var(--accent); }
+.flow-node.dim { opacity: 0.35; }
+.flow-node-head { display: flex; align-items: center; gap: 6px; font-size: 0.86rem; line-height: 1.2; }
+.flow-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--text-muted); flex: none; }
+.flow-state { color: var(--text-secondary); }
+.flow-bar { display: block; height: 5px; border-radius: 3px; background: var(--border); overflow: hidden; }
+.flow-bar > span { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+.flow-count { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.flow-warn { color: var(--warning); }
+.flow-running { color: var(--accent); }
+.flow-makes { color: var(--text-muted); margin-top: auto; overflow-wrap: anywhere; }
+.flow-makes b { color: var(--text-secondary); font-weight: 600; }
+.flow-node.node-done { background: color-mix(in srgb, var(--good) 9%, var(--surface-1)); }
+.flow-node.node-done .flow-dot, .flow-node.node-done .flow-bar > span { background: var(--good); }
+.flow-node.node-partial .flow-dot { background: var(--accent); }
+.flow-node.node-running { border-color: var(--accent); background: var(--accent-soft); }
+.flow-node.node-running .flow-dot { background: var(--accent); animation: flow-pulse 1.4s ease-in-out infinite; }
+@keyframes flow-pulse { 50% { opacity: 0.35; } }
+.flow-node.node-queued { border-style: dashed; border-color: var(--accent); }
+.flow-node.node-failed { border-color: var(--critical); background: color-mix(in srgb, var(--critical) 8%, var(--surface-1)); }
+.flow-node.node-failed .flow-dot { background: var(--critical); }
+.flow-node.node-outdated { border-color: var(--warning); background: color-mix(in srgb, var(--warning) 8%, var(--surface-1)); }
+.flow-node.node-outdated .flow-dot, .flow-node.node-outdated .flow-bar > span { background: var(--warning); }
+.flow-arrow { position: relative; display: flex; flex-direction: column; justify-content: center; align-items: center; width: 64px; flex: none; color: var(--text-muted); }
+.flow-arrow-line { position: relative; display: block; width: 100%; height: 2px; background: currentColor; opacity: 0.6; }
+.flow-arrow-line::after { content: ""; position: absolute; right: -1px; top: -4px; border: 5px solid transparent; border-left: 7px solid currentColor; border-right: 0; }
+.flow-arrow-label { font-size: 10.5px; line-height: 1.15; text-align: center; padding: 0 3px 3px; max-width: 100%; overflow-wrap: anywhere; color: var(--text-secondary); }
+.flow-arrow.lit { color: var(--accent); }
+.flow-arrow.lit .flow-arrow-line { opacity: 1; }
+.flow-arrow.down { flex-direction: row; width: auto; height: 34px; margin-left: 84px; justify-content: flex-start; gap: 8px; }
+.flow-arrow.down .flow-arrow-line { width: 2px; height: 100%; order: -1; }
+.flow-arrow.down .flow-arrow-line::after { right: -4px; top: auto; bottom: -1px; border: 5px solid transparent; border-top: 7px solid currentColor; border-bottom: 0; }
+.flow-arrow.down .flow-arrow-label { text-align: left; padding: 0; }
+.flow-details { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); display: grid; gap: 8px; }
+.flow-details .step-card { margin: 0; }
+.flow-card .map-legend { margin-top: 10px; }
+@media (max-width: 700px) {  /* phones: one step under the other, the arrows pointing down */
+  .flow-lane { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .flow-row { flex-direction: column; flex-wrap: nowrap; }
+  .flow-cell { flex-direction: column; align-items: stretch; }
+  .flow-node { width: 100%; min-height: 0; }
+  .flow-cell > .flow-arrow { width: auto; height: 30px; flex-direction: row; justify-content: flex-start; gap: 8px; margin-left: 16px; }
+  .flow-cell > .flow-arrow .flow-arrow-line { width: 2px; height: 100%; order: -1; }
+  .flow-cell > .flow-arrow .flow-arrow-line::after { right: -4px; top: auto; bottom: -1px; border: 5px solid transparent; border-top: 7px solid currentColor; border-bottom: 0; }
+  .flow-cell > .flow-arrow .flow-arrow-label { text-align: left; padding: 0; }
+  .flow-arrow.down { margin-left: 16px; }
+}
+.tutorial-coach h3 { text-transform: none; letter-spacing: 0; font-size: 1rem; color: var(--text-primary); }
+.outline-defaults { margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.viewer svg.viewer-under { will-change: transform; }  /* the field tool's objects: a layer of their own, not painted again on every mouse move */

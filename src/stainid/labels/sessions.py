@@ -7,7 +7,7 @@ A session is `sessions/<name>/meta.json`; its labels go into the shared label st
   with one label so far, or at random) from the fields whose candidate pool is prepared. The page asks for the next
   few objects at a time; those are held for that person for a while (`Reservations`), so people labelling at once get
   different objects. The rule is applied anew on every ask, so the queue follows new data and new labels.
-- `outline`: outline every object of whole fields, blind to the AI, to measure segmentation (`labels.outline`).
+- `outline`: outline every object of whole fields, with stainID detection shown, to measure segmentation (`labels.outline`).
 
 A field is one square tile of a core (about 560 µm, 2048 pixels), shown to people as one picture.
 
@@ -36,9 +36,9 @@ FOLDER = "sessions"
 KINDS = ("fields", "queue", "outline")
 FIELD_TOOLS = ("class", "point", "outline", "tag")
 AI_VIEWS = ("full", "positions", "none")
-RULES = {"uncertain": "where the AI is unsure (probability 0.3–0.7)", "disagree": "where people disagree with each other or with the AI",
+RULES = {"uncertain": "where detection is unsure (probability 0.3–0.7)", "disagree": "where people disagree with each other or with detection",
          "second": "objects one other person has labelled", "random": "any candidate",
-         "informative": "the most informative first: near the AI’s threshold, then rejected but strong, then accepted but weak"}
+         "informative": "the most informative first: near detection’s threshold, then rejected but strong, then accepted but weak"}
 
 
 REFERENCE = "reference"
@@ -115,6 +115,7 @@ def names(root: Path) -> list[str]:
 def pick_fields(tiles: pd.DataFrame, reviewed: set[str], n: int, seed: int) -> list[str]:
     """Fields nobody has reviewed yet, spread over TMAs and groups, in shuffled order (so the order reveals nothing)."""
     pool = tiles[~tiles.tile_id.isin(reviewed)].sample(frac=1, random_state=seed)
+    n = len(pool) if n < 0 else n  # -1: every one
     buckets = [list(g.tile_id) for _, g in pool.groupby(["tma", pool.disease_group.fillna("")], sort=False)]
     picked: list[str] = []
     while len(picked) < n and any(buckets):

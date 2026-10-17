@@ -37,7 +37,7 @@ const NAV: { section: string; links: NavItem[] }[] = [
   ] },
   { section: '', links: [['/results', 'Results', 'Measures by diagnosis group, and the tables to download']] },
   { section: 'Improve accuracy', links: [
-    ['/labels', 'Labels', 'Check and correct what the AI found'],
+    ['/labels', 'Labels', 'Check and correct what detection found'],
     ['/models', 'Models', 'Get, train and choose the detection models'],
   ] },
 ]
@@ -79,7 +79,7 @@ function ToLastProject() {
 /** The public annotation pages (/annotate): anyone with the link, for sessions the admin has started. */
 function AnnotatorShell() {
   return (
-    <div>
+    <div className="annotator-shell">
       <header className="row" style={{ padding: '10px 24px', borderBottom: '1px solid var(--border)', background: 'var(--surface-2)' }}>
         <Link to="/annotate" className="brand" style={{ margin: 0 }}><img src="/favicon.svg" alt="" />stainID annotation</Link>
         <span className="spacer" />

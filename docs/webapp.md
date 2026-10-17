@@ -60,7 +60,7 @@ The list is kept in `~/.stainid/app.json` (`recent`, the folders opened, most re
 | 3 | **Models** | Download the published models. Add the NeuN, 6E10 and AT8 models, or train them (see [Training a model](#training-a-model)). |
 | 4 | **Run** | Follow the steps as they run; run any step on its own with its options. |
 | 5 | **Cores** | Look at the detections on the tissue, core by core. |
-| 6 | **Labels** | Ask colleagues to check and correct the AI's calls in annotation rounds (see [Annotation rounds](#annotation-rounds)), to measure how accurate detection is and to collect labels for training. |
+| 6 | **Labels** | Ask colleagues to check and correct detection's calls in annotation rounds (see [Annotation rounds](#annotation-rounds)), to measure how accurate detection is and to collect labels for training. |
 | 7 | **Results** | Download the results table (one row per donor and region) and read what every column means. |
 
 ## The guided setup
@@ -87,8 +87,14 @@ project without saved maps uses the rule under *Map → Advanced* (`sample_regio
 
 ## The Run page
 
+- **Flow chart** (at the top): every step of Set up, Detect and Results as a box, stage by stage, with arrows labelled
+  with the data each step hands on (*Core images*, *Tiles*, *Nuclei*, *Candidates*, *Calls* …). Each box shows where the
+  step stands (done, part done, running, waiting, error, out of date, not started), its counts (*621 of 621 tiles*,
+  *90 of 90 core images*, out-of-date cores), what it makes, how long its last run took, and while it runs how far it
+  is and the time left. Hovering a step lights up what it needs and what needs it; clicking it opens its details
+  (the same as its row below) under the chart. On a phone the boxes stack, the arrows pointing down.
 - **Summary.** How many steps are done, the next one, and **Run what's left** (with a rough time), which queues
-  every unfinished step of Set up, Detect and Results except the optional outlines.
+  every unfinished or out-of-date step of Set up, Detect and Results.
 - **Now running** (while something runs): progress, elapsed time, time left and why a step is waiting.
 - **Steps**, one row each, in order: what it does, its progress, its state and one button (*Run*, *Continue*,
   *Run again* or *Stop*). A step that cannot start yet says what it needs first; a failed step says why in plain words.
@@ -98,12 +104,16 @@ project without saved maps uses the rule under *Map → Advanced* (`sample_regio
     the step that makes it, download it, or show the expected format and a template;
   - options, with advanced ones hidden, and *Run with these options*;
   - *Show log*.
-- **Detect (v2)**: the four stages of the staged detection (*Find candidates*, *Decide*, *Outline objects*, *Make
-  results tables*; see [pipeline_v2.md](pipeline_v2.md)), each run on its own (not by *Run what's left*). Each says
-  how many cores are done and how many are **out of date**: something they were made from changed since (a setting,
-  a model, a hand-drawn exclusion or an earlier stage). Running the step again redoes only those cores.
-- **Pipeline map** (folded): every step as a box in the order steps can run; an arrow means "needs the result of".
-  Colours show done, partly done, running, waiting, failed and "made with an older model".
+- **Detect** is the staged detection (*Find nuclei*, then *Find candidates*, *Decide*, *Outline objects*; see
+  [pipeline_v2.md](pipeline_v2.md)) and **Results** its *Make results tables*. Each v2 step says how many cores are
+  done and how many are **out of date**: something they were made from changed since (a setting, a model, a
+  hand-drawn exclusion or an earlier stage). Running the step again redoes only those cores. *Outline objects →
+  Advanced → Outline shown for each stain* sets which outline each stain shows first, its stain outline or Segment
+  Anything's (`v2.outlines.default_outline`; NeuN Segment Anything, 6E10 and AT8 the stain outline); changing it only
+  puts the candidate tables together again, Segment Anything does not run again.
+- **Legacy detection (v1)** (folded, under the stages): the first detection (*Detect NeuN neurons*, *Detect plaques and
+  tau*, *Outline objects*, *Make results tables*, each marked *legacy v1*). Still runnable one by one; never run by
+  *Run what's left* or *Run everything*.
 - **All jobs** (folded): every run with its command and log.
 
 The *Register slides* step holds the slides-table editor (the same table as the Slides screen), and *Attach TMA map* the template download and the CSV
@@ -170,9 +180,9 @@ the sign-in as a token instead of a cookie.
 | Page | What it is for |
 |---|---|
 | **Home** | Your next step (the guided setup while the study is not set up, or new slides to add), a checklist of every step, cohort numbers and recent jobs. |
-| **Cores** | Every core of every TMA (or every image or slide); click one to see the whole core, then click any spot for a full-resolution preview (220–660 µm) with the AI detections where detection has run and the DAB layer. Where the v2 detection has run, the preview reads its saved candidates: the counted objects with their exact outlines, and, as layers to switch on, the rejected ones (each with why, in plain words), the AT8 threads it saved and the stained areas no candidate covers. Only the preview is sent over the network, never the whole scan. The analysed fields themselves are reviewed on Labels. |
+| **Cores** | Every core of every TMA (or every image or slide); click one to see the whole core, then click any spot for a full-resolution preview (220–660 µm) with stainID detection's objects where detection has run and the DAB layer. Where the v2 detection has run, the preview reads its saved candidates: the counted objects with their exact outlines, and, as layers to switch on, the rejected ones (each with why, in plain words), the AT8 threads it saved and the stained areas no candidate covers. Only the preview is sent over the network, never the whole scan. The analysed fields themselves are reviewed on Labels. |
 | **Stain thresholds** | The DAB threshold of every slide and why it exists. |
-| **Labels** | Labelling progress per stain, how often people and the AI agree, the labelling sessions (create, open, close, share the link, follow people, download) and all labels as CSV. |
+| **Labels** | Labelling progress per stain, how often people and detection agree, the labelling sessions (create, open, close, share the link, follow people, download) and all labels as CSV. |
 | **Models** | Every model with its status and settings, download buttons, training from all labels, and trained models compared with the current one. |
 | **Results** | The main results table (download), every other table, plots by group and region, and the meaning of every column. |
 | **Settings** | Study name, TMA layout, diagnostic groups and every file location, with a folder picker. Also leads to the Projects page to open or create another project, changes the admin password and (folded away) chooses the server. |
@@ -183,7 +193,7 @@ the sign-in as a token instead of a cookie.
 Everything people say about the tissue is a **label**: the class of an object and, where it has types, its type (e.g.
 *NeuN+ neuron*, *plaque · compact*, *tau+ neuron · pretangle*, *thread*; see [label_classes.md](label_classes.md) for
 the classes, their keys and how to change them in Settings), its outline, a tag on a whole field (*white matter*, *unusable*, …) or a note. Labels are attached
-to the objects the pipeline considers in the analysed fields, accepted or rejected; the AI's own call is shown next to
+to the objects the pipeline considers in the analysed fields, accepted or rejected; detection's own call is shown next to
 them but is not a label. An object's label is what most people said; ties stay unresolved. All labels live in one
 append-only file, `outputs.reviews/labels/labels.jsonl` (one line per saved label with who, what, where and when;
 edits and deletions keep the history), and *Download all labels (CSV)* exports them.
@@ -191,17 +201,17 @@ edits and deletions keep the history), and *Download all labels (CSV)* exports t
 A **field** is one tile of a core (a square about 560 µm across) shown to people as one picture.
 
 The **Labels** page shows, per stain: how many fields have been fully reviewed, how many objects carry labels
-and of which class, objects people added that the AI missed, outlines people drew or corrected, how often people agree
-with each other, and how often the AI agrees with people (precision and recall). Labels the current model was trained
+and of which class, objects people added that detection missed, outlines people drew or corrected, how often people agree
+with each other, and how often detection agrees with people (precision and recall). Labels the current model was trained
 on are included in the last figure, which therefore flatters the model; the cross-validated figures on Models are the
 fair estimate.
 
 ### Annotation rounds
 
-Labelling in stainID means checking and correcting the AI's work. People start from every object the AI considered,
+Labelling in stainID means checking and correcting stainID detection. People start from every object detection considered,
 with its call and outline already on the screen, and fix only what is wrong. The rounds read the candidate store of the
 staged detection ([pipeline_v2.md](pipeline_v2.md)): every candidate it proposed, accepted and rejected, with its
-three Segment Anything outlines. So a stain needs its *Detect (v2)* steps first. Until then, `stainid labels
+three Segment Anything outlines. So a stain needs its *Find candidates* and *Decide* steps first. Until then, `stainid labels
 store-from-pool` writes a store from the prepared label pool, to try the rounds out. Rounds work the same in TMA
 studies, image sets and whole-slide projects.
 
@@ -209,19 +219,19 @@ studies, image sets and whole-slide projects.
 
 1. **Stain.**
 2. **What should people do?**
-   - **Round 1, Check the AI's calls** (start here). One field at a time, object by object, accepted and rejected
-     ones, with the AI's class, type, score and outline. The most informative come first: near the decision
-     threshold (closest first), then strong ones the AI rejected, then weak ones it accepted. *How many objects*
-     (default 500; 0 = every one).
-   - **Round 2, Fix the field.** Whole fields with every object the AI considered: add what it missed, fix outlines,
-     change any call. *How many fields*: fields nobody has checked, spread over TMAs and groups.
+   - **Fix the field** (round 2, the default). Whole fields with every object detection considered: point at an
+     object and press a key to change its call or its outline, click to add what it missed. *How many fields*: fields
+     nobody has checked, spread over TMAs and groups.
+   - **Check detection's calls** (round 1). One object at a time, accepted and rejected ones, with detection's
+     class, type, score and outline. The most informative come first: near the decision threshold (closest first),
+     then strong ones detection rejected, then weak ones it accepted. *How many objects* (default 500; 0 = every one).
 3. **Which cores**: every ready core, some TMAs (batches, for slides and images), or fields clicked on the cores. Each
-   core shows whether it has the AI's candidates yet.
+   core shows whether it has detection's candidates yet.
 4. **Title**, and whether it opens to labellers right away.
 
 *Advanced* holds:
 
-- *How generous*: which candidates are shown, from every candidate the AI proposed down to only clearly stained ones
+- *How generous*: which candidates are shown, from every candidate detection proposed down to only clearly stained ones
   (1.5 × the stain threshold);
 - *People who must finish each field* (default 1; 2 or more gives repeat labels for agreement);
 - the session ID, a note for labellers, and *Also ask for the type*;
@@ -233,35 +243,42 @@ People type their name, with no account or password, and can stop and continue l
 in stainID is reachable without the admin password. Links without a project (`…:8765/annotate`) open the project
 opened last.
 
-**The first time.** A name that has not been through the tutorial goes there first. It is a practice on a real field
+**The first time.** A name that has not been through the tutorial goes there first, from the list of sessions or from
+a session's own link (and back there afterwards; `/api/session/tutorial` names the practice field). It is a practice on a real field
 of the project, in both rounds, where nothing is saved (about 3–5 minutes). A coach asks for one thing at a time and
 waits until it is done. *Skip tutorial* is always there, and *Tutorial* at the top shows it again. Who finished it is
-kept in `outputs.reviews/tutorials.json`.
+kept in `outputs.reviews/tutorials.json`. **Try the tutorial** on the Labels page opens the same practice for the
+admin, without a name, in a new tab: what annotators see, with nothing saved or remembered.
 
-**On the page.** Every object is always shown:
+**On the page.** Every object is always shown, one shape each, with a thin dark edge so it reads on light and dark
+tissue:
 
-- solid in its class colour when it counts as that class;
-- dotted grey when the AI rejected it or someone said it is not an object;
-- dotted in the unsure colour when unsure;
-- dotted with "new — choose a class" when just added.
+- solid in its class colour when it has a class: every class its own saturated colour, unsure (0) white;
+- dotted grey when it is not active: detection rejected it, someone removed it (Delete), or it was just added and waits
+  for its class (with a small diamond). A class key makes any of them solid.
 
-Pointing at an object lights it up and shows what the AI said about it at the side: the AI's class and score, why it was
-left out (when it was), who has checked it already, and which of its outline sizes is shown. Every key acts on the object under the mouse (round 2) or on screen (round 1):
+The page fits the window: the picture as large as it can be and the side panel scrolling by itself, so the page never
+scrolls while the picture is panned (drag, or hold the middle button; scroll to zoom). The side panel shows, from the
+top: the object under the mouse (its class, detection's call and score, why it was left out, its area and which of its
+three outlines shows, *n/3*); the class keys with their colours (0 unsure); the keys; this field (checked, changed,
+added; tags and a note); *Save* and *Save and continue*; **?** for the longer help, display options and the other
+fields; and the *Tutorial* link. Pointing at an object also shows its name beside it on the picture. Every key acts on the object under the mouse (round 2) or on screen (round 1):
 
 | Key | What it does |
 |---|---|
 | 1–9 | its class. For a class with types, a type number right after it (within 1 s, `labels.subtype_wait_s`) picks the type, and a type's own letter key answers class and type at once ([label_classes.md](label_classes.md)) |
 | 0 | unsure: left out of training; that person is not asked again, but the others are |
-| Delete (Backspace) | not an object: a candidate turns dotted grey and stays visible; an object the person added goes |
+| Delete (Backspace) | not an object: it turns dotted grey and stays visible (also an object the person added); a class key brings it back |
 | Tab / Shift+Tab (or + / −) | a bigger or smaller outline: the three Segment Anything outputs come with the object, so it changes at once |
-| Space | precise editing of this object, with everything else locked: right-click a spot to include it, left-click one to leave it out, drag the white dots; Space again keeps it, Esc cancels |
-| Z | undo the last unsaved change |
-| Enter | round 1: keep the AI's call |
+| Space | precise editing of this object, with everything else locked (tags, note, other fields, saving): right-click a spot to add it, left-click one to leave it out, drag the white dots (at most 48, the outline simplified to them); Z one step back; Space again keeps it, Esc cancels |
+| E | the exclusion brush, on and off (Esc also leaves): left-drag paints a bad area (fold, smudge, empty glass) as a red hatch, right-drag or Shift-drag erases, the wheel sets the brush size, the middle button pans; outlines are locked meanwhile. Saved with Save as rings in field pixels (an `exclude` label, `labels/exclusions.py`). Objects whose centre lies in it are that person's "excluded by the annotator": left out of scoring, agreement and training, and not confirmed when the field is finished. The analyses ignore the areas unless *Settings → More study settings → Apply annotators' excluded areas to the analysis* (`labels.apply_exclusions`, off by default) adds them to the hand-drawn exclusions |
+| Z | undo the last unsaved change (a brush stroke too) |
+| Enter | round 1: keep detection's call |
 | Ctrl+S (⌘S) | save, and stay on the field |
 | Ctrl+Enter (⌘Enter) | save and continue |
 
-In round 2, a click on empty tissue outlines a missed object with one click (Segment Anything). It stays dotted
-("new") until a class key gives it a class. *Draw an object by hand…* is the last resort. One click answers at once,
+In round 2, a click on empty tissue outlines a missed object with one click (Segment Anything). It is a new
+candidate, dotted grey, and Tab / Shift+Tab switch between its three sizes, until a class key makes it solid. *Draw an object by hand…* is the last resort. One click answers at once,
 because the server makes the Segment Anything features of the session's fields ahead: on a GPU every field of the
 open sessions, and on the CPU the field someone has open and their next ones. They are kept in
 `data/cache/sam_embeddings/`, and the page says *Preparing one-click outlines…* until its field is ready.
@@ -270,9 +287,10 @@ open sessions, and on the CPU the field someone has open and their next ones. Th
 unsaved changes there are, and a small orange dot marks each changed object. A draft is kept in the browser in case of
 a reload, and leaving the page with unsaved changes asks first. *Save and continue* finishes the field:
 
-- in round 1 every object needs an answer first;
-- in round 2 every call nobody decided and every outline left as it is counts as checked by this person;
-- new objects need a class first.
+- detection's call counts as right unless the person changed it: nothing needs a class or an answer first;
+- every candidate of the tile is then recorded as checked by this person, the ones they left as they are with
+  detection's call as their answer (also where someone else decided it), and every outline left as it is too;
+- objects the person added and gave no class are left out (the panel says so).
 
 A tile's labels are written all at once (`routes.rounds.save_tile`) or not at all.
 
@@ -305,17 +323,17 @@ v2 store:
 
 - **Review whole fields**: fields that stainID picks (nobody has reviewed them yet, spread over TMAs and groups, in
   shuffled order) or that you click on the cores, and how many people should review each field. People see the field
-  with the AI's calls and outlines pre-filled (dashed: the AI's call; solid: their own decision). They change the class
+  with detection's calls and outlines pre-filled (dashed: detection's call; solid: their own decision). They change the class
   of wrong objects, add missed objects, drag outline corners or draw new ones, tag the field (*white matter*,
-  *unusable*, …), and press *Finished*, which records every AI call they left alone as confirmed by them. A blind
-  variant shows the candidates without the AI's calls.
+  *unusable*, …), and press *Finished*, which records every detection call they left alone as confirmed by them. An option
+  under Advanced shows the candidates without detection's calls.
 - **Quick object queue**: one object at a time, labelled with the keyboard. The next object is chosen anew each time
-  from all prepared fields: where the AI is unsure, where people disagree with each other or with the AI, objects one
+  from all prepared fields: where detection is unsure, where people disagree with each other or with detection, objects one
   other person has labelled, or at random.
 - **Outline every object**: the segmentation check (below).
 
 These need their fields **prepared**. The *Prepare fields for labelling* step (`stainid labels prepare`) finds every
-candidate as the detection step does and stores its measurements and the AI's call in
+candidate as the detection step does and stores its measurements and detection's call in
 `outputs.reviews/pool/<stain>/<field>.csv` (10–30 s per field). Sessions prepare their own fields in the background.
 
 Labels made before the label store (training sets, the CNN-outlier adjudication and the white-matter field review)
@@ -332,17 +350,17 @@ check measures that end to end:
 1. **Set it up** on *Models → How well does detection outline objects?* (or *New labelling session → Outline every
    object*): one session per stain, "Segmentation check – <stain>", about 40 ready fields chosen from TMAs 1–7 (in an
    image set: every batch; *Advanced* lets you choose), spread over TMA × diagnosis group × region and over sparse,
-   medium and dense staining (thirds of the AI's objects per mm² of tissue), fields nobody has labelled first. Its
+   medium and dense staining (thirds of detection's objects per mm² of tissue), fields nobody has labelled first. Its
    fields' candidates are found in the background (`stainid score-segmentation --proposals-only`, 10–30 s per field).
-2. **People outline every object** of the stain's classes whose middle lies in the field's yellow square, without
-   seeing the AI: *click to outline* (Segment Anything: Tab tries another size, Shift+click adds a spot that belongs to
+2. **People outline every object** of the stain's classes whose middle lies in the field's yellow square, with
+   what detection found shown (it can be hidden): *click to outline* (Segment Anything: Tab tries another size, Shift+click adds a spot that belongs to
    the object, right-click one that does not; a click answers in well under a tenth of a second because the server
    prepares each field's picture features ahead — on a GPU, fp16, every field of the open checks as soon as one is made
    or opened; on the CPU the field someone has open and their next two, about 50 s each — kept in
    `data/cache/sam_embeddings/`; the page says *Preparing outlines…* until its field is done (clicks work meanwhile, the
    first in each part of the field slower); `$STAINID_SAM_DEVICE` (`cpu`, `cuda:1`) chooses the device), *draw by hand* (D), drag corners, 1–9 for the
-   class ("unsure" is left out of the scores), Delete, Esc. *Compare with the AI* (R) shows what the AI counted and
-   every candidate it considered, off by default. *Mark field complete* asks to confirm that nothing is left; only
+   class ("unsure" is left out of the scores), Delete, Esc. *Show detection* (R) shows what detection counted and
+   every candidate it considered, on by default. *Mark field complete* asks to confirm that nothing is left; only
    complete fields are scored. These outlines are kept apart from the class labels models train on (tasks `object`
    and `complete` in the label store).
 3. **Score now** (`stainid score-segmentation`) matches every outlined object one to one with (a) every candidate:

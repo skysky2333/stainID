@@ -134,7 +134,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("action", choices=("prepare", "import", "store-from-pool"),
                    help="store-from-pool: write a v2 candidate store from the prepared pool (to try the annotation rounds before the v2 detection)")
     p.add_argument("--stain", choices=("NeuN", "6E10", "AT8"))
-    p.add_argument("--fields", type=int, default=0, help="prepare this many more fields that are not prepared yet")
+    p.add_argument("--fields", type=int, default=0, help="prepare this many more fields that are not prepared yet (-1: every one)")
     p.add_argument("--session", default="", help="prepare every field of this labelling session")
     p.add_argument("--seed", type=int, default=0)
 
