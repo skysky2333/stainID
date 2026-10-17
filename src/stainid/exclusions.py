@@ -282,6 +282,30 @@ def digests(project, stain: str, core_ids) -> dict[str, str | None]:
     return {str(c): digest(project, str(c), stain) for c in core_ids}
 
 
+def edits_digest(project, core_id: str, stain: str) -> str:
+    """The core image's edits alone, as a short text (for stage 2, which takes them as an input before it writes the
+    mask the layer is made from): changes exactly when an edit of this core image is saved."""
+    keys = [e.key() for e in edits(project, core_id, stain)]
+    return hashlib.sha1(json.dumps(keys, default=str).encode()).hexdigest()[:16]
+
+
+EDIT_NONE, EDIT_CLEARED = 0, 9  # `edit_codes`: untouched, cleared; 1–4 painted that type
+
+
+def edit_codes(project, core_id: str, stain: str, shape: tuple[int, int]) -> np.ndarray:
+    """What people's edits of a core image say on its 1/`SCALE` grid of `shape`, applied in time order (the latest
+    wins): `EDIT_NONE` untouched (detection's areas stand), 1–4 painted that type, `EDIT_CLEARED` cleared (counted,
+    whatever detection found). Stage 2 takes it before it writes the mask: excluded = (automatic and not cleared) or
+    painted."""
+    out = np.full(shape, EDIT_NONE, np.uint8)
+    for edit in edits(project, core_id, stain):
+        for kind in dict.fromkeys(edit.kinds):
+            rings = [r for r, k in zip(edit.rings, edit.kinds) if k == kind]
+            holes = [h for h, k in zip(edit.holes, edit.kinds) if k == kind]
+            out[rasterize(rings, holes, shape)] = EDIT_CLEARED if kind == INCLUDE else int(kind) if str(kind).isdigit() else 1
+    return out
+
+
 _LAYERS: OrderedDict[tuple, Layer] = OrderedDict()
 _LAYERS_LIMIT = 24
 _SHARES: OrderedDict[tuple, tuple[tuple, dict]] = OrderedDict()  # (project, stain, core) -> (made from, what was worked out)

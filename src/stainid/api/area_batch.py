@@ -1,6 +1,6 @@
 """Applying area edits by themselves: at most every `v2.apply_area_edits_minutes` (default 10; 0 never) the app starts
-the "Apply area edits" step (`stainid.v2.area_edits`) for each open project that has edits to apply, but only when the
-calls exist, no job of the project is queued or running and no detection run is working on the project from outside
+the "Apply area edits" step (`stainid.v2.area_edits`: re-detecting the edited cores) for each open project that has
+edits to apply, but only when the proposals exist, no job of the project is queued or running and no detection run is working on the project from outside
 the app (a v2 claim touched in the last `BUSY_MINUTES`), so it never interrupts one.
 """
 from __future__ import annotations
@@ -38,7 +38,7 @@ def due(state, now: float | None = None) -> bool:
     now = time.time() if now is None else now
     if minutes <= 0 or now - _started.get(str(project.root), 0.0) < minutes * 60:
         return False
-    if not (project.output("v2") / "manifests" / "calls").exists() or state.jobs.active() or detection_busy(project, now):
+    if not (project.output("v2") / "manifests" / "proposals").exists() or state.jobs.active() or detection_busy(project, now):
         return False
     return area_edits.status(project)["cores"] > 0
 

@@ -139,17 +139,17 @@ def test_ai_reviewer_areas_are_edits_people_can_clear(project, tmp_path):
 
 
 def test_area_edits_outdate_only_the_cores_they_change(project):
-    """A core's calls record the layer digest they were made with: an edit makes that core (only) one to decide again,
-    and the app's batch starts "Apply area edits" only when nothing else runs."""
+    """A core's proposals record the digest of its edits they were made with: an edit makes that core (only) one to
+    re-detect, and the app's batch starts "Apply area edits" only when nothing else runs."""
     import time as clock
 
     from stainid.api import area_batch
     from stainid.v2 import area_edits, manifest
 
     write_mask(project)
-    made = manifest.make("calls", {}, {"proposals": "x", area_edits.KEY: exclusions.digest(project, CORE, STAIN)})
-    manifest.write(project, "calls", STAIN, CORE, made)
-    manifest.write(project, "calls", STAIN, "LIP-9_Z-9", manifest.make("calls", {}, {"proposals": "x"}))  # made before the layer: left alone
+    made = manifest.make("proposals", {}, {"image": "x", area_edits.KEY: exclusions.edits_digest(project, CORE, STAIN)})
+    manifest.write(project, "proposals", STAIN, CORE, made)
+    manifest.write(project, "proposals", STAIN, "LIP-9_Z-9", manifest.make("proposals", {}, {"image": "x"}))  # made before: left alone
     cache.forget()
     assert area_edits.changed(project) == {}
     edit(project, "Ann", [square(200, 200, 280, 280)], ["1"], 50.0)
@@ -173,3 +173,13 @@ def test_area_edits_outdate_only_the_cores_they_change(project):
     claims.mkdir(parents=True, exist_ok=True)
     (claims / "calls_AT8_x.claim").write_text("")
     assert not area_batch.due(State(False), now=clock.time())  # a detection run works on the project from outside: wait
+
+
+def test_edit_codes_give_the_net_effect_of_the_edits_for_stage_2(project):
+    edit(project, "Ann", [square(200, 200, 280, 280)], ["1"], 10.0)
+    edit(project, "Bob", [square(240, 200, 320, 280)], ["include"], 20.0)
+    before = exclusions.edits_digest(project, CORE, STAIN)
+    codes = exclusions.edit_codes(project, CORE, STAIN, (150, 150))
+    assert codes[cell(project, 220, 240)] == 1 and codes[cell(project, 300, 240)] == exclusions.EDIT_CLEARED and codes[5, 5] == exclusions.EDIT_NONE
+    edit(project, "Cy", [square(0, 0, 40, 40)], ["4"], 30.0)
+    assert exclusions.edits_digest(project, CORE, STAIN) != before  # no stage-2 mask needed: stage 2 reads it before writing one
