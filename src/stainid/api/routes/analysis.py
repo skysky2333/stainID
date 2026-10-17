@@ -18,7 +18,10 @@ from stainid.setup.naming import Groups
 router = APIRouter(tags=["analysis"])
 GROUP_COLUMNS = ("disease_group", "region", "tma")
 ID_COLUMNS = ("sample_region_id", "core_id", "donor_id", "tma", "region", "disease_group")
+V2_MEASURES = "v2/measures"  # where "Make results tables" (the staged detection, `stainid v2 measures`) writes, under the tables folder
 TABLES = {  # name: (title, description)
+    f"{V2_MEASURES}/results_donor_region.csv": ("All measures, per donor-region", "Main results: one row per donor and brain region, every stain."),
+    f"{V2_MEASURES}/results_core.csv": ("All measures, per core", "Main results, one row per core."),
     "results_donor_region.csv": ("All measures, per donor-region", "Main results: one row per donor and brain region, every stain."),
     "results_core.csv": ("All measures, per core", "Main results, one row per core."),
     "neun_donor_region.csv": ("Neurons, per donor-region", "NeuN neuron measures per donor-region."),
@@ -118,11 +121,14 @@ def tables() -> list[dict]:
     base = tables_root()
     project = get_state().project
     out = []
-    for path in _folder(base)[0] + sorted(_csv_tree(base / "biology")):
+    staged = (base / V2_MEASURES / "results_donor_region.csv").exists()
+    for path in _folder(base / V2_MEASURES)[0] + _folder(base)[0] + sorted(_csv_tree(base / "biology")):
         stamp = _stamp(path)
         header = _header(path, stamp)
         name = str(path.relative_to(base))
         title, description = TABLES.get(name, (name, ""))
+        if staged and name in TABLES and "/" not in name:  # the staged detection made the main tables: these are the first detection's
+            title, description = f"{title} (legacy v1)", f"The first detection's results (legacy v1). {description}"
         out.append({"name": name, "title": title, "description": description, "main": name in TABLES, "path": project.relative(path),
                     "columns": len(header), "size_kb": round(stamp[1] / 1024, 1), "modified": stamp[0] / 1e9,
                     "donor_region": "sample_region_id" in header, "contrasts": "std_effect" in header or "effect_sd" in header})

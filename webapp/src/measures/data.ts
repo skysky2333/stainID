@@ -13,6 +13,12 @@ export interface RowsPage { total: number; offset: number; columns: string[]; ro
 
 export const DONOR_REGION_TABLE = 'results_donor_region.csv'
 export const CORE_TABLE = 'results_core.csv'
+/** The main tables a project's Results page shows: those of the staged detection ("Make results tables", v2/measures)
+ *  when it made them, else the first detection's (legacy v1). */
+export function mainTables(names: string[]): { donorRegion: string; core: string } {
+  const v2 = 'v2/measures/'
+  return names.includes(v2 + DONOR_REGION_TABLE) ? { donorRegion: v2 + DONOR_REGION_TABLE, core: v2 + CORE_TABLE } : { donorRegion: DONOR_REGION_TABLE, core: CORE_TABLE }
+}
 
 /** What the identifier columns are called on screen. */
 export const ID_LABELS: Record<string, string> = {

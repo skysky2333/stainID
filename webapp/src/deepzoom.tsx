@@ -5,7 +5,8 @@ export interface PyramidLevel { width: number; height: number; cols: number; row
 /** A core image the server has cut into tiles: level 0 is full resolution, each next level half the size. */
 export interface Pyramid { width: number; height: number; tile: number; version: string; levels: PyramidLevel[] }
 /** Something drawn over the image, in image pixels: a circle (radius `r`) or, with `w`/`h`, a box. `rings` adds the
- *  object's exact outline (polygons as flat [x0, y0, x1, y1, …] pixel indices); `circle: false` leaves the circle out. */
+ *  object's exact outline (polygons as flat [x0, y0, x1, y1, …] pixel indices); `circle: false` leaves the circle out, so
+ *  an outlined object is drawn by one shape. `dashed`: drawn with long dashes (rejected candidates; tile boxes). */
 export interface Mark { x: number; y: number; r?: number; w?: number; h?: number; color: string; dashed?: boolean; rings?: number[][]; circle?: boolean }
 /** An open line over the image (a traced thread): flat [x0, y0, x1, y1, …] pixel indices, drawn `width` screen px wide. */
 export interface Line { points: number[]; width: number }
@@ -16,6 +17,30 @@ interface TileRef { level: number; col: number; row: number }
 
 const MAX_SCALE = 4
 const FAR_SCALE = 0.25  // below this zoom lines are drawn as faint hairlines
+/* Object strokes, in screen px whatever the zoom: every line has a thin dark halo under it so it reads on brown (DAB)
+   and on blue (haematoxylin) tissue; dashed marks (rejected candidates) use long dashes so they stay visible. */
+const STROKE = 2.2
+const STROKE_HOVER = 3.2
+const STROKE_SELECTED = 3.8
+const HALO = 1.6  // extra width of the dark line under each stroke
+const HALO_COLOR = 'rgb(0 0 0 / 55%)'
+const DASH = [5, 4]
+
+/** Strokes a shape twice: a dark halo, then the colour (`glow`: a soft light around it, for hover and selection).
+ *  `unit` = user units per screen px (1 / zoom under the image transform, 1 in screen space). */
+function strokeWithHalo(g: CanvasRenderingContext2D, draw: () => void, color: string, width: number, unit: number, dashed = false, glow = false) {
+  const dash = dashed ? DASH.map((d) => d * unit) : []
+  g.save()
+  g.setLineDash(dash)
+  g.strokeStyle = HALO_COLOR
+  g.lineWidth = (width + HALO) * unit
+  draw()
+  g.strokeStyle = color
+  g.lineWidth = width * unit
+  if (glow) { g.shadowColor = color; g.shadowBlur = 10 }
+  draw()
+  g.restore()
+}
 const NICE_UM = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000]
 
 /** The coarsest level that still gives at least one image pixel per device pixel. */
@@ -112,17 +137,21 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
   const [loaded, setLoaded] = useState<Set<string>>(() => new Set())
   const [tip, setTip] = useState<{ x: number; y: number; text: string } | null>(null)
   const [dragging, setDragging] = useState(false)
-  // outlines: one path per colour, built once (redrawn with the view's transform), and each outline's bounding box
+  const [hovered, setHovered] = useState<number | null>(null)
+  // outlines: one path per colour and line style, built once (redrawn with the view's transform), and each outline's bounding box
   const outlines = useMemo(() => {
-    const byColor = new Map<string, Mark[]>()
+    const byStyle = new Map<string, { color: string; dashed: boolean; group: Mark[] }>()
     for (const m of marks) {
       if (!m.rings?.length) continue
-      if (!byColor.has(m.color)) byColor.set(m.color, [])
-      byColor.get(m.color)!.push(m)
+      const key = `${m.color}|${m.dashed ? 1 : 0}`
+      if (!byStyle.has(key)) byStyle.set(key, { color: m.color, dashed: !!m.dashed, group: [] })
+      byStyle.get(key)!.group.push(m)
     }
-    return [...byColor].map(([color, group]) => ({ color, path: ringPath(group) }))
+    // dashed (rejected) first, so the solid outlines of kept objects lie on top
+    return [...byStyle.values()].sort((a, b) => Number(b.dashed) - Number(a.dashed)).map(({ color, dashed, group }) => ({ color, dashed, path: ringPath(group) }))
   }, [marks])
   const strokes = useMemo(() => linePaths(lines ?? []), [lines])
+  useEffect(() => setHovered(null), [marks])
   const ringBoxes = useMemo(() => marks.map((m) => {
     if (!m.rings?.length) return null
     const xs = m.rings.flatMap((ring) => ring.filter((_, k) => k % 2 === 0))
@@ -197,8 +226,13 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
       const far = view.s < FAR_SCALE  // zoomed far out: hairlines, faint, so the picture and objects stay visible
       g.globalAlpha = far ? 0.4 : 0.9
       const [vx0, vy0, vx1, vy1] = [-view.x / view.s, -view.y / view.s, (size.w - view.x) / view.s, (size.h - view.y) / view.s]
-      for (const s of strokes) {
-        if (s.x1 < vx0 || s.y1 < vy0 || s.x0 > vx1 || s.y0 > vy1) continue
+      const inView = strokes.filter((s) => !(s.x1 < vx0 || s.y1 < vy0 || s.x0 > vx1 || s.y0 > vy1))
+      if (!far) {  // a dark halo under the lines, so they read on light and dark tissue
+        g.strokeStyle = HALO_COLOR
+        for (const s of inView) { g.lineWidth = (s.width + HALO) / view.s; g.stroke(s.path) }
+        g.strokeStyle = lineColor
+      }
+      for (const s of inView) {
         g.lineWidth = (far ? Math.min(0.8, s.width) : s.width) / view.s
         g.stroke(s.path)
       }
@@ -208,31 +242,37 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
       g.save()
       g.setTransform(dpr * view.s, 0, 0, dpr * view.s, dpr * view.x, dpr * view.y)
       g.lineJoin = 'round'
-      g.lineWidth = 1.6 / view.s
-      for (const o of outlines) { g.strokeStyle = o.color; g.stroke(o.path) }
-      const chosen = selected === null ? null : marks[selected]
-      if (chosen?.rings?.length) { g.strokeStyle = chosen.color; g.lineWidth = 3.5 / view.s; g.stroke(ringPath([chosen])) }
+      const unit = 1 / view.s  // one screen px in image px: the strokes keep their width on screen at any zoom
+      for (const o of outlines) strokeWithHalo(g, () => g.stroke(o.path), o.color, STROKE, unit, o.dashed)
+      for (const [i, width] of [[hovered, STROKE_HOVER], [selected, STROKE_SELECTED]] as const) {
+        const m = i === null ? null : marks[i]
+        if (m?.rings?.length) { const path = ringPath([m]); strokeWithHalo(g, () => g.stroke(path), m.color, width, unit, m.dashed, true) }
+      }
       g.restore()
     }
+    g.lineJoin = 'round'
     marks.forEach((m, i) => {
       if (m.circle === false) return
       const x = m.x * view.s + view.x
       const y = m.y * view.s + view.y
       const r = (m.r ?? 4) * view.s + 2
       if (x < -r - 4 || y < -r - 4 || x > size.w + r + 4 || y > size.h + r + 4) return
-      g.beginPath()
-      if (r < 4 && i !== selected) {
+      const lit = i === selected || i === hovered
+      if (r < 4 && !lit) {  // zoomed far out: a dot with a dark rim
+        g.beginPath()
+        g.arc(x, y, 2.4, 0, 2 * Math.PI)
         g.fillStyle = m.color
-        g.arc(x, y, 1.8, 0, 2 * Math.PI)
+        g.strokeStyle = HALO_COLOR
+        g.lineWidth = 1
         g.fill()
+        g.stroke()
         return
       }
-      g.strokeStyle = m.color
-      g.lineWidth = i === selected ? 3.5 : 1.8
-      g.arc(x, y, Math.max(r, 4) + (i === selected ? 3 : 0), 0, 2 * Math.PI)
-      g.stroke()
+      const radius = Math.max(r, 5) + (i === selected ? 3 : 0)
+      strokeWithHalo(g, () => { g.beginPath(); g.arc(x, y, radius, 0, 2 * Math.PI); g.stroke() }, m.color,
+        i === selected ? STROKE_SELECTED : i === hovered ? STROKE_HOVER : STROKE, 1, m.dashed, lit)
     })
-  }, [view, size, marks, boxes, selected, outlines, strokes, lineColor])
+  }, [view, size, marks, boxes, selected, hovered, outlines, strokes, lineColor])
 
   const local = (e: React.PointerEvent | React.MouseEvent) => {
     const rect = box.current!.getBoundingClientRect()
@@ -300,14 +340,14 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
         onPointerMove={(e) => {
           const d = drag.current
           if (d) {
-            if (!d.moved && Math.hypot(e.clientX - d.x, e.clientY - d.y) > 4) { d.moved = true; setDragging(true); setTip(null) }
+            if (!d.moved && Math.hypot(e.clientX - d.x, e.clientY - d.y) > 4) { d.moved = true; setDragging(true); setTip(null); setHovered(null) }
             if (d.moved) setView((v) => v && { ...v, x: d.vx + e.clientX - d.x, y: d.vy + e.clientY - d.y })
             return
           }
-          if (!describe) return
           const { px, py } = local(e)
           const hit = nearest(px, py)
-          setTip(hit === null ? null : { x: px, y: py, text: describe(hit) })
+          setHovered(hit)
+          if (describe) setTip(hit === null ? null : { x: px, y: py, text: describe(hit) })
         }}
         onPointerUp={(e) => {
           const d = drag.current
@@ -315,7 +355,7 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
           setDragging(false)
           if (d && !d.moved && onPick) { const { px, py } = local(e); onPick(nearest(px, py)) }
         }}
-        onPointerLeave={() => setTip(null)}
+        onPointerLeave={() => { setTip(null); setHovered(null) }}
         onDoubleClick={(e) => { const { px, py } = local(e); zoomAt(2, px, py) }}
         onKeyDown={(e) => {
           const moves: Record<string, [number, number]> = { ArrowLeft: [80, 0], ArrowRight: [-80, 0], ArrowUp: [0, 80], ArrowDown: [0, -80] }

@@ -29,16 +29,19 @@ export default function Labels() {
 
   return (
     <>
-      <PageHead title="Labels" subtitle="Ask colleagues to check the AI’s calls on a few fields; their labels then train better models.">
+      <PageHead title="Labels" subtitle="Ask colleagues to check stainID detection’s calls on a few fields; their labels then train better models.">
         <a className="btn" href={apiUrl('/api/labels/export.csv')}>Download all labels</a>
+        <a className="btn" href={appPath('/annotate/tutorial?preview=1')} target="_blank" rel="noreferrer"
+          title="See exactly what annotators see first: the 4-minute practice on a field of this project (nothing is saved)">Try the tutorial</a>
         <button className="btn primary" onClick={() => setCreating(true)}>New labelling session</button>
       </PageHead>
       <HelpBox id="labels">
         <p style={{ marginTop: 0 }}>{FIELD_TEXT}</p>
         <ol className="plain-steps">
-          <li><b>Start a session</b>: pick a stain and a round. <b>Round 1, Check the AI’s calls</b>: one object at a time, the AI’s call and outline shown,
-            people keep or correct it with one key. <b>Round 2, Fix the field</b>: whole fields with every object the AI considered; people add what it
-            missed and fix outlines. Both share one set of answers, so nothing is checked twice.</li>
+          <li><b>Start a session</b>: pick a stain and what people do. <b>Fix the field</b> (start here): whole fields with every object detection
+            considered; people point at an object and press a key to change its call or outline, and click to add what it missed. <b>Check detection’s
+            calls</b>: one object at a time, people keep or correct detection’s call with one key. Both share one set of answers, so nothing is checked twice.</li>
+          <li><b>Try the tutorial</b> to see what annotators see first (nothing is saved).</li>
           <li><b>Send the link</b>. People type their name and label in their browser — no account needed. Each person gets their own field, and their work is kept when they press Save.</li>
           <li><b>Watch progress</b> here, field by field, then <Link to="/models">train a new model</Link> from the sessions you choose and compare it with the one in use.</li>
         </ol>
@@ -73,7 +76,14 @@ function Sessions({ sessions, reference, linkFor, onChanged, onNew }: {
     <section className="card labels-section">
       <h2>Labelling sessions</h2>
       {ordered.length || reference ? <div className="session-list">
-        {ordered.map((s) => <SessionRow key={s.name} s={s} link={linkFor(s.name)} onChanged={onChanged} />)}
+        {ordered.filter((s) => s.round).map((s) => <SessionRow key={s.name} s={s} link={linkFor(s.name)} onChanged={onChanged} />)}
+        {ordered.some((s) => !s.round) && (ordered.some((s) => s.round)
+          ? <details className="advanced older-sessions">
+            <summary><span>Older kinds of session</span><span className="muted small"> · {ordered.filter((s) => !s.round).length} (segmentation checks, whole-field reviews, quick checks)
+              {ordered.some((s) => !s.round && s.open) ? ` · ${ordered.filter((s) => !s.round && s.open).length} open` : ''}</span></summary>
+            <div className="advanced-body session-list">{ordered.filter((s) => !s.round).map((s) => <SessionRow key={s.name} s={s} link={linkFor(s.name)} onChanged={onChanged} />)}</div>
+          </details>
+          : ordered.map((s) => <SessionRow key={s.name} s={s} link={linkFor(s.name)} onChanged={onChanged} />))}
         {reference && <ReferenceRow r={reference} />}
       </div>
         : <Empty>
@@ -92,7 +102,7 @@ function ReferenceRow({ r }: { r: ReferenceLabels }) {
     <div className="session-row reference-row">
       <div className="session-main">
         <div className="session-title"><b>{r.title}</b> <span className="badge">read only</span></div>
-        <div className="muted small">Brought in from earlier label sets ({r.sets.map((s) => s.replace(/^import: /, '')).join(', ')})</div>
+        <div className="muted small">AI reference labels, brought in from earlier label sets ({r.sets.map((s) => s.replace(/^import: /, '')).join(', ')})</div>
         <div className="small secondary">{r.labels.toLocaleString()} objects labelled on {r.fields.toLocaleString()} fields ·{' '}
           {Object.entries(r.stains).map(([s, n]) => `${s} ${n.toLocaleString()}`).join(' · ')}</div>
       </div>
@@ -214,7 +224,7 @@ function SessionMore({ s, onChanged, onError }: { s: SessionInfo; onChanged: () 
         <table className="compact"><tbody>
           <tr><td className="secondary">Session ID</td><td><code>{s.name}</code></td></tr>
           <tr><td className="secondary">Created</td><td>{timeAgo(s.created)}</td></tr>
-          <tr><td className="secondary">What people see of the AI</td><td>{AI_VIEW_TEXT[s.ai_view]}</td></tr>
+          <tr><td className="secondary">What people see of detection</td><td>{AI_VIEW_TEXT[s.ai_view]}</td></tr>
           {s.round && <tr><td className="secondary">How generous</td><td>{s.level == null ? 'every candidate' : `proposed at ${s.level} × the stain threshold or stronger`}</td></tr>}
           {s.kind !== 'queue' ? <>
             <tr><td className="secondary">Tasks</td><td>{s.tools.map((t) => TOOL_TEXT[t] ?? t).join(' · ')}</td></tr>
@@ -225,7 +235,7 @@ function SessionMore({ s, onChanged, onError }: { s: SessionInfo; onChanged: () 
         {s.labellers.length > 0 && (
           <div className="table-scroll">
             <table className="compact">
-              <thead><tr><th>Name</th><th className="num">Fields finished</th><th className="num">Objects changed or added</th><th className="num">AI calls confirmed</th>
+              <thead><tr><th>Name</th><th className="num">Fields finished</th><th className="num">Objects changed or added</th><th className="num">Detection calls confirmed</th>
                 <th className="num">Outlines</th><th className="num">Tags</th><th>Last saved</th></tr></thead>
               <tbody>{s.labellers.map((p) => (
                 <tr key={p.person}><td>{p.person}</td><td className="num">{p.fields_done}</td><td className="num">{p.changed}</td><td className="num">{p.confirmed}</td>
@@ -281,7 +291,7 @@ function LabelledSoFar({ stains, onChanged }: { stains: StainOverview[]; onChang
         {total > 0 && <Link className="btn small" to="/models">Train a model from these labels →</Link>}</div>
       <div className="table-scroll">
         <table className="labelled-table">
-          <thead><tr><th>Stain</th><th className="num">Objects labelled</th><th>Fields with labels</th><th>What people said</th><th>How the AI does on them</th></tr></thead>
+          <thead><tr><th>Stain</th><th className="num">Objects labelled</th><th>Fields with labels</th><th>What people said</th><th>How detection does on them</th></tr></thead>
           <tbody>{stains.map((s) => (
             <tr key={s.stain}>
               <td><b>{s.stain}</b></td>
@@ -296,9 +306,9 @@ function LabelledSoFar({ stains, onChanged }: { stains: StainOverview[]; onChang
           ))}</tbody>
         </table>
       </div>
-      <p className="muted small">“Never proposed”: real objects people labelled where the AI had circled nothing (added with “Add a missed object”) — its blind spots.
-        “Proposed but rejected”: the AI looked at the object and said no.</p>
-      <Advanced hint="agreement, AI against people, outlines, tags, sources, preparing fields">
+      <p className="muted small">“Never proposed”: real objects people labelled where detection had circled nothing (added with “Add a missed object”) — its blind spots.
+        “Proposed but rejected”: detection looked at the object and said no.</p>
+      <Advanced hint="agreement, detection against people, outlines, tags, sources, preparing fields">
         <div className="grid grid-3">{stains.map((s) => <StainDetails key={s.stain} s={s} onChanged={onChanged} />)}</div>
       </Advanced>
     </section>
@@ -333,7 +343,7 @@ function StainDetails({ s, onChanged }: { s: StainOverview; onChanged: () => voi
       <table className="compact"><tbody>
         {row('fields fully checked (every object)', fmt(s.fields_reviewed))}
         {row('fields prepared for labelling', fmt(s.fields_prepared))}
-        {row(`${objectsOf(s.stain)} people added where the AI proposed nothing`, fmt(s.objects_added))}
+        {row(`${objectsOf(s.stain)} people added where detection proposed nothing`, fmt(s.objects_added))}
         {s.added && s.added.objects > 0 && row('of those added in sessions: measured · could not be measured · waiting',
           `${fmt(s.added.measured)} · ${fmt(s.added.could_not_be_measured)} · ${fmt(s.added.waiting)}`)}
         {s.detection && row(`real ${objectsOf(s.stain)}: found · never proposed · rejected`,
@@ -341,12 +351,12 @@ function StainDetails({ s, onChanged }: { s: StainOverview; onChanged: () => voi
         {s.detection && s.detection.not_checked > 0 && row('real objects on fields not prepared (not counted)', fmt(s.detection.not_checked))}
         {row('outlines (edited by people)', `${fmt(s.outlines)} (${fmt(s.outlines_edited)})`)}
         {row(`people agree (${fmt(s.objects_with_several_labels)} objects with ≥2 labels)`, percent(s.agreement))}
-        {row(`AI agrees with people (${fmt(s.ai.n)} objects)`, percent(s.ai.agreement))}
-        {row('AI precision · recall, among proposed objects only', `${fmt(s.ai.precision, 2)} · ${fmt(s.ai.recall, 2)}`)}
+        {row(`Detection agrees with people (${fmt(s.ai.n)} objects)`, percent(s.ai.agreement))}
+        {row('Detection precision · recall, among proposed objects only', `${fmt(s.ai.precision, 2)} · ${fmt(s.ai.recall, 2)}`)}
         {Object.entries(s.tags).map(([k, v]) => <tr key={k}><td className="secondary">fields tagged “{k}”</td><td className="num">{fmt(v)}</td></tr>)}
       </tbody></table>
-      <p className="muted small">The AI figures include objects the current model was trained on; the cross-validated estimate is on Models.
-        The older recall counts only objects the AI proposed, so it cannot see what the AI never looked at.
+      <p className="muted small">The detection figures include objects the current model was trained on; the cross-validated estimate is on Models.
+        The older recall counts only objects detection proposed, so it cannot see what detection never looked at.
         Sources: {s.people.length ? s.people.join(', ') : 'none yet'}.</p>
       <button className="btn small" disabled={asked} onClick={prepare} title="Finds the candidate objects in 20 more fields in the background, so queues have more to draw from">
         {asked ? 'Preparing 20 more fields…' : 'Prepare 20 more fields'}</button>
@@ -415,9 +425,9 @@ function NewSession({ stains, onClose, onCreated }: { stains: string[]; onClose:
         </fieldset>
         <fieldset className="field"><legend>What should people do?</legend>
           <div className="choice-grid">
-            {choice('fields', 'Whole-field review (current label pool)', 'People see a whole field with the AI’s calls filled in, correct the wrong ones and add what it missed. Gives complete labels for every object.')}
-            {choice('queue', 'Quick check, one object at a time (current label pool)', 'People see one object and pick what it is with a key press. Fast; aims at the objects the AI is unsure about.')}
-            {choice('outline', 'Outline every object (segmentation check)', 'People outline every object in whole fields without seeing the AI, to measure how well detection finds and outlines objects. Scored on Models.')}
+            {choice('fields', 'Whole-field review (current label pool)', 'People see a whole field with detection’s calls filled in, correct the wrong ones and add what it missed. Gives complete labels for every object.')}
+            {choice('queue', 'Quick check, one object at a time (current label pool)', 'People see one object and pick what it is with a key press. Fast; aims at the objects detection is unsure about.')}
+            {choice('outline', 'Outline every object (segmentation check)', 'People outline every object in whole fields, with what detection found shown (it can be hidden), to measure how well detection finds and outlines objects. Scored on Models.')}
           </div>
         </fieldset>
         {form.kind !== 'queue' && <FieldChoice stain={form.stain} mode={mode} n={form.n_fields} chosen={chosen} onMode={setMode}
@@ -427,16 +437,16 @@ function NewSession({ stains, onClose, onCreated }: { stains: string[]; onClose:
         {defaults.data?.vocabularies[form.stain] && form.kind !== 'outline' && <SessionClasses vocabulary={defaults.data.vocabularies[form.stain]} typesAsked={form.subtypes}
           onTypesAsked={(on) => set('subtypes', on)} />}
         <label className="layer-toggle"><input type="checkbox" checked={form.open} onChange={(e) => set('open', e.target.checked)} />Open to labellers right away</label>
-        <Advanced hint="session ID, people per field, what people see of the AI, tasks, field IDs">
+        <Advanced hint="session ID, people per field, what people see of detection, tasks, field IDs">
           <div className="row" style={{ alignItems: 'flex-end' }}>
             <label className="field">Session ID (in links and files)<input type="text" value={form.name} placeholder="made from the title"
               onChange={(e) => set('name', e.target.value.replace(/[^A-Za-z0-9_-]/g, '_'))} /></label>
             {form.kind === 'fields' && <label className="field">People per field<input type="number" min={1} value={form.per_field} style={{ width: 80 }}
               onChange={(e) => set('per_field', Math.max(1, Number(e.target.value)))} /></label>}
-            {form.kind !== 'outline' && <label className="field">What people see of the AI<select value={form.ai_view} onChange={(e) => set('ai_view', e.target.value as AiView)}>
+            {form.kind !== 'outline' && <label className="field">What people see of detection<select value={form.ai_view} onChange={(e) => set('ai_view', e.target.value as AiView)}>
               {(defaults.data?.ai_views ?? ['full', 'positions', 'none'] as AiView[]).map((v) => <option key={v} value={v}>{AI_VIEW_TEXT[v]}</option>)}</select></label>}
             {form.kind === 'queue' && <label className="field">Which objects<select value={form.rule} onChange={(e) => set('rule', e.target.value)}>
-              {Object.entries(defaults.data?.rules ?? { uncertain: 'where the AI is unsure' }).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label>}
+              {Object.entries(defaults.data?.rules ?? { uncertain: 'where detection is unsure' }).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label>}
           </div>
           {form.kind === 'fields' && <>
             <div className="row">{(defaults.data?.tools ?? Object.keys(TOOL_TEXT)).map((t) => (

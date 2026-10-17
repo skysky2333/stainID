@@ -1,13 +1,15 @@
-/* "Outline every object": the page where a person outlines every object of a field for the segmentation check.
-   Click an object and Segment Anything outlines it; correct with more clicks, other sizes, dragging corners or drawing by
-   hand; mark the field complete only when every object in the square is outlined. What the AI found stays hidden unless
-   the person turns it on. */
+/* "Outline every object": the page where a person outlines every object of a field for the segmentation check (made
+   from the Models page; an older kind of session, kept for that check). Click an object and Segment Anything outlines
+   it; correct with more clicks, other sizes, dragging corners or drawing by hand; mark the field complete only when every
+   object in the square is outlined. What detection found shows from the start (R hides it). The page takes the window
+   exactly, with the same side panel as the field tool: the object, the class keys (0 unsure), the keys, the field. */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import type { SessionDetail } from '../api'
 import { api, apiUrl, enc } from '../api'
 import { ErrorNote, Loaded, Modal, Progress, fmt } from '../components'
-import { useFetch } from '../hooks'
+import { useFetch, useStored } from '../hooks'
+import { useFitScreen } from '../labels/rounds'
 import { objectsOf } from '../labelling'
 import type { ImagePoint } from '../viewer'
 import { ZoomViewer } from '../viewer'
@@ -60,6 +62,7 @@ function inside(polygon: number[][], x: number, y: number) {
 export function OutlineWorkspace({ detail, reload, tile }: { detail: SessionDetail; reload: () => void; tile: string }) {
   const meta = detail.meta
   const work = useFetch<OutlineField>(`/api/annotate/${meta.name}/outline/${enc(tile)}`)
+  useFitScreen()
   return (
     <Loaded state={work} label="Opening the field…">
       {(data) => <Outliner key={tile} detail={detail} reload={reload} tile={tile} field={data} />}
@@ -96,11 +99,18 @@ function Outliner({ detail, reload, tile, field }: { detail: SessionDetail; relo
   const [error, setError] = useState<string | null>(null)
   const [complete, setComplete] = useState(field.complete)
   const [confirming, setConfirming] = useState(false)
-  const [showCounted, setShowCounted] = useState(false)  // blind by default: the AI's objects only when asked for
+  const [showCounted, setShowCounted] = useState(true)  // what detection counted shows from the start (R hides it)
+  const [help, setHelp] = useStored<boolean>('stainid.outline.help', false)
   const [showCandidates, setShowCandidates] = useState(false)
   const reference = useFetch<OutlineReference>(showCounted || showCandidates ? `/api/annotate/${name}/outline/${enc(tile)}/reference` : null)
   const label = classes[labelIndex] ?? classes[0]
   const color = (value: string) => (!scored(value) ? UNSURE_COLOR : COLORS[Math.max(0, classes.indexOf(value)) % COLORS.length])
+  /** The key of a class: 1, 2, … for the classes that count, 0 for "unsure" (as on every labelling page). */
+  const keyFor = (value: string) => {
+    if (!scored(value)) return '0'
+    const i = classes.filter(scored).indexOf(value)
+    return i >= 0 && i < 9 ? String(i + 1) : ''
+  }
   const px = field.pixel_size_um
   const box = field.box
   const position = fields.findIndex((f) => f.tile_id === tile)
@@ -213,10 +223,10 @@ function Outliner({ detail, reload, tile, field }: { detail: SessionDetail; relo
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (typing(e) || e.metaKey || e.ctrlKey || confirming) return
-      const n = Number(e.key)
-      if (n >= 1 && n <= Math.min(9, classes.length)) {
-        setLabelIndex(n - 1)
-        if (chosen && chosen.value !== classes[n - 1]) save([{ ref: chosen.ref, value: classes[n - 1], points: chosen.points }])
+      const picked = classes.findIndex((c) => keyFor(c) === e.key)
+      if (picked >= 0) {
+        setLabelIndex(picked)
+        if (chosen && chosen.value !== classes[picked]) save([{ ref: chosen.ref, value: classes[picked], points: chosen.points }])
         return
       }
       const key = e.key.toLowerCase()
@@ -234,7 +244,7 @@ function Outliner({ detail, reload, tile, field }: { detail: SessionDetail; relo
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [classes, chosen, draft, samReady, confirming, closeDraft, remove, otherSize, save])
+  }, [classes, chosen, draft, samReady, confirming, closeDraft, remove, otherSize, save])  // eslint-disable-line react-hooks/exhaustive-deps
 
   const counts: Record<string, number> = {}
   for (const o of list) counts[o.value] = (counts[o.value] ?? 0) + 1
@@ -262,133 +272,166 @@ function Outliner({ detail, reload, tile, field }: { detail: SessionDetail; relo
   }
 
   return (
-    <div className="annotate-page outline-page">
+    <div className="annotate-page outline-page fit-page">
       <div className="annotate-top">
         <div className="annotate-heading">
           <span className="row small"><Link to="/annotate">← All sessions</Link><Link to={`/annotate/${name}`}>All fields of this session</Link></span>
           <h1>{meta.title}</h1>
-          <div className="muted small">{meta.stain} · outline every {one} in the yellow square</div>
+          <div className="muted small">{meta.stain} · outline every {one} in the yellow square · field {position + 1} of {fields.length}</div>
         </div>
         <div className="annotate-progress">
-          <span className="small secondary">Field <b>{position + 1}</b> of {fields.length} · {finishedByMe} complete</span>
+          <span className="small secondary"><b>{finishedByMe}</b> of {fields.length} fields complete</span>
           <Progress done={finishedByMe} total={fields.length} />
         </div>
         <div className="annotate-actions">
-          <span className="muted small save-state" aria-live="polite">{Object.keys(pending).length ? 'Finding the outline…' : saving ? 'Saving…' : 'All changes saved'}</span>
           <button className="btn" onClick={() => later && navigate(`/annotate/${name}/${enc(later.tile_id)}`)} disabled={!later}
             title={later ? 'Come back to this field later' : 'No other field is waiting for you'}>Skip for now</button>
-          {complete
-            ? <button className="btn" onClick={() => markComplete(false)} disabled={saving > 0}>Reopen this field</button>
-            : <button className="btn primary big" disabled={busy || draft.length > 0} onClick={() => setConfirming(true)}
-              title={draft.length ? 'Finish or cancel (Esc) the outline you are drawing first' : undefined}>Mark field complete…</button>}
         </div>
       </div>
       {meta.instructions && <div className="instructions">{meta.instructions}</div>}
       <ErrorNote error={error} />
       <div className="annotate-workspace">
         <div className="annotate-image" onContextMenu={(e) => e.preventDefault()}>
-          <ZoomViewer src={apiUrl(`/api/annotate/${name}/fields/${enc(tile)}/image.jpg`)}
-            title={<span className="row"><span className="muted small">{tile}</span>{complete && <span className="badge status-done">complete</span>}</span>}
+          <ZoomViewer fit src={apiUrl(`/api/annotate/${name}/fields/${enc(tile)}/image.jpg`)}
+            title={<span className="row"><span className="muted small">{tile}</span>{complete && <span className="badge status-done">complete</span>}
+              {Object.keys(pending).length > 0 && <span className="small muted">Finding the outline…</span>}</span>}
             cursor={complete ? 'default' : 'crosshair'} onClick={click} onMove={move}>
             {(_zoom, size, rawUnit) => { const unit = Number.isFinite(rawUnit) && rawUnit > 0 ? rawUnit : 1; return <>
               <path d={`M0 0H${size.w}V${size.h}H0Z M${box.x} ${box.y}v${box.height}h${box.width}v${-box.height}Z`} fill="#000" fillOpacity={0.28} fillRule="evenodd" />
               <rect x={box.x} y={box.y} width={box.width} height={box.height} fill="none" stroke={BOX_COLOR} strokeWidth={2 * unit} strokeDasharray={`${12 * unit} ${8 * unit}`} />
               {showCandidates && reference.data?.candidates?.map((ring, i) => (
-                <polygon key={`c${i}`} points={flatPoints(ring)} fill="none" stroke="#fff" strokeOpacity={0.75} strokeWidth={unit} strokeDasharray={`${3 * unit} ${2 * unit}`} />
+                <polygon key={`c${i}`} points={flatPoints(ring)} fill="none" stroke="#d0d4da" strokeWidth={2 * unit} strokeDasharray={`${5 * unit} ${4 * unit}`} />
               ))}
               {showCounted && reference.data && <>
-                {reference.data.outlines.map((ring, i) => <polygon key={`s${i}`} points={flatPoints(ring)} fill="none" stroke={REFERENCE_COLOR} strokeWidth={1.2 * unit} />)}
+                {reference.data.outlines.map((ring, i) => <g key={`s${i}`}>
+                  <polygon points={flatPoints(ring)} fill="none" stroke="#000" strokeOpacity={0.55} strokeWidth={3.8 * unit} />
+                  <polygon points={flatPoints(ring)} fill="none" stroke={REFERENCE_COLOR} strokeWidth={2 * unit} /></g>)}
                 {reference.data.counted.map((c, i) => <circle key={`d${i}`} cx={c.x} cy={c.y} r={Math.max(8, c.r) + 4} fill="none" stroke={REFERENCE_COLOR}
-                  strokeWidth={1.5 * unit} strokeDasharray={`${5 * unit} ${3 * unit}`} />)}
+                  strokeWidth={2 * unit} strokeDasharray={`${5 * unit} ${4 * unit}`} />)}
               </>}
               {list.map((o) => o.ref === selected && editing ? null : (
-                <polygon key={o.ref} points={svgPoints(o.points)} fill={color(o.value)} fillOpacity={0.12} stroke={color(o.value)}
-                  strokeWidth={2 * unit} strokeDasharray={!scored(o.value) ? `${4 * unit} ${3 * unit}` : undefined}>
-                  <title>{nameOf(o.value)}</title>
-                </polygon>
+                <g key={o.ref}>
+                  <polygon points={svgPoints(o.points)} fill="none" stroke="#000" strokeOpacity={0.6} strokeWidth={4.2 * unit} />
+                  <polygon points={svgPoints(o.points)} fill={color(o.value)} fillOpacity={0.12} stroke={color(o.value)} strokeWidth={2.4 * unit}>
+                    <title>{nameOf(o.value)}</title>
+                  </polygon>
+                </g>
               ))}
               {editing && <>
-                <polygon points={svgPoints(editing)} fill={color(chosen!.value)} fillOpacity={0.25} stroke="#fff" strokeWidth={2.5 * unit} />
+                <polygon points={svgPoints(editing)} fill="none" stroke="#000" strokeOpacity={0.6} strokeWidth={5 * unit} />
+                <polygon points={svgPoints(editing)} fill={color(chosen!.value)} fillOpacity={0.25} stroke="#fff" strokeWidth={3 * unit} />
                 {editing.length <= MAX_HANDLES && !complete && spacing(editing) / unit >= MIN_HANDLE_SPACING && editing.map((p, i) => (
                   <circle key={i} cx={p[0]} cy={p[1]} r={3.5 * unit} fill="#fff" stroke="#000" strokeWidth={0.8 * unit} style={{ cursor: 'move' }}
-                    onMouseDown={(e) => { e.stopPropagation(); setDragging({ index: i, points: editing }) }} />
+                    onMouseDown={(e) => { if (e.button !== 0) return; e.stopPropagation(); setDragging({ index: i, points: editing }) }} />
                 ))}
                 {prompt?.clicks.map((c, i) => <circle key={`k${i}`} cx={c[0]} cy={c[1]} r={4 * unit} fill={c[2] ? '#4ade80' : '#f87171'} stroke="#000" strokeWidth={unit} />)}
               </>}
               {Object.entries(pending).map(([ref, p]) => <circle key={`p${ref}`} className="sam-pending" cx={p[0]} cy={p[1]} r={10 * unit} fill="none" stroke="#fff" strokeWidth={2 * unit} />)}
               {draft.length > 0 && <>
-                <polyline points={svgPoints([...draft, ...(hover ? [hover] : [])])} fill="none" stroke={color(label)} strokeWidth={2 * unit} />
+                <polyline points={svgPoints([...draft, ...(hover ? [hover] : [])])} fill="none" stroke={color(label)} strokeWidth={2.4 * unit} />
                 {draft.map((p, i) => <circle key={i} cx={p[0]} cy={p[1]} r={(i === 0 ? 6 : 3.5) * unit} fill={i === 0 ? '#fff' : color(label)} stroke="#000" strokeWidth={unit} />)}
               </>}
             </> }}
           </ZoomViewer>
-          <OutlineKeys classes={classes.length} sam={samReady} />
         </div>
-        <aside className="annotate-side">
-          <div className="card">
-            <h3>1 · Outline</h3>
-            <div className="tool-list">
-              <button className={`btn tool-btn${tool === 'click' ? ' chosen' : ''}`} aria-pressed={tool === 'click'} disabled={!samReady}
-                onClick={() => { setTool('click'); setDraft([]) }}><span className="kbd">S</span> Click to outline</button>
-              <button className={`btn tool-btn${tool === 'draw' ? ' chosen' : ''}`} aria-pressed={tool === 'draw'}
-                onClick={() => { setTool('draw'); setDraft([]) }}><span className="kbd">D</span> Draw by hand</button>
-            </div>
-            <p className="small secondary tool-hint">{redrawing || draft.length ? 'Click the corners of the outline, then the first corner or press Enter.'
-              : tool === 'click' ? `Click the middle of a ${one}: its outline appears. Not right? Tab tries another size, Shift+click adds a spot that belongs to it, right-click a spot that does not.`
-              : 'Click the corners of the outline, then the first corner or press Enter.'}</p>
-            {samReady && !prepared && tool === 'click' && <p className="muted small sam-preparing" aria-live="polite">Preparing outlines…</p>}
-            {!samReady && <p className="small warning-note">Click-to-outline is not available here, so draw each outline by hand.</p>}
-            <h3 style={{ marginTop: 14 }}>2 · Class</h3>
-            <div className="class-list">
-              {classes.map((c, i) => (
-                <button key={c} className={`btn class-btn${c === label ? ' chosen' : ''}`} aria-pressed={c === label} title={classOf(c)?.description}
-                  onClick={() => { setLabelIndex(i); if (chosen && chosen.value !== c) save([{ ref: chosen.ref, value: c, points: chosen.points }]) }}>
-                  {i < 9 && <span className="kbd">{i + 1}</span>}<span className="swatch" style={{ background: color(c) }} />{nameOf(c)}<span className="spacer" /><span className="muted small">{counts[c] ?? ''}</span>
-                </button>
-              ))}
-            </div>
-            <p className="muted small">{classOf(label)?.description} {choices.some((c) => !c.scored)
-              && `Use “${choices.filter((c) => !c.scored).map((c) => c.name).join('” or “')}” for something you cannot decide: it is left out of the scores.`}</p>
-          </div>
-          {chosen && (
-            <div className="card">
-              <h3>Selected object</h3>
-              <p className="small">{nameOf(chosen.value)} · {fmt(area(chosen.points) * px * px, 3)} µm²</p>
-              <div className="row">
-                {prompt && prompt.options.length > 1 && <button className="btn small" onClick={() => otherSize(1)}>Other size ({prompt.chosen + 1} of {prompt.options.length})</button>}
+        <aside className="annotate-side round-side" aria-label="The object, the keys and this field">
+          {chosen ? (
+            <div className="card side-block round-target" style={{ borderLeftColor: color(chosen.value) }}>
+              <div className="row target-head"><span className="look-swatch" style={{ borderColor: color(chosen.value), background: color(chosen.value) }} />
+                <b className="ellipsis">{nameOf(chosen.value)}</b></div>
+              <dl className="target-facts small">
+                <dt>Area</dt><dd>{fmt(area(chosen.points) * px * px, 3)} µm²</dd>
+                {prompt && prompt.options.length > 1 && <><dt>Size</dt><dd>{prompt.chosen + 1}/{prompt.options.length}</dd></>}
+              </dl>
+              <div className="row" style={{ marginTop: 8 }}>
+                {prompt && prompt.options.length > 1 && <button className="btn small" onClick={() => otherSize(1)}>Other size <span className="kbd">Tab</span></button>}
                 <button className="btn small" onClick={() => { setDraft([]); setRedrawing(chosen.ref) }}>Redraw by hand</button>
                 <button className="btn small danger-outline" onClick={() => remove(chosen.ref)}>Delete</button>
               </div>
             </div>
+          ) : (
+            <div className="card side-block round-target empty">
+              <p className="small muted" style={{ margin: 0 }}>{samReady ? `Click the middle of a ${one}: its outline appears and is selected here.` : 'Click the corners of an outline, then the first corner or Enter.'}</p>
+            </div>
           )}
-          <div className="card">
-            <h3>3 · This field</h3>
-            <p className="small">{inBox.toLocaleString()} {inBox === 1 ? one : words} outlined in the square
-              {list.length > inBox && <span className="muted"> ({list.length - inBox} more in the margin)</span>}.</p>
-            <p className="muted small">Outline every {one} whose middle lies inside the yellow square, also faint, small and touching ones —
-              each one separately. Objects reaching over the edge are outlined whole. When none are left, press <b>Mark field complete</b>.</p>
+          <div className="card side-block">
+            <h3>Classes</h3>
+            <ul className="class-legend small">
+              {classes.map((c, i) => (
+                <li key={c}>
+                  <button className={`link-btn class-pick${c === label ? ' chosen' : ''}`} aria-pressed={c === label} title={classOf(c)?.description}
+                    onClick={() => { setLabelIndex(i); if (chosen && chosen.value !== c) save([{ ref: chosen.ref, value: c, points: chosen.points }]) }}>
+                    <span className="kbd key-slot">{keyFor(c) || '·'}</span><span className="look-swatch" style={{ borderColor: color(c), background: color(c) }} />
+                    <span className="ellipsis">{nameOf(c)}</span></button>
+                  <span className="spacer" /><span className="muted">{counts[c] ?? ''}</span>
+                </li>
+              ))}
+            </ul>
           </div>
-          <details className="card side-details">
-            <summary>Compare with the AI</summary>
-            <p className="muted small">Hidden at first so that your outlines are your own. Turn it on only after outlining the field.</p>
-            <label className="layer-toggle"><input type="checkbox" checked={showCounted} onChange={() => setShowCounted(!showCounted)} />
-              <span className="swatch" style={{ background: REFERENCE_COLOR }} />what the AI counted (R)</label>
-            <label className="layer-toggle"><input type="checkbox" checked={showCandidates} onChange={() => setShowCandidates(!showCandidates)} />
-              everything it considered</label>
-            {(showCounted || showCandidates) && !reference.data && !reference.error && <p className="muted small">Loading…</p>}
+          <div className="card side-block">
+            <h3>Keys</h3>
+            <ul className="key-list small">
+              {samReady && <li><span className={`kbd${tool === 'click' ? ' on' : ''}`}>S</span> click to outline{tool === 'click' ? ' (on)' : ''}</li>}
+              <li><span className={`kbd${tool === 'draw' ? ' on' : ''}`}>D</span> draw by hand{tool === 'draw' ? ' (on)' : ''}</li>
+              {samReady && <li><span className="kbd">Tab</span> other size · <span className="kbd">⇧ click</span> add a spot · <span className="kbd">right-click</span> leave one out</li>}
+              <li><span className="kbd">drag</span> a dot to move the outline</li>
+              <li><span className="kbd">Del</span> delete the selected one · <span className="kbd">Esc</span> cancel</li>
+              <li><span className="kbd">R</span> {showCounted ? 'hide' : 'show'} what detection counted</li>
+            </ul>
+            {samReady && !prepared && tool === 'click' && <p className="muted small sam-preparing" aria-live="polite">Preparing outlines…</p>}
+            {!samReady && <p className="small warning-note">Click-to-outline is not available here, so draw each outline by hand.</p>}
+            <ul className="look-legend small secondary">
+              <li><span className="look-swatch" style={{ borderColor: COLORS[0], background: COLORS[0] }} />solid, in the class colour: your outlines</li>
+              <li><span className="look-swatch" style={{ borderColor: REFERENCE_COLOR, background: REFERENCE_COLOR }} />what detection counted</li>
+            </ul>
+          </div>
+          <div className="card side-block">
+            <h3>This field</h3>
+            <p className="small field-counts"><b>{inBox.toLocaleString()}</b> {inBox === 1 ? one : words} outlined in the square
+              {list.length > inBox && <span className="muted"> ({list.length - inBox} more in the margin)</span>}</p>
+            <label className="layer-toggle small"><input type="checkbox" checked={showCounted} onChange={() => setShowCounted(!showCounted)} />
+              <span className="swatch" style={{ background: REFERENCE_COLOR }} />show what detection counted (R)</label>
+            <label className="layer-toggle small"><input type="checkbox" checked={showCandidates} onChange={() => setShowCandidates(!showCandidates)} />
+              everything detection considered (dotted grey)</label>
+            {(showCounted || showCandidates) && !reference.data && !reference.error && <p className="muted small">Loading what detection found…</p>}
             {showCandidates && reference.data && !reference.data.candidates && <p className="muted small">Not found yet for this field; try again later.</p>}
             <ErrorNote error={reference.error} />
-          </details>
-          <details className="card side-details">
-            <summary>Go to another field</summary>
-            <p className="muted small">Green = complete.</p>
-            <div className="field-jump">
-              {fields.map((f, i) => (
-                <Link key={f.tile_id} to={`/annotate/${name}/${enc(f.tile_id)}`} title={f.tile_id}
-                  className={`field-chip${f.tile_id === tile ? ' current' : f.done_by_me ? ' done' : ''}`}>{i + 1}{f.open_by_others > 0 && <span className="busy-dot" />}</Link>
-              ))}
+          </div>
+          <div className="card side-block side-save">
+            <span className="small muted save-state" aria-live="polite">{Object.keys(pending).length ? 'Finding the outline…' : saving ? 'Saving…' : 'All changes saved'}</span>
+            <div className="row side-save-buttons">
+              {complete
+                ? <button className="btn" onClick={() => markComplete(false)} disabled={saving > 0}>Reopen this field</button>
+                : <button className="btn primary big" disabled={busy || draft.length > 0} onClick={() => setConfirming(true)}
+                  title={draft.length ? 'Finish or cancel (Esc) the outline you are drawing first' : undefined}>Mark field complete…</button>}
             </div>
-          </details>
+          </div>
+          <div className="side-foot small">
+            <button className={`btn small help-toggle${help ? ' chosen' : ''}`} aria-expanded={help} onClick={() => setHelp(!help)} title="How this page works">?</button>
+            <span className="spacer" /><span className="muted">{tile}</span>
+          </div>
+          {help && (
+            <div className="card side-block round-help">
+              <p className="small secondary">{tool === 'click' && samReady
+                ? `Click the middle of a ${one}: its outline appears. Not right? Tab tries another size, Shift+click adds a spot that belongs to it, right-click a spot that does not.`
+                : 'Click the corners of the outline, then the first corner or press Enter.'}</p>
+              <p className="small secondary">Outline every {one} whose middle lies inside the yellow square, also faint, small and touching ones — each one separately.
+                Objects reaching over the edge are outlined whole. When none are left, press <b>Mark field complete</b>.</p>
+              <p className="small muted">{classOf(label)?.description} {choices.some((c) => !c.scored)
+                && `Use “${choices.filter((c) => !c.scored).map((c) => c.name).join('” or “')}” (0) for something you cannot decide: it is left out of the scores.`}</p>
+              <p className="small muted">Scroll to zoom; drag (or hold the middle button) to move the picture.</p>
+              <details className="side-details compact">
+                <summary className="small">Go to another field</summary>
+                <p className="muted small">Green = complete.</p>
+                <div className="field-jump">
+                  {fields.map((f, i) => (
+                    <Link key={f.tile_id} to={`/annotate/${name}/${enc(f.tile_id)}`} title={f.tile_id}
+                      className={`field-chip${f.tile_id === tile ? ' current' : f.done_by_me ? ' done' : ''}`}>{i + 1}{f.open_by_others > 0 && <span className="busy-dot" />}</Link>
+                  ))}
+                </div>
+              </details>
+            </div>
+          )}
         </aside>
       </div>
       {confirming && (
@@ -406,23 +449,6 @@ function Outliner({ detail, reload, tile, field }: { detail: SessionDetail; relo
           </div>
         </Modal>
       )}
-    </div>
-  )
-}
-
-/** The keys of the outline page, always on screen under the picture. */
-function OutlineKeys({ classes, sam }: { classes: number; sam: boolean }) {
-  return (
-    <div className="key-help small secondary">
-      <span>Scroll to zoom, drag to move</span>
-      {sam && <span><span className="kbd">S</span> click to outline</span>}
-      <span><span className="kbd">D</span> draw by hand</span>
-      <span><span className="kbd">1</span>–<span className="kbd">{Math.min(9, classes)}</span> class</span>
-      {sam && <span><span className="kbd">Tab</span> other size</span>}
-      {sam && <span><span className="kbd">Shift</span>+click add · right-click remove</span>}
-      <span><span className="kbd">Delete</span> remove</span>
-      <span><span className="kbd">R</span> show the AI</span>
-      <span><span className="kbd">Esc</span> cancel</span>
     </div>
   )
 }

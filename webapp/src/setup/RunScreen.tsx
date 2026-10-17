@@ -51,7 +51,7 @@ export default function RunScreen({ back, go, overview, onChanged }: ScreenProps
             <tbody>{overview.estimate.steps.map((s) => <tr key={s.id}><td>{stepTitle(overview, s.id)}</td><td className="num">{minutes(s.seconds)}</td></tr>)}</tbody>
           </table>
         )}
-        <p className="small secondary">Every step can also be run on its own, with its options, from the <Link to="/workflow">list of all steps</Link>. The optional “Outline objects” step is not part of Run everything.</p>
+        <p className="small secondary">Every step can also be run on its own, with its options, from the <Link to="/workflow">list of all steps</Link>. The first detection’s steps (legacy v1) are there under Advanced; Run everything runs the current detection.</p>
       </Advanced>
       <ScreenFoot back={back} />
     </div>

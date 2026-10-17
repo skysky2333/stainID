@@ -31,9 +31,22 @@ from pydantic import BaseModel
 
 from stainid import cache
 from stainid.api import label_crops, queue_pictures, render, sam_embeddings
-from stainid.api.routes.annotate import (LAYERS, Mark, NewSession, asks_subtypes, busy, class_of, field_tile, free_name, measure_added_soon, root,
-                                         session_meta, vocabulary, writable)
-from stainid.api.session import annotator, require_admin
+from stainid.api.routes.annotate import (
+    LAYERS,
+    Mark,
+    NewSession,
+    asks_subtypes,
+    busy,
+    class_of,
+    field_tile,
+    free_name,
+    measure_added_soon,
+    root,
+    session_meta,
+    vocabulary,
+    writable,
+)
+from stainid.api.session import PREVIEW, annotator, require_admin
 from stainid.api.state import get_state
 from stainid.labels import added, candidate_store, decisions, readiness, rounds, sessions, store
 from stainid.labels import vocabulary as vocab
@@ -113,7 +126,7 @@ def _scope(body: NewSession) -> list[str]:
         tiles = tiles[tiles.tma.astype(str).isin({str(t) for t in body.tmas})]
     ready = store_ready(body.stain, tiles)
     if ready.empty:
-        raise HTTPException(400, f"No {body.stain} core has the AI's candidates yet" + (" on these TMAs" if body.tmas else "")
+        raise HTTPException(400, f"No {body.stain} core has detection's candidates yet" + (" on these TMAs" if body.tmas else "")
                             + ": run the v2 detection (“Find candidates”) first.")
     return list(ready.tile_id)
 
@@ -164,7 +177,7 @@ def _pick_fields(stain: str, scope: list[str], n: int, seed: int) -> list[str]:
 def add_fields(meta: dict, n: int, tile_ids: list[str] | None) -> dict:
     """More fields for a "Fix the field" session: these (checked to have candidates) or n more stainID picks."""
     if rounds.round_of(meta) != 2:
-        raise HTTPException(400, "a “Check the AI’s calls” session keeps the candidates it was made with; make a new session for more")
+        raise HTTPException(400, "a “Check detection’s calls” session keeps the candidates it was made with; make a new session for more")
     scope = _scope(NewSession(stain=meta["stain"], round=2, tile_ids=tile_ids))
     left = [t for t in scope if t not in set(meta["fields"])]
     picked = left if tile_ids else _pick_fields(meta["stain"], left, max(1, n), len(meta["fields"]) + 1)
@@ -716,7 +729,7 @@ def practice_meta(name: str) -> dict:
     round_, stain = int(parts[1]), parts[2]
     tile = practice_tile(stain)
     if tile is None:
-        raise HTTPException(404, f"there is no {stain} field with the AI's candidates to practise on yet")
+        raise HTTPException(404, f"there is no {stain} field with detection's candidates to practise on yet")
     return {"name": name, "title": "Practice: " + rounds.TITLE[round_], "stain": stain, "kind": rounds.KIND[round_], "tools": ["class", "point", "outline", "tag"],
             "ai_view": "full", "per_field": 1, "rule": rounds.RULE, "fields": [tile] if round_ == 2 else [], "scope": [tile], "source": rounds.SOURCE,
             "round": round_, "level": None, "labels_needed": 1, "subtypes": True, "instructions": "", "open": True, "created": 0.0, "practice": True}
@@ -759,7 +772,7 @@ def tutorial(request: Request, person: str = Depends(annotator)) -> dict:
         if tile:
             practice = {"stain": stain, "tile_id": tile, "round1": practice_name(1, stain), "round2": practice_name(2, stain)}
             break
-    return {"done": person in _tutorials(), "practice": practice}
+    return {"done": person in _tutorials() and person != PREVIEW, "practice": practice}
 
 
 @router.post("/session/tutorial")

@@ -8,20 +8,20 @@ import { Modal } from './components'
 export const STAIN_OBJECTS: Record<string, string> = { NeuN: 'neurons', '6E10': 'plaques', AT8: 'tau+ neurons' }
 export const objectsOf = (stain: string) => STAIN_OBJECTS[stain] ?? 'objects'
 
-/** What people who label see of the AI, as the admin chooses it. */
+/** What people who label see of stainID detection, as the admin chooses it. */
 export const AI_VIEW_TEXT: Record<AiView, string> = {
-  full: 'AI calls and outlines filled in (people correct them)',
-  positions: 'blind: the objects to check are marked, the AI’s calls are hidden',
-  none: 'nothing from the AI',
+  full: 'detection’s calls and outlines filled in (people correct them)',
+  positions: 'the objects to check are marked, detection’s calls are hidden',
+  none: 'nothing from detection',
 }
 /** The same, as the person labelling reads it. */
 export const AI_VIEW_FOR_LABELLERS: Record<AiView, string> = {
-  full: 'The AI’s guesses are filled in — correct the wrong ones',
-  positions: 'The AI’s guesses are hidden — decide for yourself',
-  none: 'No AI help — mark what you see',
+  full: 'Detection’s calls are filled in — correct the wrong ones',
+  positions: 'Detection’s calls are hidden — decide for yourself',
+  none: 'No help from detection — mark what you see',
 }
 export const TOOL_TEXT: Record<string, string> = {
-  class: 'correct the class of each object', point: 'add objects the AI missed', outline: 'fix or draw outlines', tag: 'tag the whole field',
+  class: 'correct the class of each object', point: 'add objects detection missed', outline: 'fix or draw outlines', tag: 'tag the whole field',
 }
 export const KIND_TEXT = { fields: 'check whole fields', queue: 'one object at a time', outline: 'outline every object (segmentation check)' } as const
 
@@ -37,7 +37,7 @@ export function quality(m: Metrics | null | undefined): { word: string; tone: 'g
 export const percent = (v: number | null | undefined) => (v == null || !Number.isFinite(v) ? '—' : `${Math.round(100 * v)}%`)
 
 /** "Finds 89% of real neurons · 84% of the objects it counts are real", the plain reading of recall and precision. With `d` (a model
- *  that learned from objects people added where the AI proposed nothing), the share it finds counts those as missed too. */
+ *  that learned from objects people added where detection proposed nothing), the share it finds counts those as missed too. */
 export function QualityLine({ m, stain, d }: { m: Metrics; stain: string; d?: Detection }) {
   if (d && d.never_proposed > 0) return <span><DetectionLine d={d} stain={stain} /> · <b>{percent(m.precision)}</b> of what it counts is right</span>
   return <span>finds <b>{percent(m.recall)}</b> of real {objectsOf(stain)} · <b>{percent(m.precision)}</b> of what it counts is right</span>
@@ -95,10 +95,10 @@ export function CopyButton({ text, label = 'Copy link', primary = false }: { tex
     {result === 'copied' ? 'Copied ✓' : result === 'failed' ? 'Select and copy it by hand' : label}</button>
 }
 
-/* ---------- objects the AI never proposed (recall over every real object people labelled) ---------- */
+/* ---------- objects detection never proposed (recall over every real object people labelled) ---------- */
 
 /** "finds 88% of real plaques (3% were never proposed, 9% proposed but rejected)": every real object people labelled counts,
- *  also the ones they added where the AI proposed nothing. */
+ *  also the ones they added where detection proposed nothing. */
 export function DetectionLine({ d, stain }: { d: Detection; stain: string }) {
   if (!d.real) return <span className="muted">no real {objectsOf(stain)} labelled yet</span>
   return <span>finds <b>{percent(d.recall)}</b> of real {objectsOf(stain)}

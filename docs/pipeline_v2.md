@@ -22,7 +22,8 @@ Stage 3 runs after stage 4 because by default it outlines the candidates stage 4
 and `tools/v2_run.sh decide` only stages 4 and 5 (after a new model, cut-off or rule). Both are resumable: a core image is
 done once its manifest is written, and every run redoes the core images that are missing or out of date. `stainid v2
 status` shows, per stage and stain, how many core images are done, out of date and in all; the Run page shows the same
-for the four "Detect (v2)" steps. Memory: a stage-2 worker holds one decoded core image (about 0.8 GB) and one tile's
+for the Detect steps *Find candidates*, *Decide*, *Outline objects* and the Results step *Make results tables*
+(*Run what's left* runs them; the first detection's steps are under *Legacy detection (v1)*). Memory: a stage-2 worker holds one decoded core image (about 0.8 GB) and one tile's
 pictures (about 1 GB); `--workers 0` picks as many as the free memory and the processors allow.
 
 ## Manifests and out-of-date detection

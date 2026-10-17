@@ -18,8 +18,8 @@ type Where = 'all' | 'tmas' | 'pick'
 const WORDS = { tma: { pictures: 'cores', groups: 'TMAs', group: 'TMA' }, slides: { pictures: 'slides', groups: 'batches', group: 'batch' },
   images: { pictures: 'images', groups: 'batches', group: 'batch' } } as const
 const LEVEL_TEXT: Record<string, string> = {
-  all: 'Every candidate the AI proposed (most generous)', '0.5': 'Proposed at half the stain threshold or stronger',
-  '0.75': 'At three quarters of the stain threshold or stronger', '1': 'At the stain threshold or stronger (as the AI counts)',
+  all: 'Every candidate detection proposed (most generous)', '0.5': 'Proposed at half the stain threshold or stronger',
+  '0.75': 'At three quarters of the stain threshold or stronger', '1': 'At the stain threshold or stronger (as detection counts)',
   '1.5': 'Only clearly stained ones (1.5 × the threshold)',
 }
 
@@ -29,7 +29,7 @@ export function NewRoundSession({ stains, onClose, onCreated, onOlder }: {
   const { tmaName, info } = useProject()
   const words = WORDS[info?.kind ?? 'tma'] ?? WORDS.tma
   const [stain, setStain] = useState(stains[0] ?? 'NeuN')
-  const [round, setRound] = useState<1 | 2>(1)
+  const [round, setRound] = useState<1 | 2>(2)  // the field tool is the default: every object of a field, corrected in place
   const [where, setWhere] = useState<Where>('all')
   const [tmas, setTmas] = useState<string[]>([])
   const [chosen, setChosen] = useState<string[]>([])
@@ -70,10 +70,10 @@ export function NewRoundSession({ stains, onClose, onCreated, onOlder }: {
         </fieldset>
         <fieldset className="field"><legend>What should people do?</legend>
           <div className="choice-grid">
-            {([1, 2] as const).map((r) => (
+            {([2, 1] as const).map((r) => (
               <label key={r} className={`choice-card${round === r ? ' chosen' : ''}`}>
                 <input type="radio" name="round" checked={round === r} onChange={() => setRound(r)} />
-                <span><b>Round {r} · {ROUND_TITLE[r]}{r === 1 ? ' (start here)' : ''}</b><span className="small secondary">{ROUND_TEXT[r]}</span></span>
+                <span><b>{ROUND_TITLE[r]}{r === 2 ? ' (start here)' : ''}</b><span className="small secondary">{ROUND_TEXT[r]}</span></span>
               </label>
             ))}
           </div>
@@ -83,8 +83,8 @@ export function NewRoundSession({ stains, onClose, onCreated, onOlder }: {
           {(s) => <>
             <fieldset className="field"><legend>Which {words.pictures}?</legend>
               <p className={`small ${s.cores_ready ? 'secondary' : 'warning-text'}`} style={{ margin: '0 0 8px' }}>
-                {s.cores_ready ? <>{s.cores_ready.toLocaleString()} of {s.cores.toLocaleString()} {words.pictures} have the AI’s candidates ({s.fields_ready.toLocaleString()} fields).</>
-                  : <>No {stain} {words.pictures.slice(0, -1)} has the AI’s candidates yet: run the v2 detection first. Until then the older kinds of session (under Advanced) use the current label pool.</>}
+                {s.cores_ready ? <>{s.cores_ready.toLocaleString()} of {s.cores.toLocaleString()} {words.pictures} have detection’s candidates ({s.fields_ready.toLocaleString()} fields).</>
+                  : <>No {stain} {words.pictures.slice(0, -1)} has detection’s candidates yet: run the v2 detection first. Until then the older kinds of session (under Advanced) use the current label pool.</>}
                 {s.from_pool && <span className="muted"> These candidates were made from the label pool for trying the rounds out.</span>}</p>
               <div className="segmented">
                 <button type="button" className={`btn${where === 'all' ? ' chosen' : ''}`} onClick={() => setWhere('all')}>Every ready {words.pictures.slice(0, -1)}</button>
@@ -105,7 +105,7 @@ export function NewRoundSession({ stains, onClose, onCreated, onOlder }: {
                 {round === 1
                   ? <input type="number" min={0} value={objects} style={{ width: 100 }} onChange={(e) => setObjects(Math.max(0, Number(e.target.value)))} />
                   : <input type="number" min={1} max={500} value={fieldCount} style={{ width: 100 }} onChange={(e) => setFieldCount(Math.max(1, Number(e.target.value)))} />}
-                <span className="small muted">{round === 1 ? 'The most informative first: where the AI is unsure, then strong ones it rejected, then weak ones it accepted.'
+                <span className="small muted">{round === 1 ? 'The most informative first: where detection is unsure, then strong ones it rejected, then weak ones it accepted.'
                   : 'Fields nobody has checked, spread over TMAs and groups.'}</span>
               </label>
             ) : null}
@@ -130,7 +130,7 @@ export function NewRoundSession({ stains, onClose, onCreated, onOlder }: {
           {typed.length > 0 && <label className="layer-toggle"><input type="checkbox" checked={subtypes} onChange={(e) => setSubtypes(e.target.checked)} />
             Also ask for the type ({typed.map((c) => c.name).join(', ')})</label>}
           <p className="small secondary" style={{ marginBottom: 0 }}>Older kinds of session — the whole-field review and quick check on the current label pool, and
-            “Outline every object” (a blind segmentation check): <button className="link-btn" onClick={onOlder}>make one of those instead…</button></p>
+            “Outline every object” (a segmentation check): <button className="link-btn" onClick={onOlder}>make one of those instead…</button></p>
         </Advanced>
         <ErrorNote error={error ?? scope.error} />
         <div className="row"><span className="spacer" />

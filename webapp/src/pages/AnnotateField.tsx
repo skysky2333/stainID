@@ -13,18 +13,19 @@ import { FieldThumb } from '../labels/fields'
 import { QuickCheck } from '../labels/quickcheck'
 import { CheckCalls } from '../labels/checkcalls'
 import { FixField } from '../labels/fixfield'
-import { ROUND_TITLE, RoundProgressLine } from '../labels/rounds'
+import { ROUND_TITLE, RoundProgressLine, useFitScreen } from '../labels/rounds'
 import type { RoundDetail } from '../api'
 import { Register, useSession } from '../session'
 import { OutlineWorkspace } from '../segcheck/OutlineWorkspace'
+import { useFirstTutorial } from '../labels/tutorial'
 import type { ImagePoint } from '../viewer'
 import { RASTER_LAYERS, ZoomViewer } from '../viewer'
 
 const COLORS = ['#ff4fd8', '#ff8c1a', '#facc15', '#4ade80', '#a78bfa', '#f87171', '#e2e8f0', '#22d3ee', '#2dd4bf']
 type Tool = 'label' | 'add' | 'outline'
 const TOOLS: { id: Tool; needs: string; key: string; name: string; hint: string }[] = [
-  { id: 'label', needs: 'class', key: 'v', name: 'Label objects', hint: 'Click an object to give it the chosen class. Dashed = the AI’s call, not yet checked by you; solid = your decision. Click again with the same class to go back to the AI’s call.' },
-  { id: 'add', needs: 'point', key: 'a', name: 'Add a missed object', hint: 'Click an object the AI did not circle to add it with the chosen class. It shows as a diamond. Click one of your diamonds to select it; Delete removes it.' },
+  { id: 'label', needs: 'class', key: 'v', name: 'Label objects', hint: 'Click an object to give it the chosen class. Dashed = detection’s call, not yet checked by you; solid = your decision. Click again with the same class to go back to detection’s call.' },
+  { id: 'add', needs: 'point', key: 'a', name: 'Add a missed object', hint: 'Click an object detection did not circle to add it with the chosen class. It shows as a diamond. Click one of your diamonds to select it; Delete removes it.' },
   { id: 'outline', needs: 'outline', key: 'o', name: 'Fix outlines', hint: 'Click an object to select it, then drag the corners of its outline or press Redraw. Clicking empty tissue starts a new outline (a new object): click its corners, then the first corner or Enter.' },
 ]
 
@@ -46,6 +47,7 @@ export default function AnnotatePage() {
   const { session } = useSession()
   const { name = '', tile } = useParams()
   const detail = useFetch<SessionDetail>(session.annotator ? `/api/annotate/${name}` : null)
+  useFirstTutorial()  // someone new who followed a session's link: the tutorial first, then back here
   if (!session.annotator) return <><PageHead title="Help check tissue images" subtitle="Type your name to start." /><Register /></>
   if (detail.error) return <SessionProblem error={detail.error} retry={detail.reload} />
   if (!detail.data) return <Loading label="Opening the session…" />
@@ -137,6 +139,7 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
   const meta = detail.meta
   const name = meta.name
   const work = useFetch<FieldWork>(`/api/annotate/${name}/fields/${enc(tile)}`)
+  useFitScreen()
   const [mine, setMine] = useState<Record<string, Label>>({})
   const [tool, setTool] = useState<Tool | null>(null)
   const { vocabulary, keys, subtypes: typesAsked } = meta
@@ -337,7 +340,7 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
   const finishedByMe = fields.filter((f) => f.done_by_me).length
 
   return (
-    <div className="annotate-page">
+    <div className="annotate-page fit-page">
       <div className="annotate-top">
         <div className="annotate-heading">
           <span className="row small"><Link to="/annotate">← All sessions</Link><Link to={`/annotate/${name}`}>All fields of this session</Link></span>
@@ -363,7 +366,7 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
         {(data) => (
           <div className="annotate-workspace">
             <div className="annotate-image">
-              <ZoomViewer src={apiUrl(`/api/annotate/${name}/fields/${enc(tile)}/image.jpg`)}
+              <ZoomViewer fit src={apiUrl(`/api/annotate/${name}/fields/${enc(tile)}/image.jpg`)}
                 layers={data.layers.filter((l) => layers[l]).map((l) => apiUrl(`/api/annotate/${name}/fields/${enc(tile)}/layer/${l}.png`))}
                 title={<span className="row"><span className="muted small">{tile}</span>{done && <span className="badge status-done">finished</span>}</span>}
                 cursor={active?.id === 'label' ? 'pointer' : 'crosshair'} onClick={click} onMove={move}>
@@ -387,7 +390,7 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
                       <circle key={k} cx={o.x} cy={o.y} r={Math.max(8, o.radius_px) + 4} fill={decided ? color(v) : 'none'} fillOpacity={0.18}
                         stroke={v ? color(v) : '#ffffff'} strokeOpacity={negative && !decided ? 0.55 : 1}
                         strokeWidth={(k === selected ? 3.5 : negative && !decided ? 1.2 : 2) * unit} strokeDasharray={decided ? undefined : `${5 * unit} ${3 * unit}`}>
-                        <title>{[full && o.ai_value && `AI: ${text(aiPick(o))} (p ${fmt(o.ai_probability, 2)})`, decided && `you: ${text(v)}`].filter(Boolean).join(' · ') || 'candidate'}</title>
+                        <title>{[full && o.ai_value && `detection: ${text(aiPick(o))} (p ${fmt(o.ai_probability, 2)})`, decided && `you: ${text(v)}`].filter(Boolean).join(' · ') || 'candidate'}</title>
                       </circle>
                     )
                   })}
@@ -436,17 +439,17 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
               {selectedObject && (
                 <div className="card">
                   <h3>Selected object</h3>
-                  {selectedAi?.ai_value && <p className="small">The AI’s guess: <b>{text(aiPick(selectedAi))}</b></p>}
+                  {selectedAi?.ai_value && <p className="small">Detection’s call: <b>{text(aiPick(selectedAi))}</b></p>}
                   <p className="small">{myClass(selectedObject.x, selectedObject.y) ? <>Your class: <b>{text(pickOf(myClass(selectedObject.x, selectedObject.y)))}</b></> : 'Not changed by you'}
                     {!objectKeys.has(selected!) && ' (added by you)'}</p>
                   {!objectKeys.has(selected!) && <AddedNote state={addedState(selectedObject.x, selectedObject.y)}
                     reason={addedStates.find((a) => rkey(a.x, a.y) === selected)?.reason ?? ''} />}
                   <div className="row">
                     {myClass(selectedObject.x, selectedObject.y) && objectKeys.has(selected!) &&
-                      <button className="btn small" onClick={() => save([{ task: 'class', x: selectedObject.x, y: selectedObject.y, deleted: true }])}>Back to the AI’s guess</button>}
+                      <button className="btn small" onClick={() => save([{ task: 'class', x: selectedObject.x, y: selectedObject.y, deleted: true }])}>Back to detection’s call</button>}
                     {meta.tools.includes('outline') && active?.id !== 'outline' && <button className="btn small" onClick={() => setTool('outline')}>Edit outline</button>}
                     {meta.tools.includes('outline') && active?.id === 'outline' && <button className="btn small" onClick={() => { setDraft([]); setRedrawing(true) }}>Redraw outline</button>}
-                    {myOutline(selectedObject.x, selectedObject.y) && <button className="btn small" onClick={() => save([{ task: 'outline', x: selectedObject.x, y: selectedObject.y, deleted: true }])}>Outline back to the AI’s</button>}
+                    {myOutline(selectedObject.x, selectedObject.y) && <button className="btn small" onClick={() => save([{ task: 'outline', x: selectedObject.x, y: selectedObject.y, deleted: true }])}>Outline back to detection’s</button>}
                     {!objectKeys.has(selected!) && <button className="btn small" onClick={removeSelected}>Remove object</button>}
                   </div>
                 </div>
@@ -462,7 +465,7 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
                     onBlur={() => { if (note !== (Object.values(mine).find((m) => m.task === 'note')?.value ?? '')) save([{ task: 'note', value: note, deleted: !note }]) }} />
                 </label>
                 <p className="muted small">{changed} change{changed === 1 ? '' : 's'} by you in this field.
-                  {' '}{full ? 'When you press Finished, every AI guess you left as it is counts as checked by you.' : 'Objects you did not label stay unlabelled.'}</p>
+                  {' '}{full ? 'When you press Finished, every call of detection you left as it is counts as checked by you.' : 'Objects you did not label stay unlabelled.'}</p>
               </div>
               <details className="card side-details">
                 <summary>Display options</summary>
@@ -495,30 +498,30 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
   )
 }
 
-/** "Did the AI miss something?": the add tool, explained, always in view while a field is open. */
+/** "Did detection miss something?": the add tool, explained, always in view while a field is open. */
 function MissedCallout({ adding, count, onAdd }: { adding: boolean; count: number; onAdd: () => void }) {
   return (
     <div className="missed-callout small">
-      <b>Did the AI miss something?</b> {adding ? 'Click it on the picture.' : <>Press <span className="kbd">A</span> or
+      <b>Did detection miss something?</b> {adding ? 'Click it on the picture.' : <>Press <span className="kbd">A</span> or
         {' '}<button className="link-btn" onClick={onAdd}>Add a missed object</button>, then click it.</>}
-      {' '}Objects you add are how we find the AI’s blind spots — and they teach the next model.
+      {' '}Objects you add are how we find detection’s blind spots — and they teach the next model.
       {count > 0 && <span className="muted"> You added {count} in this field.</span>}
     </div>
   )
 }
 
 const ADDED_TEXT: Record<AddedState['state'], string> = {
-  measuring: 'Being measured so it can teach the AI…',
+  measuring: 'Being measured so it can teach the model…',
   measured: 'Measured — it will help train the next model.',
-  could_not_be_measured: 'Could not be measured, so it cannot train the model; your label still counts as an object the AI missed.',
-  proposed: 'The AI had proposed this object too: your mark sits next to its centre, so it counts as that object.',
+  could_not_be_measured: 'Could not be measured, so it cannot train the model; your label still counts as an object detection missed.',
+  proposed: 'Detection had proposed this object too: your mark sits next to its centre, so it counts as that object.',
 }
 
-/** What became of an object the person added: the AI never proposed it, and whether it could be measured. */
+/** What became of an object the person added: detection never proposed it, and whether it could be measured. */
 function AddedNote({ state, reason }: { state: AddedState['state']; reason: string }) {
   return (
     <p className={`small added-note${state === 'could_not_be_measured' ? ' warn' : ''}`}>
-      {state !== 'proposed' && <><b>The AI never proposed this object.</b> </>}{ADDED_TEXT[state]}
+      {state !== 'proposed' && <><b>Detection never proposed this object.</b> </>}{ADDED_TEXT[state]}
       {state === 'could_not_be_measured' && reason && <span className="muted"> ({reason})</span>}
     </p>
   )

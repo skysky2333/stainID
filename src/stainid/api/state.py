@@ -290,7 +290,7 @@ def project_status(root: Path) -> dict:
         running = [_title(j) for j in JobStore(project.output("jobs"), create=False).newest() if j.status == "running" and alive(j.pid, j.started)]
     if running:
         return {"state": "running", "text": "Running: " + ", ".join(dict.fromkeys(running)), "running": running}
-    if (project.output("tables") / "results_donor_region.csv").exists():
+    if any((folder / "results_donor_region.csv").exists() for folder in (project.output("v2") / "measures", project.output("tables"))):
         return {"state": "results", "text": "Results ready", "running": []}
     needed = ("slides_table", "core_manifest", "tma_layout") if project.is_tma else ("image_list", "whole_core_manifest")
     if all(project.input(key).exists() for key in needed):

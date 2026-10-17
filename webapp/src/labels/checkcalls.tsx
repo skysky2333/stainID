@@ -1,7 +1,7 @@
-/* Round 1, "Check the AI's calls": one field (tile) at a time, its candidates one after the other (accepted and
-   rejected, most informative first) with the AI's class, type, score and outline. The server hands each person a field
+/* Round 1, "Check detection's calls": one field (tile) at a time, its candidates one after the other (accepted and
+   rejected, most informative first) with detection's class, type, score and outline. The server hands each person a field
    nobody else is on (held while this page is open); once someone finishes a field it is not handed to anyone else.
-   The keys are those of round 2, acting on the object on screen: Enter keeps the AI's call, 1–9 (and the type keys)
+   The keys are those of round 2, acting on the object on screen: Enter keeps detection's call, 1–9 (and the type keys)
    choose the class, 0 unsure, Delete not an object, Tab / Shift+Tab a bigger or smaller outline (the three Segment
    Anything masks come with the object: no waiting), Space precise editing (right-click a spot to include, left-click one
    to leave out, drag the corners; Space again keeps it), Z undoes the last unsaved answer. Answers stay on this page
@@ -310,12 +310,12 @@ export function CheckCalls({ detail, onEvent }: { detail: SessionDetail; onEvent
                     <b>Precise editing</b> — right-click a spot to include it, left-click one to leave it out, drag the corners.
                     {precise.busy ? ' Outlining…' : ''} <span className="kbd">Space</span> keeps it, <span className="kbd">Esc</span> cancels.
                   </div>
-                ) : <MaskSwitch count={item.masks.length} index={maskOf(item)} onChange={chooseMask} />}
+                ) : <MaskSwitch masks={item.masks} index={maskOf(item)} onChange={chooseMask} />}
                 {(edited[item.key] || mine?.outline) && !precise && <p className="small muted" style={{ margin: 0 }}>Outline edited by you{edited[item.key] ? ' — kept with your answer' : ''}.</p>}
               </div>
               <div className="card queue-choices">
                 <div className="ai-call">
-                  <span className="small secondary">The AI says</span>
+                  <span className="small secondary">Detection says</span>
                   <b className="ai-call-class"><span className={`look-swatch look-${look.look}`} style={{ borderColor: look.colour }} />
                     {callText(vocabulary, item.ai_value, item.ai_subtype, typesAsked)}</b>
                   <span className="small muted">{item.ai_probability != null ? `score ${fmt(item.ai_probability, 2)} · ` : ''}

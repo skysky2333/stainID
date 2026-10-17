@@ -33,7 +33,7 @@ from stainid.tables import write_text_atomic
 
 SOURCE = "candidates"
 KIND = {1: "queue", 2: "fields"}
-TITLE = {1: "Check the AI’s calls", 2: "Fix the field"}
+TITLE = {1: "Check detection’s calls", 2: "Fix the field"}
 RULE = "informative"
 NEAR = 0.15  # how close to the decision threshold a score is "near" it
 LEVELS = {"all": None, "0.5": 0.5, "0.75": 0.75, "1": 1.0, "1.5": 1.5}  # how generous: lowest proposal level shown (× the slide threshold)

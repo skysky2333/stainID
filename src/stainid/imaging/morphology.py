@@ -14,7 +14,6 @@ from functools import lru_cache
 import cv2
 import numpy as np
 
-
 SMALL_RADIUS = 10  # below this OpenCV's own dilation is as quick
 
 

@@ -66,11 +66,11 @@ default; sessions made before this choice ask for it). On the quick check and on
 - with the mouse: click the class, then its type or *No type / not sure*.
 
 The keys are shown on screen next to the classes and under the picture. Without types asked, only the class keys apply
-and the AI's confirmed calls (fields sessions, *Finished*) are stored without a type.
+and detection's confirmed calls (fields sessions, *Finished*) are stored without a type.
 
 The annotation rounds use the same class and type keys, acting on the object under the mouse (round 2) or on screen
 (round 1). Their other keys are listed in [webapp.md](webapp.md#annotation-rounds): 0 unsure, Delete not an object,
-Tab / Shift+Tab for the outline size, Space for precise editing, Z undo and Enter to keep the AI's call.
+Tab / Shift+Tab for the outline size, Space for precise editing, Z undo and Enter to keep detection's call.
 
 ## Where types show
 
@@ -80,7 +80,7 @@ Tab / Shift+Tab for the outline size, Space for precise editing, Z undo and Ente
 - **Labelled so far** counts objects per class and per type (*tau+ neuron 420 (pretangle 170 · mature tangle 250)*).
 - **Download all labels** adds `identity`, `subtype`, `role` and `class` (as the page shows it) to every class label;
   `value` stays as stored.
-- The AI's calls read in the same words (*tau+ neuron · mature tangle*); "AI gives another type" compares types.
+- Detection's calls read in the same words (*tau+ neuron · mature tangle*); "Detection gives another type" compares types.
 
 ## Changing the classes (Settings → Label classes)
 
@@ -108,7 +108,7 @@ Example pictures are stored with the labels, `outputs.reviews/class_examples/<st
 
 A package's class map (`dataset.class_map`, label → stainID class) may target a type: `plaque/compact`,
 `tau+ neuron/pretangle`. Imported labels are stored as identity and type like any other, and the scores against
-the models compare types through the same vocabulary (a rater's `plaque/compact` is the AI's *compact plaque*; a
+the models compare types through the same vocabulary (a rater's `plaque/compact` is detection's *compact plaque*; a
 rater who marked plaques without a type is compared with every accepted plaque). The import page offers every class
 and `class/type` of the stain's family.
 

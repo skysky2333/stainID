@@ -47,7 +47,7 @@ export function expire(waiting: Waiting | null, now: number, waitMs: number): Cl
   return waiting && !live(waiting, now, waitMs) ? { identity: waiting.identity, subtype: null } : null
 }
 
-/** A stored label (or an AI call) as identity and type ids: labels made before types existed through the aliases,
+/** A stored label (or a detection call) as identity and type ids: labels made before types existed through the aliases,
  *  "identity / type" by id or name, else as it is. */
 export function resolveClass(vocabulary: Vocabulary, value: string | null | undefined, subtype?: string | null): ClassPick {
   const v = (value ?? '').trim()

@@ -300,3 +300,16 @@ def test_the_tutorial_practises_on_a_real_field_and_keeps_nothing(rounds_project
     assert ann.post("/api/session/tutorial", json={"done": True}).json() == {"done": True}
     assert ann.get("/api/session/tutorial").json()["done"] is True
     assert ann.get("/api/annotate").json() == []  # practice sessions are not listed
+
+
+def test_the_admin_can_preview_the_tutorial_without_a_name(rounds_project):
+    admin, (ann, _), _ = rounds_project
+    preview = admin.get("/api/session/tutorial").json()  # the admin, signed in, with no annotator name
+    assert preview["done"] is False and preview["practice"]["round2"] == "practice-2-6E10"
+    field = admin.get(f"/api/annotate/practice-2-6E10/fields/{TILE}")
+    assert field.status_code == 200 and field.json()["objects"]
+    assert _save(admin, "practice-2-6E10", TILE, [], submit=True).status_code == 200  # echoed back, nothing kept
+    # the preview opens only the practice: real sessions still need a name
+    made = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "open": True, "tile_ids": [TILE]}).json()
+    assert admin.get(f"/api/annotate/{made['name']}/fields/{TILE}").status_code == 401
+    assert ann.get(f"/api/annotate/{made['name']}/fields/{TILE}").status_code == 200

@@ -16,9 +16,17 @@ export default function AnnotateHome() {
     <div className="annotate-home">
       <PageHead title="Choose a session" subtitle="You can stop and come back at any time: use the same name to continue where you left off." />
       <Loaded state={list} label="Loading sessions…">
-        {(sessions) => sessions.length ? (
-          <div className="grid grid-2">{sessions.map((s) => <SessionCard key={s.name} s={s} />)}</div>
-        ) : (
+        {(sessions) => sessions.length ? (() => {
+          const rounds = [...sessions.filter((s) => s.round)].sort((a, b) => (b.round ?? 0) - (a.round ?? 0))  // the field tool first
+          const older = sessions.filter((s) => !s.round)
+          return <>
+            {rounds.length > 0 && <div className="grid grid-2">{rounds.map((s) => <SessionCard key={s.name} s={s} />)}</div>}
+            {older.length > 0 && <>
+              {rounds.length > 0 && <h2 className="annotate-older">Other kinds of session</h2>}
+              <div className="grid grid-2">{older.map((s) => <SessionCard key={s.name} s={s} />)}</div>
+            </>}
+          </>
+        })() : (
           <Empty>
             <p style={{ marginTop: 0 }}>No session is open right now. The person who sent you the link opens one when it is ready.</p>
             <button className="btn" onClick={list.reload}>Check again</button>

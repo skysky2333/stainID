@@ -14,9 +14,10 @@ keeps; it finds every core or tissue region, looks at every tile of tissue, and 
 
 Other antibodies of the same kind work too (4G8 or NAB228 for amyloid, PHF-1 for tau), as do other chromogens.
 
-![Workflow](docs/images/workflow.png)
+![The Run page: the flow chart of every step, with its state, counts, what it makes and how long it took](docs/images/workflow.png)
 
-*Screenshots show a synthetic demo project, not study data (see [The app](#the-app)).*
+*The Run page: every step as a flow chart, the data each hands on along the arrows. Screenshots show a synthetic demo
+project, not study data (see [The app](#the-app)).*
 
 ## Why stainID
 
@@ -24,9 +25,9 @@ Other antibodies of the same kind work too (4G8 or NAB228 for amyloid, PHF-1 for
   Word, CSV or even a photo, matches them to the slides, and tells you in plain words what does not fit.
 - **One button to run.** *Run everything* runs every step in the right order. You can stop at any time and continue
   later, and you can close the browser while it works.
-- **See what the AI saw.** Open any core and click any spot to see a full-resolution picture with every detection
+- **See what detection found.** Open any core and click any spot to see a full-resolution picture with every detection
   drawn on it.
-- **Annotation built in.** Send colleagues a link. They correct the AI with one key per object, on their own fields,
+- **Annotation built in.** Send colleagues a link. They correct stainID detection with one key per object, on their own fields,
   after a short tutorial, with no account.
 - **Your staining, your models.** Train the detection models on the labels your team makes, compare the new model
   with the one in use, and switch only when it is better.
@@ -45,7 +46,7 @@ Other antibodies of the same kind work too (4G8 or NAB228 for amyloid, PHF-1 for
 - **A labelled training set.** Collect labels from several people, with repeat labels for agreement and every label
   traceable to who made it and when.
 - **Better detection for your lab's staining.** Retrain the NeuN, 6E10 and AT8 models on your own slides.
-- **An end-to-end accuracy check.** People outline every object in a few fields without seeing the AI. The check then
+- **An end-to-end accuracy check.** People outline every object in a few fields, with what detection found shown. The check then
   shows what detection missed, cut in two, merged or outlined poorly.
 
 ## Getting started
@@ -63,7 +64,7 @@ Other antibodies of the same kind work too (4G8 or NAB228 for amyloid, PHF-1 for
    from your files. A final check lists any problems, each with a fix. Then press *Run everything*.
 5. **Follow the run** on the Run page. Each step shows its progress and a rough time left.
 6. **Check, label, improve, and use the results.** Look at detections on the tissue (Cores). Ask colleagues to check
-   the AI's work (Labels), and train better models from their labels (Models). Then download the results table
+   detection's work (Labels), and train better models from their labels (Models). Then download the results table
    (Results).
 
 The Help page in the app has the same guide, answers to common questions and a glossary. Adding slides to a running
@@ -89,26 +90,26 @@ against about 90 s on a Mac's GPU.
 | | What happens | Where |
 |---|---|---|
 | **1 Set up** | slides registered, cores found, maps and donors attached, every core cut into ~560 µm tiles, one stain threshold per slide (set blind to diagnosis) | Set up |
-| **2 Detect** | every cell found with Cellpose-SAM, then neurons, plaques and tau found and measured in every tile; Segment Anything outlines, optional | Run |
+| **2 Detect** | every cell found with Cellpose-SAM, then every stained object proposed in every core, detection's call on each, and three Segment Anything outlines of the likely ones | Run |
 | **3 Check** | every core with its detections, and the stain threshold of each slide | Cores, Stain thresholds |
-| **4 Improve** | people check and correct the AI's calls in annotation rounds; new models are trained from their labels and compared | Labels, Models |
+| **4 Improve** | people check and correct detection's calls in annotation rounds; new models are trained from their labels and compared | Labels, Models |
 | **5 Results** | one row per donor and brain region, every stain, with plots by group and what every column means | Results |
 
 Steps run in the background in the right order, at most two heavy ones at a time. Every one can be stopped and
 resumed. The full list of steps and their commands is [below](#every-step-and-its-command).
 
-## Annotation: check and correct the AI together
+## Annotation: check and correct detection together
 
-Labelling in stainID means **correcting the AI**, not starting from a blank picture. Every object the AI considered is
+Labelling in stainID means **correcting stainID detection**, not starting from a blank picture. Every object detection considered is
 already on the screen with its outline. People only fix what is wrong. A session takes a minute to make on the Labels
 page:
 
-1. **Choose a stain and a round.**
-   - **Round 1, Check the AI's calls** (start here): one field at a time, object by object. The AI's class, type,
-     score and outline are shown. Press Enter to keep the call, or a key to change it. The most informative objects
-     come first: those where the AI is unsure, then strong ones it rejected, then weak ones it accepted.
-   - **Round 2, Fix the field**: the whole field with every object the AI considered. People add what it missed, fix
-     outlines and change any call.
+1. **Choose a stain and what people should do.**
+   - **Fix the field** (start here): the whole field with every object detection considered. People point at an
+     object and press a key to change its call, fix its outline, or click to add what detection missed.
+   - **Check detection's calls**: one object at a time, with detection's class, type, score and outline. Press Enter
+     to keep the call, or a key to change it. The most informative objects come first: those where detection is
+     unsure, then strong ones it rejected, then weak ones it accepted.
 2. **Choose where the fields come from**: every ready core, some TMAs, or squares you click on the cores. The same
    works for slides and images.
 3. **Copy the link and send it.** People open it in their browser and type their name. No account or password is
@@ -116,41 +117,48 @@ page:
 
 What annotators see:
 
-- **Everything, nothing hidden.** Objects the AI counts are solid in their class colour, rejected ones dotted grey,
-  and unsure ones dotted in the unsure colour. Pointing at an object lights it up and shows what the AI said about it
-  at the side.
+- **Everything, nothing hidden.** Every chosen class is solid in its own colour (unsure, key 0, too). Dotted grey means
+  not active: rejected by detection, removed by a person (Delete), or just added and waiting for its class. Pointing at
+  an object lights it up, shows its name beside it and its facts at the side: class, detection's call and score, area,
+  and which of its three outlines shows.
 - **One key per object.** The keys act on the object under the mouse:
 
   | Key | What it does |
   |---|---|
   | **1–9** | its class; for a class with types, the type's number right after (or the type's letter key) |
   | **0** | unsure (left out of training) |
-  | **Delete** | not an object (it turns dotted grey and stays visible) |
+  | **Delete** | not an object (it turns dotted grey and stays visible; a class key brings it back) |
   | **Tab** / **Shift+Tab** | a bigger or smaller outline: each object has three Segment Anything outlines ready |
-  | **Space** | precise editing: right-click a spot to include it, left-click one to leave it out, drag the dots; Space again keeps it |
+  | **Space** | precise editing of that object only: right-click a spot to add it, left-click one to leave it out, drag the dots (Z one step back); Space again keeps it, Esc cancels |
   | **Z** | undo |
-  | **Enter** | keep the AI's call (round 1) |
+  | **Enter** | keep detection's call (round 1) |
   | **Ctrl+S** / **Ctrl+Enter** | save / save and continue |
 
-- **Click to add a missed object.** In round 2, a click on empty tissue outlines the object at once, because the
-  Segment Anything features of each field are made ahead (on the GPU when there is one). Its class key then keeps it.
+- **Click to add a missed object.** In *Fix the field*, a click on empty tissue outlines the object at once, because
+  the Segment Anything features of each field are made ahead (on the GPU when there is one). It shows as a new
+  candidate, dotted grey, until a class key makes it solid.
+- **The page fits the window.** The picture is as large as the window allows and the side panel (the object, the class
+  keys and colours, the keys, the field's progress, Save) scrolls on its own; longer help is behind **?**. Scroll to
+  zoom, drag or hold the middle button to move the picture.
 - **No collisions.** Each person is handed a field nobody else is working on, and a finished field is not handed out
   again. Under *Advanced* you can ask for two or more people per field, to measure agreement.
 - **Nothing is saved by accident.** Changes stay on the page, with a count of unsaved changes, until *Save* or *Save
   and continue*. A reload brings unsaved work back. *Save and continue* counts every call you left as it is as checked
   by you, and opens the next field.
 - **A tutorial the first time.** A new name first goes through a short practice on a real field of the project (about
-  3–5 minutes, where nothing is saved). The coach asks for one thing at a time; *Tutorial* at the top shows it again.
+  3–5 minutes, where nothing is saved), also when they arrive by a session's own link. The coach asks for one thing at
+  a time; *Tutorial* at the top shows it again. *Try the tutorial* on the Labels page shows the admin the same practice.
 
 Both rounds write one shared set of answers, so no object is asked about twice, and labels made earlier are matched
-onto the AI's candidates. The Labels page follows progress field by field and person by person. It also shows how
-often people agree with the AI, and the labels train a new model on the Models page. The classes and their types
+onto detection's candidates. The Labels page follows progress field by field and person by person. It also shows how
+often people agree with detection, and the labels train a new model on the Models page. The classes and their types
 (e.g. *tau+ neuron · pretangle*) can be changed in Settings ([label classes](docs/label_classes.md)). The older kinds
 of session (whole-field review, a quick object queue, and *Outline every object* for the segmentation check) are under
 *Advanced*.
 
 The rounds work on the candidates of the staged detection ([below](#detection-stage-by-stage)), so a stain needs its
-*Detect (v2)* steps run first. To try the rounds before that, run `stainid labels store-from-pool`.
+*Find candidates* and *Decide* steps run first (*Run what's left* does it). To try the rounds before that, run
+`stainid labels store-from-pool`.
 
 ## Image sets, whole slides and other labs' datasets
 
@@ -195,14 +203,18 @@ All screenshots show a synthetic demo project: the tissue images, donors, labels
 
 | | |
 |---|---|
+| ![Fix the field](docs/images/annotate.jpg) | ![Precise editing](docs/images/annotate-precise.jpg) |
+| **Fix the field** (at `/p/<project>/annotate`): every candidate of the field, solid in its class colour or dotted grey when rejected or removed; the object under the mouse lights up, its name beside it and its facts (class, detection's call and score, area, outline) in the side panel with the class keys and colours | **Precise editing** (Space): only this object can change; right-click adds a spot, left-click leaves one out, the white dots drag; Space keeps it |
+| ![Check detection's calls](docs/images/check-calls.jpg) | ![Tutorial](docs/images/tutorial.jpg) |
+| **Check detection's calls**: the other kind of round, one object at a time, Enter keeps detection's call | **Tutorial**: where a new annotator starts, on a practice field where nothing is saved; *Try the tutorial* on the Labels page shows it to the admin |
 | ![Home](docs/images/home.png) | ![Models](docs/images/models.png) |
 | **Home**: your next step and overall progress | **Models**: download published models; train from labels, compare, switch |
 | ![Core viewer](docs/images/viewer.jpg) | ![Labels](docs/images/labels.png) |
-| **Cores**: the whole core; click any spot for a full-resolution preview with the detections drawn on it | **Labels**: progress per stain, agreement with the AI, labelling sessions and the link to share |
-| ![Reviewing a field](docs/images/annotate.jpg) | ![Projects](docs/images/projects.png) |
-| **Reviewing a field** (at `/p/<project>/annotate`): the AI's calls and outlines pre-filled; people correct, add and confirm | **Projects**: every study with its status; new study, open a folder, switch |
-| ![Results](docs/images/results.png) | ![Settings](docs/images/settings.png) |
-| **Results**: download the main table, what every column means, plots by group | **Settings**: study layout, diagnostic groups, label classes and every file location |
+| **Cores**: the whole core; click any spot for a full-resolution preview with every candidate drawn on it (rejected ones dotted grey) | **Labels**: annotation rounds with their progress, agreement with detection, the link to share and *Try the tutorial* |
+| ![Results](docs/images/results.png) | ![Projects](docs/images/projects.png) |
+| **Results**: download the main table, what every column means, plots by group | **Projects**: every study with its status; new study, open a folder, switch |
+| ![Settings](docs/images/settings.png) | |
+| **Settings**: study layout, diagnostic groups, label classes and every file location | |
 
 ---
 
@@ -243,28 +255,29 @@ one started there.
 | | Prepare images | image sets and whole slides: the analysis scale and colours, regions, tiles (replaces the five steps above) | `stainid images` |
 | | Calibrate stain thresholds | one DAB threshold per slide from every tile of its cores, blind to diagnosis | `stainid calibrate` |
 | **Detect** | Find nuclei | Cellpose-SAM cells for every stain; the slow step, the one to run on a GPU | `stainid nuclei` |
-| | Detect NeuN neurons | candidates + NeuN model | `stainid neun` |
-| | Detect plaques and tau | 6E10 plaques and morphotypes; AT8 tau+ neurons and threads | `stainid fields` |
-| | Outline objects | Segment Anything outlines and shape features (optional) | `stainid masks` |
-| **Results** | Make results tables | one row per donor and region, every stain | `stainid summarize` |
-| **Detect (v2)** | Find candidates | every stained object proposed generously and measured; nothing decided yet | `stainid v2 proposals` |
+| | Find candidates | every stained object proposed generously and measured; nothing decided yet | `stainid v2 proposals` |
 | | Decide | the stain model and rules call every candidate, from the saved measurements | `stainid v2 calls` |
-| | Outline objects | three Segment Anything outline sizes for the likely objects (optional) | `stainid v2 outlines` |
-| | Make results tables | per-core and per-donor-region tables from the calls | `stainid v2 measures` |
+| | Outline objects | three Segment Anything outline sizes for the likely objects | `stainid v2 outlines` |
+| **Results** | Make results tables | one row per donor and region (and per core), every stain, from the calls | `stainid v2 measures` |
 | **Models** | Download public models | Cellpose-SAM, Segment Anything, Phikon | `stainid download-models` |
 | | Prepare fields for labelling | candidates for the older kinds of labelling session | `stainid labels prepare` |
 | | Train a model | train and compare a stain model from the labelling sessions you choose | `stainid train` |
 | | Check segmentation | how well detection finds and outlines the objects people outlined | `stainid score-segmentation` |
+| **Legacy (v1)** | Detect NeuN neurons (legacy v1) | the first detection: candidates + NeuN model | `stainid neun` |
+| | Detect plaques and tau (legacy v1) | the first detection: 6E10 plaques and morphotypes; AT8 tau+ neurons and threads | `stainid fields` |
+| | Outline objects (legacy v1) | Segment Anything outlines of the first detection's objects | `stainid masks` |
+| | Make results tables (legacy v1) | the first detection's tables (`data/analysis/results_*.csv`) | `stainid summarize` |
 
-*Run everything* (*Run what's left* on the Run page) runs the Set up, Detect and Results steps, except the optional
-outlines. The Detect (v2) steps have their own section on the Run page and run one by one. [docs/webapp.md](docs/webapp.md) explains the queue, and
-[docs/pipelines.md](docs/pipelines.md) says what each step computes.
+*Run everything* (*Run what's left* on the Run page) runs the Set up, Detect and Results steps. The legacy (v1)
+detection steps are under *Advanced* on the Run page: still runnable one by one, never run by those buttons.
+[docs/webapp.md](docs/webapp.md) explains the queue, and [docs/pipelines.md](docs/pipelines.md) says what each step
+computes.
 
 ### Detection, stage by stage
 
 The staged (v2) detection splits detection into stages. Each stage reads the saved outputs of the stage before it:
 proposals → calls → outlines → measures. Every candidate is kept, accepted or rejected, with its outline,
-measurements, the AI's call and the reason for it. This store is what the viewer and the annotation rounds show.
+measurements, detection's call and the reason for it. This store is what the viewer and the annotation rounds show.
 
 Each stage writes a small manifest per core image. The manifest records the code version, the parameters and a
 fingerprint of every input (the image, the slide threshold, the hand-drawn exclusions, the model and its cut-off, the
@@ -277,8 +290,8 @@ tools/v2_run.sh decide     # only calls and measures, after a new model, cut-off
 tools/v2_run.sh status     # how far each stage has got
 ```
 
-Outputs go to `data/analysis/v2/` and leave the current results untouched. See
-[docs/pipeline_v2.md](docs/pipeline_v2.md) for every stage, rule and output column.
+Outputs go to `data/analysis/v2/`; the Results page shows `v2/measures/` once it exists, and the legacy tables stay
+as they were. See [docs/pipeline_v2.md](docs/pipeline_v2.md) for every stage, rule and output column.
 
 ### Documentation
 
