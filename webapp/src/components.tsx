@@ -96,7 +96,7 @@ export function Loaded<T>({ state, label, children }: {
 }) {
   if (state.data !== null && state.data !== undefined) return <>{children(state.data)}</>
   if (state.error) return <ErrorNote error={state.error} />
-  if (state.pending) return <Loading label={<>{label ?? 'Loading…'} <span className="secondary">{pendingText(state.pending)}</span></>} />
+  if (state.pending) return <Loading label={pendingText(state.pending)} />  // the server prepares it: how far, and how long still
   return <Loading label={label} />
 }
 

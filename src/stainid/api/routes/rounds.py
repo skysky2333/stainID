@@ -235,8 +235,8 @@ def prepare_pictures(meta: dict, force: bool = False) -> work.Task | None:
     state = get_state()
     if not meta.get("open") or not meta.get("fields"):
         return None
-    made = cache.names(state.cache_dir("fields"))  # one listing (a session may have hundreds of fields)
-    if all(f"{t}.jpg" in made for t in meta["fields"]):
+    made = render.fields_made(state)  # one listing (a session may have hundreds of fields)
+    if all(t in made for t in meta["fields"]):
         return None
     return work.submit("pictures", ("pictures", str(state.root), meta["name"]),
                        lambda task: render.field_jpegs(state, [t for t in meta["fields"] if _known(t)], task.step), work.AHEAD,

@@ -332,7 +332,10 @@ export interface RequestOptions { onPending?: (pending: Pending | null) => void 
 async function request<T>(url: string, init?: RequestInit, options?: RequestOptions): Promise<T> {
   setInFlight(1)
   const key = ++pendingCounter
-  const tell = (p: Pending | null) => { setPending(key, p); options?.onPending?.(p) }
+  const tell = (p: Pending | null) => {  // a page showing it itself (useFetch / Loaded), else the note at the top of the window
+    if (options?.onPending) options.onPending(p)
+    else setPending(key, p)
+  }
   try {
     let answer: T | PendingAnswer = await send<T>(url, init)
     const start = Date.now()

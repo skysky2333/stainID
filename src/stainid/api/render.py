@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from stainid import disk_cache
+from stainid import cache, disk_cache
 from stainid.api import pyramid
 from stainid.api.state import ProjectState
 from stainid.imaging.color import rgb_to_hed
@@ -72,6 +72,11 @@ def _cut(state: ProjectState, image, tile: dict, target: Path) -> None:
     out = io.BytesIO()
     part.save(out, format="JPEG", quality=FIELD_JPEG_QUALITY)
     disk_cache.write(target, out.getvalue())
+
+
+def fields_made(state: ProjectState) -> frozenset[str]:
+    """The tiles whose field picture is made (one listing of the folder, kept a few seconds)."""
+    return frozenset(name[:-4] for name in cache.names(state.cache_dir("fields")) if name.endswith(".jpg"))
 
 
 def field_jpegs(state: ProjectState, tile_ids, step=None) -> int:
