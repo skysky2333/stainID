@@ -59,4 +59,22 @@ def test_annotation_pages_show_the_stains_default_outline_first(project):
     project.config["v2"] = {"outlines": {"default_outline": {"AT8": "sam"}}}
     row = candidate_store.read_box(project, "AT8", CORE, 0, 0, 100, 100).set_index("candidate_id").loc[f"AT8:{CORE}:10:10"]
     found, default = candidate_store.masks(row)
-    assert default == 0  # "sam" and no sam_default stored: the best-scored SAM mask (no scores: the first)
+    assert default == 1  # "sam" and no sam_default stored: the output stage 3 kept (`sam_outline`), as the Cores view draws it
+    row = {**row.to_dict(), "sam_outline": None}
+    assert candidate_store.masks(row)[1] == 0  # nor that: the best-scored SAM mask (no scores: the first)
+
+
+@pytest.mark.parametrize("setting", ["stain", "sam"])
+def test_every_view_draws_the_outline_one_rule_chooses(project, setting):
+    """The Cores view (raw store rows, `candidates.outline_rings`) and the annotation pages (parsed rows,
+    `candidate_store.masks`) draw the same outline for every candidate: one choice, `candidates.outline_options`."""
+    from stainid.labels import candidate_store
+
+    project.config["v2"] = {"outlines": {"default_outline": {"AT8": setting}}}
+    raw = store.read_core(project, "AT8", CORE)
+    parsed = candidate_store.read_box(project, "AT8", CORE, 0, 0, 100, 100).set_index("candidate_id")
+    for row in raw.to_dict("records"):
+        found, default = candidate_store.masks(parsed.loc[row["candidate_id"]])
+        page = [int(round(v)) for point in found[default] for v in point]
+        assert store.outline_rings(row) == [page], (setting, row["candidate_id"])
+

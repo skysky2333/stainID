@@ -5,16 +5,21 @@ person about each candidate counts. Labels that name the candidate (`candidate`)
 before candidate ids existed (earlier sessions, imported label sets) are matched onto candidates by position
 (`candidate_store.match`), so nothing anyone labelled is asked again.
 
-A candidate is *decided* once `needed` people gave it a class that says something (not "unsure"): it then leaves every
-round-1 list at once and shows as "checked by <name>" in round 2. Someone who answered "unsure" is not asked again,
-but the candidate stays open for the others.
+One key and one count for every reader: `store.object_keys` (the candidate id, the position only where no candidate is
+named or found) and `store.tally` (the majority, "" when split). `table` / `state` are the decisions on candidates
+(the rounds, scoring, the Cores view); `consensus` is the same count over every labelled object, candidates and the
+objects people added that no candidate covers (training's truth, the Labels page).
+
+A candidate is *decided* once `needed` people gave it a class that says something (not "unsure"): it shows as
+"checked by <name>" in "Fix the field", with the class most of them gave (the latest one said when they are split).
+Someone who answered "unsure" is not asked again, but the candidate stays open for the others.
 """
 from __future__ import annotations
 
 import threading
+from collections import OrderedDict
 from dataclasses import dataclass, field
 
-import numpy as np
 import pandas as pd
 
 from stainid import cache
@@ -25,7 +30,8 @@ from stainid.project import Project
 
 COLUMNS = ["candidate", "source", "identity", "subtype", "role", "time", "session", "confirmed"]
 _LOCK = threading.Lock()
-_LEGACY: dict[tuple[str, str], tuple[tuple, pd.Series]] = {}  # (project, stain) -> (what it was made from, candidate of each old label)
+_LEGACY: OrderedDict[tuple, pd.Series] = OrderedDict()  # (project, stain, what it was made from) -> candidate of each old label
+_LEGACY_LIMIT = 8  # the rounds' labels, training's and the Labels page's: each its own rows
 _STATE: dict[tuple[str, str], tuple[tuple, State]] = {}
 _MAKING: dict[tuple[str, str], threading.Lock] = {}
 
@@ -41,40 +47,57 @@ def _store_signature(project: Project, stain: str) -> tuple:
     return cache.signature(candidate_store.folder(project, stain)), len(names)
 
 
-def _legacy(project: Project, stain: str, rows: pd.DataFrame, tiles: pd.DataFrame) -> pd.Series:
-    """The candidate each old label (one without a candidate id) is about, kept until those labels or the store change."""
-    digest = (len(rows), int(pd.util.hash_pandas_object(rows[["id", "source", "time"]].astype(str), index=False).sum()) if len(rows) else 0,
-              _store_signature(project, stain))
-    key = (str(project.root), stain)
+def _legacy(project: Project, stain: str, rows: pd.DataFrame, tiles: pd.DataFrame, in_field: bool = False) -> pd.Series:
+    """The candidate each old label (one without a candidate id) is about, kept until those labels or the store change.
+    `in_field`: the positions are in field-picture pixels already (`frames.in_field_frame`)."""
+    digest = (len(rows), int(pd.util.hash_pandas_object(rows[["id", "source", "time", "x", "y"]].astype(str), index=False).sum()) if len(rows) else 0,
+              _store_signature(project, stain), in_field)
+    key = (str(project.root), stain, digest)
     with _LOCK:
         kept = _LEGACY.get(key)
-    if kept is not None and kept[0] == digest:
-        return kept[1]
-    matched = candidate_store.match(project, stain, frames.in_field_frame(rows, tiles, project.context_px), tiles)
+        if kept is not None:
+            _LEGACY.move_to_end(key)
+            return kept
+    moved = rows if in_field else frames.in_field_frame(rows, tiles, project.context_px)
+    matched = candidate_store.match(project, stain, moved, tiles)
     with _LOCK:
-        _LEGACY[key] = (digest, matched)
+        _LEGACY[key] = matched
+        while len(_LEGACY) > _LEGACY_LIMIT:
+            _LEGACY.popitem(last=False)
     return matched
+
+
+def _unnamed(rows: pd.DataFrame) -> pd.DataFrame:
+    return rows[~_has_candidate(rows) & rows.x.notna()]
 
 
 def table(project: Project, stain: str, labels: pd.DataFrame, tiles: pd.DataFrame) -> pd.DataFrame:
     """Every person's latest decision on each candidate of this stain: candidate, source, identity, subtype, role
-    (`vocabulary` roles: positive, negative, skip), time, session and whether it confirmed the AI's call."""
+    (`vocabulary` roles: positive, negative, skip), time, session and whether it confirmed the AI's call. Old labels no
+    candidate is found for are left out (they are about no candidate)."""
     rows = labels[(labels.stain == stain) & (labels.task == "class")]
     if rows.empty:
         return pd.DataFrame(columns=COLUMNS)
-    named = _has_candidate(rows)
-    direct = rows[named]
-    old = rows[~named & rows.x.notna()]
-    matched = _legacy(project, stain, old, tiles) if len(old) else pd.Series(dtype=object)
-    old = old.assign(candidate=matched.reindex(old.index)).dropna(subset=["candidate"])
-    both = pd.concat([direct, old]) if len(old) else direct
-    if both.empty:
+    old = _unnamed(rows)
+    matched = _legacy(project, stain, old, tiles) if len(old) else None
+    rows = store.classes(rows, stain, vocab.of(project, stain))
+    keyed = store.latest_say(rows, store.object_keys(rows, matched))
+    keyed = keyed[~keyed.object.astype(str).str.startswith("at:")]
+    if keyed.empty:
         return pd.DataFrame(columns=COLUMNS)
-    both = store.classes(both, stain, vocab.of(project, stain))
-    both = both.assign(time=pd.to_numeric(both.time, errors="coerce").fillna(0.0), confirmed=both.confirmed.fillna(False).astype(bool),
-                       session=both.session.fillna("").astype(str))
-    latest = both.sort_values("time", kind="stable").drop_duplicates(["source", "candidate"], keep="last")
-    return latest[COLUMNS].reset_index(drop=True)
+    keyed = keyed.assign(candidate=keyed.object, time=pd.to_numeric(keyed.time, errors="coerce").fillna(0.0),
+                         confirmed=keyed.confirmed.fillna(False).astype(bool), session=keyed.session.fillna("").astype(str))
+    return keyed[COLUMNS].reset_index(drop=True)
+
+
+def consensus(project: Project, stain: str, labels: pd.DataFrame, tiles: pd.DataFrame) -> pd.DataFrame:
+    """One row per labelled object of this stain (`store.consensus`): old labels matched onto candidates first, so a
+    candidate's labels count together whatever field or position they were made at. `labels` in field-picture pixels
+    (`frames.in_field_frame`), as training and the Labels page read them."""
+    rows = labels[(labels.stain == stain) & (labels.task == "class")] if len(labels) else labels
+    old = _unnamed(rows) if len(rows) else rows
+    matched = _legacy(project, stain, old, tiles, in_field=True) if len(old) else None
+    return store.consensus(rows, stain, vocab.of(project, stain), matched)
 
 
 @dataclass
@@ -96,14 +119,6 @@ class State:
         return self.decided.get(candidate, [])
 
 
-def _most_common(frame: pd.DataFrame, column: str) -> pd.Series:
-    """Per candidate, the most common value of `column` among its rows (in their order); a tie goes to the value that
-    came first, as `value_counts` orders them."""
-    counted = frame.groupby(["candidate", column], sort=False).position.agg(["size", "min"]).reset_index()
-    counted = counted.sort_values(["size", "min"], ascending=[False, True], kind="stable").drop_duplicates("candidate")
-    return counted.set_index("candidate")[column]
-
-
 def _state_of(rows: pd.DataFrame) -> State:
     """Who decided what, counted for every candidate at once (grouped, not candidate by candidate: a submitted tile
     records each of its candidates)."""
@@ -115,18 +130,12 @@ def _state_of(rows: pd.DataFrame) -> State:
     said = rows[rows.role != vocab.SKIP].sort_values("time", kind="stable")
     if said.empty:
         return out
-    said = pd.DataFrame({"candidate": said.candidate.to_numpy(object), "source": said.source.to_numpy(object),
-                         "identity": said.identity.astype(str).to_numpy(object), "subtype": said.subtype.fillna("").astype(str).to_numpy(object),
-                         "time": said.time.to_numpy(float), "position": np.arange(len(said))})
     for candidate, source in zip(*(said.drop_duplicates(["candidate", "source"])[c].to_numpy(object) for c in ("candidate", "source"))):
         out.decided.setdefault(candidate, []).append(source)
-    identity = _most_common(said, "identity")
-    typed = said[(said.subtype != "") & (said.identity.to_numpy(object) == identity.reindex(said.candidate).to_numpy(object))]
-    subtype = _most_common(typed, "subtype") if len(typed) else pd.Series(dtype=object)
-    latest = said.groupby("candidate", sort=False).time.max()
-    subtypes = subtype.to_dict()
-    out.calls = {c: (identity[c], subtypes.get(c, "")) for c in out.decided}
-    out.times = {c: float(t) for c, t in latest.items()}
+    counted = store.tally(said.assign(object=said.candidate))  # the one count (training's truth too); split: the latest said
+    out.calls = {c: ((v, s) if v else (latest, latest_subtype)) for c, v, s, latest, latest_subtype in
+                 zip(counted.object, counted.value, counted.subtype, counted.latest, counted.latest_subtype)}
+    out.times = {c: float(t) for c, t in zip(counted.object, counted.time)}
     return out
 
 

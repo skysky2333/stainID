@@ -1,9 +1,11 @@
 """Every label in one append-only log: who said what about which object (or field), for which task.
 
 A label is {id, source, stain, task, tile_id, x, y, value, points, session, confirmed, time, deleted, subtype, candidate}. `source` is a
-person's name or `import: <set>`; the pipeline's own call is not stored here, it is read from the results. Objects are
-identified by field and position (rounded pixel), so labels from different people and sessions about the same object
-line up. The latest version of (source, id) wins; edits and deletions keep the history.
+person's name or `import: <set>`; the pipeline's own call is not stored here, it is read from the results. A label's
+`id` is its field and position (rounded pixel); the latest version of (source, id) wins, edits and deletions keep the
+history. What a class label is *about* (`object_keys`) is the candidate it names (`candidate`), else the candidate found
+at its position (labels made before candidate ids existed, `labels.decisions`), else its field and position: the one
+key `consensus` groups by, for training, the Labels page and the rounds alike.
 
 Tasks: `class` (the object's class, also used for objects people add: `value` is its identity and `subtype` its
 subtype, see `labels.vocabulary`; labels made before subtypes existed have one value and no subtype),`outline` (polygon), `tag`, `note` and `done`
@@ -120,28 +122,78 @@ def majority(values: pd.Series) -> tuple[str, float]:
     return str(top), float(counts.iloc[0] / len(values))
 
 
-def consensus(labels: pd.DataFrame, stain: str, vocabulary: Vocabulary | None = None) -> pd.DataFrame:
-    """One row per labelled object: the majority identity (`value`, "" when people are split), the majority subtype
-    among the people who gave one for that identity, number of people, agreement on the identity, and whether most say
-    the object is positive (None on a tie). Labels that say nothing ("unsure") are left out."""
-    rows = classes(labels, stain, vocabulary)
-    rows = rows[rows.role != vocab.SKIP].copy()
+CONSENSUS = ["object", "candidate", "tile_id", "x", "y", "value", "subtype", "n", "agreement", "positive", "sources", "latest", "latest_subtype",
+             "time"]
+
+
+def object_keys(labels: pd.DataFrame, matched: pd.Series | None = None) -> pd.Series:
+    """What each label is about: the candidate it names (`candidate`), else `matched` (the candidate found at its
+    position, by label index), else its field and rounded position ("at:<tile>:<x>:<y>")."""
+    out = pd.Series("", index=labels.index, dtype=object)
+    if labels.empty:
+        return out
+    named = labels.candidate.fillna("").astype(str) if "candidate" in labels else out
+    found = matched.reindex(labels.index).fillna("").astype(str) if matched is not None and len(matched) else out
+    xs = pd.to_numeric(labels.x, errors="coerce").round()
+    ys = pd.to_numeric(labels.y, errors="coerce").round()
+    at = ["at:%s:%s:%s" % (t, "" if x != x else int(x), "" if y != y else int(y)) for t, x, y in zip(labels.tile_id, xs, ys)]
+    return pd.Series(np.where(named != "", named, np.where(found != "", found, at)), index=labels.index, dtype=object)
+
+
+def latest_say(rows: pd.DataFrame, keys: pd.Series) -> pd.DataFrame:
+    """`rows` with their `object` (`keys`), keeping each person's latest label about each object (by `time`, then the
+    order of the rows), in the order of the rows."""
     if rows.empty:
-        return pd.DataFrame(columns=["tile_id", "x", "y", "value", "subtype", "n", "agreement", "positive", "sources"])
-    rows["rx"], rows["ry"] = rows.x.round().astype(int), rows.y.round().astype(int)
-    group = rows.groupby(["tile_id", "rx", "ry"], sort=False).ngroup().to_numpy()  # in the order objects first come
-    frame = pd.DataFrame({"group": group, "identity": rows.identity.astype(str).to_numpy(object), "subtype": rows.subtype.astype(str).to_numpy(object)})
-    n = np.bincount(group)
-    top, share = _majorities(frame.group.to_numpy(), frame.identity.to_numpy(object), len(n))
-    typed = frame[(frame.subtype != "") & (frame.identity.to_numpy(object) == top[frame.group.to_numpy()]) & (top[frame.group.to_numpy()] != "")]
-    subtype, _ = _majorities(typed.group.to_numpy(), typed.subtype.to_numpy(object), len(n))
+        return rows.assign(object=pd.Series(dtype=object))
+    time = pd.to_numeric(rows.time, errors="coerce").fillna(0.0).to_numpy(float) if "time" in rows else np.zeros(len(rows))
+    frame = pd.DataFrame({"source": rows.source.astype(str).to_numpy(object), "object": keys.reindex(rows.index).to_numpy(object),
+                          "time": time, "position": np.arange(len(rows))})
+    keep = frame.sort_values(["time", "position"], kind="stable").drop_duplicates(["source", "object"], keep="last").position.sort_values()
+    return rows.iloc[keep.to_numpy()].assign(object=frame.object.to_numpy(object)[keep.to_numpy()])
+
+
+def tally(rows: pd.DataFrame) -> pd.DataFrame:
+    """One row per object of these labels (each with `object`, `source`, `identity`, `subtype`, `role`, optional
+    `time`, `tile_id`, `x`, `y`; one per person and object, `latest_say`), in the order objects first come: the
+    majority identity (`value`, "" when people are split), the majority subtype among the people who gave one for that
+    identity ("" on a tie), number of people, agreement on the identity, whether most say the object is positive (None
+    on a tie), who, the latest identity and subtype said (`latest`, `latest_subtype`) and when. Labels that say nothing
+    ("unsure") are left out. The one counting rule: training's truth, the Labels page and the rounds' calls."""
+    rows = rows[rows.role != vocab.SKIP]
+    if rows.empty:
+        return pd.DataFrame(columns=CONSENSUS)
+    group, objects = pd.factorize(rows.object.to_numpy(object))  # in the order objects first come
+    identity, subtype = rows.identity.astype(str).to_numpy(object), rows.subtype.fillna("").astype(str).to_numpy(object)
+    n = np.bincount(group, minlength=len(objects))
+    top, share = _majorities(group, identity, len(n))
+    typed = (subtype != "") & (identity == top[group]) & (top[group] != "")
+    sub, _ = _majorities(group[typed], subtype[typed], len(n))
     positive = np.bincount(group, weights=(rows.role == vocab.POSITIVE).to_numpy(float), minlength=len(n)) / n
+    time = pd.to_numeric(rows.time, errors="coerce").fillna(0.0).to_numpy(float) if "time" in rows else np.zeros(len(rows))
+    order = np.lexsort((np.arange(len(rows)), time))  # by time, then the order of the rows
+    last = pd.Series(order).groupby(group[order]).last().reindex(range(len(n))).to_numpy(int)  # the latest label of each object
     first = pd.Series(np.arange(len(group))).groupby(group).min().to_numpy()
-    sources = pd.Series(rows.source.to_numpy(object)).groupby(group).agg(lambda s: ", ".join(sorted(s)))
-    return pd.DataFrame({"tile_id": list(rows.tile_id.to_numpy(object)[first]), "x": rows.x.astype(float).to_numpy()[first],
-                         "y": rows.y.astype(float).to_numpy()[first], "value": list(top), "subtype": list(subtype), "n": n.tolist(),
-                         "agreement": share.tolist(), "positive": [bool(p > 0.5) if p != 0.5 else None for p in positive],
-                         "sources": list(sources.to_numpy(object))})
+    sources = pd.Series(rows.source.astype(str).to_numpy(object)).groupby(group).agg(lambda s: ", ".join(sorted(s))).to_numpy(object)
+    column = (lambda name, fill: rows[name].to_numpy(object)[first] if name in rows else np.full(len(n), fill, dtype=object))  # noqa: E731
+    keys = np.asarray(objects, dtype=object)
+    return pd.DataFrame({"object": list(keys), "candidate": ["" if str(k).startswith("at:") else k for k in keys],
+                         "tile_id": list(column("tile_id", "")), "x": pd.to_numeric(pd.Series(column("x", np.nan)), errors="coerce").to_numpy(float),
+                         "y": pd.to_numeric(pd.Series(column("y", np.nan)), errors="coerce").to_numpy(float),
+                         "value": list(top), "subtype": list(sub), "n": n.tolist(), "agreement": share.tolist(),
+                         "positive": [bool(p > 0.5) if p != 0.5 else None for p in positive], "sources": list(sources),
+                         "latest": list(identity[last]), "latest_subtype": list(subtype[last]),
+                         "time": pd.Series(time).groupby(group).max().to_numpy(float).tolist()}, columns=CONSENSUS)
+
+
+def consensus(labels: pd.DataFrame, stain: str, vocabulary: Vocabulary | None = None, matched: pd.Series | None = None) -> pd.DataFrame:
+    """One row per labelled object of this stain (`tally`), the object being the candidate a label names, else the
+    one `matched` at its position, else its field and position (`object_keys`); each person's latest label about it
+    counts. `tile_id`, `x`, `y` are those of the object's first label. `labels.decisions.consensus` matches old labels
+    onto candidates first."""
+    rows = classes(labels, stain, vocabulary)
+    if rows.empty:
+        return pd.DataFrame(columns=CONSENSUS)
+    return tally(latest_say(rows, object_keys(rows, matched)))
 
 
 def _majorities(group: np.ndarray, values: np.ndarray, groups: int) -> tuple[np.ndarray, np.ndarray]:

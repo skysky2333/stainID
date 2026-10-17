@@ -222,6 +222,39 @@ def test_old_labels_count_by_position_and_training_reads_the_store(rounds_projec
     assert names == ["context_dab_mean"] and features[0]["context_dab_mean"] == pytest.approx(0.65) and features[0]["tma"] == "1"
 
 
+def test_one_key_and_one_count_for_training_and_the_rounds(rounds_project):
+    """A candidate's labels count together whatever field or position they were made at (`store.object_keys`: the
+    candidate id, the position only where none is named; old labels matched onto it), one per person (the latest), and
+    training's truth (`decisions.consensus`) and the rounds' call (`decisions.state`) come from the one count."""
+    from stainid.labels import frames, store
+    from stainid.sampling.tiles import known_tiles
+
+    _, _, rows = rounds_project
+    project = state.get_state().project
+    tiles = known_tiles(project)
+    cid = rows[0]["candidate_id"]  # at (400, 400): (228, 228) in the first field's picture
+    label = {"stain": "6E10", "task": "class", "session": ""}
+    store.append(project.output("reviews"), [
+        {**label, "id": "class:a", "source": "Ann", "tile_id": TILE, "x": 228.0, "y": 228.0, "value": "plaque", "subtype": "diffuse",
+         "candidate": cid, "time": 1.0},
+        {**label, "id": "class:b", "source": "Ben", "tile_id": OTHER, "x": 5.0, "y": 5.0, "value": "plaque", "subtype": "diffuse",
+         "candidate": cid, "time": 2.0},  # seen from the other field: another position, the same candidate
+        {**label, "id": "class:c", "source": "import: old", "tile_id": TILE, "x": 229.5, "y": 227.0, "value": "CAA", "time": 3.0},  # no id: by position
+        {**label, "id": "class:d", "source": "Ann", "tile_id": TILE, "x": 231.0, "y": 228.0, "value": "plaque", "subtype": "compact",
+         "candidate": cid, "time": 4.0},  # Ann again: her latest counts
+    ])
+    labels = frames.in_field_frame(store.current(project.output("reviews")), tiles, project.context_px)
+    truth = decisions.consensus(project, "6E10", labels, tiles)
+    mine = truth[truth.candidate == cid]
+    assert len(mine) == 1 and len(truth) == 1
+    one = mine.iloc[0]
+    assert (one.n, one.value, one.subtype, one.sources) == (3, "plaque", "", "Ann, Ben, import: old")  # compact vs diffuse: split type
+    assert one.agreement == pytest.approx(2 / 3) and one.positive
+    decided = decisions.state(project, "6E10", tiles)
+    assert sorted(decided.by(cid)) == ["Ann", "Ben", "import: old"] and decided.calls[cid] == ("plaque", "")
+    assert store.consensus(labels, "6E10").pipe(lambda f: f[f.candidate == cid]).n.iloc[0] == 2  # unmatched, the old label stays its own object
+
+
 def test_a_store_can_be_made_from_the_pool_for_trying_the_rounds(rounds_project):
     from stainid.labels import pool
     from stainid.sampling.tiles import known_tiles

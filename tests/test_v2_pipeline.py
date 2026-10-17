@@ -189,9 +189,8 @@ def test_store_ids_encodings_and_reads(tmp_path):
     assert list(store.read_tile(project, "NeuN", "T2", "LIP-1_A-1").candidate_id) == [ids[2]]
     assert list(store.read_bbox(project, "NeuN", "LIP-1_A-1", 0, 0, 20, 30).candidate_id) == ids[:2]
     assert list(store.by_id(project, [ids[2], ids[0], "NeuN:LIP-1_A-1:99:99"]).candidate_id) == [ids[2], ids[0]]
-    assert store.match(project, "NeuN", "LIP-1_A-1", 30.5, 5.5) == ids[2]
-    assert store.match(project, "NeuN", "LIP-1_A-1", 300, 300) is None
-    assert store.match_many(project, "NeuN", "LIP-1_A-1", np.array([[10.3, 20.0], [10.3, 20.0], [31, 5]])) == [ids[0], ids[1], ids[2]]
+    assert store.stored(project, "NeuN", "LIP-1_A-1", "proposals").suffix in (".parquet", ".gz")
+    assert store.stored(project, "NeuN", "LIP-1_A-1") is None and store.cores(project, "NeuN", "proposals") == {"LIP-1_A-1"}
     matrix = store.model_matrix(got, ["context_dab_mean", "area_um2", "unknown"])
     assert matrix.shape == (3, 3) and np.isnan(matrix[2, 0]) and matrix[1, 1] == 60.0 and np.isnan(matrix[:, 2]).all()
     assert store.outlines(project, "NeuN", "LIP-1_A-1")[0]["rings"] == [[0, 0, 20, 0, 20, 20]]
