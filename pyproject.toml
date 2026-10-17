@@ -20,6 +20,7 @@ dependencies = [
     "pillow>=11.0",
     "joblib>=1.4",
     "pyyaml>=6.0",
+    "pyarrow>=15",  # the v2 candidate store as parquet (falls back to csv.gz without it)
 ]
 
 [project.optional-dependencies]
