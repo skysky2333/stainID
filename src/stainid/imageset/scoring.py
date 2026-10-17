@@ -37,9 +37,10 @@ from stainid.sampling.tiles import table
 from stainid.tables import write_records, write_text_atomic
 
 COLUMNS = ["stain", "rater", "kind", "class", "images", "marks", "found", "missed", "ai_objects", "ai_unmarked", "precision", "recall", "f1",
-           "auc", "candidate_auc", "iou_recall", "same_type", "scope"]
+           "auc", "candidate_auc", "iou_recall", "same_type", "specificity", "scope"]
 WHOLE_SET = 0.5  # a rater who marked something on at least this share of the annotated images read all of them
 GENERIC = {"plaque", "tau+ neuron", "NeuN+ neuron"}
+OBJECT = {"6E10": "plaque", "AT8": "tau+ neuron", "NeuN": "NeuN+ neuron"}
 
 
 def _auc(scores: list[float], truth: list[bool]) -> float | None:
@@ -261,6 +262,24 @@ def score_objects(project: Project, marks: pd.DataFrame, found: pd.DataFrame, st
             "same_type": _ratio(sum(c == v for c, v in typed), len(typed)), "scope": "all accepted" if untyped or not types else ", ".join(sorted(types))}
 
 
+def score_negatives(project: Project, marks: pd.DataFrame, found: pd.DataFrame, stain: str) -> list[dict]:
+    """Marks of things that are not the stain's object (e.g. AT8 neuritic plaques, which are not tau+ neurons), from a
+    rater who marked nothing else: per class, on how many of them the AI accepted an object (a false alarm), and the
+    specificity (the share it rightly left alone)."""
+    out = []
+    for cls, group in marks.groupby("class"):
+        group = group.reset_index(drop=True)  # an outline is matched as its box: any accepted object inside it is a false alarm
+        kinds = np.where(group.x0.notna(), "box", group.kind) if "x0" in group else group.kind
+        as_objects = group.assign(**{"class": OBJECT[stain], "kind": kinds})
+        hit, _ = _match_marks(as_objects, found, project, stain)
+        alarms = sum(h is not None for h in hit)
+        out.append({"class": cls, "images": int(group.image_id.nunique()), "marks": len(group), "found": alarms, "missed": len(group) - alarms,
+                    "ai_objects": None, "ai_unmarked": None, "precision": None, "recall": None, "f1": None, "auc": None, "candidate_auc": None,
+                    "iou_recall": None, "same_type": None, "specificity": _ratio(len(group) - alarms, len(group)),
+                    "scope": f"not {OBJECT[stain]}: the AI's accepted objects on them are false alarms"})
+    return out
+
+
 def score_vessels(project: Project, marks: pd.DataFrame, found: pd.DataFrame, reviewed: set[str]) -> dict | None:
     """Vessel (CAA) marks against the deposits the AI set aside as on a vessel or the tissue edge."""
     vessels = marks[[vocab.defaults("6E10").resolve(c)[0] == "CAA" for c in marks["class"]]].reset_index(drop=True)  # "vascular" too
@@ -356,9 +375,12 @@ def _plural(kind: str) -> str:
 
 def summary_text(stain: str, row: dict, people: list[dict]) -> str:
     """One sentence in plain words for the Models page."""
+    who = "the consensus of the raters" if row["rater"] == CONSENSUS else row["rater"]
+    if row.get("kind") == "negatives":
+        return (f"{stain}: {who} marked {row['marks']:,} {row['class']}s, which are not {OBJECT[stain]}s; the AI accepted a {OBJECT[stain]} "
+                f"on {row['found']:,} of them ({1 - row['specificity']:.0%}).") if row.get("specificity") is not None else ""
     if row.get("recall") is None:
         return ""
-    who = "the consensus of the raters" if row["rater"] == CONSENSUS else row["rater"]
     scope = row.get("scope") or "all accepted"
     thing = ("images" if row["kind"] == "image" else "vessel deposits (CAA)" if row["class"] == "vascular"
              else _plural(scope) if scope != "all accepted" and "," not in scope else "objects")
@@ -386,6 +408,8 @@ def score(project: Project) -> dict:
             marks = theirs[theirs.kind != "image_label"]
             if len(marks) and any(positive(stain, c) or c in GENERIC for c in marks["class"]):
                 rows.append({"stain": stain, "rater": rater, "kind": "objects", "class": "all", **score_objects(project, marks, found, stain, reviewed)})
+            elif len(marks) and not (stain == "6E10" and any(vocab.defaults(stain).resolve(c)[0] == "CAA" for c in marks["class"])):
+                rows += [{"stain": stain, "rater": rater, "kind": "negatives", **r} for r in score_negatives(project, marks, found, stain)]
             vessels = score_vessels(project, marks, found, reviewed) if stain == "6E10" and len(marks) else None
             if vessels:
                 rows.append({"stain": stain, "rater": rater, "kind": "objects", **vessels})

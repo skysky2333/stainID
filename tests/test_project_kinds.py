@@ -116,6 +116,22 @@ def test_scoring_reads_the_v2_calls_where_the_v2_detection_has_run(tmp_path):
     assert consensus["candidate_auc"] == pytest.approx(27 / 36)
 
 
+def test_marks_of_other_things_count_the_ai_false_alarms():
+    from types import SimpleNamespace
+
+    project = SimpleNamespace(pixel_size_um=0.2738)
+    marks = pd.DataFrame({"image_id": ["a", "a", "b"], "core_id": ["a", "a", "b"], "kind": "polygon", "class": "neuritic plaque",
+                          "core_x": [100.0, 400.0, 100.0], "core_y": [100.0, 400.0, 100.0], "x0": [50.0, 350.0, 50.0], "y0": [50.0, 350.0, 50.0],
+                          "x1": [150.0, 450.0, 150.0], "y1": [150.0, 450.0, 150.0]})
+    found = pd.DataFrame({"core_id": ["a", "a", "b"], "cx": [130.0, 900.0, 100.0], "cy": [70.0, 900.0, 100.0], "radius_px": 10.0,
+                          "value": ["tau+ neuron/mature tangle", "tau+ neuron/pretangle", "not tau"], "accepted": [True, True, False],
+                          "probability": [0.9, 0.8, 0.2]})
+    [row] = scoring.score_negatives(project, marks, found, "AT8")
+    assert row["marks"] == 3 and row["found"] == 1 and row["specificity"] == pytest.approx(2 / 3, abs=1e-3)  # one tangle inside an outline
+    text = scoring.summary_text("AT8", {"kind": "negatives", "rater": "expert", **row}, [])
+    assert "3 neuritic plaques" in text and "on 1 of them (33%)" in text
+
+
 def test_precision_counts_the_images_each_rater_read():
     marks = pd.DataFrame({"rater": ["a"] * 6 + ["b"] * 2 + ["c"], "core_id": ["i0", "i1", "i2", "i3", "i4", "i5", "i6", "i7", "i0"]})
     assert scoring.reviewed_images(marks, "a") == {f"i{n}" for n in range(8)}  # marked on most images: read them all

@@ -181,7 +181,10 @@ every rater and with the consensus, per stain, and saves `scores.json` and `scor
   boxes whose best object overlaps them by IoU ≥ 0.5 (the object taken as a square of its diameter);
 - **image labels**: an image said to contain a class is found when the AI accepted any object of that class in it;
 - **vessels**: `vascular` (CAA) marks are scored against the deposits the 6E10 step set aside as on a vessel or the
-  tissue edge.
+  tissue edge;
+- **other things**: a rater who marked only things that are not the stain's object (e.g. AT8 neuritic plaques, which
+  are not tau+ neurons) gets a `negatives` row per class: on how many marks the AI accepted an object (false alarms,
+  `found`) and the `specificity`, the share it rightly left alone.
 
 Recall ("Found") is the share of marks the AI found; precision ("Of the AI's, marked") the share of the AI's accepted
 objects in the annotated images that someone marked; F1 combines them. When a rater marked only some types (e.g. only
