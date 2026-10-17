@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import type { Detection, Job, LabelSet, LabelsOverview, Metrics, ModelInfo, TrainedModel } from '../api'
+import type { BadAreas, Detection, Job, LabelSet, LabelsOverview, Metrics, ModelInfo, TrainedModel } from '../api'
 import { api, runStep } from '../api'
 import { Empty, ErrorNote, HelpBox, Loaded, Modal, PageHead, PathLine, Progress, Term, fmt, timeAgo, withError } from '../components'
 import { useFetch } from '../hooks'
@@ -75,6 +75,8 @@ export default function Models() {
           <ScoreOnLabels />
           <h2 className="stage-title">Segmentation</h2>
           <SegmentationCheck />
+          <h2 className="stage-title">Bad-area detector</h2>
+          <BadAreaDetector />
           <h2 className="stage-title">Published models</h2>
           <PublishedModels models={list.filter((m) => m.source !== 'train')} job={download} onChanged={() => { jobs.reload(); models.reload() }} />
         </>}
@@ -318,6 +320,50 @@ function PublishedModels({ models, job, onChanged }: { models: ModelInfo[]; job:
           {m.size_mb != null && <span className="muted small"> {m.size_mb.toLocaleString()} MB · {m.modified}</span>}</div>)}
         <p className="muted small" style={{ margin: 0 }}>Published plaque CNNs are optional: copy the published weights (Wong et al. 2022; Tang et al. 2019) into their folder.</p>
       </Advanced>
+    </section>
+  )
+}
+
+/* ---------- the bad-area detector ---------- */
+
+/** The bad-area detector (today detection's rules: the automatic excluded areas the analysis uses) against the areas
+ *  people marked in "Mark bad areas": per stain, type and TMA or donor, the area people added and cleared and the
+ *  pixel F1. A trained bad-area model is scored here too once there is one. */
+function BadAreaDetector() {
+  const state = useFetch<BadAreas>('/api/models/bad-areas')
+  const [by, setBy] = useState<'tma' | 'donor'>('tma')
+  return (
+    <section className="card">
+      <div className="row"><h2 style={{ margin: 0 }}>Bad-area detector</h2><span className="spacer" />
+        <span className="badge">rules</span></div>
+      <p className="small secondary">Finds folds, artifacts, empty glass and blurred parts, which the analysis leaves out. Here its areas are compared with the areas people
+        marked in <b>Mark bad areas</b> (<Link to="/labels">Labels</Link>): how much people added and cleared, and how well the two agree pixel by pixel (F1; 100% = the same).</p>
+      <Loaded state={state} label="Comparing detection’s areas with people’s…">
+        {(d) => {
+          const rows = by === 'tma' ? d.by_tma : d.by_donor
+          return <>
+            {d.model == null && <p className="small muted">Today the detector is a set of rules. A trained bad-area model comes later: it will learn from these areas and be scored here the same way.</p>}
+            {!d.images ? <Empty><p style={{ margin: 0 }}>No core image has been checked in “Mark bad areas” yet. Start a session on <Link to="/labels">Labels</Link>.</p></Empty> : <>
+              <div className="row small">
+                <span className="secondary">{d.images.toLocaleString()} stain images checked by people.</span><span className="spacer" />
+                <div className="segmented">
+                  <button type="button" className={`btn small${by === 'tma' ? ' chosen' : ''}`} onClick={() => setBy('tma')}>Per TMA</button>
+                  <button type="button" className={`btn small${by === 'donor' ? ' chosen' : ''}`} onClick={() => setBy('donor')}>Per donor</button>
+                </div>
+              </div>
+              <div className="table-wrap" style={{ marginTop: 8 }}><table className="compact small areas-table">
+                <thead><tr><th>Stain</th><th>{by === 'tma' ? 'TMA' : 'Donor'}</th><th>Type</th><th>Images</th>
+                  <th title="Area people marked bad that detection did not">Added by people (mm²)</th><th title="Area detection left out that people marked fine">Cleared by people (mm²)</th><th>F1</th></tr></thead>
+                <tbody>{rows.map((r) => (
+                  <tr key={`${r.stain}-${r.tma ?? r.donor_id}-${r.type}`}><td>{r.stain}</td><td>{(by === 'tma' ? r.tma : r.donor_id) ?? '—'}</td><td>{r.type_name}</td>
+                    <td>{r.images.toLocaleString()}</td><td>{fmt(r.added_mm2)}</td><td>{fmt(r.cleared_mm2)}</td>
+                    <td>{r.f1 == null ? '—' : `${Math.round(100 * r.f1)}%`}</td></tr>
+                ))}</tbody>
+              </table></div>
+            </>}
+          </>
+        }}
+      </Loaded>
     </section>
   )
 }

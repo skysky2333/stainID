@@ -1272,3 +1272,22 @@ details.side-details.compact > summary { font-weight: 500; }
 .outline-defaults { margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
 .viewer svg.viewer-under { will-change: transform; }  /* the field tool's objects: a layer of their own, not painted again on every mouse move */
 .look-swatch.hatched { background: repeating-linear-gradient(45deg, currentColor 0 2px, transparent 2px 5px); }
+
+/* "Mark bad areas" (labels/markareas.tsx): the stain tabs, the brush and the layers over the core picture */
+.area-tabs { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 6px; margin-bottom: 6px; }
+.area-tab { display: grid; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-1); color: inherit; font: inherit; cursor: pointer; }
+.area-tab img { display: block; width: 58px; height: 58px; object-fit: cover; border-radius: 5px; }
+.area-tab > span { display: flex; align-items: center; justify-content: center; gap: 4px; font-size: 0.8rem; }
+.area-tab.chosen { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.area-tick { color: var(--good); font-weight: 700; }
+.area-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--warning); }
+.area-tabs-keys { margin-left: auto; }
+.area-pending, .area-svg { position: absolute; left: 0; top: 0; pointer-events: none; }
+.area-svg { overflow: visible; }
+.area-types { display: grid; gap: 3px; }
+.area-type { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border: 1px solid transparent; border-radius: 6px; background: none; color: inherit; font: inherit; font-size: 0.85rem; text-align: left; cursor: pointer; }
+.area-type.chosen { border-color: var(--accent); background: var(--accent-soft); }
+.area-type.is-clear { cursor: default; color: var(--text-secondary); }
+.area-size { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.area-size input { flex: 1; }
+.areas-table td, .areas-table th { white-space: nowrap; }
