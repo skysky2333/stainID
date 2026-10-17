@@ -286,7 +286,7 @@ def test_stages_end_to_end_with_stable_ids_and_outdated_detection(v2_project, mo
         for row in frame.itertuples():  # every candidate's centroid lies in its own tile
             t = tiles.loc[row.tile_id]
             assert t.x_px <= row.x_core < t.x_px + t.width_px and t.y_px <= row.y_core < t.y_px + t.height_px
-    assert (store.root(project) / "threads" / "LIP-1_B-2.csv.gz").exists()
+    assert store.threads_path(project, "LIP-1_B-2").exists()
     assert store.threads(project, "LIP-1_B-2").n_px.sum() > 0
     # stage 4 reads no image
     import stainid.imaging.core_images as images

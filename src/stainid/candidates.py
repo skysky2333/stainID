@@ -154,11 +154,49 @@ def _remember(key, stamp, frame: pd.DataFrame) -> None:
             _CACHE[key] = (stamp, frame, size)
 
 
+def _parquet_ok() -> bool:
+    try:
+        import pyarrow  # noqa: F401, PLC0415 - optional: without it the store stays csv.gz
+    except ImportError:
+        return False
+    return True
+
+
+PARQUET = _parquet_ok()
+
+
+def twin(file: Path) -> Path:
+    """The `.parquet` file standing for a `.csv.gz` name (the stages name their outputs `<core_id>.csv.gz`)."""
+    return file.with_name(file.name[: -len(".csv.gz")] + ".parquet") if file.name.endswith(".csv.gz") else file
+
+
+def _for_parquet(frame: pd.DataFrame) -> pd.DataFrame:
+    """Text columns as text ("" for none, as the csv.gz store reads back), other object columns numeric where they are."""
+    out = frame.copy()
+    for column in out.columns:
+        if out[column].dtype != object and not pd.api.types.is_string_dtype(out[column].dtype):
+            continue
+        values = [v for v in out[column] if v is not None and v == v and v != ""]
+        if column not in TEXT_COLUMNS and values and all(isinstance(v, (bool, np.bool_)) for v in values):
+            out[column] = pd.array([v if isinstance(v, (bool, np.bool_)) else None for v in out[column]], dtype="boolean")
+            continue
+        if column not in TEXT_COLUMNS:
+            numbers = pd.to_numeric(out[column], errors="coerce")
+            if numbers.notna().sum() == len(values):
+                out[column] = numbers
+                continue
+        empty = "" if column in TEXT_COLUMNS else None  # as the csv.gz store reads back: "" for text, NaN otherwise
+        out[column] = [empty if v is None or (isinstance(v, float) and np.isnan(v)) or (empty is None and v == "") else str(v) for v in out[column]]
+    return out
+
+
 def read_table(file: Path, columns: list[str] | None = None) -> pd.DataFrame:
     """A store table (cached by mtime and size); an empty frame when the file does not exist. With `columns`, only those
     are read (the whole table when it is in memory already): a stage-5 pass or a viewer layer parses a fraction of a
-    core's columns."""
+    core's columns. A `.csv.gz` name reads its `.parquet` twin when there is one."""
     file = Path(file)
+    if file.name.endswith(".csv.gz") and twin(file).exists():
+        file = twin(file)
     try:
         stat = file.stat()
     except FileNotFoundError:
@@ -174,7 +212,18 @@ def read_table(file: Path, columns: list[str] | None = None) -> pd.DataFrame:
         frame = part[1]
     else:
         if file.suffix == ".parquet":
-            frame = pd.read_parquet(file, columns=None if wanted is None else list(wanted))
+            if wanted is None:
+                frame = pd.read_parquet(file)
+            else:
+                import pyarrow.parquet as pq  # noqa: PLC0415
+
+                present = set(pq.read_schema(file).names)
+                frame = pd.read_parquet(file, columns=[c for c in wanted if c in present])
+            for column in frame.columns:
+                if column in TEXT_COLUMNS:
+                    frame[column] = frame[column].fillna("").astype(object)
+                elif isinstance(frame[column].dtype, pd.BooleanDtype) or frame[column].dtype == object:  # None as NaN, as csv.gz reads back
+                    frame[column] = frame[column].astype(object).where(frame[column].notna(), np.nan)
         else:
             header = pd.read_csv(file, nrows=0).columns
             use = list(header) if wanted is None else [c for c in header if c in wanted]
@@ -188,13 +237,29 @@ def read_table(file: Path, columns: list[str] | None = None) -> pd.DataFrame:
     return frame.copy()
 
 
-def write_table(file: Path, frame: pd.DataFrame) -> Path:
-    """Write a store table atomically (csv.gz, floats to 8 significant digits)."""
+def write_table(file: Path, frame: pd.DataFrame, keep_csv: bool = False) -> Path:
+    """Write a store table atomically: as the `.parquet` twin of a `.csv.gz` name when pyarrow is installed (the csv.gz
+    is removed unless `keep_csv`), else csv.gz with floats to 8 significant digits. Returns the file written."""
     import os
     import tempfile
 
     file = Path(file)
     file.parent.mkdir(parents=True, exist_ok=True)
+    if PARQUET and file.name.endswith(".csv.gz"):
+        target = twin(file)
+        with tempfile.NamedTemporaryFile(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp", delete=False) as handle:
+            temporary = Path(handle.name)
+        try:
+            _for_parquet(frame).to_parquet(temporary, index=False, compression="zstd")
+            with temporary.open("rb+") as handle:
+                os.fsync(handle.fileno())
+            temporary.replace(target)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
+        if not keep_csv:
+            file.unlink(missing_ok=True)
+        return target
     with tempfile.NamedTemporaryFile(dir=file.parent, prefix=f".{file.name}.", suffix=".tmp", delete=False) as handle:
         temporary = Path(handle.name)
     try:
