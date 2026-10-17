@@ -220,7 +220,7 @@ export interface Overlay { src: string; width: number; height: number; opacity?:
  * `boxes` (tiles, fields) are drawn on a canvas on top; `overlays` are pictures laid over the whole image. A click near
  * a mark or inside its outline reports its index to `onPick` (null for empty space), hovering shows `describe(index)`.
  */
-export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lineColor = '#fff', boxes = [], overlays = [], selected = null, describe, onPick, target, pixelUm, toolbar, height = 'min(72vh, 760px)', onTileError }: {
+export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lineColor = '#fff', boxes = [], overlays = [], selected = null, describe, onPick, target, pixelUm, toolbar, height = 'min(72vh, 760px)', onTileError, onView }: {
   pyramid: Pyramid
   tileUrl: (level: number, col: number, row: number, layer?: string) => string
   layers?: string[]
@@ -238,6 +238,8 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
   height?: string
   /** A tile could not be loaded (the server cleaned up the picture to save space): ask for the picture again. */
   onTileError?: () => void
+  /** The image-pixel rectangle in view, whenever the view settles (at most every COMMIT_MS while it moves). */
+  onView?: (view: { x0: number; y0: number; x1: number; y1: number }) => void
 }) {
   const box = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
@@ -447,6 +449,9 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
   // what is drawn changed: the cached picture is made again; hovering and selecting only redraw the frame
   useEffect(() => { cache.current = null; requestDraw() }, [prepared, strokes, boxes, lineColor])  // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { requestDraw() }, [hovered, selected])  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {  // the rectangle in view, for whoever shows it elsewhere (a minimap)
+    if (onView && committed && size.w) onView({ x0: -committed.x / committed.s, y0: -committed.y / committed.s, x1: (size.w - committed.x) / committed.s, y1: (size.h - committed.y) / committed.s })
+  }, [committed, size.w, size.h])  // eslint-disable-line react-hooks/exhaustive-deps
 
   // a new image starts from the whole core (or the requested spot) as soon as the box has a size
   useEffect(() => { setView(null, true); setLoaded(new Set()) }, [pyramid.version, pyramid.width])  // eslint-disable-line react-hooks/exhaustive-deps
