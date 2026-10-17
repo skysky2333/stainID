@@ -39,7 +39,7 @@ export default function Labels() {
           <li><b>Start a session</b>: pick a stain and a round. <b>Round 1, Check the AI’s calls</b>: one object at a time, the AI’s call and outline shown,
             people keep or correct it with one key. <b>Round 2, Fix the field</b>: whole fields with every object the AI considered; people add what it
             missed and fix outlines. Both share one set of answers, so nothing is checked twice.</li>
-          <li><b>Send the link</b>. People type their name and label in their browser — no account needed. Everything is saved as they go.</li>
+          <li><b>Send the link</b>. People type their name and label in their browser — no account needed. Each person gets their own field, and their work is kept when they press Save.</li>
           <li><b>Watch progress</b> here, field by field, then <Link to="/models">train a new model</Link> from the sessions you choose and compare it with the one in use.</li>
         </ol>
       </HelpBox>

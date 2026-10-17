@@ -14,7 +14,7 @@ export default function AnnotateHome() {
   if (!session.annotator) return <Welcome />
   return (
     <div className="annotate-home">
-      <PageHead title="Choose a session" subtitle="Everything you do is saved as you go, so you can stop and come back at any time." />
+      <PageHead title="Choose a session" subtitle="You can stop and come back at any time: use the same name to continue where you left off." />
       <Loaded state={list} label="Loading sessions…">
         {(sessions) => sessions.length ? (
           <div className="grid grid-2">{sessions.map((s) => <SessionCard key={s.name} s={s} />)}</div>

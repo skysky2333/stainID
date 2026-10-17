@@ -31,15 +31,26 @@ const FAQ: [string, ReactNode][] = [
     The main results table is <code>data/analysis/results_donor_region.csv</code>; download it and the others on <Link to="/results">Results</Link> (Downloads).</>],
   ['What does a measure in the results mean?', <>Open <Link to="/results">Results</Link> → <b>What the measures mean</b>: every column of the results tables with
     its unit and a plain explanation, and the column name used in the CSV file.</>],
-  ['How do I know the results are right?', <>Look at the cores and what was found in them on <Link to="/cohort">Cores</Link>, and review some fields on <Link to="/labels">Labels</Link>:
-    each stain shows how often the AI agrees with people, and <Link to="/models">Models</Link> shows the cross-validated precision and recall on all labels.</>],
-  ['The detections look wrong for my staining.', <>Label objects on your own slides (a review session on <Link to="/labels">Labels</Link>; 100–200 objects is a good start),
+  ['How do I know the results are right?', <>Look at the cores and what was found in them on <Link to="/cohort">Cores</Link>, and ask colleagues to check the AI’s calls
+    on <Link to="/labels">Labels</Link>: each stain shows how often the AI agrees with people, and <Link to="/models">Models</Link> shows the cross-validated precision and
+    recall on all labels.</>],
+  ['The detections look wrong for my staining.', <>Label objects on your own slides (an annotation round on <Link to="/labels">Labels</Link>; 100–200 objects is a good start),
     then train on <Link to="/models">Models</Link> and switch to the new model if it scores better. Then run the detection steps again with <b>Start over</b>.</>],
   ['A step says “Made with an older model”.', <>You switched to a different model after that step ran. Its results stay as they are
     until you run the step again with <b>Start over</b> (under Advanced); then make the results tables again.</>],
-  ['How do other people label for me?', <>On <Link to="/labels">Labels</Link>, create a session and start it, then send people the link shown there
-    (it ends in /annotate and names the study). They type their name and label in their own browser, with no password; you follow their progress and download
-    the labels on the same page.</>],
+  ['How do other people label for me?', <>On <Link to="/labels">Labels</Link>, press <b>New labelling session</b>, pick a stain and a round
+    (<b>Check the AI’s calls</b>: object by object; <b>Fix the field</b>: whole fields, adding what the AI missed), then send people the <b>Link for labellers</b>
+    (it ends in /annotate and names the study). They type their name and work in their own browser, with no password. Someone new first gets a short practice
+    tutorial. Each person is handed a field nobody else is on, so no one does the same work twice; you follow their progress and download the labels on the
+    same page.</>],
+  ['How does labelling work?', <>The AI’s work is already on the picture: objects it counts are solid in their class colour, objects it rejected dotted grey.
+    Point at an object and press a key: <b>1–9</b> its class, <b>0</b> unsure, <b>Delete</b> not an object, <b>Tab</b> / <b>Shift+Tab</b> a bigger or smaller
+    outline, <b>Space</b> to edit the outline spot by spot, <b>Z</b> undo. In <b>Fix the field</b>, clicking empty tissue outlines a missed object. Nothing
+    is saved until <b>Save</b> or <b>Save and continue</b>; unsaved changes come back after a reload. The keys are always shown under the picture.</>],
+  ['A labelling session says no core has the AI’s candidates.', <>The annotation rounds show the candidates of the staged detection. Run the
+    <b>Detect (v2)</b> steps on the <Link to="/workflow">Run</Link> page for that stain first (at least <b>Find candidates</b> and <b>Decide</b>).</>],
+  ['A Detect (v2) step says some cores are out of date.', <>Something those cores were made from changed after they ran: a setting, a model, a hand-drawn
+    exclusion or an earlier step. Run the step again: it redoes only the out-of-date cores and keeps the rest.</>],
   ['Who can sign in?', <>Everything except the annotation pages needs the admin password, from this computer or any other. It is <b>admin</b> until you
     change it in <Link to="/settings">Settings</Link>.</>],
   ['Is anything deleted?', <>No. <b>Start over</b> and uploads move old files aside with a date in their name; nothing is removed.
@@ -66,7 +77,8 @@ export default function Help() {
                 by itself; you confirm or correct it.</li>
               <li><b>Get the models</b> on <Link to="/models">Models</Link>: download the published ones, and put in (or train) the NeuN, 6E10 and AT8 models.</li>
               <li><b><Link to="/workflow">Run</Link></b> the analysis and follow its progress; any step can also be run on its own.</li>
-              <li><b>Check</b> what was found on <Link to="/cohort">Cores</Link>, and by reviewing fields on <Link to="/labels">Labels</Link>.</li>
+              <li><b>Check</b> what was found on <Link to="/cohort">Cores</Link>, and ask colleagues to check and correct the AI’s calls on <Link to="/labels">Labels</Link>;
+                their labels train better models on <Link to="/models">Models</Link>.</li>
               <li><b>Use the <Link to="/results">Results</Link></b>: every measure plotted by diagnosis group, what it means, and the tables to download.</li>
             </ol>
           </div>
