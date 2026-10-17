@@ -58,10 +58,13 @@ def test_tiles_need_no_field_selection_and_keep_earlier_field_ids(tmp_path):
     assert len(again) == len(tiles)
 
 
-def test_calibration_pools_every_tile_and_keeps_existing_thresholds(tmp_path):
+def test_calibration_pools_every_tile_and_keeps_existing_thresholds(tmp_path, monkeypatch):
     from stainid.sampling.whole_core import write_whole_core_manifest
+    from stainid.v2 import field
     from stainid.workflows.calibrate import calibrate_slides
 
+    # the synthetic disc is dark and blue, which the linear-artifact mask (left out of the sample) would take for a scratch
+    monkeypatch.setattr(field, "linear_artifact_mask", lambda rgb: np.zeros(rgb.shape[:2], bool))
     project = _core_project(tmp_path, ("NeuN", "AT8"))
     write_whole_core_manifest(project, 512)
     calibrate_slides(project, stride=1)

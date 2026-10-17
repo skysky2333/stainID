@@ -162,19 +162,16 @@ def test_painting_or_clearing_changes_no_analysis_input(project):
     excluded shares and stage 2's inputs stay as they were."""
     import pandas as pd
 
-    from stainid.qc.exclusions import read_manual_exclusions
     from stainid.v2 import proposals
 
     write_mask(project)
     frame = pd.DataFrame({"candidate_id": ["c1"], "x_core": [440.0], "y_core": [440.0], "outline": ["400 400 480 400 480 480 400 480"]})
     tiles = [{"tile_id": TILE, "x_px": 300, "y_px": 300, "width_px": 512, "height_px": 512, "image_path": "data/cores/LIP-1/B-2/AT8.png", "tma": "1"}]
-    manual = read_manual_exclusions(project.input("manual_exclusions")).get("data/cores/LIP-1/B-2/AT8.png", [])
     before = (exclusions.digest(project, CORE, STAIN), exclusions.candidate_fractions(project, STAIN, CORE, frame).tolist(),
-              proposals.inputs_of(project, STAIN, CORE, tiles, 0.05, manual, frozenset()))
+              proposals.inputs_of(project, STAIN, CORE, tiles, 0.05, frozenset()))
     edit(project, "Ann", [square(200, 200, 400, 400)], ["2"], 10.0)
     edit(project, "Bob", [[[0.0, 0.0], [600.0, 0.0], [600.0, 100.0], [0.0, 100.0]]], ["include"], 20.0)
     exclusions.forget()
-    manual = read_manual_exclusions(project.input("manual_exclusions")).get("data/cores/LIP-1/B-2/AT8.png", [])
     after = (exclusions.digest(project, CORE, STAIN), exclusions.candidate_fractions(project, STAIN, CORE, frame).tolist(),
-             proposals.inputs_of(project, STAIN, CORE, tiles, 0.05, manual, frozenset()))
+             proposals.inputs_of(project, STAIN, CORE, tiles, 0.05, frozenset()))
     assert after == before

@@ -25,7 +25,6 @@ from stainid.imaging.shared import shared_pictures
 from stainid.imaging.tissue import core_glass_darkness
 from stainid.nuclei import nucleus_centroids
 from stainid.pipelines.cohort_v1 import context_crop
-from stainid.qc.exclusions import rasterize_core_exclusions
 from stainid.v2 import amyloid, manifest, neun, tau
 from stainid.v2.context import context_features_many
 from stainid.v2.field import Field
@@ -95,7 +94,7 @@ def unproposed_regions(field: Field, stain: str, owner: np.ndarray, rule: dict |
     ps = field.pixel_size_um
     smooth = field.smooth if not float(rule["smooth_um"]) else cv2.GaussianBlur(field.dab, (0, 0), float(rule["smooth_um"]) / ps)
     level = stained_level(field, smooth, float(rule["level"]), float(rule["contrast"]), field.tissue & ~exclusion)
-    positive = cv2.morphologyEx(((smooth >= level) & field.tissue).astype(np.uint8), cv2.MORPH_CLOSE, disk(1))
+    positive = cv2.morphologyEx(((smooth >= level) & field.tissue & ~exclusion).astype(np.uint8), cv2.MORPH_CLOSE, disk(1))
     min_cover = float(rule["min_cover"])
     covered = cv2.dilate((owner > 0).astype(np.uint8), disk(max(1, round(1.0 / ps)))).astype(bool) if not min_cover else None
     out = []
@@ -364,26 +363,27 @@ def mask_piece(field: Field, stain: str) -> np.ndarray:
 
 # ---------------------------------------------------------------- one core image
 
-def inputs_of(project, stain: str, core_id: str, tiles: list[dict], threshold: float, manual_polygons: list, nuclei_names: frozenset) -> dict:
+def inputs_of(project, stain: str, core_id: str, tiles: list[dict], threshold: float, nuclei_names: frozenset) -> dict:
+    # no exclusion input: the analysis leaves out detection's own areas only (folds, linear artifacts, no tissue, the AT8
+    # edge guard), found here; people's marked areas only train and evaluate models (`stainid.exclusions.drop_excluded`)
     image = project.root / tiles[0]["image_path"]
     return {
         "image": manifest.file_signature(image),
         "threshold": round(float(threshold), 10),
-        "manual_exclusions": digest(manual_polygons),
         "tiles": digest([(t["tile_id"], t["x_px"], t["y_px"], t["width_px"], t["height_px"]) for t in tiles]),
         "nuclei_tiles": sum(f"{t['tile_id']}.npz" in nuclei_names for t in tiles),
     }
 
 
-def expected(project, stain: str, core_id: str, tiles: list[dict], threshold: float, manual_polygons: list, nuclei_names: frozenset,
+def expected(project, stain: str, core_id: str, tiles: list[dict], threshold: float, nuclei_names: frozenset,
              settings: dict | None = None) -> dict:
     """What stage 2's manifest of this core would be now (`settings`: the stain's `stage_params`, when known already)."""
     return manifest.make("proposals", stage_params(project, "proposals", stain) if settings is None else settings,
-                         inputs_of(project, stain, core_id, tiles, threshold, manual_polygons, nuclei_names))
+                         inputs_of(project, stain, core_id, tiles, threshold, nuclei_names))
 
 
-def propose_core(project, stain: str, core_id: str, tiles: list[dict], threshold: float, manual_polygons: list,
-                 nuclei_names: frozenset, tiles_at_once: int = 1) -> dict:
+def propose_core(project, stain: str, core_id: str, tiles: list[dict], threshold: float, nuclei_names: frozenset,
+                 tiles_at_once: int = 1) -> dict:
     """Run stage 2 on one core image and write its outputs; returns counts and timing. `tiles_at_once` tiles are worked on
     in threads at once (they share the decoded core image; each needs about 0.7 GB more); the outputs keep the tile
     order and do not depend on it."""
@@ -412,7 +412,7 @@ def propose_core(project, stain: str, core_id: str, tiles: list[dict], threshold
                     raw = loaded["masks"]
             field = Field({**tile, "context_px": context}, rgb, inner, origin, threshold,
                           float(np.sqrt(float(tile["pixel_width_um"]) * float(tile["pixel_height_um"]))),
-                          rasterize_core_exclusions(manual_polygons, origin[0], origin[1], rgb.shape[:2]), raw, glass,
+                          np.zeros(rgb.shape[:2], bool), raw, glass,
                           smooth_px=float(p["smooth_px"]), background_um=float(p["local_background_um"]))
             with shared_pictures(rgb):  # the stain separation and tissue mask of the field, made once for every step
                 result = process_tile(field, stain, settings, shared)
@@ -440,7 +440,7 @@ def propose_core(project, stain: str, core_id: str, tiles: list[dict], threshold
     for summary in summaries:
         summary["candidate_count"] = int(counts.get(summary["tile_id"], 0))
     write_core(project, stain, core_id, tiles, rows, summaries, unproposed, thread_rows, mask)
-    manifest.write(project, "proposals", stain, core_id, expected(project, stain, core_id, tiles, threshold, manual_polygons, nuclei_names),
+    manifest.write(project, "proposals", stain, core_id, expected(project, stain, core_id, tiles, threshold, nuclei_names),
                    candidates=len(rows), unproposed=len(unproposed), seconds=round(time.time() - started, 1), tiles=len(tiles))
     return {"candidates": len(rows), "unproposed": len(unproposed), "seconds": time.time() - started}
 

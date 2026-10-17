@@ -8,9 +8,7 @@ import numpy as np
 from PIL import Image
 
 from stainid.imaging.calibration import calibrate_threshold
-from stainid.imaging.color import rgb_to_hed
 from stainid.imaging.core_images import open_image
-from stainid.imaging.tissue import field_tissue_mask
 from stainid.project import Project
 from stainid.tables import read_csv, write_records
 
@@ -18,28 +16,74 @@ Image.MAX_IMAGE_PIXELS = None
 STRIDE = 64  # every 64th tissue pixel of every tile: about a million pixels per core, 60 million per slide
 
 
-def sample_dab(root: Path, tiles: list[dict[str, str]], stride: int = STRIDE) -> np.ndarray:
-    """Tissue DAB (optical density) of every tile of these cores, every `stride`-th tissue pixel of each tile."""
-    values = []
+def excluded_of(field, stain: str) -> np.ndarray:
+    """The pixels the analysis leaves out of a field for this stain (`stainid.v2.field.Field`): linear artifacts and
+    folds (NeuN: linear artifacts only), the same masks stage 2 finds on the same crop. None of them depends on the slide
+    threshold (darkness, hematoxylin and shape only), so the threshold is calibrated on the tissue they leave."""
+    return field.neun_exclusion if stain == "NeuN" else field.exclusion
+
+
+def sample_core(root: str, image_path: str, tiles: list[dict], stride: int = STRIDE, context: int = 128,
+                leave_out: bool = True) -> dict[str, np.ndarray | int]:
+    """One core image's share of its slide's calibration sample: every `stride`-th tissue pixel's DAB (optical density) of
+    each tile's own area, cut with the context margin stage 2 uses (so the exclusion masks are the same); `values` leave
+    the excluded pixels out (`leave_out`), `all` keep them (the sample as it was made before)."""
+    from stainid.pipelines.cohort_v1 import context_crop  # noqa: PLC0415
+    from stainid.v2.field import Field  # noqa: PLC0415
+
+    kept, everything, tissue_px, excluded_px = [], [], 0, 0
+    with open_image(Path(root) / image_path) as image:
+        image.load()
+        for tile in tiles:
+            x, y = int(tile["x_px"]), int(tile["y_px"])
+            rgb, inner = context_crop(image, x, y, int(tile["width_px"]), int(tile["height_px"]), context)
+            size = float(np.sqrt(float(tile["pixel_width_um"]) * float(tile["pixel_height_um"])))
+            field = Field({**tile, "context_px": context}, rgb, inner, (x - inner[1].start, y - inner[0].start), float("nan"), size,
+                          np.zeros(rgb.shape[:2], bool), None)
+            tissue = field.tissue[inner]
+            if not tissue.any():
+                continue
+            dab = field.dab[inner]
+            everything.append(dab[tissue][::stride].astype(np.float32))
+            excluded = excluded_of(field, str(tile["stain"]))[inner] & tissue if leave_out else np.zeros_like(tissue)
+            clean = tissue & ~excluded
+            kept.append(dab[clean][::stride].astype(np.float32))
+            tissue_px += int(tissue.sum())
+            excluded_px += int(excluded.sum())
+            field.release()
+    empty = np.zeros(0, np.float32)
+    return {"values": np.concatenate(kept) if kept else empty, "all": np.concatenate(everything) if everything else empty,
+            "tissue_px": tissue_px, "excluded_px": excluded_px}
+
+
+def sample_dab(root: Path, tiles: list[dict[str, str]], stride: int = STRIDE, context: int = 128, leave_out: bool = True,
+               workers: int = 1) -> dict[str, np.ndarray | int]:
+    """The calibration sample of these tiles (`sample_core` per core image, `workers` core images at once): `values`
+    (tissue outside the excluded areas), `all` (all tissue), and the tissue and excluded pixel counts."""
     by_image = defaultdict(list)
     for tile in tiles:
         by_image[tile["image_path"]].append(tile)
-    for image_path, image_tiles in sorted(by_image.items()):
-        with open_image(root / image_path) as image:
-            image.load()
-            for tile in image_tiles:
-                x, y = int(tile["x_px"]), int(tile["y_px"])
-                rgb = np.asarray(image.crop((x, y, x + int(tile["width_px"]), y + int(tile["height_px"]))).convert("RGB"))
-                tissue = field_tissue_mask(rgb)
-                if tissue.any():
-                    values.append(np.maximum(rgb_to_hed(rgb)[..., 2], 0)[tissue][::stride].astype(np.float32))
-    return np.concatenate(values) if values else np.zeros(0, np.float32)
+    jobs = sorted(by_image.items())
+    if workers > 1 and len(jobs) > 1:
+        from concurrent.futures import ProcessPoolExecutor  # noqa: PLC0415
+        from multiprocessing import get_context  # noqa: PLC0415
+
+        with ProcessPoolExecutor(min(workers, len(jobs)), mp_context=get_context("spawn")) as pool:
+            parts = list(pool.map(sample_core, [str(root)] * len(jobs), [j[0] for j in jobs], [j[1] for j in jobs], [stride] * len(jobs),
+                                  [context] * len(jobs), [leave_out] * len(jobs)))
+    else:
+        parts = [sample_core(str(root), image_path, image_tiles, stride, context, leave_out) for image_path, image_tiles in jobs]
+    empty = np.zeros(0, np.float32)
+    return {"values": np.concatenate([p["values"] for p in parts]) if parts else empty,
+            "all": np.concatenate([p["all"] for p in parts]) if parts else empty,
+            "tissue_px": sum(p["tissue_px"] for p in parts), "excluded_px": sum(p["excluded_px"] for p in parts)}
 
 
 def calibrate_slides(project: Project, stains: list[str] | None = None, redo: bool = False, stride: int = STRIDE,
-                     output: Path | None = None, cores: set[str] | None = None) -> Path:
-    """Pool tissue DAB from every whole-core tile of a slide and apply `calibrate_threshold` (Otsu / median + 6 MAD /
-    0.01 floor). Slides that already have a threshold keep it unless `redo`. With `cores`, only the slides of these core
+                     output: Path | None = None, cores: set[str] | None = None, workers: int = 1) -> Path:
+    """Pool tissue DAB from every whole-core tile of a slide, outside the excluded areas (linear artifacts, folds; the
+    masks stage 2 uses, `excluded_of`), and apply `calibrate_threshold` (Otsu / median + 6 MAD / 0.01 floor). Slides that
+    already have a threshold keep it unless `redo`. With `cores`, only the slides of these core
     images are calibrated, from these core images' tiles (all of a slide's for the same threshold as without)."""
     output = output or project.input("calibration")
     wanted = lambda stain: stains is None or stain in stains  # noqa: E731
@@ -55,9 +99,11 @@ def calibrate_slides(project: Project, stains: list[str] | None = None, redo: bo
         print(f"{len(have)} slides already have a threshold (kept)", flush=True)
     rows = []
     for number, ((tma, stain), group) in enumerate(sorted(groups.items()), start=1):
-        values = sample_dab(project.root, group, stride)
+        sample = sample_dab(project.root, group, stride, project.context_px, workers=workers)
+        values = sample["values"]
         threshold, quantiles = calibrate_threshold(values)
         rows.append({"tma": tma, "stain": stain, "threshold_dab_od": threshold, "sampled_tissue_pixels": int(values.size),
+                     "excluded_tissue_fraction": round(sample["excluded_px"] / max(1, sample["tissue_px"]), 6),
                      **{f"dab_p{q}": v for q, v in zip(("50", "75", "90", "95", "99", "999"), quantiles)}})
         print(f"[{number}/{len(groups)}] TMA {tma} {stain}: threshold {threshold:.4f} OD", flush=True)
     if rows:
