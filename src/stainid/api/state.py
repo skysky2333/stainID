@@ -172,17 +172,20 @@ def open_project(path: Path | str) -> ProjectState:
             if new:
                 disk_cache.watch(state.root)
                 disk_cache.know(*registry.recent_projects())  # a drive low on space takes from every project on it
-                threading.Thread(target=_warm_up, args=(state.project,), daemon=True).start()
+                threading.Thread(target=_warm_up, args=(state,), daemon=True).start()
         return state
 
 
-def _warm_up(project: Project) -> None:
-    """Read what the step overview needs once, in the background, so the first page to ask for it does not wait for the
-    big tables to be read (see `stainid.cache`)."""
+def _warm_up(state: ProjectState) -> None:
+    """Read what the step overview and the labels page need once, in the background, so the first page to ask for them
+    does not wait for the big tables to be read (see `stainid.cache`)."""
+    from stainid.labels import overview
     from stainid.workflows.steps import describe
 
     try:
-        describe(project)
+        describe(state.project)
+        for stain in sorted(set(state.tiles.stain)) if "stain" in state.tiles else []:
+            overview.cached_stain_overview(state.project, stain, state.project.output("reviews"), state.tiles)
     except Exception:  # a half-set-up project: the page that asks will say what is wrong
         pass
 

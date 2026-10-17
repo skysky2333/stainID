@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+from collections import OrderedDict
 from pathlib import Path
 
 import numpy as np
@@ -134,7 +136,7 @@ def _numbers(value) -> list[float] | None:
         return None
     if isinstance(value, str):
         text = value.strip()
-        value = json.loads(text) if text[0] == "[" else text.replace("|", " ").replace(",", " ").split()
+        value = json.loads(text) if text[0] == "[" else text.replace("|", " ").replace(";", " ").replace(",", " ").split()
     return [float(v) for v in value]
 
 
@@ -154,10 +156,10 @@ def _module_reader():
     return getattr(v2, "read_core", None)
 
 
-def _read_file(target: Path) -> pd.DataFrame:
+def _read_file(target: Path, columns: list[str] | None = None) -> pd.DataFrame:
     if target.suffix == ".parquet":
-        return pd.read_parquet(target)
-    return pd.read_csv(target, dtype={"tile_id": str, "candidate_id": str, "sources": str, "decision": str, "reason": str, "class": str,
+        return pd.read_parquet(target, columns=columns)
+    return pd.read_csv(target, usecols=(lambda c: c in columns) if columns else None, dtype={"tile_id": str, "candidate_id": str, "sources": str, "decision": str, "reason": str, "class": str,
                                       "subtype": str, "sam_status": str, "model_id": str})
 
 
@@ -190,18 +192,37 @@ def radius(row, pixel_size_um: float) -> float:
     return float(np.sqrt(area / np.pi) / pixel_size_um) if np.isfinite(area) and area > 0 else 8.0
 
 
-def read_core(project: Project, stain: str, core_id: str) -> pd.DataFrame | None:
-    """Every candidate of one core image (None when it has none), kept until its file changes. Callers must not change it."""
+POSITIONS = ["candidate_id", "x_core", "y_core", "tile_id"]
+CALLS = [*POSITIONS, "decision", "class", "subtype"]
+_WHOLE: OrderedDict[str, tuple[tuple, pd.DataFrame]] = OrderedDict()
+_WHOLE_LIMIT = 8  # a whole NeuN or AT8 core with its outlines and three masks parsed is a few hundred MB to a GB in memory
+_WHOLE_LOCK = threading.Lock()
+
+
+def read_core(project: Project, stain: str, core_id: str, columns: list[str] | None = None) -> pd.DataFrame | None:
+    """Every candidate of one core image (None when it has none). Whole tables are kept for the last few cores read
+    (until their file changes); with `columns` (e.g. `POSITIONS`, `CALLS`) only those are read and parsed, for passes over
+    many cores. Callers must not change it."""
     target = path(project, stain, core_id)
     if target is None:
         return None
     reader = _module_reader()
-
-    def make() -> pd.DataFrame:
-        found = reader(project, stain, core_id) if reader else _read_file(target)
+    if columns is not None:
+        found = reader(project, stain, core_id, list(columns)) if reader else _read_file(target, list(columns))
         return _normalised(found, stain, core_id)
-
-    return cache.memo(("v2 candidates", str(target)), [target], make)
+    stamp = cache.signature(target)
+    with _WHOLE_LOCK:
+        kept = _WHOLE.get(str(target))
+        if kept is not None and kept[0] == stamp:
+            _WHOLE.move_to_end(str(target))
+            return kept[1]
+    found = _normalised(reader(project, stain, core_id) if reader else _read_file(target), stain, core_id)
+    with _WHOLE_LOCK:
+        _WHOLE[str(target)] = (stamp, found)
+        _WHOLE.move_to_end(str(target))
+        while len(_WHOLE) > _WHOLE_LIMIT:
+            _WHOLE.popitem(last=False)
+    return found
 
 
 EMPTY = ["candidate_id", "x_core", "y_core", "tile_id", "core_id", "radius_px", "area_um2", "probability", "decision", "reason", "class",
@@ -311,49 +332,80 @@ def match_px(stain: str, pixel_size_um: float) -> float:
     return MATCH_UM.get(stain, DEFAULT_MATCH_UM) / max(1e-6, pixel_size_um)
 
 
-def match(project: Project, stain: str, labels: pd.DataFrame, tiles: pd.DataFrame) -> pd.Series:
-    """The candidate each label (tile_id, x, y in its field picture, `labels.frames`) is about: the nearest candidate of
-    the store within `MATCH_UM`, else None. Labels made before candidate ids existed are matched this way."""
-    out = pd.Series(None, index=labels.index, dtype=object)
+_LIGHT: OrderedDict[str, tuple[tuple, dict]] = OrderedDict()
+_LIGHT_LIMIT = 1200  # every core image of a cohort: a core's ids, positions and calls are a few MB
+
+
+def _light(project: Project, stain: str, core_id: str) -> dict | None:
+    """One core's candidates as matching needs them, compactly: ids (bytes), positions (float32) and the call of each
+    as a code into the core's few (decision, class, subtype) combinations. Kept until the store file changes."""
+    target = path(project, stain, core_id)
+    if target is None:
+        return None
+    stamp = cache.signature(target)
+    with _WHOLE_LOCK:
+        kept = _LIGHT.get(str(target))
+        if kept is not None and kept[0] == stamp:
+            _LIGHT.move_to_end(str(target))
+            return kept[1]
+    frame = read_core(project, stain, core_id, CALLS)
+    if frame is None or frame.empty:
+        found = None
+    else:
+        combos = pd.MultiIndex.from_arrays([frame.decision, frame["class"], frame.subtype])
+        codes, uniques = pd.factorize(combos)
+        found = {"ids": frame.candidate_id.to_numpy().astype("S"), "xy": np.c_[frame.x_core.to_numpy(), frame.y_core.to_numpy()].astype(np.float32),
+                 "codes": codes.astype(np.int32), "combos": list(uniques)}
+    with _WHOLE_LOCK:
+        _LIGHT[str(target)] = (stamp, found)
+        _LIGHT.move_to_end(str(target))
+        while len(_LIGHT) > _LIGHT_LIMIT:
+            _LIGHT.popitem(last=False)
+    return found
+
+
+def _nearest(project: Project, stain: str, labels: pd.DataFrame, tiles: pd.DataFrame):
+    """For each core with labels: (the core's compact candidates, the labels' index, the candidate row of each label or
+    -1) — the nearest candidate within `MATCH_UM` of each label (tile_id, x, y in its field picture, `labels.frames`)."""
     if labels.empty:
-        return out
+        return
     boxes = tiles.drop_duplicates("tile_id").set_index("tile_id") if not tiles.empty else pd.DataFrame(columns=["core_id"])
     have = cores(project, stain)
     placed = labels[labels.x.notna() & (labels.tile_id.isin(set(boxes.index)) | labels.tile_id.isin(have))]  # a field, or a whole core
     if placed.empty:
-        return out
+        return
     radius = match_px(stain, project.pixel_size_um)
     core_of = boxes.core_id.astype(str).to_dict()
     for core_id, group in placed.groupby(placed.tile_id.map(lambda t: core_of.get(t, t))):
         if core_id not in have:
             continue
-        found = read_core(project, stain, core_id)
-        if found is None or found.empty:
+        found = _light(project, stain, core_id)
+        if found is None:
             continue
         origin = np.array([frames.field_origin(boxes.loc[t], project.context_px) if t in core_of else (0, 0) for t in group.tile_id], float)
         points = np.c_[group.x.astype(float).to_numpy(), group.y.astype(float).to_numpy()] + origin
-        distance, index = cKDTree(np.c_[found.x_core.to_numpy(), found.y_core.to_numpy()]).query(points, distance_upper_bound=radius)
-        hit = np.isfinite(distance)
-        out.loc[group.index[hit]] = found.candidate_id.to_numpy()[index[hit]]
+        distance, index = cKDTree(found["xy"]).query(points, distance_upper_bound=radius)
+        yield found, group.index, np.where(np.isfinite(distance), index, -1)
+
+
+def match(project: Project, stain: str, labels: pd.DataFrame, tiles: pd.DataFrame) -> pd.Series:
+    """The candidate each label (tile_id, x, y in its field picture, `labels.frames`) is about: the nearest candidate of
+    the store within `MATCH_UM`, else None. Labels made before candidate ids existed are matched this way."""
+    out = pd.Series(None, index=labels.index, dtype=object)
+    for found, index, rows in _nearest(project, stain, labels, tiles):
+        hit = rows >= 0
+        out.loc[index[hit]] = [v.decode() for v in found["ids"][rows[hit]]]
     return out
 
 
 def calls_at(project: Project, stain: str, labels: pd.DataFrame, tiles: pd.DataFrame) -> pd.Series:
     """The AI's call (identity id) of the candidate each label is about (`match`), None where there is no candidate."""
-    matched = match(project, stain, labels, tiles)
     out = pd.Series(None, index=labels.index, dtype=object)
-    found = matched.dropna()
-    if found.empty:
-        return out
     vocabulary = vocab.of(project, stain)
-    for core_id, group in found.groupby(found.map(lambda c: ":".join(str(c).split(":")[1:-2]))):
-        rows = read_core(project, stain, core_id)
-        if rows is None:
-            continue
-        by_id = rows.drop_duplicates("candidate_id").set_index("candidate_id")
-        for index, cid in group.items():
-            row = by_id.loc[cid]
-            out[index] = ai_call(vocabulary, row.decision, row["class"], row.subtype)[0]
+    for found, index, rows in _nearest(project, stain, labels, tiles):
+        hit = rows >= 0
+        calls = [ai_call(vocabulary, *combo)[0] for combo in found["combos"]]
+        out.loc[index[hit]] = [calls[c] for c in found["codes"][rows[hit]]]
     return out
 
 
