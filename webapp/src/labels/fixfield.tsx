@@ -26,7 +26,7 @@ import { RASTER_LAYERS, ZoomViewer } from '../viewer'
 import type { ClassPick } from './classKeys'
 import { resolveClass } from './classKeys'
 import type { RoundEvent } from './rounds'
-import { BRUSH_SCALE, BRUSH_UM, useBrush } from './brush'
+import { BRUSH_SCALE, BRUSH_UM, CLEARED, EXCLUDE_TYPES, useBrush } from './brush'
 import { ClassLegend, LookLegend, MaskSwitch, ROUND_TITLE, RoundProgressLine, SaveButtons, SaveState, callText, changesText, draftKey, lookOf, maskName,
   polygonArea, polygonPoints, readDraft, simplifyPolygon, stepMask, unsureClass, useCandidateKeys, useFitScreen, useLeaveGuard, useLive, useSaveKeys,
   writeDraft } from './rounds'
@@ -37,6 +37,12 @@ const rkey = (x: number, y: number) => `${Math.round(x)}:${Math.round(y)}`
 type Meta = SessionDetail['meta'] & RoundDetail
 type Mine = Label & { candidate?: string | null }
 type Rec = Record<string, unknown>
+/** The excluded areas over a field (GET …/fields/{tile}/excluded, store_view.field_excluded): where the overlay picture
+ *  lies in field pixels and the kinds on it. */
+interface FieldExcluded {
+  status: string; scale?: number; x?: number; y?: number; width?: number; height?: number; version?: number
+  kinds: { id: string; label: string; color: string; hatch: string; type: string; fraction: number | null }[]
+}
 /** An object someone just added with one click and has not given a class yet (kept on the page only); `removed`: they
  *  pressed Delete on it, so it stays dotted grey until a class key brings it back. */
 interface Fresh { key: string; x: number; y: number; options: number[][][]; chosen: number; removed?: boolean }
@@ -211,13 +217,24 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   const [error, setError] = useState<string | null>(null)
   const [samReady, setSamReady] = useState(field.segment_ready)
   const [addedStates, setAddedStates] = useState<AddedState[]>(field.added)
-  const [layers, setLayers] = useStored<Record<string, boolean>>('stainid.round2.layers', { box: true, margin: true })
+  const [layers, setLayers] = useStored<Record<string, boolean>>('stainid.round2.layers', { box: true, margin: true, excluded: true })
   const [help, setHelp] = useStored<boolean>('stainid.round2.help', false)
   const [note, setNote] = useState(() => field.mine.find((m) => m.task === 'note')?.value ?? '')
   const sam = meta.segment_anything && field.segment_anything
   // the exclusion brush (E): bad areas painted on a mask, saved with the field's other changes
   const [excluding, setExcluding] = useState(false)
   const [brushUm, setBrushUm] = useStored<number>('stainid.round2.brush', BRUSH_UM.start)
+  const [brushKind, setBrushKind] = useStored<string>('stainid.round2.brush.type', '1')  // the type painted (keys 1–4 with the brush on)
+  // the excluded areas over the field (detection's folds, artifacts, no tissue, … and what others marked), as on the Cores view
+  const excluded = useFetch<FieldExcluded>(`/api/annotate/${name}/fields/${enc(tile)}/excluded`)
+  const brushType = EXCLUDE_TYPES.find((t) => t.key === brushKind) ?? EXCLUDE_TYPES[0]
+  const [shiftDown, setShiftDown] = useState(false)  // Shift held while the brush is on: it erases (the cursor shows it)
+  useEffect(() => {
+    const on = (e: KeyboardEvent) => setShiftDown(e.shiftKey)
+    window.addEventListener('keydown', on)
+    window.addEventListener('keyup', on)
+    return () => { window.removeEventListener('keydown', on); window.removeEventListener('keyup', on) }
+  }, [])
   const [fieldSize, setFieldSize] = useState<{ w: number; h: number } | null>(null)
   const [brushDirty, setBrushDirty] = useState(false)
   const savedArea = useMemo(() => {
@@ -435,6 +452,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   useEffect(() => {  // E: the exclusion brush on and off
     const onKey = (e: KeyboardEvent) => {
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement).tagName) || e.metaKey || e.ctrlKey || e.altKey || e.repeat) return
+      if (excluding && ['1', '2', '3', '4'].includes(e.key)) { e.preventDefault(); setBrushKind(e.key); return }  // the type of area painted
       if (e.key.toLowerCase() !== 'e' || precise || draft.length) return
       e.preventDefault()
       setExcluding((on) => !on)
@@ -442,12 +460,12 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [precise, draft.length])
+  }, [precise, draft.length, excluding])  // eslint-disable-line react-hooks/exhaustive-deps
   const brushPx = brushUm / (field.pixel_size_um || 0.27) / 2  // the brush's radius in field pixels
   const press = (p: ImagePoint, event: React.MouseEvent) => {
     if (!excluding) return
     if (event.button !== 0) return  // the left button paints (Shift: erases); the middle one pans
-    brush.begin(p.x, p.y, brushPx, event.shiftKey)
+    brush.begin(p.x, p.y, brushPx, brushKind, event.shiftKey)  // Shift: erase, the part marked as fine
   }
   const release = () => {
     if (!excluding) return
@@ -591,7 +609,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     if (saving || (!finish && !unsaved)) return
     const marks = Object.values(changes).flatMap((c) => (c.mark ? [c.mark] : []))
       .sort((a, b) => (SEND_ORDER[String(a.task)] ?? 2) - (SEND_ORDER[String(b.task)] ?? 2))
-    if (brushDirty) marks.push({ task: 'exclude', png: brush.png(), scale: BRUSH_SCALE })  // the painted bad area ("" : none)
+    if (brushDirty) marks.push({ task: 'exclude', pngs: brush.pngs(), scale: BRUSH_SCALE })  // the painted areas, one picture per type
     if (!(await send(marks, finish))) return
     setChanges({}); setUndos([]); setRestored(0); setBrushDirty(false)
     writeDraft(draftAt, null)
@@ -676,8 +694,13 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
               {pending && <span className="small muted">Outlining…</span>}</span>}
             focus={focus} cursor={excluding ? 'none' : precise ? 'crosshair' : target ? 'pointer' : 'copy'} onClick={click} onMove={move}
             onPress={press} onRelease={release} panLock={excluding} onWheelOver={wheelBrush} onSize={setFieldSize}
-            under={(_z, _s, rawUnit) => hidden ? null : <ObjectLayer items={drawnItems} unit={Number.isFinite(rawUnit) && rawUnit > 0 ? rawUnit : 1}
-              dim={precise ? 0.25 : excluding ? 0.55 : 1} />}>
+            under={(_z, _s, rawUnit) => hidden ? null : <>
+              {layers.excluded !== false && excluded.data?.status === 'done' && excluded.data.width ? (  // detection's and others' excluded areas
+                <image href={apiUrl(`/api/annotate/${name}/fields/${enc(tile)}/excluded.png?v=${excluded.data.version ?? 0}`)} x={excluded.data.x} y={excluded.data.y}
+                  width={excluded.data.width} height={excluded.data.height} preserveAspectRatio="none" style={{ imageRendering: 'pixelated' }} />
+              ) : null}
+              <ObjectLayer items={drawnItems} unit={Number.isFinite(rawUnit) && rawUnit > 0 ? rawUnit : 1} dim={precise ? 0.25 : excluding ? 0.55 : 1} />
+            </>}>
             {(_zoom, size, rawUnit) => {
               const unit = Number.isFinite(rawUnit) && rawUnit > 0 ? rawUnit : 1
               if (hidden) return null  // a clean look at the tissue
@@ -731,20 +754,23 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
                   ))}
                   {precise.clicks.map((c, i) => <circle key={`c${i}`} cx={c[0]} cy={c[1]} r={3.8 * unit} fill={c[2] ? '#4ade80' : '#f87171'} stroke="#000" strokeWidth={unit} />)}
                 </>}
-                {brush.url && <>  {/* the areas marked as bad: a translucent red hatch */}
-                  <defs>
-                    <pattern id="exclude-hatch" width={9 * unit} height={9 * unit} patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-                      <rect width={9 * unit} height={9 * unit} fill="#ff3b3b" fillOpacity={0.22} />
-                      <line x1={0} y1={0} x2={0} y2={9 * unit} stroke="#ff3b3b" strokeOpacity={0.85} strokeWidth={2.4 * unit} />
-                    </pattern>
-                    <mask id="exclude-mask" maskUnits="userSpaceOnUse" x={0} y={0} width={size.w} height={size.h}>
-                      <image href={brush.url} x={0} y={0} width={Math.ceil(size.w / BRUSH_SCALE) * BRUSH_SCALE} height={Math.ceil(size.h / BRUSH_SCALE) * BRUSH_SCALE} preserveAspectRatio="none" />
-                    </mask>
-                  </defs>
-                  <rect x={0} y={0} width={size.w} height={size.h} fill="url(#exclude-hatch)" mask="url(#exclude-mask)" pointerEvents="none" />
-                </>}
-                {excluding && cursor && <circle cx={cursor[0]} cy={cursor[1]} r={brushPx} fill="#ff3b3b" fillOpacity={0.12} stroke="#ffffff" strokeWidth={1.6 * unit}
-                  strokeDasharray={`${4 * unit} ${3 * unit}`} pointerEvents="none" />}
+                {[...EXCLUDE_TYPES, CLEARED].filter((t) => brush.urls[t.key]).map((t) => (  // this person's painted areas, a hatch per type
+                  <g key={t.key} pointerEvents="none">
+                    <defs>
+                      <pattern id={`exclude-hatch-${t.key}`} width={9 * unit} height={9 * unit} patternUnits="userSpaceOnUse" patternTransform={t.key === CLEARED.key ? undefined : 'rotate(45)'}>
+                        <rect width={9 * unit} height={9 * unit} fill={t.colour} fillOpacity={0.22} />
+                        <line x1={0} y1={0} x2={t.key === CLEARED.key ? 9 * unit : 0} y2={t.key === CLEARED.key ? 0 : 9 * unit} stroke={t.colour} strokeOpacity={0.9} strokeWidth={2.4 * unit} />
+                      </pattern>
+                      <mask id={`exclude-mask-${t.key}`} maskUnits="userSpaceOnUse" x={0} y={0} width={size.w} height={size.h}>
+                        <image href={brush.urls[t.key]} x={0} y={0} width={Math.ceil(size.w / BRUSH_SCALE) * BRUSH_SCALE} height={Math.ceil(size.h / BRUSH_SCALE) * BRUSH_SCALE}
+                          preserveAspectRatio="none" />
+                      </mask>
+                    </defs>
+                    <rect className="exclude-painted" x={0} y={0} width={size.w} height={size.h} fill={`url(#exclude-hatch-${t.key})`} mask={`url(#exclude-mask-${t.key})`} />
+                  </g>
+                ))}
+                {excluding && cursor && <circle cx={cursor[0]} cy={cursor[1]} r={brushPx} fill={shiftDown ? CLEARED.colour : brushType.colour} fillOpacity={0.15}
+                  stroke="#ffffff" strokeWidth={1.6 * unit} strokeDasharray={`${4 * unit} ${3 * unit}`} pointerEvents="none" />}
                 {pending && <circle className="sam-pending" cx={pending[0]} cy={pending[1]} r={10 * unit} fill="none" stroke="#fff" strokeWidth={2 * unit} />}
                 {draft.length > 0 && <>
                   <polyline points={polygonPoints([...draft, ...(cursor ? [cursor] : [])])} fill="none" stroke="#fff" strokeWidth={2 * unit} />
@@ -757,10 +783,16 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
         <aside className="annotate-side round-side" aria-label="The object, the keys and this field">
           {coach}
           {excluding && <div className="card side-block exclude-bar" role="status">
-            <b>Excluding</b> · brush {brushUm} µm · <span className="kbd">E</span> to exit
-            <p className="small secondary" style={{ margin: '4px 0 0' }}>Drag paints a bad area (fold, smudge, empty glass), Shift-drag
-              erases, scroll changes the brush, the middle button moves the picture, <span className="kbd">Z</span> takes back a stroke. Objects in it are left
-              out of scoring and training; saved with Save.</p>
+            <b>Excluding</b> · <span className="look-swatch" style={{ borderColor: brushType.colour, background: brushType.colour }} /> {brushType.name} · brush {brushUm} µm
+            {' '}· <span className="kbd">E</span> to exit
+            <ul className="class-legend small" style={{ marginTop: 6 }}>{EXCLUDE_TYPES.map((t) => (
+              <li key={t.key} className={t.key === brushKind ? 'waiting' : ''}><span className="kbd key-slot">{t.key}</span>
+                <span className="look-swatch" style={{ borderColor: t.colour, background: t.colour }} />{t.name}</li>
+            ))}
+              <li><span className="kbd key-slot">⇧</span><span className="look-swatch" style={{ borderColor: CLEARED.colour, background: CLEARED.colour }} />Shift-drag: erase, or
+                mark part of a detected exclusion as fine</li></ul>
+            <p className="small secondary" style={{ margin: '4px 0 0' }}>Drag paints the chosen type, scroll changes the brush, the middle button moves the
+              picture, <span className="kbd">Z</span> takes back a stroke. Objects in a painted area are left out of scoring and training; saved with Save.</p>
           </div>}
           <TargetCard s={target} call={target ? callOf(target) : null} meta={meta} precise={precise} px={px} outline={target ? outlineOf(target) : null}
             choices={choicesOf(target)} added={target?.added && saved[target.added.id] ? addedState(target) : null} unsaved={!!target && isUnsaved(target)}
@@ -793,6 +825,21 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
                   onBlur={() => { if (note !== (Object.values(mine).find((m) => m.task === 'note')?.value ?? '')) save([{ task: 'note', value: note, deleted: !note }]) }} /></label>
             </details>
           </div>
+          {(() => {  // what the hatches over the field are
+            const found = layers.excluded !== false && excluded.data?.status === 'done' ? excluded.data.kinds : []
+            const mine = [...EXCLUDE_TYPES, CLEARED].filter((t) => brush.urls[t.key])
+            if (!found.length && !mine.length) return null
+            return (
+              <div className="card side-block">
+                <h3>Excluded areas</h3>
+                <ul className="look-legend small secondary" style={{ marginTop: 0, paddingTop: 0, borderTop: 'none' }}>
+                  {found.map((k) => <li key={k.id}><span className="look-swatch hatched" style={{ borderColor: k.color, color: k.color }} />{k.label}</li>)}
+                  {mine.map((t) => <li key={`mine-${t.key}`}><span className="look-swatch hatched" style={{ borderColor: t.colour, color: t.colour }} />yours: {t.name}</li>)}
+                </ul>
+                <p className="small muted" style={{ margin: '4px 0 0' }}><span className="kbd">E</span> paints more (keys 1–4 the type), Shift-drag clears.</p>
+              </div>
+            )
+          })()}
           <div className="card side-block side-save">
             <SaveState unsaved={unsaved} saving={saving} />
             <div className="row side-save-buttons">
@@ -831,6 +878,8 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
                   <label key={l} className="layer-toggle"><input type="checkbox" checked={!!layers[l]} onChange={() => toggle(l)} /><span className="swatch" style={{ background: RASTER_LAYERS[l]?.color }} />{RASTER_LAYERS[l]?.label ?? l}</label>
                 ))}
                 <label className="layer-toggle"><input type="checkbox" checked={!!layers.box} onChange={() => toggle('box')} />field boundary (yellow)</label>
+                <label className="layer-toggle"><input type="checkbox" checked={layers.excluded !== false} onChange={() => setLayers({ ...layers, excluded: layers.excluded === false })} />
+                  excluded areas (folds, artifacts, no tissue …)</label>
               </details>
               <details className="side-details compact">
                 <summary className="small">Go to another field</summary>
@@ -856,7 +905,8 @@ function Controls({ sam, precise, excluding }: { sam: boolean; precise: boolean;
     return (
       <ul className="key-list small">
         <li className="key-now"><b>Excluding</b> — outlines are locked</li>
-        <li><span className="kbd">left-drag</span> paint a bad area</li>
+        <li><span className="kbd">1</span>–<span className="kbd">4</span> the type: fold, artifact, no tissue, out of focus</li>
+        <li><span className="kbd">drag</span> paint a bad area of that type</li>
         <li><span className="kbd">⇧ drag</span> erase (also clears part of a detected exclusion: “this is fine”)</li>
         <li><span className="kbd">scroll</span> brush size · <span className="kbd">middle</span> move the picture</li>
         <li><span className="kbd">Z</span> one stroke back · <span className="kbd">E</span> or <span className="kbd">Esc</span> done</li>
@@ -882,7 +932,7 @@ function Controls({ sam, precise, excluding }: { sam: boolean; precise: boolean;
       <li><span className="kbd">click</span> empty tissue: {sam ? 'a new candidate' : 'draw a new one by hand'}</li>
       <li><span className="kbd">click</span> an object: precise edit{sam ? ' (click add, ⇧ click remove, drag dots, click beyond the frame done)' : ' (drag dots, click beyond the frame done)'}</li>
       <li><span className="kbd">Space</span> hide / show the drawings</li>
-      <li><span className="kbd">E</span> mark a bad area with a brush (folds, smudges): its objects are left out</li>
+      <li><span className="kbd">E</span> mark bad areas with a brush (1–4 the type; ⇧ drag clears): their objects are left out</li>
       <li><span className="kbd">Z</span> undo · <span className="kbd">Esc</span> cancel</li>
       <li><span className="kbd">Ctrl S</span> save · <span className="kbd">Ctrl ⏎</span> save and continue</li>
     </ul>

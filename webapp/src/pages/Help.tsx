@@ -45,7 +45,7 @@ const FAQ: [string, ReactNode][] = [
     same page.</>],
   ['How does labelling work?', <>What stainID detection found is already on the picture: objects with a class are solid in its colour, objects it rejected (or someone removed) dotted grey.
     Point at an object and press a key: <b>1–9</b> its class, <b>0</b> unsure, <b>Delete</b> not an object, <b>Tab</b> / <b>Shift+Tab</b> a bigger or smaller
-    outline, a <b>click</b> on the object to edit the outline spot by spot (a click outside keeps it), <b>Space</b> to hide the drawings for a clean look, <b>Z</b> undo. In <b>Fix the field</b>, clicking empty tissue outlines a missed object. Nothing
+    outline, a <b>click</b> on the object to edit the outline spot by spot (a click outside keeps it), <b>Space</b> to hide the drawings for a clean look, <b>E</b> to paint bad areas (1–4 their type; Shift-drag clears, also a detected fold that is fine), <b>Z</b> undo. In <b>Fix the field</b>, clicking empty tissue outlines a missed object. Nothing
     is saved until <b>Save</b> or <b>Save and continue</b>; unsaved changes come back after a reload. The keys are always shown in the side panel.</>],
   ['A labelling session says no core has detection’s candidates.', <>The annotation rounds show the candidates of the staged detection. Run the
     <b>Detect</b> steps on the <Link to="/workflow">Run</Link> page for that stain first (at least <b>Find candidates</b> and <b>Decide</b>; <b>Run what’s left</b> runs them).</>],

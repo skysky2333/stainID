@@ -372,6 +372,47 @@ def test_an_area_marked_as_bad_saves_reloads_and_keeps_its_objects_out_of_scorin
     assert cleared.status_code == 200 and not [m for m in ann.get(f"/api/annotate/{name}/fields/{TILE}").json()["mine"] if m["task"] == "exclude"]
 
 
+def test_typed_areas_and_cleared_parts_save_reload_and_steer_scoring(rounds_project):
+    import base64
+
+    import cv2
+
+    from stainid.labels import exclusions
+
+    def png(*boxes):
+        painted = np.zeros((200, 200, 4), np.uint8)
+        for r0, r1, c0, c1 in boxes:
+            painted[r0:r1, c0:c1] = 255
+        return "data:image/png;base64," + base64.b64encode(cv2.imencode(".png", painted)[1].tobytes()).decode()
+
+    admin, (ann, _), _ = rounds_project
+    name = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "open": True, "tile_ids": [TILE]}).json()["name"]
+    field = ann.get(f"/api/annotate/{name}/fields/{TILE}").json()
+    own = {(round(o["x"]), round(o["y"])): o["candidate_id"] for o in field["objects"] if o["own"]}
+    in_fold, in_cleared = own[(228, 228)], own[(288, 228)]  # (400, 400) and (460, 400) on the core
+    # a fold (type 1) over the first; a part marked as fine (Shift-drag: include) over the second, e.g. over a detected fold
+    pngs = {"1": png((50, 65, 50, 65)), "2": "", "3": "", "4": "", "include": png((50, 65, 65, 80))}
+    assert _save(ann, name, TILE, [{"task": "exclude", "pngs": pngs, "scale": 4}], submit=True).status_code == 200
+    mark = next(m for m in ann.get(f"/api/annotate/{name}/fields/{TILE}").json()["mine"] if m["task"] == "exclude")
+    rings, holes, kinds = exclusions.parts_of(mark)
+    assert sorted(kinds) == ["1", "include"] and mark["value"].startswith("kinds:")  # each ring keeps its type
+    assert exclusions.inside(rings, holes, kinds, 228, 228) and not exclusions.inside(rings, holes, kinds, 288, 228)  # cleared: not excluded
+    decided = decisions.state(state.get_state().project, "6E10", state.get_state().tiles)
+    hers = set(decided.rows.candidate[decided.rows.source == "Ann"])
+    assert in_fold not in hers and in_cleared in hers  # the fold keeps its object out of scoring; the cleared part does not
+    from dataclasses import replace
+
+    from stainid.labels import store
+
+    project, tiles = state.get_state().project, state.get_state().tiles
+    on = replace(project, config={**project.config, "labels": {**project.config["labels"], "apply_exclusions": True}})
+    carried = next(iter(exclusions.for_analysis(on, store.current(project.output("reviews")), tiles).values()))
+    assert {(p["kind"], p["include"]) for p in carried} == {("1", False), ("include", True)}  # types and overrides go along
+    bad = _save(ann, name, TILE, [{"task": "exclude", "pngs": {"9": png((1, 2, 1, 2))}, "scale": 4}])
+    assert bad.status_code == 400  # an unknown type
+    assert ann.get(f"/api/annotate/{name}/fields/{TILE}/excluded").json()["status"] == "not_made"  # no stage-2 mask in this project
+
+
 def test_a_fix_the_field_session_takes_every_remaining_field_by_default(rounds_project):
     admin, _, _ = rounds_project
     scope = admin.get("/api/labels/rounds/scope", params={"stain": "6E10"}).json()

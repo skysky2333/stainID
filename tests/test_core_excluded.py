@@ -45,6 +45,19 @@ def write_mask(project_root) -> np.ndarray:
     return mask
 
 
+def test_a_field_gets_its_part_of_the_excluded_areas(client, synthetic_project):
+    """The annotation pages draw the part of the core's layer over their field, in field pixels."""
+    write_mask(synthetic_project)
+    project = state.get_state().project
+    tile = {"tile_id": "F", "core_id": CORE, "stain": "AT8", "x_px": 40, "y_px": 16, "width_px": 64, "height_px": 48}
+    info, png = store_view.field_excluded(project, tile, "Ann")
+    x0, y0 = max(0, 40 - project.context_px), max(0, 16 - project.context_px)
+    assert info["status"] == "done" and info["x"] == (x0 // 8) * 8 - x0 and info["y"] == (y0 // 8) * 8 - y0
+    picture = cv2.imdecode(np.frombuffer(png, np.uint8), cv2.IMREAD_UNCHANGED)
+    assert picture.shape[:2] == (info["height"] // 8, info["width"] // 8) and picture[..., 3].max() > 0
+    assert {"fold", "manual"} <= {k["id"] for k in info["kinds"]}  # the fold at the top of the core reaches this field
+
+
 def test_excluded_areas(client, synthetic_project):
     assert store_view.EXCLUDED_SCALE == MASK_SCALE
     missing = client.get(f"/api/cores/{CORE}/AT8/excluded").json()
