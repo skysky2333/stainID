@@ -66,6 +66,14 @@ class Job:
     grace: float = 0.0
     runs: list = field(default_factory=list)  # [started, ended] of each earlier run (paused, pre-empted or interrupted)
     after: list = field(default_factory=list)  # ids of jobs that must have finished before this one starts
+    # scheduling (`stainid.jobs.policy`): the time it declared (seconds), its units (tiles, core images x stains), who
+    # asked for it (fair share of annotation work), explicit conflict keys, and job arrays (a parent and its chunks)
+    time_s: float = 0.0
+    units: int = 0
+    owner: str = ""
+    conflicts: list = field(default_factory=list)
+    array_of: str = ""
+    children: list = field(default_factory=list)
 
 
 def new_id() -> str:

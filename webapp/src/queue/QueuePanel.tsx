@@ -56,12 +56,17 @@ function QueueRow({ job, onAct }: { job: Job; onAct: (job: Job, action: string, 
   const { done, total } = job.progress
   const running = job.status === 'running'
   const waiting = job.status === 'queued' || job.status === 'paused'
+  const chunks = job.chunks
+  const chunkText = chunks ? `${chunks.finished} of ${chunks.total} chunks done${chunks.running ? ` · ${chunks.running} running` : ''}` : ''
   const facts = running
-    ? [job.stopping ? (job.stopping === 'cancel' ? 'Stopping…' : 'Pausing at the next unit…') : '',
+    ? [job.stopping ? (job.stopping === 'cancel' ? 'Stopping…' : 'Pausing at the next unit…') : '', chunkText,
        total ? `${done.toLocaleString()} of ${total.toLocaleString()} done` : 'Starting…',
        job.eta_s ? `about ${duration(job.eta_s)} left` : ''].filter(Boolean).join(' · ')
-    : [job.queue?.position ? `#${job.queue.position} in its class` : '', queueText(job), job.typical_s ? `takes about ${duration(job.typical_s)}` : '']
-      .filter(Boolean).join(' · ')
+    : [job.queue?.position ? `#${job.queue.position} in its class` : '', chunkText, queueText(job)].filter(Boolean).join(' · ')
+  const sizeText = job.size ? `${job.size}${job.estimate_s ? ` · ~${duration(job.estimate_s)}` : ''}` : ''
+  const sizeTitle = job.needs ? `Needs ${job.needs.cpus} processors${job.needs.gpus ? `, ${job.needs.gpus} GPU` : ''}, ${job.needs.ram_gb} GB`
+    + `${job.io === 'heavy' ? ', heavy disk use' : ''}${job.needs.network ? ', network only' : ''}` : ''
+
   return (
     <li className="queue-row">
       <div className="queue-main">
@@ -69,9 +74,12 @@ function QueueRow({ job, onAct }: { job: Job; onAct: (job: Job, action: string, 
           <StatusBadge status={job.status} />
           <b className="ellipsis">{job.title}</b>
           {job.project_name && <span className="muted ellipsis">{job.project_name}</span>}
+          {sizeText && <span className={`badge size-${job.size}`} title={sizeTitle}>{sizeText}</span>}
         </div>
         {running && total > 0 && <Progress done={done} total={total} />}
         <div className="muted small ellipsis" title={facts}>{facts}</div>
+        {running && job.running_chunks && job.running_chunks.length > 0 && (
+          <div className="muted small ellipsis">Now: {job.running_chunks.map((t) => t.split(' · ').pop()).join(', ')}</div>)}
       </div>
       <div className="queue-actions small">
         {running && !job.stopping && <button className="link-btn" onClick={() => onAct(job, 'pause')}>Pause</button>}

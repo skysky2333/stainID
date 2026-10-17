@@ -1283,3 +1283,5 @@ details.side-details.compact > summary { font-weight: 500; }
 .queue-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
 .status-paused { color: var(--warning); }
 @media (max-width: 640px) { .queue-row { flex-direction: column; align-items: stretch; } .queue-actions { justify-content: flex-start; } }
+.badge.size-small { color: var(--good); }
+.badge.size-big { color: var(--warning); }

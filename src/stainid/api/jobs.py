@@ -50,7 +50,7 @@ class JobManager:
     def jobs(self) -> dict[str, Job]:
         mine = str(self.root)
         with self.scheduler.lock:
-            found = {j.id: j for j in self.scheduler.jobs.values() if j.project == mine}
+            found = {j.id: j for j in self.scheduler.jobs.values() if j.project == mine and not j.array_of}  # an array shows as its parent
         return {**self.legacy, **found}
 
     def active(self) -> bool:
@@ -60,14 +60,20 @@ class JobManager:
         job = self.jobs.get(job_id)
         if job is None:
             return None
+        if job.children:  # an array: the log of the chunk running (or that ran) last
+            chunks = [self.scheduler.jobs[c] for c in job.children if c in self.scheduler.jobs and self.scheduler.jobs[c].started]
+            if not chunks:
+                return None
+            job = max(chunks, key=lambda c: (c.status == "running", c.started or 0))
         if job.log_file:
             return Path(job.log_file)
         return self.store.log_path(job)
 
-    def submit(self, workflow: str, options: dict, klass: str | None = None) -> Job:
+    def submit(self, workflow: str, options: dict, klass: str | None = None, owner: str = "") -> Job:
+        """Queue a step (a big one as a job array of chunks); it starts on the queue's next round."""
         from stainid.project import load_project
 
-        return self.scheduler.submit_step(load_project(self.root), workflow, options, klass)  # started on the queue's next round
+        return self.scheduler.submit_step(load_project(self.root), workflow, options, klass, owner=owner)
 
     def act(self, op: str, job_id: str, **args) -> Job:
         if job_id not in self.jobs:

@@ -37,10 +37,10 @@ import sys
 import threading
 import time
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from stainid.jobs import ACTIVE, APP, COMMAND_LINE, JOB_ENV, Job, JobStore, alive, new_id, stop
+from stainid.jobs import ACTIVE, APP, COMMAND_LINE, JOB_ENV, Job, JobStore, alive, new_id, policy, stop
 from stainid.jobs.units import CONTROL_ENV, PAUSED, SINCE_ENV
 from stainid.tables import write_text_atomic
 
@@ -96,6 +96,8 @@ class Budget:
     cpus: float
     gpus: int
     ram_gb: float
+    io_per_disk: int = policy.IO_PER_DISK  # io-heavy jobs at once on one disk
+    caps: dict = field(default_factory=lambda: {k: dict(v) for k, v in policy.DEFAULT_CAPS.items()})  # class -> {"big": n}
 
     def fits(self, need: dict, used: dict) -> bool:
         return all(used.get(k, 0) + need.get(k, 0) <= getattr(self, k) + 1e-9 for k in ("cpus", "gpus", "ram_gb"))
@@ -133,15 +135,18 @@ def default_budget() -> Budget:
 
 
 def load_budget(directory: Path) -> Budget:
-    """`budget.json` in the queue folder ({"cpus": 24, "gpus": 2, "ram_gb": 30}, any of them), else this computer's."""
+    """`budget.json` in the queue folder ({"cpus": 24, "gpus": 2, "ram_gb": 30, "io_per_disk": 2, "caps": {"public": {"big": 1}}},
+    any of them), else this computer's."""
     budget = default_budget()
     try:
         saved = json.loads((directory / "budget.json").read_text())
     except (OSError, ValueError):
         saved = {}
-    for key in ("cpus", "gpus", "ram_gb"):
+    for key in ("cpus", "gpus", "ram_gb", "io_per_disk"):
         if isinstance(saved.get(key), (int, float)):
             setattr(budget, key, type(getattr(budget, key))(saved[key]))
+    if isinstance(saved.get("caps"), dict):
+        budget.caps = {k: dict(v) for k, v in saved["caps"].items() if isinstance(v, dict)}
     return budget
 
 
@@ -454,7 +459,7 @@ class Scheduler:
     def submit(self, job: Job) -> Job:
         """Add a job (any process may: a new record is never written by two processes)."""
         job.status = "queued"
-        job.order = job.order or time.time()
+        job.order = job.order or job.created or time.time()
         job.klass = job_class(job) if job.klass else "pipeline"
         if not job.log_file:
             job.log_file = str(self.dir / f"{job.id}.log")
@@ -464,23 +469,65 @@ class Scheduler:
         return job
 
     def submit_step(self, project, workflow: str, options: dict, klass: str | None = None, needs: dict | None = None,
-                    argv: list[str] | None = None, after: list[str] | None = None) -> Job:
-        """Queue a workflow step of a project (`argv`: its exact arguments, when they hold more than its options)."""
+                    argv: list[str] | None = None, after: list[str] | None = None, array: bool | str | int | None = None,
+                    time_s: float = 0.0, owner: str = "", conflicts: list[str] | None = None, title: str = "") -> Job:
+        """Queue a workflow step of a project (`argv`: its exact arguments, when they hold more than its options). A big
+        step over many core images becomes a job array (`stainid.jobs.arrays`): `array=None` decides by itself, False
+        never, True / "tma" / a number of core images per chunk always when there are two chunks or more."""
+        from stainid.jobs import arrays
         from stainid.workflows.steps import BY_ID, to_argv
 
         if workflow not in BY_ID or BY_ID[workflow].command is None:
             raise KeyError(workflow)
         options = {**{o.key: o.default for o in BY_ID[workflow].options}, **options}
-        job = Job(id=new_id(), workflow=workflow, options=options, argv=list(argv) if argv else to_argv(workflow, options),
-                  project=str(Path(project.root).resolve()), project_name=project.name, klass=klass or class_of(project, workflow),
-                  needs=needs or needs_of(workflow, options), after=list(after or []))
-        return self.submit(job)
+        argv = list(argv) if argv else to_argv(workflow, options)
+        job = Job(id=new_id(), workflow=workflow, options=options, argv=argv, project=str(Path(project.root).resolve()), project_name=project.name,
+                  klass=klass or class_of(project, workflow), needs=needs or needs_of(workflow, options), after=list(after or []),
+                  time_s=float(time_s or 0), owner=owner, conflicts=list(conflicts or []), title=title)
+        chunks = None
+        if array is not False:
+            try:
+                chunks = arrays.plan(project, workflow, options, argv, None if array in (None, True) else array)
+            except (OSError, ValueError, KeyError):
+                chunks = None
+        if not chunks:
+            return self.submit(job)
+        return self._submit_array(job, chunks)
+
+    def _submit_array(self, parent: Job, chunks: list[dict]) -> Job:
+        """A parent and one chunk job per part (`--core` with the part's core images), queued in order."""
+        from stainid.jobs import arrays
+
+        folder = self.dir / "arrays" / parent.id
+        folder.mkdir(parents=True, exist_ok=True)
+        parent.order = parent.order or time.time()
+        parent.units = sum(c["units"] for c in chunks)
+        base = arrays.without_cores(parent.argv)
+        children = []
+        for number, chunk in enumerate(chunks):
+            listing = folder / f"{number + 1:04d}.txt"
+            write_text_atomic(listing, "\n".join(chunk["cores"]) + "\n")
+            child = Job(id=f"{parent.id}.{number + 1:04d}", workflow=parent.workflow, options=parent.options, argv=[*base, "--core", str(listing)],
+                        project=parent.project, project_name=parent.project_name, klass=parent.klass, needs=dict(parent.needs),
+                        after=list(parent.after), owner=parent.owner, conflicts=list(parent.conflicts), array_of=parent.id,
+                        units=chunk["units"], title=f"{title_of(parent)} · {chunk['label']}",
+                        created=parent.created + (number + 1) * 1e-6, order=parent.order + (number + 1) * 1e-6)
+            children.append(child)
+        parent.children = [c.id for c in children]
+        parent.status = "queued"
+        with self.lock:
+            for child in children:
+                self.submit(child)
+            self.submit(parent)
+        return parent
 
     def submit_command(self, command: list[str], cwd: str, title: str, klass: str, needs: dict | None = None, project=None,
-                       env: dict | None = None, grace: float = 0.0, after: list[str] | None = None) -> Job:
+                       env: dict | None = None, grace: float = 0.0, after: list[str] | None = None, time_s: float = 0.0,
+                       conflicts: list[str] | None = None, owner: str = "") -> Job:
         """Queue any command (a stainID command that is not a step, a script): it should skip what it has done when run again."""
         job = Job(id=new_id(), workflow="command", options={}, argv=list(command), command=list(command), cwd=str(cwd), title=title,
                   klass=klass, needs={**EXEC_NEEDS, **(needs or {})}, env=dict(env or {}), grace=grace, after=list(after or []),
+                  time_s=float(time_s or 0), conflicts=list(conflicts or []), owner=owner,
                   project=str(Path(project.root).resolve()) if project is not None else "", project_name=project.name if project is not None else "")
         return self.submit(job)
 
@@ -552,6 +599,9 @@ class Scheduler:
             return
         if job is None:
             return
+        if job.children:
+            self._apply_to_array(job, request)
+            return
         if op == "pause":
             if job.status == "queued":
                 job.status, job.paused_by, job.waiting = "paused", "user", ""
@@ -583,12 +633,92 @@ class Scheduler:
             job.klass = request["klass"]
             self._save_if_ours(job)
 
+    def _apply_to_array(self, parent: Job, request: dict) -> None:
+        """Pause, Resume, Cancel and the class act on every chunk; Move moves them all together."""
+        op = request.get("op")
+        chunks = [self.jobs[c] for c in parent.children if c in self.jobs]
+        if op == "move":
+            self._move(parent, request.get("where", "up"))
+            return
+        if op == "class" and request.get("klass") in CLASSES:
+            parent.klass = request["klass"]
+        for chunk in chunks:
+            if op in ("pause", "resume", "cancel", "class"):
+                self._apply({**request, "id": chunk.id})
+        self._update_parent(parent, force=True)
+
+    def _update_parents(self) -> None:
+        for job in list(self.jobs.values()):
+            if job.children:
+                self._update_parent(job)
+
+    def _update_parent(self, parent: Job, force: bool = False) -> None:
+        """A parent's state from its chunks: running while one runs, waiting while one waits, paused when the rest are
+        paused, and at the end finished (all finished), failed or stopped."""
+        chunks = [self.jobs[c] for c in parent.children if c in self.jobs]
+        states = {c.status for c in chunks}
+        if "running" in states:
+            status = "running"
+        elif "queued" in states:
+            status = "queued"
+        elif "paused" in states:
+            status = "paused"
+        elif not chunks or states == {"finished"}:
+            status = "finished"
+        elif "failed" in states:
+            status = "failed"
+        elif "cancelled" in states:
+            status = "cancelled"
+        elif states <= {"finished", "skipped"}:
+            status = "skipped" if "finished" not in states else "finished"
+        else:
+            status = "interrupted"
+        started = [c.started for c in chunks if c.started]
+        changed = status != parent.status or force
+        parent.status = status
+        parent.started = min(started) if started else None
+        if status in FINAL and parent.ended is None:
+            parent.ended, changed = max((c.ended or 0) for c in chunks) if chunks else time.time(), True
+        elif status not in FINAL:
+            parent.ended = None
+        if status == "paused":
+            parent.paused_by = next((c.paused_by for c in chunks if c.status == "paused"), "user")
+        if changed:
+            if status in FINAL:
+                parent.outcome = self._array_progress(parent, chunks)
+            self._save(parent)
+            if status in ("failed", "cancelled", "skipped", "interrupted"):
+                self._skip_dependents(parent, "failed" if status == "failed" else "did not finish")
+
+    def _array_progress(self, parent: Job, chunks: list[Job]) -> dict:
+        from stainid.jobs import progress as log_progress
+
+        done = total = 0
+        error = ""
+        for chunk in chunks:
+            total += chunk.units
+            if chunk.status == "finished":
+                done += chunk.units
+            elif chunk.status == "running" and chunk.log_file:
+                p = log_progress(Path(chunk.log_file))
+                if p["total"]:
+                    done += min(chunk.units, round(chunk.units * p["done"] / p["total"]))
+            if chunk.status == "failed" and not error:
+                error = f"{chunk.title}: {(chunk.outcome or {}).get('error') or 'failed'}"
+        counts = {state: sum(1 for c in chunks if c.status == state) for state in ("finished", "running", "queued", "paused", "failed")}
+        line = f"{counts['finished']} of {len(chunks)} chunks done" + (f", {counts['running']} running" if counts["running"] else "")
+        return {"done": done, "total": total, "last_line": line, "error": error, "chunks": {**counts, "total": len(chunks)}}
+
     def _move(self, job: Job, where: str) -> None:
         """Move a waiting job up or down (or to the top) among the waiting jobs of its class."""
         if job.status not in ("queued", "paused"):
             return
-        mates = sorted((j for j in self.jobs.values() if j.status in ("queued", "paused") and job_class(j) == job_class(job)), key=_key)
+        mates = sorted((j for j in self.jobs.values() if j.status in ("queued", "paused") and job_class(j) == job_class(job)
+                        and not j.array_of), key=_key)  # whole jobs and arrays (an array's chunks move with it)
+        if job not in mates:
+            return
         place = mates.index(job)
+        before = job.order or job.created
         if where == "top" and place > 0:
             job.order = (mates[0].order or mates[0].created) - 1.0
             self._save(job)
@@ -600,6 +730,17 @@ class Scheduler:
                 job.order, neighbour.order = (b, a) if a != b else (b - 0.001 if where == "up" else b + 0.001, a)
                 self._save(job)
                 self._save(neighbour)
+                self._shift_chunks(neighbour, a - b)
+        self._shift_chunks(job, (job.order or job.created) - before)
+
+    def _shift_chunks(self, job: Job, delta: float) -> None:
+        if not delta:
+            return
+        for chunk_id in job.children or []:
+            chunk = self.jobs.get(chunk_id)
+            if chunk is not None:
+                chunk.order = (chunk.order or chunk.created) + delta
+                self._save(chunk)
 
     # -- one round
 
@@ -611,7 +752,9 @@ class Scheduler:
             self._take_requests()
             self._reap()
             self._enforce_stops()
+            self._update_parents()
             self._schedule()
+            self._update_parents()
 
     def recover(self) -> None:
         """After a start: adopt the jobs still running, finish those that ended while no scheduler ran, and queue again
@@ -726,62 +869,150 @@ class Scheduler:
             gpus |= set(job.gpus or [])
         return used, gpus
 
+    # -- estimates
+
+    def _history(self) -> dict:
+        """Per (step, project) and per step: seconds and units of the runs that ended, and the durations of the jobs that
+        finished (for estimates), remade at most every 10 s."""
+        when, found = getattr(self, "_history_cache", (0.0, None))
+        if found is not None and time.time() - when < 10:
+            return found
+        found = {"unit": {}, "whole": {}}
+        for job in list(self.jobs.values()):
+            if job.children or not job.runs:
+                continue
+            last = job.runs[-1]
+            last_seconds = (last[1] or 0) - (last[0] or 0) if last and last[0] else 0
+            done = (job.outcome or {}).get("done", 0)  # the units its last run did (a run prints [done/total] of what it had to do)
+            name = job.title if job.command else job.workflow
+            for key in ((name, job.project), (name, "")):
+                if done and last_seconds > 0 and not job.command:
+                    unit = found["unit"].setdefault(key, [0.0, 0])
+                    unit[0] += last_seconds
+                    unit[1] += done
+                if job.status == "finished" and not job.array_of:
+                    seconds = sum((r[1] or 0) - (r[0] or 0) for r in job.runs if r and r[0] and r[1])
+                    if seconds > 0:
+                        found["whole"].setdefault(key, []).append(seconds)
+        self._history_cache = (time.time(), found)
+        return found
+
+    def estimate(self, job: Job) -> float | None:
+        """How long the job is expected to run in all, in seconds (None: not known)."""
+        if job.time_s:
+            return job.time_s
+        if job.children:
+            parts = [self.estimate(self.jobs[c]) for c in job.children if c in self.jobs]
+            known = [p for p in parts if p is not None]
+            return sum(known) if known else None
+        history = self._history()
+        if job.units and not job.command:
+            for key in ((job.workflow, job.project), (job.workflow, "")):
+                seconds, done = history["unit"].get(key, (0.0, 0))
+                if done >= 3:
+                    return job.units * seconds / done
+            if job.workflow in policy.UNIT_SECONDS:
+                return job.units * policy.UNIT_SECONDS[job.workflow]
+        for key in (((job.title, job.project), (job.title, "")) if job.command else ((job.workflow, job.project), (job.workflow, ""))):
+            times = sorted(history["whole"].get(key, []))
+            if times:
+                return times[len(times) // 2]
+        return None if job.command else policy.STEP_SECONDS.get(job.workflow)
+
+    def remaining(self, job: Job, now: float | None = None) -> float | None:
+        """Seconds a running job is expected to take still (from its progress, else its estimate)."""
+        now = now or time.time()
+        elapsed = now - (job.started or now)
+        if job.request:  # asked to stop: by the end of its grace time at the latest
+            return max(0.0, (job.requested_at or now) + (job.grace or GRACE[job_class(job)]) + KILL_AFTER - now)
+        from stainid.jobs import progress as log_progress
+
+        p = log_progress(Path(job.log_file)) if job.log_file else {"done": 0, "total": 0}
+        if p["done"] and p["total"] and p["done"] < p["total"] and elapsed > 0:
+            return elapsed / p["done"] * (p["total"] - p["done"])
+        total = self.estimate(job)
+        return None if total is None else max(30.0, total - elapsed)
+
+    def size(self, job: Job) -> str:
+        need = job_needs(job)
+        return policy.size_of(need, self.estimate(job))
+
+    def _top(self, job: Job) -> Job:
+        return self.jobs.get(job.array_of, job) if job.array_of else job
+
+    # -- what to start
+
     def _schedule(self) -> None:
-        """Start what fits, highest class first and first in, first out within one; pre-empt lower classes for a job that
-        could run if they stopped; skip what cannot run (a step it waits for failed, an input is missing)."""
+        """Start what fits (`stainid.jobs.policy`): by class, taking turns between projects within one; a job that does
+        not fit gets a reservation (EASY backfill: later jobs start only if they do not delay it) and pre-empts lower
+        classes when that makes room; writers of the same outputs never run at once; io-heavy jobs per disk and big
+        jobs per class are capped; skip what cannot run (a step it waits for failed, an input is missing)."""
         from stainid.workflows.steps import BY_ID, wait_reason
 
-        budget = self.budget
-        active = [j for j in self.jobs.values() if j.status in ACTIVE]
-        blocking = [j for j in self.jobs.values() if j.status in (*ACTIVE, "paused")]  # a paused step still holds back what needs it
-        running = [j for j in active if j.status == "running"]
+        budget, now = self.budget, time.time()
+        jobs = [j for j in self.jobs.values() if not j.children]
+        running = [j for j in jobs if j.status == "running"]
+        blocking = [j for j in jobs if j.status in (*ACTIVE, "paused")]  # a paused step still holds back what needs it
         used, busy_gpus = self._used(running)
-        waiting: list[tuple[int, dict]] = []  # (class rank, what it needs) of jobs that wait for room
+        free = policy.minus({k: getattr(budget, k) for k in policy.KEYS}, used)
+        io_busy: dict = {}
+        big: dict[str, set[str]] = {}
+        sizes: dict[str, str] = {}
+        size = lambda top: sizes.setdefault(top.id, self.size(top))  # noqa: E731 - once per job and round
+        held_until = {}  # running job -> (expected end, what it holds): when what it holds is free again
+        for job in running:
+            if policy.io_of(job, job_needs(job)) == "heavy":
+                io_busy[policy.disk_of(job)] = io_busy.get(policy.disk_of(job), 0) + 1
+            top = self._top(job)
+            if size(top) == "big":
+                big.setdefault(job_class(job), set()).add(top.id)
+            left = self.remaining(job, now)
+            held_until[job.id] = (now + left if left is not None else policy.INF, policy.counted(budget.clamp(job_needs(job))))
+        by_project: dict[str, list[Job]] = {}
+        for other in blocking:
+            by_project.setdefault(other.project, []).append(other)
+        self._dependency_cache = {}
         stopping = {j.id for j in running if j.request}
+        reservations: list[dict] = []  # per class, its first job that waits for room: when it can start, what is left then
         held = self.paused_all()
-        for job in sorted((j for j in active if j.status == "queued"), key=_key):
+        queued = [j for j in jobs if j.status == "queued"]
+        for job in policy.fair_order(queued, running, _key, lambda j: RANK[job_class(j)]):
             if held:
                 job.waiting = "All background work is paused"
                 continue
-            step = BY_ID.get(job.workflow) if not job.command else None
-            reasons = []
-            for before in job.after or []:  # the jobs it was queued after
-                other = self.jobs.get(before)
-                if other is None or other.status == "finished":
-                    continue
-                if other.status in FINAL:
-                    reasons = []
-                    self._skip(job, f"Not started because “{title_of(other)}” {'failed' if other.status == 'failed' else 'did not finish'}")
-                    break
-                reasons.append(f"Waits for “{title_of(other)}” to finish")
+            reason = self._blocked(job, by_project.get(job.project, []) + ([] if not job.project else by_project.get("", [])), BY_ID, wait_reason)
             if job.status != "queued":
                 continue
-            if step is not None:
-                for other in blocking:
-                    if other is job or other.project != job.project or other.workflow not in BY_ID or other.command:
-                        continue
-                    if (other.created < job.created or other.source == COMMAND_LINE) and not (other.workflow == job.workflow and other.options != job.options):
-                        reason = wait_reason(BY_ID[other.workflow], step, "command line" if other.source == COMMAND_LINE else "")
-                        if reason:
-                            reasons.append(reason)
-            if reasons:
-                self._wait(job, reasons[0])
+            if reason:
+                self._wait(job, reason)
                 continue
-            need = budget.clamp(job_needs(job))
-            counted = {**need, "cpus": 0 if need.get("network") else need.get("cpus", 0)}
-            rank = RANK[job_class(job)]
-            # what higher classes wait for stays free of this one; within a class a smaller job may use what is left
-            reserved = {k: sum(n.get(k, 0) for r, n in waiting if r < rank) for k in used}
-            free = {k: getattr(budget, k) - used[k] - reserved[k] for k in used}
-            if all(counted.get(k, 0) <= free[k] + 1e-9 for k in used if counted.get(k, 0) > 0):
+            klass, rank = job_class(job), RANK[job_class(job)]
+            top = self._top(job)
+            cap = (budget.caps.get(klass) or {}).get("big")
+            if cap is not None and size(top) == "big" and len(big.get(klass, set()) - {top.id}) >= cap:
+                self._wait(job, f"At most {cap} big {CLASS_TITLES[klass].lower()} job{'s' if cap != 1 else ''} at a time")
+                continue
+            need = policy.counted(budget.clamp(job_needs(job)))
+            heavy = policy.io_of(job, job_needs(job)) == "heavy"
+            disk = policy.disk_of(job)
+            if heavy and io_busy.get(disk, 0) >= budget.io_per_disk:
+                self._wait(job, f"Waits for its disk: {io_busy[disk]} io-heavy jobs use it already")
+                continue
+            outside = self.outside()["gpus"] if self.watch_outside and need["gpus"] else set()
+            gpus = [g for g in range(budget.gpus) if g not in busy_gpus and g not in outside][: int(need["gpus"])]
+            estimate = self.estimate(job)
+            if policy.fits(need, free) and len(gpus) >= int(need["gpus"]):
+                end = now + (estimate if estimate is not None else policy.INF)
+                delays = next((r for r in reservations if end > r["shadow"] and not policy.fits(need, r["extra"])), None)
+                if delays is not None:
+                    self._wait(job, f"Waits so as not to delay “{title_of(delays['job'])}”" + _starts_in(delays["shadow"], now))
+                    continue
+                if why := self._no_room_outside(job, need, gpus, used):
+                    self._wait(job, why)
+                    continue
+                step = BY_ID.get(job.workflow) if not job.command else None
                 if step is not None and (missing := self._missing(job, step)):
                     self._skip(job, missing)
-                    continue
-                outside = self.outside()["gpus"] if self.watch_outside and counted.get("gpus") else set()
-                gpus = [g for g in range(budget.gpus) if g not in busy_gpus and g not in outside][: int(counted.get("gpus", 0))]
-                if why := self._no_room_outside(job, counted, gpus, used):
-                    self._wait(job, why)
-                    waiting.append((rank, counted))
                     continue
                 try:
                     self._start(job, gpus)
@@ -790,42 +1021,82 @@ class Scheduler:
                     job.outcome = {"done": 0, "total": 0, "last_line": str(error), "error": f"Could not start: {error}"}
                     self._save(job)
                     continue
-                for key in used:
-                    used[key] += counted.get(key, 0)
+                free, used = policy.minus(free, need), policy.plus(used, need)
+                for r in reservations:
+                    if end > r["shadow"]:
+                        r["extra"] = policy.minus(r["extra"], need)  # it uses part of what is left over at that time
                 busy_gpus |= set(gpus)
                 running.append(job)
+                held_until[job.id] = (end, need)
+                if heavy:
+                    io_busy[disk] = io_busy.get(disk, 0) + 1
+                if size(top) == "big":
+                    big.setdefault(klass, set()).add(top.id)
                 continue
             # it does not fit: lower classes give way (they stop at their next unit boundary and wait again)
             lower = sorted((j for j in running if RANK[job_class(j)] > rank and j.source != COMMAND_LINE),
                            key=lambda j: (-RANK[job_class(j)], -(j.started or 0)))
-            freed = {k: 0.0 for k in used}
+            freed = {k: 0.0 for k in policy.KEYS}
             for j in lower:
                 if j.id in stopping:
-                    n = budget.clamp(job_needs(j))
-                    for key in freed:
-                        freed[key] += 0 if key == "cpus" and n.get("network") else n.get(key, 0)
+                    freed = policy.plus(freed, policy.counted(budget.clamp(job_needs(j))))
             victims = []
             for j in lower:
-                if all(counted.get(k, 0) <= free[k] + freed[k] + 1e-9 for k in used if counted.get(k, 0) > 0):
+                if policy.fits(need, policy.plus(free, freed)):
                     break
                 if j.id in stopping:
                     continue
-                n = budget.clamp(job_needs(j))
-                if not any(counted.get(k, 0) > free[k] + freed[k] + 1e-9 and n.get(k, 0) > 0 and not (k == "cpus" and n.get("network")) for k in used):
+                n = policy.counted(budget.clamp(job_needs(j)))
+                if not any(need[k] > free[k] + freed[k] + 1e-9 and n[k] > 0 for k in policy.KEYS):
                     continue  # it holds nothing this job lacks
                 victims.append(j)
-                for key in freed:
-                    freed[key] += 0 if key == "cpus" and n.get("network") else n.get(key, 0)
-            if all(counted.get(k, 0) <= free[k] + freed[k] + 1e-9 for k in used if counted.get(k, 0) > 0):
+                freed = policy.plus(freed, n)
+            ends = [(now + (j.grace or GRACE[job_class(j)]) + KILL_AFTER, held_until[j.id][1]) if j in victims else held_until[j.id]
+                    for j in running]
+            shadow, extra = policy.shadow(need, free, ends, now)
+            if policy.fits(need, policy.plus(free, freed)) and victims:
                 for j in victims:
                     self._ask_to_stop(j, "preempt")
                     stopping.add(j.id)
                 self._wait(job, "Starts as soon as lower-priority work has paused")
+            elif policy.fits(need, policy.plus(free, freed)) and stopping:
+                self._wait(job, "Starts as soon as lower-priority work has paused")
             else:
-                short = [k for k in used if counted.get(k, 0) > free[k] + freed[k] + 1e-9]
+                short = [k for k in policy.KEYS if need[k] > free[k] + 1e-9] or ["gpus"]
                 names = {"cpus": "processors", "gpus": "GPUs", "ram_gb": "GB of memory"}
-                self._wait(job, "Waits for free capacity: needs " + ", ".join(f"{counted[k]:g} {names[k]} ({max(0, free[k]):g} free)" for k in short))
-            waiting.append((rank, counted))
+                self._wait(job, "Waits for room: needs " + ", ".join(f"{need[k]:g} {names[k]} ({max(0, free[k]):g} free)" for k in short)
+                           + _starts_in(shadow, now))
+            if not any(r["rank"] == rank for r in reservations):
+                reservations.append({"rank": rank, "job": job, "shadow": shadow, "extra": extra})
+
+    def _blocked(self, job: Job, blocking: list[Job], steps: dict, wait_reason) -> str:
+        """Why a waiting job cannot start whatever the room: a job it was queued after, a step it needs the outputs of,
+        a step writing the same file, or a job writing the same outputs."""
+        for before in job.after or []:  # the jobs it was queued after
+            other = self.jobs.get(before)
+            if other is None or other.status == "finished":
+                continue
+            if other.status in FINAL:
+                self._skip(job, f"Not started because “{title_of(other)}” {'failed' if other.status == 'failed' else 'did not finish'}")
+                return ""
+            return f"Waits for “{title_of(other)}” to finish"
+        step = steps.get(job.workflow) if not job.command else None
+        cache = getattr(self, "_dependency_cache", {})
+        for other in blocking:
+            if other is job or (job.array_of and other.array_of == job.array_of):
+                continue  # the chunks of one array work on different core images
+            earlier = other.status == "running" or other.created < job.created or other.source == COMMAND_LINE
+            if not earlier:
+                continue
+            if step is not None and other.project == job.project and other.workflow in steps and not other.command and other.workflow != job.workflow:
+                key = (other.workflow, job.workflow, other.source == COMMAND_LINE)  # the same for every pair of these steps
+                if key not in cache:
+                    cache[key] = wait_reason(steps[other.workflow], step, "command line" if other.source == COMMAND_LINE else "")
+                if cache[key]:
+                    return cache[key]
+            if (other.status == "running" or other.workflow == job.workflow or other.command or job.command) and policy.conflict(job, other):
+                return f"Waits for “{title_of(other)}”: both write the same outputs"
+        return ""
 
     def outside(self) -> dict:
         """What work outside the queue (other programs, runs started by hand) leaves for it, looked at every 10 s: free
@@ -909,7 +1180,7 @@ class Scheduler:
             return
         for other in sorted(self.jobs.values(), key=lambda j: j.created):
             if (other.status in ("queued", "paused") and other.project == job.project and other.workflow in BY_ID and not other.command
-                    and (other.created > job.created or job.source == COMMAND_LINE) and wait_reason(BY_ID[job.workflow], BY_ID[other.workflow])):
+                    and other.workflow != job.workflow and (other.created > job.created or job.source == COMMAND_LINE) and wait_reason(BY_ID[job.workflow], BY_ID[other.workflow])):
                 self._skip(other, f"Not started because “{BY_ID[job.workflow].title}” {what}")
 
     def environment(self, job: Job) -> dict[str, str]:
@@ -954,20 +1225,32 @@ class Scheduler:
         """A job as the Run page shows it: its class, place in the queue, progress and an estimate of the time left."""
         from stainid.jobs import progress as log_progress
 
-        progress = job.outcome if job.status in FINAL and job.outcome else (log_progress(Path(job.log_file)) if job.log_file else self.store.progress(job))
+        chunks = [self.jobs[c] for c in job.children if c in self.jobs] if job.children else []
+        if job.children:
+            progress = job.outcome if job.status in FINAL and job.outcome else self._array_progress(job, chunks)
+        else:
+            progress = job.outcome if job.status in FINAL and job.outcome else (log_progress(Path(job.log_file)) if job.log_file else self.store.progress(job))
+        estimate = self.estimate(job)
         out = {**asdict(job), "env": {}, "title": title_of(job), "class": job_class(job), "class_title": CLASS_TITLES[job_class(job)],
-               "rank": RANK[job_class(job)], "needs": job_needs(job), "progress": progress, "queue": None, "eta_s": None}
+               "rank": RANK[job_class(job)], "needs": job_needs(job), "progress": progress, "queue": None, "eta_s": None,
+               "estimate_s": round(estimate) if estimate is not None else None, "size": policy.size_of(job_needs(job), estimate),
+               "io": policy.io_of(job, job_needs(job)), "children": list(job.children)}
+        if job.children:
+            out["chunks"] = progress.get("chunks")
+            out["running_chunks"] = [c.title for c in chunks if c.status == "running"][:4]
+            left = [self.remaining(c) if c.status == "running" else self.estimate(c) for c in chunks if c.status not in FINAL]
+            parallel = max(1, sum(1 for c in chunks if c.status == "running"))
+            if left and all(x is not None for x in left):
+                out["eta_s"] = round(sum(left) / parallel)
         if job.status in ("queued", "paused"):
-            waiting = sorted((j for j in self.jobs.values() if j.status in ("queued", "paused")), key=_key)
+            waiting = sorted((j for j in self.jobs.values() if j.status in ("queued", "paused") and not j.array_of), key=_key)
             mates = [j for j in waiting if job_class(j) == job_class(job)]
             out["queue"] = {"ahead": waiting.index(job) if job in waiting else 0, "position": mates.index(job) + 1 if job in mates else 0,
                             "in_class": len(mates), "running": sum(1 for j in self.jobs.values() if j.status == "running")}
             out["typical_s"] = self.typical(job)
-        elif job.status == "running":
-            done, total = progress.get("done", 0), progress.get("total", 0)
-            elapsed = time.time() - (job.started or time.time())
-            if done and total and done < total:
-                out["eta_s"] = round(elapsed / done * (total - done))
+        elif job.status == "running" and not job.children:
+            left = self.remaining(job)
+            out["eta_s"] = round(left) if left is not None else None
             out["stopping"] = job.request
         return out
 
@@ -981,15 +1264,21 @@ class Scheduler:
         """Every job that is not over, by class (highest first), plus the ones that ended in the last day."""
         with self.lock:
             jobs = list(self.jobs.values())
-        live = sorted((j for j in jobs if j.status not in FINAL), key=lambda j: (j.status != "running", _key(j)))
-        recent = sorted((j for j in jobs if j.status in FINAL and (j.ended or 0) > time.time() - 86400), key=lambda j: -(j.ended or 0))[:50]
+        tops = [j for j in jobs if not j.array_of]  # an array shows as its parent
+        live = sorted((j for j in tops if j.status not in FINAL), key=lambda j: (j.status != "running", _key(j)))
+        recent = sorted((j for j in tops if j.status in FINAL and (j.ended or 0) > time.time() - 86400), key=lambda j: -(j.ended or 0))[:50]
         budget = self.budget
-        used, _ = self._used([j for j in jobs if j.status == "running"])
+        used, _ = self._used([j for j in jobs if j.status == "running" and not j.children])
         return {"classes": [{"id": c, "title": CLASS_TITLES[c], "rank": RANK[c], "jobs": [self.describe(j) for j in live if job_class(j) == c]}
                             for c in CLASSES],
                 "recent": [self.describe(j) for j in recent], "paused_all": self.paused_all(), "led": self.leader or self.led_elsewhere(),
                 "budget": asdict(budget), "used": used,
                 "outside": {**(found := self.outside()), "gpus": sorted(found["gpus"])} if self.watch_outside else None}
+
+
+def _starts_in(shadow: float, now: float) -> str:
+    text = policy.duration_text(shadow - now) if shadow != policy.INF else ""
+    return f"; expected to start in about {text}" if text and shadow > now else ""
 
 
 _SHARED: Scheduler | None = None
