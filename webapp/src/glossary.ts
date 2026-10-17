@@ -42,7 +42,7 @@ export const GLOSSARY: Record<string, string> = {
   'leave-one-TMA-out': 'Testing a model on one TMA after training it on all the others, repeated for every TMA — an honest estimate of accuracy on new slides.',
   'label': 'What a person said about an object or field; detection’s call is shown next to it. An object’s label is what most people said.',
   candidate: 'An object stainID detection proposed: everything that might be a neuron, plaque or tau+ neuron. The model then accepts or rejects each one.',
-  'annotation round': 'A labelling session on detection’s candidates. Round 2 (Fix the field): whole fields, adding what detection missed and fixing outlines. Round 1 (Check detection’s calls): one object at a time.',
+  'annotation round': 'A labelling session on detection’s work. Fix the field: whole fields, correcting calls, adding what detection missed and fixing outlines. Mark bad areas: core by core with a brush. (Check detection’s calls, one object at a time, is no longer made; its labels still count.)',
   detection: 'stainID detection: what the pipeline found — every candidate it proposed, its call on each (accepted or rejected, class, score) and its outlines. Annotators correct it.',
   'AI reference labels': 'A set of truth labels made earlier by an AI (not by people), kept as a reference that detection and models are scored against.',
   'out of date': 'A core whose v2 detection was made from something that has changed since (a setting, a model or an earlier step). Running the step again redoes only those cores.',

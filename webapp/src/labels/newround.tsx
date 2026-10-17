@@ -1,4 +1,4 @@
-/* Making an annotation round (the Labels page): stain, round, where its objects come from (every ready core, some
+/* Making an annotation round (the Labels page): "Fix the field" (objects) or "Mark bad areas" (the brush), where its objects come from (every ready core, some
    TMAs, or fields chosen on the cores, each core showing whether it is ready) and how many. Everything else (how
    generous the candidates are, how many people must decide each object, the session ID, a note, types) is under
    Advanced, with the older kinds of session (whole-field review and quick check of the label pool, outline every object). */
@@ -31,12 +31,11 @@ export function NewRoundSession({ stains, onClose, onCreated, onOlder }: {
   const { tmaName, info } = useProject()
   const words = WORDS[info?.kind ?? 'tma'] ?? WORDS.tma
   const [stain, setStain] = useState(stains[0] ?? 'NeuN')
-  const [round, setRound] = useState<1 | 2 | 'areas'>(2)  // the field tool is the default: every object of a field, corrected in place
+  const [round, setRound] = useState<2 | 'areas'>(2)  // the field tool is the default: every object of a field, corrected in place
   const [order, setOrder] = useState<'problems' | 'random'>('problems')  // "Mark bad areas": likely problems first
   const [where, setWhere] = useState<Where>('all')
   const [tmas, setTmas] = useState<string[]>([])
   const [chosen, setChosen] = useState<string[]>([])
-  const [objects, setObjects] = useState(500)
   const [fieldCount, setFieldCount] = useState(-1)  // -1: every remaining field
   const [spread, setSpread] = useState(false)  // Advanced: spread the fields over TMAs and groups instead of a plain random draw
   const [seed, setSeed] = useState('')
@@ -62,7 +61,7 @@ export function NewRoundSession({ stains, onClose, onCreated, onOlder }: {
       ? { stain: 'all', kind: 'areas', title: title.trim() || placeholder, name, open, instructions, n_fields: fieldCount, order,
         seed: seed.trim() === '' ? null : Number(seed), tmas: where === 'tmas' ? tmas : null }
       : { stain, round, title: title.trim() || placeholder, name, open, instructions, subtypes, labels_needed: needed,
-        level: level === 'all' ? null : Number(level), n_objects: objects, n_fields: fieldCount, spread, seed: seed.trim() === '' ? null : Number(seed),
+        level: level === 'all' ? null : Number(level), n_fields: fieldCount, spread, seed: seed.trim() === '' ? null : Number(seed),
         tmas: where === 'tmas' ? tmas : null, tile_ids: where === 'pick' ? chosen : null }
     const made = await withError(() => api.post<SessionInfo>('/api/labels/sessions', body), setError)
     setBusy(false)
@@ -81,12 +80,10 @@ export function NewRoundSession({ stains, onClose, onCreated, onOlder }: {
         </fieldset>}
         <fieldset className="field"><legend>What should people do?</legend>
           <div className="choice-grid">
-            {([2, 1] as const).map((r) => (
-              <label key={r} className={`choice-card${round === r ? ' chosen' : ''}`}>
-                <input type="radio" name="round" checked={round === r} onChange={() => setRound(r)} />
-                <span><b>{ROUND_TITLE[r]}{r === 2 ? ' (start here)' : ''}</b><span className="small secondary">{ROUND_TEXT[r]}</span></span>
-              </label>
-            ))}
+            <label className={`choice-card${round === 2 ? ' chosen' : ''}`}>
+              <input type="radio" name="round" checked={round === 2} onChange={() => setRound(2)} />
+              <span><b>{ROUND_TITLE[2]} (start here)</b><span className="small secondary">{ROUND_TEXT[2]}</span></span>
+            </label>
             <label className={`choice-card${areas ? ' chosen' : ''}`}>
               <input type="radio" name="round" checked={areas} onChange={() => { setRound('areas'); if (where === 'pick') setWhere('all') }} />
               <span><b>{AREAS_TITLE}</b><span className="small secondary">{AREAS_TEXT}</span></span>
@@ -119,12 +116,7 @@ export function NewRoundSession({ stains, onClose, onCreated, onOlder }: {
               ))}</div>}
               {where === 'pick' && <FieldPicker stain={stain} chosen={chosen} onChange={setChosen} source="candidates" />}
             </fieldset>
-            {round === 1 ? (
-              <label className="field inline-number">How many objects (0 = every one)
-                <input type="number" min={0} value={objects} style={{ width: 100 }} onChange={(e) => setObjects(Math.max(0, Number(e.target.value)))} />
-                <span className="small muted">The most informative first: where detection is unsure, then strong ones it rejected, then weak ones it accepted.</span>
-              </label>
-            ) : where !== 'pick' ? (() => {
+            {where !== 'pick' ? (() => {
               const left = where === 'tmas' ? s.tmas.filter((t) => tmas.includes(t.tma)).reduce((n, t) => n + (t.fields_remaining ?? t.fields_ready), 0)
                 : s.fields_remaining ?? s.fields_ready
               return (

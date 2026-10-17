@@ -197,3 +197,54 @@ def test_a_faint_node_that_merges_kept_deposits_gives_way_to_its_children():
 
     walk_roots(field, [0.5, 1.0], np.ones((300, 300), bool), 20.0, 50000.0, 20.0, keep)
     assert [r.level for r in offered] == [0.5, 1.0, 1.0, 1.0]
+
+
+def _with_window(root: Path, stain: str, context_px: int) -> None:
+    config = yaml.safe_load((root / "stainid.yaml").read_text())
+    config["v2"] = {"proposals": {stain: {"context_px": context_px}}}
+    (root / "stainid.yaml").write_text(yaml.safe_dump(config))
+
+
+def _corner_plaque(rgb):
+    cv2.circle(rgb, (TILE, TILE), 150, BROWN, -1)  # 300 px across, centred where four tiles meet (tiles' context: 32 px)
+    cv2.ellipse(rgb, (TILE + 60, TILE - 40), (170, 60), 30, 0, 360, BROWN, -1)  # an irregular lobe across the same corner
+
+
+def test_a_plaque_far_wider_than_the_tile_context_on_a_four_tile_corner_is_detected_whole_once(tmp_path):
+    painted = np.zeros((2 * TILE, 2 * TILE, 3), np.uint8)
+    _corner_plaque(painted)
+    area = painted.any(axis=2).sum() * PS ** 2
+    root = border_project(tmp_path / "whole", _corner_plaque)
+    frame, _, _ = propose(root)  # the 6E10 detection window (proposals.6E10.context_px) reaches past the plaque
+    hits = covering(frame, TILE, TILE)
+    assert len(hits) == 1
+    hit = hits.iloc[0]
+    assert not bool(hit.touches_crop_edge)
+    assert hit.area_um2 >= 0.95 * area  # all of it (with its rim): no straight crop edge
+    assert len(frame[np.hypot(frame.x_core - TILE, frame.y_core - TILE) < 200]) == 1  # and no other piece of it
+
+    root = border_project(tmp_path / "narrow", _corner_plaque)  # a window only as wide as the tiles' context cuts it
+    _with_window(root, "6E10", 32)
+    frame, _, _ = propose(root)
+    cut = covering(frame, TILE, TILE)
+    assert len(cut) == 0 or bool(cut.iloc[0].touches_crop_edge) or cut.iloc[0].area_um2 < 0.9 * area
+
+
+def test_window_nuclei_keep_the_tiles_own_nuclei_and_add_the_neighbours():
+    size = (800, 800)
+    tiles = [{"tile_id": f"T{r}{c}", "x_px": c * TILE, "y_px": r * TILE, "width_px": TILE, "height_px": TILE} for r in (0, 1) for c in (0, 1)]
+    context = 32
+    labels = {}
+    for t in tiles:  # each tile's Cellpose labels over its standard crop: one nucleus in the middle of its own area
+        x0, y0, x1, y1 = proposals._crop_box(t, context, size)
+        lab = np.zeros((y1 - y0, x1 - x0), np.uint32)
+        cx, cy = t["x_px"] + 200 - x0, t["y_px"] + 200 - y0
+        lab[cy - 5: cy + 5, cx - 5: cx + 5] = 1
+        labels[t["tile_id"]] = lab
+    out = proposals.window_nuclei(tiles[0], tiles, (0, 0, 800, 800), context, size, lambda t: labels[t["tile_id"]])
+    centres = set()
+    for value in np.unique(out[out > 0]):
+        ys, xs = np.nonzero(out == value)
+        centres.add((int(round(xs.mean())), int(round(ys.mean()))))
+    assert centres == {(200, 200), (600, 200), (200, 600), (600, 600)}  # four nuclei, four labels
+    assert out[200, 200] == 1  # the tile's own label stands

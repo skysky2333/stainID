@@ -722,11 +722,11 @@ def job_records(project, cores: list[dict], tiles: int, models_at: float) -> Non
 # ---------------------------------------------------------------- the annotation rounds (over the v2 candidate store)
 
 def round_sessions(project, tiles: pd.DataFrame, drawn: dict, rng: np.random.Generator, when: float) -> dict:
-    """A "Fix the field" (round 2) and a "Check detection's calls" (round 1) session of AT8, made as the Labels page makes
-    them (`stainid.api.routes.rounds.create_round_session`), with Ann's saved work on one field she has not finished
+    """A "Fix the field" session of AT8, made as the Labels page makes it (`stainid.api.routes.rounds.create_round_session`),
+    with Ann's saved work on one field she has not finished
     (calls changed, candidates removed, a rejected one taken back, one unsure, one object she added), fields finished by
     Ben and Carla, and the tutorial done by the three of them (a new name still gets it)."""
-    from stainid.labels import candidate_store, decisions, frames, rounds
+    from stainid.labels import candidate_store, frames, rounds
     from stainid.labels import vocabulary as vocab
 
     reviews = project.output("reviews")
@@ -756,16 +756,11 @@ def round_sessions(project, tiles: pd.DataFrame, drawn: dict, rng: np.random.Gen
     # round 2: six fields; the first (most candidates, and an object detection missed) is Ann's field in progress
     fields = [str(t) for t in sessions.pick_fields(free, set(), 14, seed=int(rng.integers(1000)))]
     fields.sort(key=lambda t: (not missed.get(t), -len(own(t)[0])))
-    fix, rest = fields[:6], fields[6:]
-    fix_name, check_name = "at8_fix_fields", "at8_check_calls"
+    fix = fields[:6]
+    fix_name = "at8_fix_fields"
     sessions.create(reviews, fix_name, kind="fields", tools=["class", "point", "outline", "tag"], rule="random", fields=fix, scope=fix,
                     title="AT8: fix the fields", round=2, **common)
     sessions.update(reviews, fix_name, open=True, created=when)
-    ids = rounds.choose(project, stain, tiles, rest, None, 120, decisions.state(project, stain, tiles), 1)
-    sessions.create(reviews, check_name, kind="queue", tools=["class"], rule=rounds.RULE, fields=[], scope=rest, objects=len(ids),
-                    title="AT8: check detection’s calls", round=1, **common)
-    rounds.save_items(reviews, check_name, ids)
-    sessions.update(reviews, check_name, open=True, created=when + 60)
 
     records, clock = [], [when + 3600]
 
@@ -812,17 +807,9 @@ def round_sessions(project, tiles: pd.DataFrame, drawn: dict, rng: np.random.Gen
             call(person, fix_name, tile_id, row, remove if changed else identity, "" if changed else subtype, confirmed=not changed)
         add(id=rounds.done_id({"round": 2, "kind": "fields"}, tile_id), source=person, task="done", session=fix_name, tile_id=tile_id, value=None)
 
-    # Ben checked the calls of the first field of round 1
-    items = rounds.items(project, sessions.meta(reviews, check_name), tiles).rename(columns={"class": "klass"})
-    if len(items):
-        first = items.tile_id.iloc[0]
-        for row in items[items.tile_id == first].itertuples():
-            identity, subtype = candidate_store.ai_call(words, row.decision, row.klass, row.subtype)
-            call("Ben", check_name, first, row, identity, subtype, confirmed=True)
-        add(id=rounds.done_id({"round": 1, "kind": "queue"}, first), source="Ben", task="done", session=check_name, tile_id=first, value=rounds.CALLS)
     store.append(reviews, records)
     (reviews / "tutorials.json").write_text(json.dumps({p: when - 3600 + 60 * i for i, p in enumerate(PEOPLE)}, indent=1))
-    return {"fix": fix_name, "check": check_name, "ann_field": ann_field}
+    return {"fix": fix_name, "ann_field": ann_field}
 
 
 # ---------------------------------------------------------------- main

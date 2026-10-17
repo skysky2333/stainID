@@ -78,10 +78,9 @@ Without, the counted object has one key (1: plaque, tau+ neuron) and detection's
 *Finished*) are stored without a type. With the mouse, the side panel lists the same keys in their groups
 ("Plaques 1–4 · Not plaques Q–W · Del not a plaque · ` unsure · B brush"); a click picks one.
 
-The annotation rounds use the same keys, acting on the object under the mouse (round 2) or on screen (round 1). Their
-other keys are listed in [webapp.md](webapp.md#annotation-rounds): Tab / Shift+Tab for the outline size, a click on the
-object for precise editing (Space in round 1; in round 2 Space hides the drawings), B the brush, Z undo and Enter to
-keep detection's call.
+"Fix the field" uses the same keys, acting on the object under the mouse. Its other keys are listed in
+[webapp.md](webapp.md#annotation-rounds): Tab / Shift+Tab for the outline size, a click on the object for precise
+editing, Space to hide the drawings, B the brush and Z undo.
 
 ## Where types show
 

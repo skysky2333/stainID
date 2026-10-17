@@ -11,8 +11,8 @@ else. Pages keep every change on the page until the person saves: `save_tile` wr
 The generic session routes (`routes.annotate`) hand round sessions to the functions here; the paths only round sessions
 have are registered on this router.
 
-Practice sessions (`practice-<round>-<stain>`) are made up on the fly for the tutorial a new annotator goes through: one
-real field of the store (and its candidates for round 1), shown exactly like a round session, but nothing anyone does
+Practice sessions (`practice-2-<stain>`) are made up on the fly for the tutorial a new annotator goes through: one
+real field of the store, shown exactly like a round session, but nothing anyone does
 there is saved: answers are echoed back and never reach the label store, decisions of others are not shown, nothing is
 held. Who finished the tutorial is kept in `<reviews>/tutorials.json` (`/api/session/tutorial`).
 """
@@ -34,7 +34,7 @@ from pydantic import BaseModel
 
 from stainid import cache
 from stainid import candidates as candidate_store_ids
-from stainid.api import label_crops, queue_pictures, render, sam_embeddings, work
+from stainid.api import render, sam_embeddings, work
 from stainid.api.routes.annotate import (
     LAYERS,
     Mark,
@@ -82,9 +82,10 @@ def finished_tiles(meta: dict, labels: pd.DataFrame | None = None) -> dict[str, 
 
 
 def round_items(meta: dict) -> pd.DataFrame:
-    """A round-1 session's candidates in its order (the practice's few for the tutorial)."""
+    """An old "Check detection's calls" (round 1) session's candidates in its order, for its progress (no such session is
+    made any more; its labels stay valid object labels)."""
     state = get_state()
-    return practice_items(meta) if meta.get("practice") else rounds.items(state.project, meta, state.tiles)
+    return rounds.items(state.project, meta, state.tiles)
 
 
 def session_tiles(meta: dict) -> list[str]:
@@ -140,11 +141,12 @@ def _scope(body: NewSession) -> list[str]:
 def create_round_session(body: NewSession) -> dict:
     if body.stain not in STAINS and body.stain not in set(get_state().tiles.stain):
         raise HTTPException(400, f"unknown stain {body.stain}")
+    if body.round == 1:
+        raise HTTPException(400, "“Check detection’s calls” sessions are no longer made: make a “Fix the field” or a “Mark bad areas” session")
     if body.round not in rounds.KIND:
-        raise HTTPException(400, "round must be 1 or 2")
+        raise HTTPException(400, "round must be 2 (Fix the field)")
     if body.level is not None and body.level not in set(rounds.LEVELS.values()):
         raise HTTPException(400, f"level must be one of {[v for v in rounds.LEVELS.values() if v]} (or empty for every candidate)")
-    state = get_state()
     name = body.name or free_name(body.title or f"{body.stain} round {body.round}", body.stain, rounds.KIND[body.round])
     if not re.fullmatch(r"[A-Za-z0-9_\-]+", name) or name in sessions.names(root()) or name == sessions.REFERENCE:
         raise HTTPException(409, "a session with this name exists, or the name has other characters than letters, digits, - and _")
@@ -152,23 +154,16 @@ def create_round_session(body: NewSession) -> dict:
     scope = _scope(body)
     common = {"title": body.title or name, "stain": body.stain, "instructions": body.instructions, "subtypes": body.subtypes, "ai_view": "full",
               "source": rounds.SOURCE, "round": body.round, "level": body.level, "labels_needed": needs, "per_field": needs}
-    if body.round == 1:
-        ids = rounds.choose(state.project, body.stain, state.tiles, scope, body.level, max(0, body.n_objects), decided_now(body.stain), needs)
-        if not ids:
-            raise HTTPException(400, f"Every {body.stain} candidate there has been checked already.")
-        meta = sessions.create(root(), name, kind="queue", tools=["class"], rule=rounds.RULE, fields=[], scope=scope, objects=len(ids), **common)
-        rounds.save_items(root(), name, ids)
+    asked = rounds.ALL_FIELDS if body.n_fields is None else body.n_fields
+    seed = body.seed if body.seed is not None else secrets.randbelow(2**31)
+    if body.tile_ids:
+        fields, left = scope, len(scope)
     else:
-        asked = rounds.ALL_FIELDS if body.n_fields is None else body.n_fields
-        seed = body.seed if body.seed is not None else secrets.randbelow(2**31)
-        if body.tile_ids:
-            fields, left = scope, len(scope)
-        else:
-            fields, left = _pick_fields(body.stain, scope, asked, seed, body.spread)
-        draw = {} if body.tile_ids else {"field_seed": seed, "fields_asked": asked, "fields_remaining": left, "fields_spread": body.spread}
-        draw["fields_from_checked_areas"] = len(checked_areas_fields(body.stain, fields))
-        meta = sessions.create(root(), name, kind="fields", tools=["class", "point", "outline", "tag"], rule="random", fields=fields, scope=fields,
-                               **common, **draw)
+        fields, left = _pick_fields(body.stain, scope, asked, seed, body.spread)
+    draw = {} if body.tile_ids else {"field_seed": seed, "fields_asked": asked, "fields_remaining": left, "fields_spread": body.spread}
+    draw["fields_from_checked_areas"] = len(checked_areas_fields(body.stain, fields))
+    meta = sessions.create(root(), name, kind="fields", tools=["class", "point", "outline", "tag"], rule="random", fields=fields, scope=fields,
+                           **common, **draw)
     if body.open:
         meta = sessions.update(root(), name, open=True)
     warm(meta, force=True)
@@ -233,16 +228,13 @@ def add_fields(meta: dict, n: int, tile_ids: list[str] | None, seed: int | None 
 
 
 def warm(meta: dict, force: bool = False) -> None:
-    """Make ahead what people will see: round 1 the pictures of its candidates, round 2 the Segment Anything features
-    of its fields (when the session is open)."""
+    """Make ahead what people will see: the Segment Anything features and the pictures of a "Fix the field" session's
+    fields (when the session is open). An old round-1 session needs nothing: nobody works on it any more."""
     state = get_state()
-    if meta.get("practice"):
+    if meta.get("practice") or rounds.round_of(meta) != 2:
         return
-    if rounds.round_of(meta) == 1:
-        queue_pictures.prepare_wanted(state, meta, open_items(meta, round_items(meta)), force=force)
-    else:
-        sam_embeddings.prepare_session(state, meta, force=force)
-        prepare_pictures(meta, force)
+    sam_embeddings.prepare_session(state, meta, force=force)
+    prepare_pictures(meta, force)
 
 
 def prepare_pictures(meta: dict, force: bool = False) -> work.Task | None:
@@ -289,11 +281,6 @@ def warm_up(state) -> None:
                 prepare_pictures(meta)
 
 
-def open_items(meta: dict, frame: pd.DataFrame, finished: dict[str, set[str]] | None = None) -> pd.DataFrame:
-    """A round-1 session's candidates on tiles that still need people (whose pictures are worth making)."""
-    return rounds.open_items(frame, finished_tiles(meta) if finished is None else finished, rounds.needed(meta))
-
-
 @router.get("/labels/rounds/scope", dependencies=admin)
 def scope_overview(stain: str) -> dict:
     """What a new round session can draw from, per TMA: how many cores and fields have the AI's candidates (are ready),
@@ -310,11 +297,14 @@ def scope_overview(stain: str) -> dict:
                     "fields_ready": int(len(ok)), "fields_remaining": int(group.tile_id.isin(left).sum())})
     out.sort(key=lambda t: (len(t["tma"]), t["tma"]))
     return {"stain": stain, "tmas": out, "cores": sum(t["cores"] for t in out), "cores_ready": sum(t["cores_ready"] for t in out),
-            "fields_ready": len(ready), "fields_remaining": len(left), "levels": rounds.LEVELS, "default_objects": rounds.DEFAULT_OBJECTS,
+            "fields_ready": len(ready), "fields_remaining": len(left), "levels": rounds.LEVELS,
             "from_pool": (candidate_store.folder(state.project, stain) / ".from_pool.json").exists()}
 
 
 # ---------- what the generic session routes ask ----------
+
+NO_ROUND_ONE = ("“Check detection’s calls” is no longer used: its labels stay in the label log for training and evaluation. "
+                "Ask for a “Fix the field” session instead.")
 
 def detail(meta: dict, person: str | None) -> dict:
     """The extra facts of a round session for its pages."""
@@ -348,66 +338,6 @@ def hand_out(meta: dict, person: str, skip: str, ready: set[str] | None = None, 
         _TILES_HELD.hold(tile_hold(meta), person, [tile])
         busy(meta["name"], tile, person)
     return tile, taken
-
-
-def my_answers(meta: dict, person: str, ids: list[str]) -> dict[str, dict]:
-    """This person's saved answers on these candidates: the class (identity, subtype; `keep` when it confirmed the AI's
-    call), the mask chosen with it and an outline they edited (field-picture pixels)."""
-    if meta.get("practice") or not ids:
-        return {}
-    labels = store.current(root())
-    if "candidate" not in labels:
-        return {}
-    mine = labels[(labels.source == person) & (labels.stain == meta["stain"]) & labels.candidate.isin(set(ids))]
-    out: dict[str, dict] = {}
-    for r in mine[mine.task == "class"].itertuples():
-        out[r.candidate] = {"identity": vocab.text(r.value), "subtype": vocab.text(r.subtype), "keep": vocab.text(r.confirmed) == "True", "mask": None, "outline": None}
-    for r in mine[mine.task == "outline"].itertuples():
-        if r.candidate in out and isinstance(r.points, list):
-            value = vocab.text(r.value)
-            out[r.candidate] |= {"mask": int(value[5:])} if re.fullmatch(r"mask \d+", value) else {"outline": r.points}
-    return out
-
-
-def _item(row, size: int, pixel_um: float, words: vocab.Vocabulary, mine: dict | None) -> dict:
-    identity, subtype = candidate_store.ai_call(words, row.decision, row.klass, row.subtype)
-    found, default = candidate_store.masks(row)
-    x0, y0 = round(float(row.x)) - size // 2, round(float(row.y)) - size // 2
-    dx, dy = float(row.x_core) - float(row.x), float(row.y_core) - float(row.y)  # the field picture's corner on the core image
-    in_crop = lambda poly: None if not poly else [[round(px - dx - x0, 1), round(py - dy - y0, 1)] for px, py in poly]  # noqa: E731
-    if mine and mine.get("outline"):
-        mine = {**mine, "outline": [[round(px - x0, 1), round(py - y0, 1)] for px, py in mine["outline"]]}  # field picture -> crop
-    return {"key": row.candidate_id, "candidate_id": row.candidate_id, "tile_id": row.tile_id, "x": round(float(row.x), 1), "y": round(float(row.y), 1),
-            "radius_px": round(candidate_store.radius(row, pixel_um), 1), "ai_value": identity, "ai_subtype": subtype,
-            "ai_probability": None if pd.isna(row.probability) else round(float(row.probability), 3), "decision": row.decision,
-            "reason": row.reason, "tier": int(row.tier) if hasattr(row, "tier") and pd.notna(row.tier) else None,
-            "masks": [in_crop(m) for m in found], "mask": default, "crop_px": size, "mine": mine}
-
-
-def next_tile_objects(meta: dict, person: str, skip: str = "") -> dict:
-    """Round 1: the next tile for this person (their tile in progress first; held for them) with all its candidates to
-    check, in the session's order, and their saved answers there; how many tiles are left for them, the pictures and
-    the session's progress."""
-    state = get_state()
-    stain = meta["stain"]
-    frame = round_items(meta)
-    finished = finished_tiles(meta)
-    made = queue_pictures.ready(state, stain, frame) if len(frame) else None
-    complete = set() if made is None else {t for t, ok in frame.assign(made=made.to_numpy(bool)).groupby("tile_id").made.all().items() if ok}
-    tile, taken = hand_out(meta, person, skip, prefer=complete)
-    chosen = frame[frame.tile_id == tile] if tile else frame.iloc[:0]
-    if len(chosen):  # objects in excluded areas are not asked about
-        chosen = chosen[~chosen.candidate_id.isin(excluded_ids(meta, list(chosen.candidate_id)))]
-    if tile and len(chosen):
-        chosen = rounds.with_shapes(state.project, stain, chosen, state.tile(tile))
-    size, words = label_crops.size_px(state, stain), vocabulary(stain)
-    answers = my_answers(meta, person, list(chosen.candidate_id))
-    objects = [_item(r, size, state.project.pixel_size_um, words, answers.get(r.candidate_id)) for r in chosen.rename(columns={"class": "klass"}).itertuples()]
-    pictures = queue_pictures.prepare_wanted(state, meta, open_items(meta, frame, finished), first=chosen[["tile_id", "x", "y"]] if len(chosen) else None)
-    tiles, needs = session_tiles(meta), rounds.needed(meta)
-    left = [t for t in tiles if person not in finished.get(t, set()) and len(finished.get(t, set())) < needs]
-    return {"tile_id": tile, "objects": objects, "tiles_left": len(left), "taken": taken, "open_by": sorted(tiles_held(meta).get(tile, set()) - {person}) if tile else [],
-            "pictures": pictures, "progress": progress(meta, finished)}
 
 
 def next_field(meta: dict, person: str, skip: str = "") -> dict:
@@ -828,15 +758,6 @@ def _mine_after(meta: dict, tile_id: str, person: str, batch: list[dict]) -> pd.
     return pd.DataFrame([r for r in latest.values() if not r.get("deleted")], columns=mine.columns)
 
 
-def _unanswered(meta: dict, tile_id: str, mine: pd.DataFrame) -> list[str]:
-    """Round 1: the session's candidates on this tile this person has no answer on."""
-    frame = round_items(meta)
-    answered = set(mine.candidate[mine.task == "class"].dropna()) if "candidate" in mine else set()
-    asked = [c for c in frame.candidate_id[frame.tile_id == tile_id] if c not in answered]
-    out = excluded_ids(meta, asked)  # in an excluded area: not asked, not confirmed
-    return [c for c in asked if c not in out]
-
-
 def _confirmations(meta: dict, tile: dict, person: str, mine: pd.DataFrame) -> list[dict]:
     """Round 2, finishing a field: the whole field counts as checked by this person. Every candidate of it they left
     untouched gets detection's call as their answer (confirmed; whatever others decided), and so do detection's outlines
@@ -870,9 +791,11 @@ def _confirmations(meta: dict, tile: dict, person: str, mine: pd.DataFrame) -> l
 
 def save_tile(meta: dict, tile_id: str, marks: list, submit: bool, person: str) -> dict:
     """Save everything this person changed on a tile, all at once (or nothing, when one label is wrong). With `submit`
-    ("Save and continue") the tile is finished for this round: round 1 needs an answer on each of its candidates; round 2
-    confirms the calls and outlines left as the AI made them. The tile stays this person's until it is finished."""
+    ("Save and continue") the field is finished: the calls and outlines left as the AI made them are confirmed. The field
+    stays this person's until it is finished. An old round-1 session takes no more labels."""
     meta = writable(meta)
+    if rounds.round_of(meta) != 2:
+        raise HTTPException(410, NO_ROUND_ONE)
     tile = tile_of(meta, tile_id)
     cleaned = []
     for mark in marks:
@@ -889,10 +812,7 @@ def save_tile(meta: dict, tile_id: str, marks: list, submit: bool, person: str) 
             cleaned.append(outline)
     practice = bool(meta.get("practice"))
     if submit:
-        if rounds.round_of(meta) == 1 and not practice:  # objects not answered keep detection's call, confirmed by this person
-            for candidate in _unanswered(meta, tile_id, _mine_after(meta, tile_id, person, cleaned)):
-                cleaned.append(clean(meta, Mark(task="class", candidate=candidate, keep=True, tile_id=tile_id), person))
-        if rounds.round_of(meta) == 2 and not practice:
+        if not practice:
             cleaned += _confirmations(meta, tile, person, _mine_after(meta, tile_id, person, cleaned))
         cleaned.append({"id": rounds.done_id(meta, tile_id), "source": person, "stain": meta["stain"], "task": "done", "tile_id": tile_id,
                         "session": meta["name"], "value": rounds.done_kind(meta) or None})
@@ -1003,7 +923,6 @@ def segment(name: str, tile_id: str, body: Clicks, request: Request, person: str
 # ---------- practice for the tutorial ----------
 
 PRACTICE = "practice"
-PRACTICE_OBJECTS = 8
 _TUTORIALS = threading.Lock()
 
 
@@ -1061,7 +980,7 @@ def practice_tile(stain: str) -> str | None:
 def practice_meta(name: str) -> dict:
     """The made-up session of a practice name (404 when there is nothing to practise on)."""
     parts = name.split("-", 2)
-    if len(parts) != 3 or parts[1] not in ("1", "2"):
+    if len(parts) != 3 or parts[1] != "2":
         raise HTTPException(404, f"no labelling session {name}")
     round_, stain = int(parts[1]), parts[2]
     tile = practice_tile(stain)
@@ -1070,14 +989,6 @@ def practice_meta(name: str) -> dict:
     return {"name": name, "title": "Practice: " + rounds.TITLE[round_], "stain": stain, "kind": rounds.KIND[round_], "tools": ["class", "point", "outline", "tag"],
             "ai_view": "full", "per_field": 1, "rule": rounds.RULE, "fields": [tile] if round_ == 2 else [], "scope": [tile], "source": rounds.SOURCE,
             "round": round_, "level": None, "labels_needed": 1, "subtypes": True, "instructions": "", "open": True, "created": 0.0, "practice": True}
-
-
-def practice_items(meta: dict) -> pd.DataFrame:
-    """The candidates of the practice field for round 1: the most informative few."""
-    state = get_state()
-    found = rounds.candidates_in(state.project, meta["stain"], state.tiles, meta["scope"], None)
-    ordered = rounds.rank(found).head(PRACTICE_OBJECTS) if len(found) else found
-    return ordered.assign(order=range(len(ordered))).reset_index(drop=True)
 
 
 def _tutorials_path():
@@ -1116,7 +1027,7 @@ def _practice() -> dict | None:
     for stain in dict.fromkeys(stains):
         tile = practice_tile(stain)
         if tile:
-            return {"stain": stain, "tile_id": tile, "round1": practice_name(1, stain), "round2": practice_name(2, stain)}
+            return {"stain": stain, "tile_id": tile, "round2": practice_name(2, stain)}
     return None
 
 

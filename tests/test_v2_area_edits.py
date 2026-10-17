@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
+import pytest
 from test_v2_pipeline import BLUE, BROWN, PALE, PS, blank, v2_project  # noqa: F401 - the fixture
 
 from stainid.project import load_project
@@ -119,3 +120,35 @@ def test_area_edits_do_not_touch_the_analysis(v2_project):  # noqa: F811
     core, stain, tiles, _ = next(j for j in run.todo(project, "proposals", ["6E10"]))
     made = proposals.expected(project, stain, core, tiles, calibration[(tiles[0]["tma"], stain)], nuclei)
     assert not {"exclusions", "manual_exclusions"} & set(made["inputs"])  # neither people's areas nor the drawn polygons
+
+
+def test_every_tile_area_is_the_count_of_the_cells_the_views_show_as_counted(v2_project):  # noqa: F811
+    from stainid import candidates as store
+    from stainid import exclusions
+
+    project = load_project(v2_project)
+    calibration, nuclei = run.proposal_inputs(project)
+    for core, stain, tiles, _ in run.todo(project, "proposals", ["NeuN", "6E10", "AT8"]):
+        proposals.propose_core(project, stain, core, tiles, calibration[(tiles[0]["tma"], stain)], nuclei)
+        layer = exclusions.automatic(project, core, stain)
+        table = store.read_table(store.path(project, stain, core, "tiles")).set_index("tile_id")
+        for tile in tiles:
+            # the tile's cells as stage 2 writes them (x // 8 on; the cohort's tiles start on the 8 px grid)
+            r0, c0 = int(tile["y_px"]) // 8, int(tile["x_px"]) // 8
+            cells = int(layer.valid()[r0: r0 + int(tile["height_px"]) // 8, c0: c0 + int(tile["width_px"]) // 8].sum())
+            row = table.loc[tile["tile_id"]]
+            assert row.analysis_area_mm2 == pytest.approx(cells * 64 * PS * PS / 1e6, rel=1e-9), (stain, tile["tile_id"])
+            assert row.valid_area_mm2 == row.analysis_area_mm2
+
+
+def test_the_measures_use_the_outline_the_views_draw():
+    import pandas as pd
+
+    from stainid import candidates as store
+
+    frame = pd.DataFrame({"area_um2": [100.0, 100.0, 100.0], "sam_area_um2": [80.0, 80.0, np.nan], "sam_status": ["ok", "ok", "ok"],
+                          "outline_default": ["sam", "stain", "sam"]})
+    assert store.shown_area_um2(frame).tolist() == [80.0, 100.0, 100.0]  # NeuN: its SAM outline; 6E10 / AT8: the stain's
+    row = {"outline": "0 0 10 0 10 10", "sam_outline": "1 1 9 1 9 9", "sam_status": "ok", "outline_default": "sam"}
+    assert store.outline_rings(row) == store.rings("1 1 9 1 9 9")
+    assert store.outline_rings({**row, "outline_default": "stain"}) == [store.points("0 0 10 0 10 10")]

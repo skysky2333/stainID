@@ -36,7 +36,7 @@ CANDIDATE_COLUMNS = ["candidate_id", "tile_id", "x_core", "y_core", "area_um2", 
                      "mean_dab_od", "m_selection_area_um2", "m_proposal_is_positive_profile", "m_soma_area_um2", "m_soma_dab_p90",
                      "m_soma_solidity", "m_soma_circularity", "m_soma_elongation", "m_soma_dab_mean", "m_normalized_contrast",
                      "m_deposit_area_um2", "m_boundary_irregularity", "legacy_class", "source",
-                     "sam_status", "sam_area_um2", "sam_solidity", "sam_circularity", "sam_elongation", "sam_normalized_mean_dab",
+                     "outline_default", "sam_status", "sam_area_um2", "sam_solidity", "sam_circularity", "sam_elongation", "sam_normalized_mean_dab",
                      "sam_core_dab_q"]
 
 
@@ -105,7 +105,7 @@ def neun_rows(tiles: pd.DataFrame, found: pd.DataFrame, addition_threshold: floa
                           "total_artifact_exclusion_area_fraction": tile["exclusion_fraction"]})
         for row in accepted.to_dict("records"):
             objects.append({**{k: tile[k] for k in REGION_KEYS if k in tile}, "tile_id": tile["tile_id"], "stain": "NeuN", "candidate_class": "positive",
-                            "touches_edge": "false", "area_um2": row["m_selection_area_um2"], "mean_dab_od": row["mean_dab_od"]})
+                            "touches_edge": "false", "area_um2": row["area_um2"], "mean_dab_od": row["mean_dab_od"]})
     return tile_rows, objects
 
 
@@ -178,7 +178,7 @@ def tau_rows(project, tiles: pd.DataFrame, found: pd.DataFrame, threads: pd.Data
         })
         meta = {k: tile[k] for k in REGION_KEYS if k in tile} | {"tile_id": tile["tile_id"], "stain": "AT8"}
         for row in neurons.to_dict("records"):
-            objects.append({**meta, "soma_area_um2": row["m_soma_area_um2"]})
+            objects.append({**meta, "soma_area_um2": row["area_um2"]})
     return tile_rows, objects
 
 
@@ -264,6 +264,7 @@ def write_measures(project) -> list[str]:
             for column in CANDIDATE_COLUMNS:
                 if column not in found:
                     found[column] = np.nan
+            found["area_um2"] = store.shown_area_um2(found)  # each object as the views draw it (the stain's default outline)
             if stain == "NeuN":
                 t, o = neun_rows(tiles, found, addition)
                 v1 = o

@@ -3,7 +3,6 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-
 SATURATED_OD = 1.0  # DAB optical density no unsaturated pixel reaches (a colour channel clipped at 0 in 8-bit RGB)
 
 

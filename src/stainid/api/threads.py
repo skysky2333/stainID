@@ -35,7 +35,6 @@ from stainid.api.state import ProjectState
 from stainid.imaging.core_images import open_image
 from stainid.nuclei import clean_nuclei
 from stainid.pipelines.cohort_v1 import context_crop
-from stainid.qc.exclusions import read_manual_exclusions
 from stainid.stains.tau.network import segment_at8_network
 from stainid.stains.tau.threads import thread_network
 from stainid.v2.threads import NEIGHBOURS as _NEIGHBOURS
@@ -128,7 +127,7 @@ def _trace_core(state: ProjectState, tiles: list[dict], job: _Job) -> list[dict]
     project = state.project
     calibration = calibration_table(project.input("calibration"))
     image_path = tiles[0]["image_path"]
-    manual = {image_path: read_manual_exclusions(project.input("manual_exclusions")).get(image_path, [])}
+    manual: dict = {}  # detection's own areas only (the hand-drawn polygons are people's areas: training and evaluation)
     nuclei_dir = project.output("nuclei")
     with pyramid.DECODE, open_image(project.root / image_path) as image:
         image.load()
