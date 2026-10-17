@@ -181,9 +181,25 @@ def _read_file(target: Path, columns: list[str] | None = None) -> pd.DataFrame:
                                       "subtype": str, "sam_status": str, "model_id": str})
 
 
+def _displayed(project: Project, stain: str, frame: pd.DataFrame) -> pd.DataFrame:
+    """`outline_default` (which outline is shown first) filled from the stain's setting where the store has none (a store
+    assembled before the setting, or the pool's)."""
+    if "outline_default" in frame and frame.outline_default.ne("").all():
+        return frame
+    try:
+        from stainid.v2.params import default_outline  # noqa: PLC0415
+
+        setting = default_outline(project, stain)
+    except (ImportError, ValueError, AttributeError):
+        return frame
+    current = frame.outline_default if "outline_default" in frame else pd.Series("", index=frame.index)
+    return frame.assign(outline_default=current.where(current.ne(""), setting))
+
+
 def _normalised(frame: pd.DataFrame, stain: str, core_id: str) -> pd.DataFrame:
     frame = frame.copy()
-    for column, default in (("decision", ""), ("reason", ""), ("class", ""), ("subtype", ""), ("sources", ""), ("sam_status", ""), ("model_id", "")):
+    for column, default in (("decision", ""), ("reason", ""), ("class", ""), ("subtype", ""), ("sources", ""), ("sam_status", ""), ("model_id", ""),
+                            ("outline_default", "")):
         frame[column] = frame[column].fillna(default).astype(str) if column in frame else default
     for column in ("probability", "proposal_threshold", "area_um2", "radius_px"):
         frame[column] = pd.to_numeric(frame[column], errors="coerce") if column in frame else np.nan
@@ -227,14 +243,14 @@ def read_core(project: Project, stain: str, core_id: str, columns: list[str] | N
     reader = _module_reader()
     if columns is not None:
         found = reader(project, stain, core_id, list(columns)) if reader else _read_file(target, list(columns))
-        return _normalised(found, stain, core_id)
+        return _displayed(project, stain, _normalised(found, stain, core_id))
     stamp = cache.signature(target)
     with _WHOLE_LOCK:
         kept = _WHOLE.get(str(target))
         if kept is not None and kept[0] == stamp:
             _WHOLE.move_to_end(str(target))
             return kept[1]
-    found = _normalised(reader(project, stain, core_id) if reader else _read_file(target), stain, core_id)
+    found = _displayed(project, stain, _normalised(reader(project, stain, core_id) if reader else _read_file(target), stain, core_id))
     with _WHOLE_LOCK:
         _WHOLE[str(target)] = (stamp, found)
         _WHOLE.move_to_end(str(target))
@@ -274,7 +290,7 @@ def in_tiles(frame: pd.DataFrame, tiles: pd.DataFrame, context_px: int) -> pd.Da
 
 FIELD_COLUMNS = ["candidate_id", "x_core", "y_core", "tile_id", "radius_px", "area_um2", "probability", "threshold", "model_id", "decision",
                  "reason", "class", "subtype", "proposal_threshold", "sources", "outline", "sam_outline", "sam_status", "sam_masks", "sam_scores",
-                 "sam_default"]  # what the annotation pages show of a candidate (no raw features)
+                 "sam_default", "outline_default"]  # what the annotation pages show of a candidate (no raw features)
 LIGHT = ["candidate_id", "x_core", "y_core", "tile_id", "radius_px", "area_um2", "probability", "threshold", "model_id", "decision", "reason",
          "class", "subtype", "proposal_threshold", "sources", "sam_status"]  # ranking and listing candidates: no outlines
 _SCHEMAS: dict[str, tuple[tuple, frozenset[str]]] = {}
@@ -315,7 +331,7 @@ def read_box(project: Project, stain: str, core_id: str, x0: float, y0: float, x
                 frame[column] = frame[column].fillna("").astype(object)
             elif isinstance(frame[column].dtype, pd.BooleanDtype) or frame[column].dtype == object:
                 frame[column] = frame[column].astype(object).where(frame[column].notna(), np.nan)
-        return _normalised(frame, stain, core_id)
+        return _displayed(project, stain, _normalised(frame, stain, core_id))
     found = read_core(project, stain, core_id)
     if found is None:
         return None
@@ -390,18 +406,25 @@ def _get(row, name: str):
 
 
 def masks(row) -> tuple[list[list[list[float]] | None], int]:
-    """The outlines one can switch between for a candidate, small to large, and the one shown first: its three
-    Segment Anything masks and their default when the store has them, else its one outline (Segment Anything's, else
-    the candidate's own)."""
+    """The outlines one can switch between for a candidate and the one shown first. With Segment Anything's three masks
+    in the store: those (small to large, so "mask 0–2" keep their meaning) and then the candidate's stain outline
+    ("mask 3"); shown first is the stain outline where the stain's `outline_default` is "stain" or Segment Anything fell
+    back (`sam_default` -1), else the default mask. Without them: its one outline (by `outline_default`, else Segment
+    Anything's, else the candidate's own)."""
     found = _get(row, "sam_masks")
+    own = _get(row, "outline")
+    prefer_own = _get(row, "outline_default") == "stain"
     if found and any(found):
+        found = list(found) + ([own] if own else [])
         default = _get(row, "sam_default")
+        if own and (prefer_own or (default is not None and not pd.isna(default) and int(default) < 0)):  # -1: SAM fell back
+            return found, len(found) - 1
         scores = _get(row, "sam_scores") or []
-        if default is None or pd.isna(default) or not 0 <= int(default) < len(found) or not found[int(default)]:
-            usable = [i for i, m in enumerate(found) if m]
+        if default is None or pd.isna(default) or not 0 <= int(default) < 3 or not found[int(default)]:
+            usable = [i for i, m in enumerate(found[:3]) if m]
             default = max(usable, key=lambda i: scores[i] if i < len(scores) else 0.0)
-        return list(found), int(default)
-    one = _get(row, "sam_outline") or _get(row, "outline")
+        return found, int(default)
+    one = (own or _get(row, "sam_outline")) if prefer_own else (_get(row, "sam_outline") or own)
     return ([one] if one else []), 0
 
 
@@ -649,6 +672,7 @@ def training_rows(project: Project, stain: str, objects: pd.DataFrame, tiles: pd
         rows = found.drop_duplicates("candidate_id").set_index("candidate_id")
         for index, cid in group.items():
             row = rows.loc[cid]
-            out[index] = {**{n: row[c] for n, c in columns.items()}, **{k: row[k] for k in EXTRA if k in row and k not in columns},
+            scaled = {k: row[k] for k in row.index if str(k).startswith("s_") and k not in columns}  # slide-scaled 6E10 inputs
+            out[index] = {**{n: row[c] for n, c in columns.items()}, **{k: row[k] for k in EXTRA if k in row and k not in columns}, **scaled,
                           "x": float(objects.x[index]), "y": float(objects.y[index]), "tma": tma.get(objects.tile_id[index], ""), "candidate_id": cid}
     return out, names

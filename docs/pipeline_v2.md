@@ -37,7 +37,14 @@ stage's manifest. A core image is out of date when any of these differs from wha
 
 ## Stage 2: proposals
 
-Per tile (the tile with its 128 px context margin; a candidate belongs to the tile holding its centroid) and stain:
+Per tile (the tile with its 128 px context margin) and stain; a tile keeps the candidates whose centroid lies in it or
+within 64 px of it. An object across a tile edge is segmented from each side's crop, cut at that crop, with slightly
+different centroids, so the old rule (centroid in the tile) lost large plaques on an edge from both tiles, or counted
+both halves. Now every object is kept once per core image (`proposals.owned_once`): of the copies of one object (rows of
+different tiles whose outlines overlap with IoU ≥ 0.3, or one lying half inside the other) the most complete stays — not
+cut by its crop, then centroid in its own tile, then the largest — and it belongs to the tile holding its centroid
+(`tile_id`, `x_tile`, `x_field` are of that tile). Two whole objects whose centroids lie in their own tiles are never
+merged.
 
 - **NeuN**: the legacy DAB profiles and the legacy Cellpose cells, with the legacy filters recorded instead of applied
   (`flag_legacy_kept`, `flag_legacy_drop` = shape / excluded / near_profile / pale_nucleus); the legacy cells come before
@@ -50,8 +57,18 @@ Per tile (the tile with its 128 px context margin; a candidate belongs to the ti
   local background (`localbg`). A Cellpose nucleus inside a stained profile becomes a source of that candidate, not a
   candidate of its own.
 - **6E10**: every deposit of the legacy segmentation (touching plaques split at h-maxima), including those the legacy
-  shape rule called artifacts and never showed the classifier (`flag_artifact_shape`); faint deposits of the tree at
-  0.5 and 0.75 × the threshold (roots: a dense core inside a diffuse halo is one deposit).
+  shape rule called artifacts and never showed the classifier (`flag_artifact_shape`); pale diffuse plaques as one
+  region each (`coarse`: the DAB smoothed over 4 µm at max(0.75 × threshold, tissue median + 0.25 × threshold),
+  ≥ 100 µm² — at the pixel scale such a plaque is a cloud of specks below the legacy seed level); faint deposits of the
+  tree at 0.5, 0.75, 1 and 1.5 × the threshold (roots: a dense core inside a diffuse halo is one deposit). A tree node
+  that merges deposits already kept, or is mostly covered by them, gives way to its children (`descend`): on a
+  dark-background core (LIP-1 E-3: background median 0.06 OD, legacy seed level 0.26 OD, 2.5 × the threshold) the faint
+  field at 0.5 × joined unseeded plaques to seeded ones, and the plaques were never proposed. Each deposit also gets the
+  slide-scaled model inputs `s_<name>`: the 14 DAB intensities of the identity model in slide thresholds (max, p90,
+  inner and outer mean, centre, annulus, context, contrasts), and the seed and dense core measured at levels relative to
+  the threshold (seed above max(1 × threshold, median + 6 σ), core above max(1.25 × threshold, 1.2 × seed, the 85th
+  percentile)) instead of the legacy absolute 0.035 / 0.10 OD (`stainid.v2.amyloid.scaled_names`). The current model
+  still reads the legacy `m_` inputs; see "Retraining 6E10" below.
 - **AT8**: the legacy candidates (`ring`: stained ring around a Cellpose nucleus; `dense`: dense body above the 60 µm
   background); fainter rings down to 0.15 (`ring_faint`); tree bodies at 1, 1.5, 2 × the threshold and the local
   background pass (`dab@…`, `localbg`).
@@ -76,6 +93,26 @@ its pixel count, width sum and the candidate it lies in), `unproposed/<stain>/<c
 picture `masks/<stain>/<core>.png` (bits: 1 tissue, 2 linear artifact, 4 fold, 8 manual exclusion, 16 AT8 edge guard,
 32 analysed tile).
 
+Stained regions no candidate proposes (`unproposed/`, per stain `proposals.<stain>.unproposed`): NeuN and AT8 as
+before (smoothed DAB ≥ the threshold, ≥ 15 / 20 µm², touching no candidate); 6E10 the DAB smoothed over 4 µm at
+max(0.75 × threshold, tissue median + 0.25 × threshold), ≥ 100 µm², that no single candidate covers a quarter of — a
+pale diffuse plaque that only specks of candidates touch is reported, which the old rule (DAB ≥ threshold, touching no
+candidate) never did.
+
+## Retraining 6E10
+
+The current 6E10 model takes absolute DAB OD and dense-core / seed measures cut at absolute OD. The LIP-6 6E10 slide is
+3–4 × paler than the others (threshold 0.026 OD against 0.067–0.108), so its plaques have low intensities and no dense
+core: the October 2026 audit found 5,099 of the cohort's 11,060 large (≥ 300 µm²) candidates rejected with p 0.25–0.5
+on LIP-6 (41 % of its large plaques; 1.5–7 % elsewhere), and LIP-6's median diffuse-plaque density 0.6 /mm² against
+6–31 /mm² on the other TMAs. Shape features of the ragged outlines of diffuse plaques (low circularity and solidity)
+pull them down too. The next 6E10 model is trained on the annotation rounds' labels with the slide-scaled inputs
+(`v2.training.6E10.slide_scaled`, on by default; `stainid.training.train.with_scaled`): every input with an `s_`
+version is replaced by it, and the bundle records `slide_scaled: true` and the `s_` names, which stage 4 reads from the
+store like any other input. Labels on candidates without `s_` columns (the old pool) get their intensities from the
+OD over their TMA's threshold and leave the core measures to the model's imputer. Set `slide_scaled: false` to train
+on the legacy inputs.
+
 ## Stage 4: calls
 
 The stain model scores every candidate from `m_` columns (`stainid.candidates.model_matrix`). Rules (`v2.rules`):
@@ -95,7 +132,17 @@ Segment Anything ViT-B, one point at the candidate as the one-click tool, all th
 (`sam_default`): the output the stain's
 outline step uses (NeuN large, 6E10 medium, AT8 best DAB contrast) when it survives the runaway cap (more than 5 × the
 candidate's area, touching the 1024 px window edge, or outside the stain's size limits), else the surviving output with
-the best predicted IoU; none surviving → `sam_status` fallback_* and the candidate outline stands.
+the best predicted IoU; none surviving → `sam_status` fallback_* and the candidate outline stands. An output under
+0.25 × the area of a candidate of 100 µm² or more has shrunk onto a part of it (`fallback_shrunk`, `v2.outlines.
+shrink_factor` / `shrink_min_um2`): on pale diffuse plaques Segment Anything often outlined one dark speck (a 45 µm²
+outline for a 4,278 µm² plaque), and the viewer drew that speck as the plaque.
+
+Which outline is an object's own for display is a per-stain setting, `v2.outlines.default_outline` (advanced; default
+NeuN `sam`, 6E10 `stain`, AT8 `stain`: SAM clips diffuse plaques to their dense part, is as good or better on neurons
+and mixed on AT8). The assembled store records it per row (`outline_default`); the viewer's outline layer
+(`candidates.outline_rings`) and the annotation pages (`labels.candidate_store.masks`: the three SAM masks small → large,
+then the stain outline as "mask 3", shown first where the setting is `stain` or SAM fell back) follow it. Changing it
+re-assembles the store only; areas in the measures come from the stain outline either way.
 
 ## Stage 5: measures and the mapping to the current tables
 

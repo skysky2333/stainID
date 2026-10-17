@@ -217,11 +217,12 @@ def assembled_expected(project, stain: str, core_id: str) -> dict | None:
         if recorded is None and stage != "outlines":
             return None
         inputs[stage] = recorded["digest"] if recorded else ""
-    return manifest.make("candidates", {}, inputs)
+    return manifest.make("candidates", stage_params(project, "candidates", stain), inputs)
 
 
 def assemble(project, stain: str, core_id: str) -> Path | None:
-    """Write the candidate store of one core image: proposals with their outlines (stage 3, when made) and calls."""
+    """Write the candidate store of one core image: proposals with their outlines (stage 3, when made) and calls, and
+    which outline is the object's own for display (`outline_default`: "stain" or "sam")."""
     made = assembled_expected(project, stain, core_id)
     if made is None:
         return None
@@ -235,6 +236,7 @@ def assemble(project, stain: str, core_id: str) -> Path | None:
             frame[column] = ""
     if not calls.empty:
         frame = frame.merge(calls, on="candidate_id", how="left")
+    frame["outline_default"] = made["params"]["default_outline"]
     target = store.root(project) / "candidates" / stain / f"{core_id}.csv.gz"
     store.write_table(target, frame)
     manifest.write(project, "candidates", stain, core_id, made)

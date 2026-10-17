@@ -13,6 +13,8 @@ Encodings (see also the contract in the v2 brief):
 - `bbox` "x0 y0 x1 y1"; `outline` and each ring of `sam_outline` (";"-separated) a flat "x0 y0 x1 y1 …" of core pixels;
   `sam_masks` Segment Anything's three outputs small → large, "|"-separated polygons, with `sam_scores` (predicted IoU)
   and `sam_stability` ("|"-separated, same order) and `sam_default` (0–2, -1 when none survived the runaway cap);
+- `outline_default`: which outline is the object's own for display, "stain" (`outline`) or "sam" (the default Segment
+  Anything output, `outline` where it fell back), the stain's `v2.outlines.default_outline`;
 - `threshold`: the model's probability cut-off the call used;
 - `m_<name>`: the input `<name>` of the current stain models; plain names: generic measurements.
 
@@ -30,7 +32,7 @@ import pandas as pd
 KINDS = ("candidates", "proposals", "outlines", "calls", "unproposed", "tiles")  # per stain and core image
 MATCH_RADIUS_UM = {"NeuN": 4.0, "6E10": 6.0, "AT8": 4.0}
 DEFAULT_MATCH_RADIUS_UM = 5.0
-TEXT_COLUMNS = ("candidate_id", "stain", "core_id", "tile_id", "bbox", "sources", "source", "outline", "sam_outline", "sam_status",
+TEXT_COLUMNS = ("candidate_id", "stain", "core_id", "tile_id", "bbox", "sources", "source", "outline", "outline_default", "sam_outline", "sam_status",
                 "sam_masks", "sam_scores", "sam_stability", "model_id", "decision", "reason", "class", "subtype", "points", "kind", "legacy_class",
                 "legacy_source_class", "flag_legacy_drop", "dab_q", "core_dab_q", "region_id", "density_windows", "density_window_px")
 CALL_COLUMNS = ("probability", "threshold", "model_id", "decision", "reason", "class", "subtype")
@@ -280,14 +282,17 @@ def read_core(project, stain: str, core_id: str, columns: list[str] | None = Non
     stage 3 / 4 columns added empty. Empty frame when stage 2 has not run for this core."""
     store = path(project, stain, core_id, "candidates")
     frame = read_table(store, columns)
-    if store.exists():
-        return frame
-    frame = read_table(path(project, stain, core_id, "proposals"), columns)
-    if frame.empty and not len(frame.columns):
-        return frame
-    for column in (*OUTLINE_COLUMNS, *CALL_COLUMNS):
-        if (columns is None or column in columns) and column not in frame:
-            frame[column] = np.nan if column in ("probability", "threshold", "sam_default") else ""
+    if not store.exists():
+        frame = read_table(path(project, stain, core_id, "proposals"), columns)
+        if frame.empty and not len(frame.columns):
+            return frame
+        for column in (*OUTLINE_COLUMNS, *CALL_COLUMNS):
+            if (columns is None or column in columns) and column not in frame:
+                frame[column] = np.nan if column in ("probability", "threshold", "sam_default") else ""
+    if (columns is None or "outline_default" in columns) and "outline_default" not in frame:  # assembled before the setting
+        from stainid.v2.params import default_outline
+
+        frame = frame.assign(outline_default=default_outline(project, stain))
     return frame
 
 
@@ -361,17 +366,20 @@ def match_many(project, stain: str, core_id: str, xy: np.ndarray, radius_um: flo
 
 
 def outline_rings(row) -> list[list[int]]:
-    """The outline to draw for a candidate: its default Segment Anything output when one was kept, else the candidate
-    outline."""
+    """The outline to draw for a candidate: its stain outline where `outline_default` is "stain", else its default
+    Segment Anything output when one was kept, else the stain outline."""
+    own = [points(row.get("outline"))] if points(row.get("outline")) else []
+    if row.get("outline_default") == "stain" and own:
+        return own
     sam = rings(row.get("sam_outline")) if row.get("sam_status") == "ok" else []
-    return sam or ([points(row.get("outline"))] if points(row.get("outline")) else [])
+    return sam or own
 
 
 def outlines(project, stain: str, core_id: str, decision: str | None = None) -> list[dict]:
     """Every candidate's id, centroid, call and outline rings (core pixels) of one core image; `decision` limits them."""
     frame = read_core(project, stain, core_id, ["candidate_id", "x_core", "y_core", "decision", "class", "subtype", "probability",
                                                "outline", "sam_outline", "sam_status", "sam_masks", "sam_scores", "sam_stability",
-                                               "sam_default", "threshold"])
+                                               "sam_default", "threshold", "outline_default"])
     if decision is not None and "decision" in frame:
         frame = frame[frame.decision == decision]
     out = []
@@ -381,7 +389,7 @@ def outlines(project, stain: str, core_id: str, decision: str | None = None) -> 
                     "class": r.get("class", ""), "subtype": r.get("subtype", ""), "probability": r.get("probability"),
                     "rings": outline_rings(r), "outline": points(r.get("outline")), "sam_masks": sam_masks(r.get("sam_masks")),
                     "sam_scores": sam_scores(r.get("sam_scores")), "sam_stability": sam_scores(r.get("sam_stability")),
-                    "threshold": r.get("threshold"),
+                    "threshold": r.get("threshold"), "outline_default": r.get("outline_default", ""),
                     "sam_default": None if default is None or default != default or int(default) < 0 else int(default)})
     return out
 

@@ -13,7 +13,7 @@ import pandas as pd
 from stainid import candidates
 
 COLUMNS = ["candidate_id", "x_core", "y_core", "radius_px", "area_um2", "probability", "decision", "reason", "class", "subtype",
-           "m_from_ring", "outline", "sam_outline", "sam_status"]
+           "m_from_ring", "outline", "sam_outline", "sam_status", "outline_default"]
 
 
 def setting(project) -> str:

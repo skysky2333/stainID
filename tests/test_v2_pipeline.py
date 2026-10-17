@@ -398,9 +398,14 @@ def test_outlines_keep_all_three_sam_outputs(v2_project, monkeypatch):
     assert len(outlined)
     row = outlined.iloc[0]
     found, default = candidate_store.masks(row)
-    assert len(found) == 3 and 0 <= default < 3 and len(row.sam_scores) == 3
-    if row.sam_default >= 0:
-        assert default == int(row.sam_default)
+    # the three masks small → large, then the stain outline; 6E10 shows its stain outline first (v2.outlines.default_outline)
+    assert len(found) == 4 and found[3] == row.outline and len(row.sam_scores) == 3
+    assert row.outline_default == "stain" and default == 3
+    assert store.outline_rings(store.read_core(project, "6E10", "LIP-1_B-2").iloc[0].to_dict())[0] == \
+        store.points(store.read_core(project, "6E10", "LIP-1_B-2").outline.iloc[0])
+    as_sam = {**row.to_dict(), "outline_default": "sam"}  # as NeuN: the default mask, the stain outline where SAM fell back
+    found, default = candidate_store.masks(as_sam)
+    assert default == (int(row.sam_default) if row.sam_default >= 0 else 3)
     assert read.threshold.notna().all()
     again = outlines.outline_core(project, "6E10", "LIP-1_B-2", tiles, outliner, 0.05)  # nothing new to outline
     assert again["new"] == 0
