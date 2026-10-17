@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { Job, Step } from './api'
-import { api } from './api'
+import { api, queueText } from './api'
 import { CommandLineTag, ErrorNote, Progress, StatusBadge, withError } from './components'
 
 /* ---- shared pieces of the Home and Run (workflow) pages ---- */
@@ -198,7 +198,7 @@ export function runFacts(jobs: Job[], step?: Step, counts = true): { running: Jo
   const counted = step !== undefined && step.progress.total > 0
   const done = counted ? step.progress.done : running.reduce((n, j) => n + j.progress.done, 0)
   const total = counted ? step.progress.total : running.reduce((n, j) => n + j.progress.total, 0)
-  if (!running.length) return { running, done, total, text: jobs[0]?.waiting || 'Starts in a moment' }
+  if (!running.length) return { running, done, total, text: jobs[0] ? queueText(jobs[0]) : 'Starts in a moment' }
   const lefts = running.map((j) => timeLeft(j, now)).filter((t): t is number => t !== null)
   const started = Math.min(...running.map((j) => j.started ?? now))
   const text = [

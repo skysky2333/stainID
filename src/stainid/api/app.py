@@ -7,6 +7,7 @@ last. `/api/session` and `/api/projects` (the projects list) belong to the serve
 """
 from __future__ import annotations
 
+import contextlib
 import re
 from pathlib import Path
 
@@ -45,8 +46,19 @@ class ProjectScope:
             await self.app({**scope, "path": path, "raw_path": path.encode()}, receive, send)
 
 
+REQUEST_THREADS = 64  # requests answered at once (sync routes run on threads; slow work goes to `work`'s pool)
+
+
+@contextlib.asynccontextmanager
+async def _lifespan(app: FastAPI):
+    import anyio.to_thread  # noqa: PLC0415
+
+    anyio.to_thread.current_default_thread_limiter().total_tokens = REQUEST_THREADS
+    yield
+
+
 def create_app() -> FastAPI:
-    app = FastAPI(title="stainID", version="2.0", docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="stainID", version="2.0", docs_url=None, redoc_url=None, openapi_url=None, lifespan=_lifespan)
     for module in (projects, project, slides, setup, imageset, cohort, images, jobs, analysis, models, session, annotate, cache_routes, label_classes, outline_routes, round_routes):
         app.include_router(module.router, prefix="/api")
     job_queue.SLOTS.elsewhere = state.running_elsewhere  # heavy steps of known projects that are not open count too

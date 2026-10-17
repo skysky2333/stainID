@@ -71,16 +71,57 @@ def inside(rings: list[np.ndarray], holes: list[bool], x: float, y: float) -> bo
     return any(within(r) for r, h in zip(rings, holes) if not h) and not any(within(r) for r, h in zip(rings, holes) if h)
 
 
+def _within(ring: np.ndarray, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
+    """Which of the points are inside a ring or on it (even-odd ray casting for all of them at once; the edge counts as
+    inside, as with cv2.pointPolygonTest >= 0)."""
+    x0, y0 = ring[:, 0][:, None], ring[:, 1][:, None]
+    x1, y1 = np.roll(ring[:, 0], -1)[:, None], np.roll(ring[:, 1], -1)[:, None]
+    px, py = xs[None, :], ys[None, :]
+    crosses = (y0 > py) != (y1 > py)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        at = x0 + (py - y0) * (x1 - x0) / (y1 - y0)
+    odd = (crosses & (px < at)).sum(axis=0) % 2 == 1
+    dx, dy = x1 - x0, y1 - y0  # on an edge (within 1e-6 px)
+    length = dx * dx + dy * dy
+    with np.errstate(divide="ignore", invalid="ignore"):
+        t = np.clip(np.where(length > 0, ((px - x0) * dx + (py - y0) * dy) / length, 0.0), 0.0, 1.0)
+    edge = (np.hypot(px - (x0 + t * dx), py - (y0 + t * dy)) <= 1e-6).any(axis=0)
+    return odd | edge
+
+
+def inside_many(rings: list[np.ndarray], holes: list[bool], xs, ys) -> np.ndarray:
+    """`inside` for many points at once."""
+    xs, ys = np.asarray(xs, np.float64), np.asarray(ys, np.float64)
+    outer = np.zeros(len(xs), bool)
+    hole = np.zeros(len(xs), bool)
+    for ring, is_hole in zip(rings, holes):
+        found = _within(np.asarray(ring, np.float64), xs, ys)
+        if is_hole:
+            hole |= found
+        else:
+            outer |= found
+    return outer & ~hole
+
+
 def counted(labels: pd.DataFrame) -> pd.DataFrame:
     """The labels without the ones a person made inside an area they marked as bad on that field (their class and
-    outline labels on objects whose centre lies there): what scoring, agreement and training read."""
+    outline labels on objects whose centre lies there): what scoring, agreement and training read. Only the labels of
+    the (person, field) pairs that have a marked area are looked at, each pair's at once."""
     if labels.empty or "task" not in labels or not (labels.task == TASK).any():
         return labels
-    marks = labels[labels.task == TASK]
+    marks = labels[labels.task == TASK].drop_duplicates(["source", "tile_id"], keep="last")
     areas = {(r.source, r.tile_id): rings_of(r) for r in marks.itertuples()}
-    objects = labels[labels.task.isin(["class", "outline"]) & labels.x.notna()]
-    drop = [i for i, r in zip(objects.index, objects.itertuples())
-            if (r.source, r.tile_id) in areas and inside(*areas[(r.source, r.tile_id)], float(r.x), float(r.y))]
+    keys = pd.MultiIndex.from_arrays([labels.source, labels.tile_id])
+    near = keys.isin(list(areas)) & labels.task.isin(["class", "outline"]).to_numpy() & labels.x.notna().to_numpy()
+    if not near.any():
+        return labels
+    objects = labels[near]
+    drop = []
+    for (source, tile_id), group in objects.groupby(["source", "tile_id"], sort=False):
+        rings, holes = areas[(source, tile_id)]
+        if rings:
+            hit = inside_many(rings, holes, group.x.astype(float).to_numpy(), group.y.astype(float).to_numpy())
+            drop.extend(group.index[hit])
     return labels.drop(index=drop) if drop else labels
 
 

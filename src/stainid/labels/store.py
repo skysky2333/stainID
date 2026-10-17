@@ -16,6 +16,7 @@ import json
 import time
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from stainid.labels import vocabulary as vocab
@@ -61,22 +62,40 @@ def history(root: Path) -> pd.DataFrame:
         return pd.DataFrame(columns=COLUMNS)
     stat = path.stat()
     key = (stat.st_mtime_ns, stat.st_size)
-    if path in _CACHE and _CACHE[path][0] == key:
-        return _CACHE[path][1]
-    with path.open(encoding="utf-8") as handle:
+    kept = _CACHE.get(path)
+    if kept is not None and kept[0] == key:
+        return kept[1]
+    with path.open("rb") as handle:
         fcntl.flock(handle, fcntl.LOCK_SH)
-        lines = handle.read().splitlines()
+        start = 0
+        if kept is not None and len(kept) > 4 and kept[3] == stat.st_ino and kept[2] <= stat.st_size:  # the log only grows: read what was added
+            handle.seek(kept[2])
+            start = kept[2]
+        data = handle.read()
         fcntl.flock(handle, fcntl.LOCK_UN)
-    frame = pd.DataFrame([json.loads(line) for line in lines if line], columns=COLUMNS)
-    _CACHE[path] = (key, frame)
+    end = data.rfind(b"\n") + 1  # a line still being written is read next time
+    records = (kept[4] if start else []) + [json.loads(line) for line in data[:end].decode("utf-8").splitlines() if line]
+    frame = pd.DataFrame(records, columns=COLUMNS)  # from every record at once: the same columns as reading the whole log
+    _CACHE[path] = (key, frame, start + end, stat.st_ino, records)
     return frame
 
 
+_CURRENT: dict[Path, tuple[tuple, pd.DataFrame]] = {}
+
+
 def current(root: Path) -> pd.DataFrame:
-    """The latest version of every label that is not deleted."""
+    """The latest version of every label that is not deleted (kept until a label is saved; a copy is returned)."""
     frame = history(root)
+    path = log_path(root)
+    key = (_CACHE[path][0], id(frame)) if path in _CACHE else None
+    kept = _CURRENT.get(path)
+    if key is not None and kept is not None and kept[0] == key:
+        return kept[1].copy()
     latest = frame.drop_duplicates(["source", "id"], keep="last")
-    return latest[~latest.deleted.astype(bool)].reset_index(drop=True)
+    latest = latest[~latest.deleted.astype(bool)].reset_index(drop=True)
+    if key is not None:
+        _CURRENT[path] = (key, latest)
+    return latest.copy()
 
 
 def classes(labels: pd.DataFrame, stain: str, vocabulary: Vocabulary | None = None) -> pd.DataFrame:
@@ -110,15 +129,38 @@ def consensus(labels: pd.DataFrame, stain: str, vocabulary: Vocabulary | None = 
     if rows.empty:
         return pd.DataFrame(columns=["tile_id", "x", "y", "value", "subtype", "n", "agreement", "positive", "sources"])
     rows["rx"], rows["ry"] = rows.x.round().astype(int), rows.y.round().astype(int)
-    out = []
-    for (tile, rx, ry), group in rows.groupby(["tile_id", "rx", "ry"], sort=False):
-        top, agreement = majority(group.identity)
-        typed = group.subtype[(group.identity == top) & (group.subtype != "")] if top else group.subtype.iloc[:0]
-        votes = (group.role == vocab.POSITIVE).to_numpy()
-        out.append({"tile_id": tile, "x": float(group.x.iloc[0]), "y": float(group.y.iloc[0]), "value": top, "subtype": majority(typed)[0],
-                    "n": len(group), "agreement": agreement, "positive": bool(votes.mean() > 0.5) if votes.mean() != 0.5 else None,
-                    "sources": ", ".join(sorted(group.source))})
-    return pd.DataFrame(out)
+    group = rows.groupby(["tile_id", "rx", "ry"], sort=False).ngroup().to_numpy()  # in the order objects first come
+    frame = pd.DataFrame({"group": group, "identity": rows.identity.astype(str).to_numpy(object), "subtype": rows.subtype.astype(str).to_numpy(object)})
+    n = np.bincount(group)
+    top, share = _majorities(frame.group.to_numpy(), frame.identity.to_numpy(object), len(n))
+    typed = frame[(frame.subtype != "") & (frame.identity.to_numpy(object) == top[frame.group.to_numpy()]) & (top[frame.group.to_numpy()] != "")]
+    subtype, _ = _majorities(typed.group.to_numpy(), typed.subtype.to_numpy(object), len(n))
+    positive = np.bincount(group, weights=(rows.role == vocab.POSITIVE).to_numpy(float), minlength=len(n)) / n
+    first = pd.Series(np.arange(len(group))).groupby(group).min().to_numpy()
+    sources = pd.Series(rows.source.to_numpy(object)).groupby(group).agg(lambda s: ", ".join(sorted(s)))
+    return pd.DataFrame({"tile_id": list(rows.tile_id.to_numpy(object)[first]), "x": rows.x.astype(float).to_numpy()[first],
+                         "y": rows.y.astype(float).to_numpy()[first], "value": list(top), "subtype": list(subtype), "n": n.tolist(),
+                         "agreement": share.tolist(), "positive": [bool(p > 0.5) if p != 0.5 else None for p in positive],
+                         "sources": list(sources.to_numpy(object))})
+
+
+def _majorities(group: np.ndarray, values: np.ndarray, groups: int) -> tuple[np.ndarray, np.ndarray]:
+    """`majority` of `values` within each of `groups` groups at once: the most common value ("" on a tie or for a group
+    without values) and its share."""
+    top = np.full(groups, "", dtype=object)
+    share = np.zeros(groups)
+    if not len(group):
+        return top, share
+    counted = pd.DataFrame({"group": group, "value": values}).groupby(["group", "value"], sort=False).size().reset_index(name="count")
+    counted = counted.sort_values(["group", "count"], ascending=[True, False], kind="stable")
+    best = counted.drop_duplicates("group")
+    second = counted[counted.duplicated("group")].drop_duplicates("group").set_index("group")["count"]
+    runner = second.reindex(best.group).fillna(0).to_numpy()
+    total = np.bincount(group, minlength=groups)
+    clear = best["count"].to_numpy() > runner
+    top[best.group.to_numpy()[clear]] = best.value.to_numpy(object)[clear]
+    share[best.group.to_numpy()] = best["count"].to_numpy() / total[best.group.to_numpy()]
+    return top, share
 
 
 def reviewed_fields(labels: pd.DataFrame, stain: str, kind: str = "") -> dict[str, set[str]]:

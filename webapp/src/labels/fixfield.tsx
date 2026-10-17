@@ -18,7 +18,7 @@ import { memo, useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import type { AddedState, Label, RoundCheck, RoundDetail, RoundField, RoundObject, RoundProgress, RoundSamOptions, RoundSaved, SessionDetail } from '../api'
-import { api, apiUrl, enc } from '../api'
+import { api, apiUrl, enc, pendingText } from '../api'
 import { ErrorNote, Loading, fmt } from '../components'
 import { useFetch, useStored } from '../hooks'
 import type { ImagePoint } from '../viewer'
@@ -87,9 +87,12 @@ function circle(x: number, y: number, r: number) {
 interface Hooks { onEvent?: (event: RoundEvent) => void; onFinished?: () => void; coach?: ReactNode }
 
 export function FixField({ detail, reload, tile, onEvent, onFinished, coach }: { detail: SessionDetail; reload: () => void; tile: string } & Hooks) {
-  const work = useFetch<RoundField>(`/api/annotate/${detail.meta.name}/fields/${enc(tile)}`)
+  const work = useFetch<RoundField<number[]>>(`/api/annotate/${detail.meta.name}/fields/${enc(tile)}`)
+  // every outline of every object, after the field is drawn (the field brings only each object's default one)
+  const shapes = useFetch<Record<string, (number[] | null)[]>>(work.data ? `/api/annotate/${detail.meta.name}/fields/${enc(tile)}/masks` : null)
+  const field = useMemo(() => (work.data ? unflatten(work.data, shapes.data) : null), [work.data, shapes.data])
   useFitScreen()
-  if (!work.data) {  // the picture at once, the objects when they have arrived
+  if (!field) {  // the picture at once, the objects when they have arrived
     return (
       <div className="annotate-page round-page fit-page">
         <div className="annotate-top"><div className="annotate-heading"><h1>{detail.meta.title}</h1>
@@ -102,12 +105,25 @@ export function FixField({ detail, reload, tile, onEvent, onFinished, coach }: {
               {() => null}
             </ZoomViewer>
           </div>
-          <aside className="annotate-side round-side">{coach}<div className="card side-block"><Loading label="Opening the field…" /></div></aside>
+          <aside className="annotate-side round-side">{coach}<div className="card side-block">
+            <Loading label={work.pending ? pendingText(work.pending) : 'Opening the field…'} /></div></aside>
         </div>
       </div>
     )
   }
-  return <Fixer key={tile} detail={detail} reload={reload} tile={tile} field={work.data} onEvent={onEvent} onFinished={onFinished} coach={coach} />
+  return <Fixer key={tile} detail={detail} reload={reload} tile={tile} field={field} onEvent={onEvent} onFinished={onFinished} coach={coach} />
+}
+
+/** The field with its outlines as [x, y] corners: the server sends them flat ([x0, y0, x1, y1, …], whole pixels), the
+ *  default one of each object with the field and all of them (`all`) once they are loaded. */
+function unflatten(field: RoundField<number[]>, all: Record<string, (number[] | null)[]> | null): RoundField {
+  const corners = (flat: number[] | null | undefined) => {
+    if (!flat || flat.length < 6) return null
+    const out: number[][] = []
+    for (let i = 0; i + 1 < flat.length; i += 2) out.push([flat[i], flat[i + 1]])
+    return out
+  }
+  return { ...field, objects: field.objects.map((o) => ({ ...o, masks: (all?.[o.candidate_id] ?? o.masks).map(corners) })) }
 }
 
 /** The field's objects with outlines of at most `SHAPE_POINTS` corners (Segment Anything's come with hundreds): drawn,
