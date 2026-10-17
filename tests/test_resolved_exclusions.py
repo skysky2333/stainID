@@ -136,3 +136,40 @@ def test_ai_reviewer_areas_are_edits_people_can_clear(project, tmp_path):
     edit(project, "Ann", [square(600 - ox, 600 - oy, 700 - ox, 700 - oy)], ["include"], first[0].time + 10)
     assert exclusions.resolved(project, CORE, STAIN).codes[650 // 8, 650 // 8] == 0
     assert [e.source for e in exclusions.edits(project, CORE, STAIN)] == [exclusions.REVIEWER, "Ann"]
+
+
+def test_area_edits_outdate_only_the_cores_they_change(project):
+    """A core's calls record the layer digest they were made with: an edit makes that core (only) one to decide again,
+    and the app's batch starts "Apply area edits" only when nothing else runs."""
+    import time as clock
+
+    from stainid.api import area_batch
+    from stainid.v2 import area_edits, manifest
+
+    write_mask(project)
+    made = manifest.make("calls", {}, {"proposals": "x", area_edits.KEY: exclusions.digest(project, CORE, STAIN)})
+    manifest.write(project, "calls", STAIN, CORE, made)
+    manifest.write(project, "calls", STAIN, "LIP-9_Z-9", manifest.make("calls", {}, {"proposals": "x"}))  # made before the layer: left alone
+    cache.forget()
+    assert area_edits.changed(project) == {}
+    edit(project, "Ann", [square(200, 200, 280, 280)], ["1"], 50.0)
+    cache.forget()
+    assert area_edits.changed(project) == {STAIN: [CORE]}
+
+    class Jobs:
+        def __init__(self, active):
+            self._active = active
+
+        def active(self):
+            return self._active
+
+    class State:
+        def __init__(self, active):
+            self.project, self.jobs = project, Jobs(active)
+
+    area_batch._started.clear()
+    assert area_batch.due(State(False), now=1e10) and not area_batch.due(State(True), now=1e10)  # a job running: wait
+    claims = project.output("v2") / "claims"
+    claims.mkdir(parents=True, exist_ok=True)
+    (claims / "calls_AT8_x.claim").write_text("")
+    assert not area_batch.due(State(False), now=clock.time())  # a detection run works on the project from outside: wait

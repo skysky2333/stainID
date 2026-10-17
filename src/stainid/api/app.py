@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from stainid.api import jobs as job_queue
 from stainid.api import state
 from stainid.api.routes import analysis, annotate, cohort, images, imageset, jobs, models, project, projects, session, setup, slides
+from stainid.api.routes import areas as area_routes
 from stainid.api.routes import cache as cache_routes
 from stainid.api.routes import classes as label_classes
 from stainid.api.routes import outline as outline_routes
@@ -54,12 +55,15 @@ async def _lifespan(app: FastAPI):
     import anyio.to_thread  # noqa: PLC0415
 
     anyio.to_thread.current_default_thread_limiter().total_tokens = REQUEST_THREADS
+    from stainid.api import area_batch  # noqa: PLC0415
+
+    area_batch.start()  # "Apply area edits" by itself, at most every 10 minutes (`api.area_batch`)
     yield
 
 
 def create_app() -> FastAPI:
     app = FastAPI(title="stainID", version="2.0", docs_url=None, redoc_url=None, openapi_url=None, lifespan=_lifespan)
-    for module in (projects, project, slides, setup, imageset, cohort, images, jobs, analysis, models, session, annotate, cache_routes, label_classes, outline_routes, round_routes):
+    for module in (projects, project, slides, setup, imageset, cohort, images, jobs, analysis, models, session, annotate, cache_routes, label_classes, outline_routes, round_routes, area_routes):
         app.include_router(module.router, prefix="/api")
     job_queue.SLOTS.elsewhere = state.running_elsewhere  # heavy steps of known projects that are not open count too
 
