@@ -115,6 +115,7 @@ def names(root: Path) -> list[str]:
 def pick_fields(tiles: pd.DataFrame, reviewed: set[str], n: int, seed: int) -> list[str]:
     """Fields nobody has reviewed yet, spread over TMAs and groups, in shuffled order (so the order reveals nothing)."""
     pool = tiles[~tiles.tile_id.isin(reviewed)].sample(frac=1, random_state=seed)
+    n = len(pool) if n < 0 else n  # -1: every one
     buckets = [list(g.tile_id) for _, g in pool.groupby(["tma", pool.disease_group.fillna("")], sort=False)]
     picked: list[str] = []
     while len(picked) < n and any(buckets):

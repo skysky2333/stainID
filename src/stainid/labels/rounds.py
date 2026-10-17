@@ -202,6 +202,23 @@ def progress(tiles: list[str], finished: dict[str, set[str]], held: dict[str, se
 
 # ---------- round 2: fields ----------
 
+ALL_FIELDS = -1  # "how many fields": every remaining one
+
+
+def remaining_fields(fields: list[str], finished: set[str], assigned: set[str]) -> list[str]:
+    """The fields a new "Fix the field" session can draw from: those not annotated yet (nobody finished them) and not
+    assigned to an open session, in the given order."""
+    return [t for t in dict.fromkeys(fields) if t not in finished and t not in assigned]
+
+
+def draw_fields(remaining: list[str], n: int, seed: int) -> list[str]:
+    """n of the remaining fields drawn uniformly at random, without repeats (n < 0, or more than there are: all of them),
+    in the drawn order; the same seed gives the same draw."""
+    rng = np.random.default_rng(seed)
+    if n < 0 or n >= len(remaining):
+        return [remaining[i] for i in rng.permutation(len(remaining))]
+    return [remaining[i] for i in rng.choice(len(remaining), size=n, replace=False)]
+
 def field_states(meta: dict, reviewed: dict[str, set[str]], working: dict[str, set[str]], held: dict[str, set[str]], ready: set[str]) -> list[dict]:
     """Where each field of a round-2 session stands (as `sessions.field_states`); `open_by` are the people holding it now."""
     return sessions.field_states({**meta, "per_field": needed(meta)}, reviewed, working, ready, held)

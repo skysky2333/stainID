@@ -34,7 +34,9 @@ export function NewRoundSession({ stains, onClose, onCreated, onOlder }: {
   const [tmas, setTmas] = useState<string[]>([])
   const [chosen, setChosen] = useState<string[]>([])
   const [objects, setObjects] = useState(500)
-  const [fieldCount, setFieldCount] = useState(10)
+  const [fieldCount, setFieldCount] = useState(-1)  // -1: every remaining field
+  const [spread, setSpread] = useState(false)  // Advanced: spread the fields over TMAs and groups instead of a plain random draw
+  const [seed, setSeed] = useState('')
   const [title, setTitle] = useState('')
   const [open, setOpen] = useState(true)
   const [level, setLevel] = useState('all')
@@ -51,7 +53,7 @@ export function NewRoundSession({ stains, onClose, onCreated, onOlder }: {
   const create = async () => {
     setBusy(true)
     const body = { stain, round, title: title.trim() || placeholder, name, open, instructions, subtypes, labels_needed: needed,
-      level: level === 'all' ? null : Number(level), n_objects: objects, n_fields: fieldCount,
+      level: level === 'all' ? null : Number(level), n_objects: objects, n_fields: fieldCount, spread, seed: seed.trim() === '' ? null : Number(seed),
       tmas: where === 'tmas' ? tmas : null, tile_ids: where === 'pick' ? chosen : null }
     const made = await withError(() => api.post<SessionInfo>('/api/labels/sessions', body), setError)
     setBusy(false)
@@ -100,15 +102,28 @@ export function NewRoundSession({ stains, onClose, onCreated, onOlder }: {
               ))}</div>}
               {where === 'pick' && <FieldPicker stain={stain} chosen={chosen} onChange={setChosen} source="candidates" />}
             </fieldset>
-            {where !== 'pick' || round === 1 ? (
-              <label className="field inline-number">{round === 1 ? 'How many objects (0 = every one)' : 'How many fields'}
-                {round === 1
-                  ? <input type="number" min={0} value={objects} style={{ width: 100 }} onChange={(e) => setObjects(Math.max(0, Number(e.target.value)))} />
-                  : <input type="number" min={1} max={500} value={fieldCount} style={{ width: 100 }} onChange={(e) => setFieldCount(Math.max(1, Number(e.target.value)))} />}
-                <span className="small muted">{round === 1 ? 'The most informative first: where detection is unsure, then strong ones it rejected, then weak ones it accepted.'
-                  : 'Fields nobody has checked, spread over TMAs and groups.'}</span>
+            {round === 1 ? (
+              <label className="field inline-number">How many objects (0 = every one)
+                <input type="number" min={0} value={objects} style={{ width: 100 }} onChange={(e) => setObjects(Math.max(0, Number(e.target.value)))} />
+                <span className="small muted">The most informative first: where detection is unsure, then strong ones it rejected, then weak ones it accepted.</span>
               </label>
-            ) : null}
+            ) : where !== 'pick' ? (() => {
+              const left = where === 'tmas' ? s.tmas.filter((t) => tmas.includes(t.tma)).reduce((n, t) => n + (t.fields_remaining ?? t.fields_ready), 0)
+                : s.fields_remaining ?? s.fields_ready
+              return (
+                <fieldset className="field"><legend>How many fields</legend>
+                  <div className="segmented">
+                    <button type="button" className={`btn${fieldCount < 0 ? ' chosen' : ''}`} onClick={() => setFieldCount(-1)}>All remaining fields ({left.toLocaleString()})</button>
+                    <button type="button" className={`btn${fieldCount > 0 ? ' chosen' : ''}`} onClick={() => setFieldCount(fieldCount > 0 ? fieldCount : Math.min(10, Math.max(1, left)))}>A random sample</button>
+                  </div>
+                  {fieldCount > 0 && <label className="inline-number small" style={{ marginTop: 6 }}>
+                    <input type="number" min={1} value={fieldCount} style={{ width: 90 }} onChange={(e) => setFieldCount(Math.max(1, Number(e.target.value) || 1))} />
+                    {' '}fields drawn at random from the {left.toLocaleString()} remaining</label>}
+                  <p className="small muted" style={{ margin: '6px 0 0' }}>Remaining: ready fields nobody has finished that are not in another open session.
+                    {fieldCount > left && left > 0 ? <b className="warning-text"> Only {left.toLocaleString()} remain, so all of them are taken.</b> : null}</p>
+                </fieldset>
+              )
+            })() : null}
           </>}
         </Loaded>
         <label className="field">Title people see<input type="text" value={title} placeholder={placeholder} onChange={(e) => setTitle(e.target.value)} /></label>
@@ -123,6 +138,12 @@ export function NewRoundSession({ stains, onClose, onCreated, onOlder }: {
             <label className="field">Session ID (in links and files)<input type="text" value={name} placeholder="made from the title"
               onChange={(e) => setName(e.target.value.replace(/[^A-Za-z0-9_-]/g, '_'))} /></label>
           </div>
+          {round === 2 && where !== 'pick' && <div className="row" style={{ alignItems: 'flex-end' }}>
+            <label className="layer-toggle"><input type="checkbox" checked={spread} onChange={(e) => setSpread(e.target.checked)} />
+              Spread the fields over {words.groups} and groups (instead of a plain random draw)</label>
+            <label className="field">Random seed<input type="number" value={seed} placeholder="new each time" style={{ width: 130 }}
+              onChange={(e) => setSeed(e.target.value)} /></label>
+          </div>}
           <label className="field">Note for labellers (optional)<textarea rows={2} value={instructions} placeholder="e.g. Count only neurons with a visible nucleus."
             onChange={(e) => setInstructions(e.target.value)} /></label>
           {vocabulary && <p className="muted small" style={{ margin: 0 }}>Classes: {vocabulary.classes.filter((c) => !c.hidden).map((c) => c.name).join(' · ')}.

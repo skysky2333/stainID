@@ -47,6 +47,19 @@ def test_most_informative_first():
     assert len(candidate_store.at_level(frame.assign(proposal_threshold=[0.5, 1, 1.5, np.nan, 0.75, 1, 1]), 1.0)) == 5
 
 
+def test_fields_are_drawn_at_random_from_the_remaining_ones():
+    fields = [f"T{i}" for i in range(50)]
+    left = rounds.remaining_fields(fields, finished={"T0", "T1"}, assigned={"T2"})
+    assert left == fields[3:]  # not annotated yet and not in another open session
+    assert sorted(rounds.draw_fields(left, rounds.ALL_FIELDS, seed=7)) == sorted(left)  # -1: every remaining field
+    some = rounds.draw_fields(left, 10, seed=7)
+    assert len(some) == 10 == len(set(some)) and set(some) <= set(left)  # n distinct remaining fields
+    assert rounds.draw_fields(left, 10, seed=7) == some and rounds.draw_fields(left, 10, seed=8) != some  # the seed reproduces the draw
+    assert sorted(rounds.draw_fields(left, 500, seed=1)) == sorted(left)  # more than remain: all of them
+    first = [rounds.draw_fields(left, 1, seed=s)[0] for s in range(2000)]  # uniform: every field comes up
+    assert set(first) == set(left)
+
+
 def test_a_tile_is_handed_to_one_person_at_a_time_until_enough_finished_it():
     tiles = ["t1", "t2", "t3"]
     one = {"t1": {"Ben"}}  # Ben finished t1
@@ -300,6 +313,22 @@ def test_the_tutorial_practises_on_a_real_field_and_keeps_nothing(rounds_project
     assert ann.post("/api/session/tutorial", json={"done": True}).json() == {"done": True}
     assert ann.get("/api/session/tutorial").json()["done"] is True
     assert ann.get("/api/annotate").json() == []  # practice sessions are not listed
+
+
+def test_a_fix_the_field_session_takes_every_remaining_field_by_default(rounds_project):
+    admin, _, _ = rounds_project
+    scope = admin.get("/api/labels/rounds/scope", params={"stain": "6E10"}).json()
+    assert scope["fields_remaining"] == 2
+    first = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "open": True, "seed": 3}).json()  # no n_fields: -1
+    assert sorted(first["fields"]) == sorted([TILE, OTHER]) and first["fields_asked"] == -1 and first["field_seed"] == 3
+    assert admin.get("/api/labels/rounds/scope", params={"stain": "6E10"}).json()["fields_remaining"] == 0  # both are in an open session
+    taken = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "n_fields": -1})
+    assert taken.status_code == 400 and "open session" in taken.text
+    admin.post(f"/api/labels/sessions/{first['name']}/open", json={"open": False})  # a closed session's fields are free again
+    again = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "n_fields": 5, "seed": 3}).json()
+    assert sorted(again["fields"]) == sorted([TILE, OTHER]) and again["fields_remaining"] == 2  # asked for more than remain: all
+    one = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "n_fields": 1, "seed": 3}).json()
+    assert one["fields"] == rounds.draw_fields([TILE, OTHER], 1, 3)  # the recorded seed reproduces the draw
 
 
 def test_the_admin_can_preview_the_tutorial_without_a_name(rounds_project):

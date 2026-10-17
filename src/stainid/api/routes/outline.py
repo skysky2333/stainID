@@ -226,7 +226,7 @@ def create_outline_session(body: NewSession) -> dict:
         raise HTTPException(409, "a session with this name exists")
     tmas = body.tmas or _default_tmas(body.stain)
     seed = len(sessions.names(root()))
-    fields = _known_fields(body.stain, body.tile_ids) if body.tile_ids else _pick(body.stain, max(1, body.n_fields), [str(t) for t in tmas], seed)
+    fields = _known_fields(body.stain, body.tile_ids) if body.tile_ids else _pick(body.stain, max(1, outline.DEFAULT_FIELDS if body.n_fields is None else body.n_fields), [str(t) for t in tmas], seed)
     benchmark = {"tmas": [str(t) for t in tmas], "density": _density_of(body.stain, fields, seed),
                  "density_measure": "objects detection counted per mm² of tissue, in thirds of the stain's ready fields on these TMAs"}
     meta = sessions.create(root(), name, title=title, stain=body.stain, kind=outline.KIND, tools=["outline"], ai_view="full",

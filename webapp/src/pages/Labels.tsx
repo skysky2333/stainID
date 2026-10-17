@@ -58,8 +58,17 @@ export default function Labels() {
                 ? `“${s.title}” is open. Fields are prepared in the background (10–30 s each) and appear to people as they become ready. Copy its link below and send it.`
                 : `“${s.title}” is ready but closed. Open it when you want people to start.`) }} />
             : <NewRoundSession stains={data.stains.map((s) => s.stain)} onClose={() => setCreating(false)} onOlder={() => setOlder(true)}
-              onCreated={(s) => { overview.reload(); setNotice(s.open ? `“${s.title}” is open: copy its link below and send it. Pictures and outlines are made ahead in the background.`
-                : `“${s.title}” is ready but closed. Open it when you want people to start.`) }} />)}
+              onCreated={(s) => {
+                overview.reload()
+                const d = s as unknown as { fields?: string[] | number; fields_asked?: number; fields_remaining?: number; field_seed?: number }
+                const n = Array.isArray(d.fields) ? d.fields.length : d.fields ?? 0
+                const drawn = d.fields_asked == null || d.fields_remaining == null ? ''
+                  : d.fields_asked < 0 ? ` It has all ${n.toLocaleString()} remaining fields (in a random order, seed ${d.field_seed}).`
+                    : d.fields_asked > d.fields_remaining ? ` Only ${d.fields_remaining.toLocaleString()} fields remained, so it has all of them (seed ${d.field_seed}).`
+                      : ` ${n.toLocaleString()} fields were drawn at random from the ${d.fields_remaining.toLocaleString()} remaining (seed ${d.field_seed}).`
+                setNotice((s.open ? `“${s.title}” is open: copy its link below and send it. Pictures and outlines are made ahead in the background.`
+                  : `“${s.title}” is ready but closed. Open it when you want people to start.`) + drawn)
+              }} />)}
         </>}
       </Loaded>
     </>

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 import threading
 import time
 
@@ -153,34 +154,58 @@ def create_round_session(body: NewSession) -> dict:
         meta = sessions.create(root(), name, kind="queue", tools=["class"], rule=rounds.RULE, fields=[], scope=scope, objects=len(ids), **common)
         rounds.save_items(root(), name, ids)
     else:
-        fields = scope if body.tile_ids else _pick_fields(body.stain, scope, max(1, body.n_fields), len(sessions.names(root())))
+        asked = rounds.ALL_FIELDS if body.n_fields is None else body.n_fields
+        seed = body.seed if body.seed is not None else secrets.randbelow(2**31)
+        if body.tile_ids:
+            fields, left = scope, len(scope)
+        else:
+            fields, left = _pick_fields(body.stain, scope, asked, seed, body.spread)
+        draw = {} if body.tile_ids else {"field_seed": seed, "fields_asked": asked, "fields_remaining": left, "fields_spread": body.spread}
         meta = sessions.create(root(), name, kind="fields", tools=["class", "point", "outline", "tag"], rule="random", fields=fields, scope=fields,
-                               **common)
+                               **common, **draw)
     if body.open:
         meta = sessions.update(root(), name, open=True)
     warm(meta, force=True)
     return meta
 
 
-def _pick_fields(stain: str, scope: list[str], n: int, seed: int) -> list[str]:
-    """n fields of the scope nobody finished and no session has, spread over TMAs and groups."""
-    state = get_state()
-    tiles = state.labelling_tiles
-    tiles = tiles[(tiles.stain == stain) & tiles.tile_id.isin(set(scope))] if not tiles.empty else tiles
-    busy_fields = set(store.reviewed_fields(store.current(root()), stain)) | set(sessions.taken(root()))
-    free = tiles[~tiles.tile_id.isin(busy_fields)] if not tiles.empty else tiles
-    if free.empty:
-        raise HTTPException(400, f"Every {stain} field there has been checked or belongs to a session already.")
-    return sessions.pick_fields(free, set(), n, seed)
+def assigned_fields(but: str = "") -> set[str]:
+    """The fields of the open labelling sessions (but this one)."""
+    out: set[str] = set()
+    for name in sessions.names(root()):
+        meta = sessions.meta(root(), name)
+        if meta.get("open") and name != but:
+            out |= set(meta.get("fields", []))
+    return out
 
 
-def add_fields(meta: dict, n: int, tile_ids: list[str] | None) -> dict:
-    """More fields for a "Fix the field" session: these (checked to have candidates) or n more stainID picks."""
+def remaining(stain: str, scope: list[str], but: str = "") -> list[str]:
+    """The fields of the scope that are not annotated yet and not assigned to another open session (`rounds.remaining_fields`)."""
+    return rounds.remaining_fields(scope, set(store.reviewed_fields(store.current(root()), stain)), assigned_fields(but))
+
+
+def _pick_fields(stain: str, scope: list[str], n: int, seed: int, spread: bool = False, but: str = "") -> tuple[list[str], int]:
+    """The fields of a new "Fix the field" session and how many remained: n drawn at random from the remaining ones
+    (`rounds.draw_fields`; -1 or more than there are: every one), or with `spread` spread over TMAs and groups."""
+    left = remaining(stain, scope, but)
+    if not left:
+        raise HTTPException(400, f"Every {stain} field there has been checked or belongs to an open session already.")
+    if spread:
+        tiles = get_state().labelling_tiles
+        tiles = tiles[(tiles.stain == stain) & tiles.tile_id.isin(set(left))]
+        return sessions.pick_fields(tiles, set(), len(left) if n < 0 else n, seed), len(left)
+    return rounds.draw_fields(left, n, seed), len(left)
+
+
+def add_fields(meta: dict, n: int, tile_ids: list[str] | None, seed: int | None = None) -> dict:
+    """More fields for a "Fix the field" session: these (checked to have candidates) or n more drawn at random from the
+    remaining ones (-1: every remaining one)."""
     if rounds.round_of(meta) != 2:
         raise HTTPException(400, "a “Check detection’s calls” session keeps the candidates it was made with; make a new session for more")
     scope = _scope(NewSession(stain=meta["stain"], round=2, tile_ids=tile_ids))
     left = [t for t in scope if t not in set(meta["fields"])]
-    picked = left if tile_ids else _pick_fields(meta["stain"], left, max(1, n), len(meta["fields"]) + 1)
+    picked = left if tile_ids else _pick_fields(meta["stain"], left, n if n != 0 else 1, secrets.randbelow(2**31) if seed is None else seed,
+                                                 bool(meta.get("fields_spread")), meta["name"])[0]
     if not picked:
         raise HTTPException(400, f"no more {meta['stain']} fields can be added")
     updated = sessions.add_fields(root(), meta["name"], picked)
@@ -214,14 +239,15 @@ def scope_overview(stain: str) -> dict:
     tiles = state.labelling_tiles
     tiles = tiles[tiles.stain == stain] if not tiles.empty else tiles
     ready = set(store_ready(stain, tiles).tile_id) if not tiles.empty else set()
+    left = set(remaining(stain, sorted(ready))) if ready else set()
     out = []
     for tma, group in (tiles.groupby(tiles.tma.astype(str)) if not tiles.empty else []):
         ok = group[group.tile_id.isin(ready)]
         out.append({"tma": tma, "cores": int(group.core_id.nunique()), "cores_ready": int(ok.core_id.nunique()), "fields": int(len(group)),
-                    "fields_ready": int(len(ok))})
+                    "fields_ready": int(len(ok)), "fields_remaining": int(group.tile_id.isin(left).sum())})
     out.sort(key=lambda t: (len(t["tma"]), t["tma"]))
     return {"stain": stain, "tmas": out, "cores": sum(t["cores"] for t in out), "cores_ready": sum(t["cores_ready"] for t in out),
-            "fields_ready": len(ready), "levels": rounds.LEVELS, "default_objects": rounds.DEFAULT_OBJECTS,
+            "fields_ready": len(ready), "fields_remaining": len(left), "levels": rounds.LEVELS, "default_objects": rounds.DEFAULT_OBJECTS,
             "from_pool": (candidate_store.folder(state.project, stain) / ".from_pool.json").exists()}
 
 
