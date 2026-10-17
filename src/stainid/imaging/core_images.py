@@ -67,14 +67,16 @@ def project_root(link: Path) -> Path:
     return Path(link).resolve().parents[3]
 
 
-def render(link: Path) -> np.ndarray:
-    """The analysis picture of a link (RGB)."""
+def render(link: Path, reduce: int = 1) -> np.ndarray:
+    """The analysis picture of a link (RGB); with `reduce`, that picture `reduce` times smaller, read from the source at
+    that scale (a slide's pyramid level) and converted in colour at that size: a quick look at a whole-slide region (its
+    tissue, a preview) without reading and unmixing every pixel."""
     from stainid.imaging.sources import open_source
 
     data = read_link(link)
     source = open_source(data["source"])
-    rgb = source.region(tuple(data["box"]), float(data["scale"]))
-    width, height = int(data["width_px"]), int(data["height_px"])
+    rgb = source.region(tuple(data["box"]), float(data["scale"]) / reduce)
+    width, height = max(1, int(data["width_px"]) // reduce), max(1, int(data["height_px"]) // reduce)
     if (rgb.shape[1], rgb.shape[0]) != (width, height):
         rgb = cv2.resize(rgb, (width, height), interpolation=cv2.INTER_LINEAR)
     return to_analysis_rgb(rgb, Recipe.from_dict(data["recipe"]))
@@ -151,6 +153,5 @@ def read_bgr(path: Path | str, flag: int = cv2.IMREAD_COLOR) -> np.ndarray | Non
     bgr = _from_kept(path, _imread(flag))
     if bgr is not None:
         return bgr
-    bgr = cv2.cvtColor(render(path), cv2.COLOR_RGB2BGR)
     reduce = {cv2.IMREAD_REDUCED_COLOR_2: 2, cv2.IMREAD_REDUCED_COLOR_4: 4, cv2.IMREAD_REDUCED_COLOR_8: 8}.get(flag, 1)
-    return cv2.resize(bgr, (max(1, bgr.shape[1] // reduce), max(1, bgr.shape[0] // reduce)), interpolation=cv2.INTER_AREA) if reduce > 1 else bgr
+    return cv2.cvtColor(render(path, reduce), cv2.COLOR_RGB2BGR)  # a reduced read is made at its own size (whole-slide regions)

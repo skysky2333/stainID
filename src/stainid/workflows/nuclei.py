@@ -34,13 +34,13 @@ class CoreImages:
 
 
 def run_nuclei(project: Project, stains: list[str], device: str = "mps", batch_size: int = 8, threads: int = 4,
-               shard_index: int = 0, shard_count: int = 1, workers: int = 2) -> None:
-    """Segment every pending tile. `workers` tiles are in flight at once and share one model, so the GPU runs one tile's
+               shard_index: int = 0, shard_count: int = 1, workers: int = 2, cores: set[str] | None = None) -> None:
+    """Segment every pending tile (of these core images only, with `cores`). `workers` tiles are in flight at once and share one model, so the GPU runs one tile's
     network while another tile's CPU steps (normalisation, mask building) run; the masks are the same as one at a time."""
     project.apply_environment()
     output = project.output("nuclei")
     output.mkdir(parents=True, exist_ok=True)
-    rows = [r for r in read_csv(project.analysis_tiles()) if r["stain"] in set(stains)]
+    rows = [r for r in read_csv(project.analysis_tiles()) if r["stain"] in set(stains) and (cores is None or r["core_id"] in cores)]
     rows = sorted(rows, key=lambda r: (r["image_path"], int(r["selection_order"])))[shard_index::shard_count]
     done = file_names(output)
     pending = [r for r in rows if f"{r['tile_id']}.npz" not in done]

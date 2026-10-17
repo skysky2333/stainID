@@ -129,7 +129,8 @@ What annotators see:
   | **0** | unsure (left out of training) |
   | **Delete** | not an object (it turns dotted grey and stays visible; a class key brings it back) |
   | **Tab** / **Shift+Tab** | a bigger or smaller outline: each object has three Segment Anything outlines ready |
-  | **Space** | precise editing of that object only: right-click a spot to add it, left-click one to leave it out, drag the dots (Z one step back); Space again keeps it, Esc cancels |
+  | **Right-click** an object | precise editing of that object only: right-click a spot to add it, left-click one on or near the outline to leave it out, drag the dots (Z one step back); a click outside the object keeps it, Esc cancels |
+  | **Space** | hide / show everything drawn over the picture, for a clean look at the tissue |
   | **E** | the exclusion brush: paint bad areas (folds, smudges); their objects are left out of scoring and training |
   | **Z** | undo |
   | **Enter** | keep detection's call (round 1) |
@@ -205,7 +206,7 @@ All screenshots show a synthetic demo project: the tissue images, donors, labels
 | | |
 |---|---|
 | ![Fix the field](docs/images/annotate.jpg) | ![Precise editing](docs/images/annotate-precise.jpg) |
-| **Fix the field** (at `/p/<project>/annotate`): every candidate of the field, solid in its class colour or dotted grey when rejected or removed; the object under the mouse lights up, its name beside it and its facts (class, detection's call and score, area, outline) in the side panel with the class keys and colours | **Precise editing** (Space): only this object can change; right-click adds a spot, left-click leaves one out, the white dots drag; Space keeps it |
+| **Fix the field** (at `/p/<project>/annotate`): every candidate of the field, solid in its class colour or dotted grey when rejected or removed; the object under the mouse lights up, its name beside it and its facts (class, detection's call and score, area, outline) in the side panel with the class keys and colours | **Precise editing** (right-click the object): only this object can change; right-click adds a spot, left-click leaves one out, the white dots drag; a click outside keeps it |
 | ![Check detection's calls](docs/images/check-calls.jpg) | ![Tutorial](docs/images/tutorial.jpg) |
 | **Check detection's calls**: the other kind of round, one object at a time, Enter keeps detection's call | **Tutorial**: where a new annotator starts, on a practice field where nothing is saved; *Try the tutorial* on the Labels page shows it to the admin |
 | ![Home](docs/images/home.png) | ![Models](docs/images/models.png) |

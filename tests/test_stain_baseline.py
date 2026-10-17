@@ -31,6 +31,15 @@ class StainBaselineTest(unittest.TestCase):
         self.assertTrue(positive[128, 128])
         self.assertFalse(tissue[0, 0])
 
+    def test_saturated_pixels_do_not_raise_the_threshold(self):
+        rng = np.random.default_rng(0)
+        background = rng.gamma(4.0, 0.005, 200_000).astype(np.float32)  # unstained tissue, ~0.02 OD
+        stained = rng.uniform(0.15, 0.4, 4_000).astype(np.float32)  # plaques
+        clean, _ = calibrate_threshold(np.concatenate([background, stained]))
+        saturated, _ = calibrate_threshold(np.concatenate([background, stained, np.full(800, 1.52, np.float32)]))
+        self.assertLess(clean, 0.15)
+        self.assertAlmostEqual(saturated, clean, delta=0.01)
+
     def test_calibration_rejects_too_few_pixels(self):
         with self.assertRaisesRegex(ValueError, "At least 100"):
             calibrate_threshold(np.zeros(99, dtype=np.float32))

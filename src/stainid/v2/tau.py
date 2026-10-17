@@ -17,10 +17,31 @@ from stainid.v2.tree import local_background_regions, tree_regions
 LEGACY_CONTRAST = 0.3
 
 
+TOO_LITTLE_TISSUE = "AT8 network analysis requires at least 100"  # segment_at8_network refuses tiles with < 100 (valid) tissue pixels
+NETWORK_MAPS = ("valid", "excluded", "manual_excluded", "edge_excluded", "edge_excluded_display", "positive", "hole_rim_removed", "thread",
+                "thread_skeleton", "branchpoints", "endpoints")
+
+
+def _no_network(field) -> dict:
+    """The maps of a tile with (almost) no valid tissue, e.g. the corner of an image that is mostly glass: all empty."""
+    empty = np.zeros(field.shape, bool)
+    network_maps = {name: empty for name in NETWORK_MAPS} | {"compact_labels": np.zeros(field.shape, np.int32),
+                                                           "cluster_labels": np.zeros(field.shape, np.int32), "local_density": np.zeros(field.shape, np.float32)}
+    threads = {"line": empty, "skeleton": empty, "branchpoints": empty, "endpoints": empty, "width_um": np.zeros(field.shape, np.float32)}
+    return {"summary": {"edge_guard_triggered": False}, "objects": [], "maps": network_maps, "threads": threads}
+
+
 def maps(field) -> dict:
-    """segment_at8_network's maps (valid tissue, burden, legacy compact profiles and threads) and the thread network."""
+    """segment_at8_network's maps (valid tissue, burden, legacy compact profiles and threads) and the thread network;
+    all empty for a tile with fewer than 100 valid tissue pixels (the network analysis refuses those)."""
     if "at8" not in field.memo:
-        summary, objects, network_maps = segment_at8_network(field.rgb, field.threshold, field.pixel_width_um, field.pixel_height_um, field.exclusion)
+        try:
+            summary, objects, network_maps = segment_at8_network(field.rgb, field.threshold, field.pixel_width_um, field.pixel_height_um, field.exclusion)
+        except ValueError as error:
+            if TOO_LITTLE_TISSUE not in str(error):
+                raise
+            field.memo["at8"] = _no_network(field)
+            return field.memo["at8"]
         threads = thread_network(field.rgb, network_maps["valid"], field.threshold, field.pixel_size_um, nuclei=field.nuclei)
         field.memo["at8"] = {"summary": summary, "objects": objects, "maps": network_maps, "threads": threads}
     return field.memo["at8"]
