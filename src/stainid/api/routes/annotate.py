@@ -7,6 +7,7 @@ import re
 import socket
 import threading
 import time
+import uuid
 from pathlib import Path
 
 import cv2
@@ -17,10 +18,11 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from stainid import cache
-from stainid.api import label_crops, pyramid, queue_pictures, render, sam_embeddings
+from stainid.api import label_crops, pyramid, queue_pictures, render, sam_embeddings, work
 from stainid.api.routes.images import OVERLAYS
 from stainid.api.session import annotator, annotator_name, is_admin, require_admin
 from stainid.api.state import get_state
+from stainid.api.util import fast_json
 from stainid.labels import added, frames, outline, overview, pool, readiness, rounds, sessions, store
 from stainid.labels import objects as label_objects
 from stainid.labels import vocabulary as vocab
@@ -260,7 +262,13 @@ def defaults() -> dict:
 
 
 @router.get("/labels/overview", dependencies=admin)
-def labels_overview() -> dict:
+def labels_overview():
+    """Every stain's labels and every session, counted in the background when that takes a while (`work`)."""
+    return work.answer("labels overview", ("labels overview", str(get_state().root)), lambda task: _labels_overview(), work.NOW,
+                       "Counting the labels", admin=True, fresh=work.within(15))
+
+
+def _labels_overview() -> dict:
     state = get_state()
     labels = store.current(root())
     stains = [overview.cached_stain_overview(state.project, s, root(), state.tiles) for s in STAINS if s in set(state.tiles.stain)]
@@ -509,7 +517,14 @@ def _pick(stain: str, n: int, seed: int) -> list[str]:
 
 
 @router.post("/labels/sessions", dependencies=admin)
-def create_session(body: NewSession) -> dict:
+def create_session(body: NewSession):
+    """A new labelling session, made in the background when that takes a while (choosing the candidates of a large
+    scope): the page then follows its progress (`work`)."""
+    return work.answer("new session", ("new session", uuid.uuid4().hex), lambda task: _create_session(body), work.NOW, "Making the session",
+                       then="result", admin=True)
+
+
+def _create_session(body: NewSession) -> dict:
     if not body.name:
         body.name = free_name(body.title, body.stain, body.kind)
     if not re.fullmatch(r"[A-Za-z0-9_\-]+", body.name):
@@ -788,7 +803,7 @@ def next_item(name: str, request: Request, person: str = Depends(annotator), cou
     round: the next tile for this person (round 1 with its candidates); `skip` puts the tile they are on aside."""
     meta = session_meta(name, request)
     if rounds.is_round(meta):
-        return _rounds().next_tile_objects(meta, person, skip) if meta["kind"] == "queue" else _rounds().next_field(meta, person, skip)
+        return fast_json(request, _rounds().next_tile_objects(meta, person, skip)) if meta["kind"] == "queue" else _rounds().next_field(meta, person, skip)
     labels = store.current(root())
     state = get_state()
     if meta["kind"] != "queue":
@@ -809,7 +824,8 @@ def next_item(name: str, request: Request, person: str = Depends(annotator), cou
 def open_field(name: str, tile_id: str, request: Request, person: str = Depends(annotator)) -> dict:
     meta = session_meta(name, request)
     if rounds.is_round(meta):
-        return _rounds().open_field(meta, tile_id, person)
+        out = _rounds().open_field(meta, tile_id, person)
+        return out if isinstance(out, Response) else fast_json(request, out)
     tile = field_tile(meta, tile_id)
     objects = field_objects(meta, tile_id)
     busy(name, tile_id, person)

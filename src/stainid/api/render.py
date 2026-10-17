@@ -59,15 +59,44 @@ def field_rgb(state: ProjectState, tile_id: str) -> np.ndarray:
 
 def _crop_field(state: ProjectState, tile: dict, target: Path) -> None:
     """Cut one tile (with its context margin) out of its core image."""
-    context = state.project.context_px
     with pyramid.DECODE, open_image(state.root / tile["image_path"]) as image:
-        x0, y0 = crop_origin(tile, context)
-        x1 = min(int(tile["x_px"]) + int(tile["width_px"]) + context, image.width)
-        y1 = min(int(tile["y_px"]) + int(tile["height_px"]) + context, image.height)
-        part = image.crop((x0, y0, x1, y1)).convert("RGB")
+        _cut(state, image, tile, target)
+
+
+def _cut(state: ProjectState, image, tile: dict, target: Path) -> None:
+    context = state.project.context_px
+    x0, y0 = crop_origin(tile, context)
+    x1 = min(int(tile["x_px"]) + int(tile["width_px"]) + context, image.width)
+    y1 = min(int(tile["y_px"]) + int(tile["height_px"]) + context, image.height)
+    part = image.crop((x0, y0, x1, y1)).convert("RGB")
     out = io.BytesIO()
     part.save(out, format="JPEG", quality=FIELD_JPEG_QUALITY)
     disk_cache.write(target, out.getvalue())
+
+
+def field_jpegs(state: ProjectState, tile_ids, step=None) -> int:
+    """Make the field pictures of these tiles that are not made yet, decoding each core image once for all its fields
+    (a whole core is decoded to cut even one field). `step(done, total)` hears the progress in core images. Returns
+    how many pictures were made."""
+    wanted: dict[str, list[dict]] = {}
+    for tile_id in dict.fromkeys(tile_ids):
+        if not field_path(state, tile_id).exists():
+            tile = state.tile(tile_id)
+            wanted.setdefault(tile["image_path"], []).append(tile)
+    made = 0
+    for done, (image_path, tiles) in enumerate(wanted.items()):
+        if step:
+            step(done, len(wanted))
+        with _IMAGE_LOCKS.setdefault(image_path, threading.Lock()):
+            missing = [t for t in tiles if not field_path(state, t["tile_id"]).exists()]
+            if missing:
+                with pyramid.DECODE, open_image(state.root / image_path) as image:
+                    for tile in missing:
+                        _cut(state, image, tile, field_path(state, tile["tile_id"]))
+                        made += 1
+    if step:
+        step(len(wanted), len(wanted))
+    return made
 
 
 def field_jpeg(state: ProjectState, tile_id: str) -> Path:

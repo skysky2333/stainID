@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import type { Job, ResourceInfo, SetupOverview, SlideRow, SlidesInfo, Step, StepOption } from '../api'
-import { api, apiUrl, runStep } from '../api'
+import { api, apiUrl, queueText, runStep } from '../api'
 import { CommandLineTag, Empty, ErrorNote, FilePicker, HelpBox, Loaded, OptionField, PageHead, PathLine, Progress, StatusBadge, Term, timeAgo, withError } from '../components'
 import { useFetch } from '../hooks'
 import { LEGACY_STAGE, MAIN_STAGES, OPTIONAL, PipelineMap, STAGE, duration, groupState, isActive, runFacts, stepState, stopJobs } from '../pipeline'
@@ -466,7 +466,7 @@ const PAGE = 20
 function jobFacts(job: Job): string {
   const { done, total } = job.progress
   const took = job.started && job.ended ? ` · took ${duration(job.ended - job.started)}` : ''
-  if (job.status === 'queued') return job.waiting || 'Starts in a moment'
+  if (job.status === 'queued') return queueText(job)
   if (job.status === 'failed' || job.status === 'skipped') return job.progress.error || 'See the log'
   if (job.status === 'running') return total ? `${done.toLocaleString()} of ${total.toLocaleString()} done` : 'Starting…'
   return (total ? `${done.toLocaleString()} of ${total.toLocaleString()} done` : '') + took

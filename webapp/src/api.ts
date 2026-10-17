@@ -130,6 +130,13 @@ export interface Job {
   created: number; started: number | null; ended: number | null; returncode: number | null; waiting: string
   progress: { done: number; total: number; last_line: string; error: string }
   source?: 'app' | 'command line'; pid: number | null; log_file?: string
+  /** a queued job: how many queued jobs of the project start before it, and how many run now */
+  queue?: { ahead: number; running: number } | null
+}
+/** Why a queued job has not started, with its place in the queue: "2 ahead of it · waits for a free slot". */
+export function queueText(job: Job): string {
+  const place = job.queue ? (job.queue.ahead > 0 ? `${job.queue.ahead} ahead of it in the queue` : 'next in the queue') : ''
+  return [place, job.waiting].filter(Boolean).join(' · ') || 'Starts in a moment'
 }
 export interface TableInfo {
   name: string; title: string; path: string; columns: number; size_kb: number; modified: number; donor_region: boolean; contrasts: boolean; description: string; main: boolean
@@ -290,14 +297,77 @@ function setInFlight(change: number) {
   activityListeners.forEach((listener) => listener(inFlight))
 }
 
-async function request<T>(url: string, init?: RequestInit): Promise<T> {
+/** Slow work the server does in the background for a request (stainid.api.work): where it stands. */
+export interface Pending {
+  id: string; kind: string; label: string; state: 'waiting' | 'running' | 'done' | 'failed'; ahead: number; running: number
+  done: number; total: number; eta_s: number; error?: string
+}
+/** "Waiting: 2 ahead of you · about 20 s", "Preparing 3/10 · about 15 s": a pending request as people read it. */
+export function pendingText(p: Pending): string {
+  const eta = p.eta_s >= 1 ? `about ${p.eta_s < 90 ? `${Math.round(p.eta_s)} s` : `${Math.round(p.eta_s / 60)} min`}` : ''
+  const what = p.state === 'waiting'
+    ? (p.ahead > 0 ? `Waiting: ${p.ahead} ahead of you` : 'Waiting for a free worker')
+    : `${p.label || 'Preparing'}${p.total > 0 ? ` ${Math.min(p.done + 1, p.total)}/${p.total}` : '…'}`
+  return [what, eta].filter(Boolean).join(' · ')
+}
+// Requests the server answered "pending" (202), for the loading texts (see Loaded and ActivityBar in components.tsx).
+const pendingNow = new Map<number, Pending>()
+const pendingListeners = new Set<(pending: Pending[]) => void>()
+let pendingCounter = 0
+export function onPending(listener: (pending: Pending[]) => void): () => void {
+  pendingListeners.add(listener)
+  return () => { pendingListeners.delete(listener) }
+}
+function setPending(key: number, value: Pending | null) {
+  if (value) pendingNow.set(key, value)
+  else pendingNow.delete(key)
+  const all = [...pendingNow.values()]
+  pendingListeners.forEach((listener) => listener(all))
+}
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+const PENDING_GIVE_UP_MS = 15 * 60 * 1000
+
+export interface RequestOptions { onPending?: (pending: Pending | null) => void }
+
+async function request<T>(url: string, init?: RequestInit, options?: RequestOptions): Promise<T> {
   setInFlight(1)
-  try { return await send<T>(url, init) } finally { setInFlight(-1) }
+  const key = ++pendingCounter
+  const tell = (p: Pending | null) => { setPending(key, p); options?.onPending?.(p) }
+  try {
+    let answer: T | PendingAnswer = await send<T>(url, init)
+    const start = Date.now()
+    while (answer instanceof PendingAnswer) {  // the server works on it in the background: follow it, then ask again or take its result
+      tell(answer.pending)
+      if (Date.now() - start > PENDING_GIVE_UP_MS) throw new Error('504: this is taking very long; try again later')
+      await sleep(answer.pending.eta_s > 20 ? 3000 : answer.pending.eta_s > 5 ? 2000 : 1000)
+      if (answer.then === 'result') {
+        const polled: PendingAnswer | { result: T } = await send<{ result: T }>(`/api/session/work/${answer.pending.id}`)
+        answer = (polled instanceof PendingAnswer ? polled : polled.result) as T | PendingAnswer
+      } else {
+        answer = (await send<T>(url, init)) as T | PendingAnswer
+      }
+    }
+    return answer as T
+  } finally {
+    tell(null)
+    setInFlight(-1)
+  }
 }
 
-async function send<T>(url: string, init?: RequestInit): Promise<T> {
+class PendingAnswer {
+  pending: Pending
+  then: 'retry' | 'result'
+  constructor(pending: Pending, then: 'retry' | 'result') { this.pending = pending; this.then = then }
+}
+
+async function send<T>(url: string, init?: RequestInit): Promise<T | PendingAnswer> {
   const headers = remote && token ? { ...(init?.headers as Record<string, string> | undefined), Authorization: `Bearer ${token}` } : init?.headers
   const response = await fetch(apiBase + scoped(url), { ...init, headers })
+  if (response.status === 202) {
+    const body = await response.json().catch(() => null)
+    if (body?.pending) return new PendingAnswer(body.pending as Pending, body.then === 'result' ? 'result' : 'retry')
+    return body as T
+  }
   if (!response.ok) {
     const text = await response.text()
     let detail = text
@@ -314,7 +384,7 @@ async function send<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  get: <T,>(url: string) => request<T>(url),
+  get: <T,>(url: string, options?: RequestOptions) => request<T>(url, undefined, options),
   post: <T,>(url: string, body: unknown) =>
     request<T>(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
   put: <T,>(url: string, body: unknown) =>
