@@ -43,13 +43,17 @@ def model_class(stain: str, frame: pd.DataFrame) -> np.ndarray:
 
 
 def found(project, core_id: str, stain: str) -> pd.DataFrame:
-    """Every candidate of the core image as the viewer's object rows (x, y in core pixels)."""
+    """Every candidate of the core image as the viewer's object rows (x, y in core pixels), with its label class (`class`,
+    `subtype`: label-vocabulary ids, empty for rejected ones), so the viewer colours it as every other page does."""
     frame = candidates.read_core(project, stain, core_id, COLUMNS)
     if frame.empty:
-        return pd.DataFrame(columns=["x", "y", "radius_px", "model_class", "probability", "area_um2", "reason", "candidate_id"])
+        return pd.DataFrame(columns=["x", "y", "radius_px", "model_class", "probability", "area_um2", "reason", "candidate_id", "class", "subtype"])
+    accepted = frame.decision.eq("accepted")
+    text = lambda column: frame[column].fillna("").astype(str).where(accepted, "") if column in frame else ""  # noqa: E731
     return pd.DataFrame({"x": frame.x_core.round(1), "y": frame.y_core.round(1), "radius_px": frame.radius_px.round(1),
                          "model_class": model_class(stain, frame), "probability": pd.to_numeric(frame.probability, errors="coerce").round(3),
-                         "area_um2": frame.area_um2.round(1), "reason": frame.reason.fillna(""), "candidate_id": frame.candidate_id})
+                         "area_um2": frame.area_um2.round(1), "reason": frame.reason.fillna(""), "candidate_id": frame.candidate_id,
+                         "class": text("class"), "subtype": text("subtype")})
 
 
 OUTLINE_CHOICES = ("default", "stain", "sam0", "sam1", "sam2")  # which outline the core viewer draws for every candidate

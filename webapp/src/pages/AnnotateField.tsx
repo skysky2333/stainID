@@ -8,7 +8,7 @@ import { useFetch, useStored } from '../hooks'
 import { AI_VIEW_FOR_LABELLERS } from '../labelling'
 import type { ClassPick } from '../labels/classKeys'
 import { classText, resolveClass, roleOf } from '../labels/classKeys'
-import { ClassChooser, ClassKeyHint, useClassKeys } from '../labels/classes'
+import { ClassChooser, ClassKeyHint, classColour, useClassKeys } from '../labels/classes'
 import { FieldThumb } from '../labels/fields'
 import { QuickCheck } from '../labels/quickcheck'
 import { CheckCalls } from '../labels/checkcalls'
@@ -21,7 +21,6 @@ import { useFirstTutorial } from '../labels/tutorial'
 import type { ImagePoint } from '../viewer'
 import { RASTER_LAYERS, ZoomViewer } from '../viewer'
 
-const COLORS = ['#ff4fd8', '#ff8c1a', '#facc15', '#4ade80', '#a78bfa', '#f87171', '#e2e8f0', '#22d3ee', '#2dd4bf']
 type Tool = 'label' | 'add' | 'outline'
 const TOOLS: { id: Tool; needs: string; key: string; name: string; hint: string }[] = [
   { id: 'label', needs: 'class', key: 'v', name: 'Label objects', hint: 'Click an object to give it the chosen class. Dashed = detection’s call, not yet checked by you; solid = your decision. Click again with the same class to go back to detection’s call.' },
@@ -165,8 +164,7 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
 
   const classKeys = useClassKeys(keys, waitMs, setLabel)
   useEffect(() => { if (classKeys.waiting) setLabel({ identity: classKeys.waiting.identity, subtype: null }) }, [classKeys.waiting])
-  const order = useMemo(() => [...vocabulary.classes].sort((a, b) => Number(a.role !== 'positive') - Number(b.role !== 'positive')).map((c) => c.id), [vocabulary])
-  const color = (v: ClassPick | undefined) => (v ? COLORS[Math.max(0, order.indexOf(v.identity)) % COLORS.length] : '#ffffff')
+  const color = (v: ClassPick | undefined) => (v ? classColour(vocabulary, v.identity) : '#ffffff')  // the same colour on every page
   const negativePick = (v: ClassPick | undefined) => !v || roleOf(vocabulary, v.identity) !== 'positive'
   const pickOf = (m: Label | undefined) => (m ? resolveClass(vocabulary, m.value, m.subtype) : undefined)
   const aiPick = (o: FieldObjectLite | undefined) => (o?.ai_value ? resolveClass(vocabulary, o.ai_value) : undefined)

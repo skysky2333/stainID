@@ -10,6 +10,7 @@ import { Progress } from '../components'
 import type { ClassPick, KeyMap, Vocabulary } from './classKeys'
 import { classText } from './classKeys'
 import { ClassKeyHint, useClassKeys } from './classes'
+import { CLASS_COLOURS, INACTIVE_GREY, classColour } from '../classPalette'
 
 export const ROUND_TITLE: Record<1 | 2, string> = { 1: 'Check detection’s calls', 2: 'Fix the field' }
 export const ROUND_TEXT: Record<1 | 2, string> = {
@@ -220,17 +221,9 @@ export function polygonArea(points: number[][]) {
 
 /* ---------- how a candidate looks, by its call (the same in both rounds) ---------- */
 
-export const GREY = '#d0d4da'  // not active (rejected, removed, or new without a class yet): dotted light grey on a dark halo, never hidden
-export const UNSURE_COLOUR = '#ffffff'  // unsure (0): a chosen category like the others, solid in its own colour
-/** Colours drawn on the tissue: saturated, far from DAB brown and haematoxylin blue, each class its own. */
-export const TISSUE_COLOURS = ['#ff2bd6', '#ffe600', '#00e5ff', '#7cff3a', '#b98cff', '#ff4d4d', '#ffa64d', '#9dffe0']
-
-/** A class's colour on the tissue, from its place among the stain's classes (positive classes first), so it keeps it. */
-export function tissueColour(vocabulary: Vocabulary, identity: string | undefined): string {
-  const order = [...vocabulary.classes].filter((c) => c.role !== 'skip').sort((a, b) => Number(a.role !== 'positive') - Number(b.role !== 'positive'))
-  const i = order.findIndex((c) => c.id === identity)
-  return i < 0 ? GREY : TISSUE_COLOURS[i % TISSUE_COLOURS.length]
-}
+export const GREY = INACTIVE_GREY  // not active (rejected, removed, or new without a class yet): dotted light grey on a dark halo, never hidden
+/** A class's colour, on the tissue as on every page (classPalette.ts). */
+export const tissueColour = classColour
 
 /** The annotation pages take the window exactly (no page scrollbar, which would fight panning the picture). */
 export function useFitScreen() {
@@ -247,7 +240,7 @@ export type Look = 'class' | 'removed' | 'unsure' | 'new'
 export function lookOf(vocabulary: Vocabulary, removeClass: string, identity: string | null | undefined): { look: Look; colour: string; dash: boolean } {
   if (!identity) return { look: 'new', colour: GREY, dash: true }
   const role = vocabulary.classes.find((c) => c.id === identity)?.role
-  if (role === 'skip') return { look: 'unsure', colour: UNSURE_COLOUR, dash: false }
+  if (role === 'skip') return { look: 'unsure', colour: classColour(vocabulary, identity), dash: false }
   if (identity === removeClass) return { look: 'removed', colour: GREY, dash: true }
   return { look: 'class', colour: tissueColour(vocabulary, identity), dash: false }
 }
@@ -322,7 +315,10 @@ export function ClassLegend({ vocabulary, keys, removeClass, waiting }: { vocabu
         <li key={c.id} title={c.description}><span className="kbd key-slot">{keyOf(c.id) ?? 'Del'}</span>
           <span className="look-swatch look-removed" style={{ borderColor: GREY }} /><span className="ellipsis">{c.name} — dotted grey{keyOf(c.id) ? ' (or Del)' : ''}</span></li>
       ))}
-      <li><span className="kbd key-slot">0</span><span className="look-swatch look-unsure" style={{ borderColor: UNSURE_COLOUR, background: UNSURE_COLOUR }} />unsure</li>
+      {vocabulary.classes.filter((c) => c.role === 'skip' && !c.hidden).slice(0, 1).map((c) => (
+        <li key={c.id} title={c.description}><span className="kbd key-slot">0</span>
+          <span className="look-swatch look-unsure" style={{ borderColor: classColour(vocabulary, c.id), background: classColour(vocabulary, c.id) }} />{c.name}</li>
+      ))}
     </ul>
   )
 }
@@ -331,7 +327,7 @@ export function ClassLegend({ vocabulary, keys, removeClass, waiting }: { vocabu
 export function LookLegend() {
   return (
     <ul className="look-legend small secondary">
-      <li><span className="look-swatch" style={{ borderColor: TISSUE_COLOURS[0], background: TISSUE_COLOURS[0] }} />solid, in the class colour: counts as that class</li>
+      <li><span className="look-swatch" style={{ borderColor: CLASS_COLOURS[0], background: CLASS_COLOURS[0] }} />solid, in the class colour: counts as that class</li>
       <li><span className="look-swatch look-removed" style={{ borderColor: GREY }} />dotted grey: rejected by detection or removed — a class key brings it back</li>
       <li><span className="look-swatch look-new" style={{ borderColor: GREY }} /><span className="look-diamond" aria-hidden="true" />dotted grey with a diamond: new, choose its class</li>
     </ul>

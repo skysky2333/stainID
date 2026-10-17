@@ -7,6 +7,7 @@ import type { AiVerdict, ClassGroup, LabelledObject, SessionObjects } from '../a
 import { api, apiUrl, enc, fieldImage } from '../api'
 import { Empty, ErrorNote, Loaded, Loading, Modal, Progress, fmt, timeAgo, withError } from '../components'
 import { useFetch } from '../hooks'
+import { slotColour } from '../classPalette'
 import { useProject } from '../project'
 import { Advanced } from '../setup/parts'
 
@@ -18,7 +19,7 @@ type AiFilter = '' | 'disagrees' | 'type' | 'unknown'
  *  colour whatever is shown. */
 export const classColor = (groups: ClassGroup[], value: string) => {
   const group = groups.find((g) => g.keys.includes(value))
-  return !group || group.colour == null ? 'var(--text-muted)' : `var(--series-${(group.colour % 8) + 1})`
+  return !group || group.colour == null ? 'var(--text-muted)' : slotColour(group.colour)
 }
 
 /** A class under its identity's chip, without the identity's name: "pretangle", "type not recorded". */

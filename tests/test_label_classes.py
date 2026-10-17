@@ -156,6 +156,22 @@ def test_the_page_logic_of_the_keys(tmp_path):
     assert done.returncode == 0, done.stdout + done.stderr
 
 
+def test_every_page_gives_a_class_the_same_colour():
+    """One palette for every page (webapp/src/classPalette.ts), in the order of `class_groups`, run by Node when installed."""
+    node = shutil.which("node") or str(Path.home() / ".local/node/bin/node")
+    if not Path(node).exists():
+        pytest.skip("Node.js is not installed")
+    script = Path(__file__).parent / "js" / "class_palette.test.ts"
+    done = subprocess.run([node, "--experimental-strip-types", "--no-warnings", str(script)], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stdout + done.stderr
+    from stainid.api.routes.annotate import class_groups
+
+    words = vocabulary.defaults("AT8")
+    slots = {g["id"]: g["colour"] for g in class_groups(words, set())}
+    order = sorted(words.classes, key=lambda c: c.role != vocabulary.POSITIVE)
+    assert all(slots[c.id] == i for i, c in enumerate(order) if c.id in slots)  # the slots the page turns into colours
+
+
 # ---------- the classes in the settings, and labelling with them ----------
 
 pytest.importorskip("fastapi")

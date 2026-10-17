@@ -9,6 +9,8 @@ import { useFetch, useStored } from '../hooks'
 import { useProject } from '../project'
 import { Advanced } from '../setup/parts'
 import { CLASS_STYLE, RASTER_LAYERS } from '../viewer'
+import { INACTIVE_GREY, MODEL_CLASSES, classColour } from '../classPalette'
+import type { Vocabulary } from '../labels/classKeys'
 
 interface CoreInfo extends CoreDetail {
   images: (CoreDetail['images'][number] & { pixel_width_um?: number })[]
@@ -49,7 +51,7 @@ interface CoreThreads {
   pieces: number; length_mm: number; measured: ThreadTotals | null; rows: [number, number[]][]; error?: string; ahead?: number
 }
 interface Outline { area: number | null; rings: number[][] }
-interface Found { index: number; x: number; y: number; r: number; cls: string; p: number | null; area: number | null; outline?: Outline; reason?: string }
+interface Found { index: number; x: number; y: number; r: number; cls: string; color: string; p: number | null; area: number | null; outline?: Outline; reason?: string }
 
 // exact outlines are drawn instead of circles wherever the Outline objects step has made them; every candidate is shown,
 // rejected ones dotted grey (stored under a new key, so the choice of hiding them made before applies no more)
@@ -57,14 +59,18 @@ const LAYER_DEFAULTS = { objects: true, rejected: true, outlines: true, threads:
 type Layers = typeof LAYER_DEFAULTS
 /* The colours of the objects on the core picture: saturated, and clear of DAB brown and haematoxylin blue, each drawn
    over a thin dark halo (deepzoom.tsx). Rejected candidates are dotted light grey. The names stay those of CLASS_STYLE. */
-const OBJECT_COLOR: Record<string, string> = {
-  neuron: '#00e5ff', rejected: '#d0d4da', compact: '#ff2bd6', diffuse: '#ffe600', small_plaque: '#ffffff',
-  tau_neuron_ring: '#7cff3a', tau_neuron_dense: '#ffe600', unproposed: '#b98cff',
+const UNPROPOSED_COLOR = '#b98cff'  // stained areas no candidate covers: no label class
+/** An object's colour: its label class's, the same on every page (classPalette.ts; the store's class, else detection's
+ *  class name mapped onto the label classes); rejected candidates dotted light grey. */
+function objectColor(vocabulary: Vocabulary | undefined, cls: string, identity?: string): string {
+  if (cls === 'rejected') return INACTIVE_GREY
+  if (cls === 'unproposed') return UNPROPOSED_COLOR
+  const id = identity && vocabulary?.classes.some((c) => c.id === identity) ? identity : MODEL_CLASSES[cls]?.[0]
+  return vocabulary && id ? classColour(vocabulary, id) : CLASS_STYLE[cls]?.color ?? '#ffffff'
 }
-const colorOf = (cls: string) => OBJECT_COLOR[cls] ?? CLASS_STYLE[cls]?.color ?? '#ffffff'
 /** A legend swatch drawn as the object is (dotted grey for rejected candidates). */
-const swatchOf = (cls: string) => (cls === 'rejected' ? { background: 'transparent', border: `2px dotted ${colorOf(cls)}`, boxShadow: '0 0 0 1px rgb(0 0 0 / 35%)' }
-  : { background: colorOf(cls), boxShadow: '0 0 0 1px rgb(0 0 0 / 35%)' })
+const swatchOf = (color: string, dotted = false) => (dotted ? { background: 'transparent', border: `2px dotted ${color}`, boxShadow: '0 0 0 1px rgb(0 0 0 / 35%)' }
+  : { background: color, boxShadow: '0 0 0 1px rgb(0 0 0 / 35%)' })
 const TILE_COLOR = 'rgb(30 30 30 / 55%)'
 const THREAD_COLOR = '#00e5ff'  // cyan over a dark halo: the shared mid blue of RASTER_LAYERS.threads vanished on haematoxylin
 const TRACING = ['waiting', 'tracing']
@@ -131,6 +137,8 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
   const [poll, setPoll] = useState(true)
   const picture = useFetch<PictureState>(`${base}/picture`, poll ? 1500 : undefined)
   const found = useFetch<CoreObjects>(`${base}/objects`)
+  const defaults = useFetch<{ vocabularies: Record<string, Vocabulary> }>('/api/labels/defaults')  // the label classes, for their colours
+  const vocabulary = defaults.data?.vocabularies[stain]
   const [stored, setLayers] = useStored<Layers>('stainid.core.layers.v4', LAYER_DEFAULTS)
   const layers = { ...LAYER_DEFAULTS, ...stored }
   const outlinesMade = !!found.data?.outlines
@@ -183,9 +191,11 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
     const col = Object.fromEntries(data.columns.map((c, i) => [c, i]))
     const outlines = new Map((shapes.data?.rows ?? []).map(([x, y, area, rings]) => [`${x},${y}`, { area, rings }]))
     return data.rows.map((r, index) => ({ index, x: Number(r[col.x]), y: Number(r[col.y]), r: Number(r[col.radius_px] ?? 6), cls: String(r[col.model_class]),
+      color: objectColor(vocabulary, String(r[col.model_class]), col.class === undefined ? undefined : String(r[col.class] ?? '')),
       p: r[col.probability] === null ? null : Number(r[col.probability]), area: r[col.area_um2] === null ? null : Number(r[col.area_um2]),
       outline: outlines.get(`${r[col.x]},${r[col.y]}`), reason: col.reason === undefined ? undefined : String(r[col.reason] ?? '') }))
-  }, [found.data, shapes.data])
+  }, [found.data, shapes.data, vocabulary])
+  const colorOfClass = useMemo(() => Object.fromEntries(objects.map((o) => [o.cls, o.color])), [objects])
   const counts = useMemo(() => objects.reduce<Record<string, number>>((acc, o) => ({ ...acc, [o.cls]: (acc[o.cls] ?? 0) + 1 }), {}), [objects])
   const classes = Object.keys(counts).filter((c) => c !== 'rejected').sort()
   const showOutlines = layers.outlines && outlinesMade && !!shapes.data
@@ -194,10 +204,10 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
   // an object with an exact outline shown is drawn by its outline instead of the circle
   const marks = useMemo<Mark[]>(() => drawn.map((o) => {
     const outlined = showOutlines && !!o.outline
-    return { x: o.x, y: o.y, r: o.r, color: colorOf(o.cls), dashed: o.cls === 'rejected', rings: outlined ? o.outline!.rings : undefined, circle: !outlined }
+    return { x: o.x, y: o.y, r: o.r, color: o.color, dashed: o.cls === 'rejected', rings: outlined ? o.outline!.rings : undefined, circle: !outlined }
   }), [drawn, showOutlines])
   const regions = useMemo<Mark[]>(() => (layers.unproposed && stainedOnly.data ? stainedOnly.data.rows.map(([x, y, , , rings]) =>
-    ({ x, y, color: colorOf('unproposed'), rings, circle: false })) : []), [layers.unproposed, stainedOnly.data])
+    ({ x, y, color: UNPROPOSED_COLOR, rings, circle: false })) : []), [layers.unproposed, stainedOnly.data])
   const shown = useMemo(() => [...marks, ...regions], [marks, regions])
   const lines = useMemo<Line[]>(() => (layers.threads && traced.data ? traced.data.rows.map(([width, points]) => ({ points, width: threadLine(width) })) : []),
     [layers.threads, traced.data])
@@ -247,13 +257,13 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
                 <b>What detection found</b><span className="spacer" /><span className="muted">{(objects.length - (counts.rejected ?? 0)).toLocaleString()}</span></label>
               {classes.map((c) => (
                 <div key={c} className="layer-toggle indent">
-                  <span className="swatch" style={swatchOf(c)} />{CLASS_STYLE[c]?.label ?? c}<span className="spacer" /><span className="muted">{counts[c].toLocaleString()}</span>
+                  <span className="swatch" style={swatchOf(colorOfClass[c] ?? objectColor(vocabulary, c))} />{CLASS_STYLE[c]?.label ?? c}<span className="spacer" /><span className="muted">{counts[c].toLocaleString()}</span>
                 </div>
               ))}
               {!!counts.rejected && (
                 <label className="layer-toggle indent" title="Candidates detection looked at and decided were not real objects (drawn dotted grey)">
                   <input type="checkbox" checked={layers.rejected} disabled={!layers.objects} onChange={() => toggle('rejected')} />
-                  <span className="swatch" style={swatchOf('rejected')} />also show rejected candidates<span className="spacer" /><span className="muted">{counts.rejected.toLocaleString()}</span>
+                  <span className="swatch" style={swatchOf(INACTIVE_GREY, true)} />also show rejected candidates<span className="spacer" /><span className="muted">{counts.rejected.toLocaleString()}</span>
                 </label>
               )}
               <OutlinesToggle made={outlinesMade} on={layers.outlines} onToggle={() => toggle('outlines')} state={shapes}
@@ -270,7 +280,7 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
         {pick && (
           <div className="card">
             <h3>Selected object</h3>
-            <p className="row" style={{ margin: '0 0 6px' }}><span className="swatch" style={swatchOf(pick.cls)} /><b>{CLASS_STYLE[pick.cls]?.label ?? pick.cls}</b></p>
+            <p className="row" style={{ margin: '0 0 6px' }}><span className="swatch" style={swatchOf(pick.color, pick.cls === 'rejected')} /><b>{CLASS_STYLE[pick.cls]?.label ?? pick.cls}</b></p>
             <dl className="facts">
               {pick.p !== null && <><dt>Detection score</dt><dd>{Math.round(pick.p * 100)}%</dd></>}
               {pick.reason && <><dt>Why</dt><dd>{reasonText(pick.reason)}</dd></>}
@@ -376,7 +386,7 @@ function UnproposedToggle({ count, on, onToggle, state }: {
     <>
       <label className="layer-toggle" title="Brown areas above this slide's threshold, at least the size of an object, that detection never looked at">
         <input type="checkbox" checked={on} onChange={onToggle} />
-        <span className="swatch" style={swatchOf('unproposed')} />Stained but never proposed<span className="spacer" />
+        <span className="swatch" style={swatchOf(UNPROPOSED_COLOR)} />Stained but never proposed<span className="spacer" />
         <span className="muted">{count.toLocaleString()}</span>
       </label>
       {on && !state.data && !state.error && <div className="layer-toggle indent"><Loading inline label="Loading the stained areas…" /></div>}
@@ -442,7 +452,7 @@ function ObjectList({ objects, selected, onPick }: { objects: Found[]; selected:
           <tbody>
             {sorted.slice(page * size, (page + 1) * size).map((o) => (
               <tr key={o.index} className={`clickable${o.index === selected ? ' selected' : ''}`} onClick={() => onPick(o)}>
-                <td><span className="swatch" style={swatchOf(o.cls)} /> {CLASS_STYLE[o.cls]?.short ?? o.cls}</td>
+                <td><span className="swatch" style={swatchOf(o.color, o.cls === 'rejected')} /> {CLASS_STYLE[o.cls]?.short ?? o.cls}</td>
                 <td className="num">{o.p === null ? '—' : `${Math.round(o.p * 100)}%`}</td><td className="num">{o.area === null ? '—' : area(o.area)}</td>
               </tr>
             ))}

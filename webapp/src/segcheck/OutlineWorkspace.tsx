@@ -10,13 +10,14 @@ import { api, apiUrl, enc } from '../api'
 import { ErrorNote, Loaded, Modal, Progress, fmt } from '../components'
 import { useFetch, useStored } from '../hooks'
 import { useFitScreen } from '../labels/rounds'
+import { CLASS_COLOURS, classColour } from '../classPalette'
+import type { Vocabulary } from '../labels/classKeys'
 import { objectsOf } from '../labelling'
 import type { ImagePoint } from '../viewer'
 import { ZoomViewer } from '../viewer'
 import type { OutlineClass, OutlineField, OutlineObject, OutlineReference, SamOptions, SamStatus } from './types'
 
 /* drawn on the tissue picture, so the same in light and dark mode */
-const COLORS = ['#ff4fd8', '#ff8c1a', '#facc15', '#4ade80', '#a78bfa', '#f87171']
 const UNSURE_COLOR = '#e2e8f0'
 const REFERENCE_COLOR = '#22d3ee'
 const BOX_COLOR = '#ffd21f'
@@ -104,7 +105,9 @@ function Outliner({ detail, reload, tile, field }: { detail: SessionDetail; relo
   const [showCandidates, setShowCandidates] = useState(false)
   const reference = useFetch<OutlineReference>(showCounted || showCandidates ? `/api/annotate/${name}/outline/${enc(tile)}/reference` : null)
   const label = classes[labelIndex] ?? classes[0]
-  const color = (value: string) => (!scored(value) ? UNSURE_COLOR : COLORS[Math.max(0, classes.indexOf(value)) % COLORS.length])
+  const vocabularyOf = (meta as typeof meta & { vocabulary?: Vocabulary }).vocabulary
+  const color = (value: string) => (vocabularyOf?.classes.some((c) => c.id === value) ? classColour(vocabularyOf, value)  // the same colour on every page
+    : !scored(value) ? UNSURE_COLOR : CLASS_COLOURS[Math.max(0, classes.indexOf(value)) % CLASS_COLOURS.length])
   /** The key of a class: 1, 2, … for the classes that count, 0 for "unsure" (as on every labelling page). */
   const keyFor = (value: string) => {
     if (!scored(value)) return '0'
@@ -381,7 +384,7 @@ function Outliner({ detail, reload, tile, field }: { detail: SessionDetail; relo
             {samReady && !prepared && tool === 'click' && <p className="muted small sam-preparing" aria-live="polite">Preparing outlines…</p>}
             {!samReady && <p className="small warning-note">Click-to-outline is not available here, so draw each outline by hand.</p>}
             <ul className="look-legend small secondary">
-              <li><span className="look-swatch" style={{ borderColor: COLORS[0], background: COLORS[0] }} />solid, in the class colour: your outlines</li>
+              <li><span className="look-swatch" style={{ borderColor: color(classes[0] ?? ''), background: color(classes[0] ?? '') }} />solid, in the class colour: your outlines</li>
               <li><span className="look-swatch" style={{ borderColor: REFERENCE_COLOR, background: REFERENCE_COLOR }} />what detection counted</li>
             </ul>
           </div>

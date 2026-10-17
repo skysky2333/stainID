@@ -6,6 +6,9 @@ import type { CSSProperties } from 'react'
 import type { ClassDef, ClassPick, KeyMap, Vocabulary, Waiting } from './classKeys'
 import { expire, keyOf, pressKey } from './classKeys'
 import { classExample } from '../api'
+import { classColour } from '../classPalette'
+
+export { classColour }
 
 /** The class keys of a labelling page: what was answered (`onAnswer`, in order) and which class waits for its type.
  *  `waitMs` 0: a class with types waits until its type (or no type) is chosen. */
@@ -52,12 +55,6 @@ export function useClassKeys(keys: KeyMap, waitMs: number, onAnswer: (pick: Clas
   return useMemo(() => ({ waiting, press, pick, pickType, cancel }), [waiting, press, pick, pickType, cancel])
 }
 
-/** One colour per class, from its place among the stain's classes (positive classes first), so it keeps its colour. */
-export function classColour(vocabulary: Vocabulary, identity: string | undefined): string {
-  const order = [...vocabulary.classes].sort((a, b) => Number(a.role !== 'positive') - Number(b.role !== 'positive'))
-  const i = order.findIndex((c) => c.id === identity)
-  return i < 0 ? 'var(--text-muted)' : `var(--series-${(i % 8) + 1})`
-}
 
 const shownTypes = (c: ClassDef, typesAsked: boolean) => (typesAsked ? c.subtypes.filter((s) => !s.hidden) : [])
 
