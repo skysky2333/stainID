@@ -3,6 +3,7 @@ import type { OpenSession } from '../api'
 import { Empty, Loaded, PageHead, Progress } from '../components'
 import { useFetch } from '../hooks'
 import { KIND_TEXT } from '../labelling'
+import { AREAS_TEXT, AREAS_TITLE } from '../labels/markareas'
 import { ROUND_TEXT, ROUND_TITLE } from '../labels/rounds'
 import { Register, useSession } from '../session'
 import { useFirstTutorial } from '../labels/tutorial'
@@ -17,7 +18,8 @@ export default function AnnotateHome() {
       <PageHead title="Choose a session" subtitle="You can stop and come back at any time: use the same name to continue where you left off." />
       <Loaded state={list} label="Loading sessions…">
         {(sessions) => sessions.length ? (() => {
-          const rounds = [...sessions.filter((s) => s.round)].sort((a, b) => (b.round ?? 0) - (a.round ?? 0))  // the field tool first
+          const rank = (s: OpenSession) => (s.round === 'areas' ? 0.5 : s.round ?? 0)  // the field tool first, then calls, then bad areas
+          const rounds = [...sessions.filter((s) => s.round)].sort((a, b) => rank(b) - rank(a))
           const older = sessions.filter((s) => !s.round)
           return <>
             {rounds.length > 0 && <div className="grid grid-2">{rounds.map((s) => <SessionCard key={s.name} s={s} />)}</div>}
@@ -44,13 +46,15 @@ function SessionCard({ s }: { s: OpenSession }) {
   return (
     <div className="card annotate-session">
       <h2 style={{ margin: 0 }}>{s.title}</h2>
-      <p className="muted small" style={{ margin: '4px 0 10px' }}>{s.stain} · {s.round ? `Round ${s.round} · ${ROUND_TITLE[s.round]}` : KIND_TEXT[s.kind]}</p>
+      <p className="muted small" style={{ margin: '4px 0 10px' }}>{s.round === 'areas' ? `Every stain · ${AREAS_TITLE}`
+        : `${s.stain} · ${s.round ? `Round ${s.round} · ${ROUND_TITLE[s.round]}` : KIND_TEXT[s.kind as keyof typeof KIND_TEXT]}`}</p>
       {s.instructions && <p className="small secondary">{s.instructions}</p>}
       {progress ? <>
         <Progress done={progress.decided} total={progress.total} />
         <p className="small secondary">{finished ? 'Everything here has been checked — thank you!'
-          : `${progress.decided.toLocaleString()} of ${progress.total.toLocaleString()} fields done by everyone${s.my_labels ? ` · ${s.my_labels.toLocaleString()} answers by you` : ''}`}</p>
-        <p className="small muted" style={{ marginTop: 0 }}>{s.round === 1 ? ROUND_TEXT[1] : ROUND_TEXT[2]}</p>
+          : s.round === 'areas' ? `${progress.decided.toLocaleString()} of ${progress.total.toLocaleString()} cores checked by everyone`
+            : `${progress.decided.toLocaleString()} of ${progress.total.toLocaleString()} fields done by everyone${s.my_labels ? ` · ${s.my_labels.toLocaleString()} answers by you` : ''}`}</p>
+        <p className="small muted" style={{ marginTop: 0 }}>{s.round === 'areas' ? AREAS_TEXT : s.round === 1 ? ROUND_TEXT[1] : ROUND_TEXT[2]}</p>
       </> : s.kind !== 'queue' ? <>
         <Progress done={s.done_by_me} total={s.fields} />
         <p className="small secondary">{finished ? 'You have finished every field — thank you!' : `${s.done_by_me} of ${s.fields} fields finished by you`}</p>

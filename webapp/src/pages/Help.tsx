@@ -43,14 +43,41 @@ const FAQ: [string, ReactNode][] = [
     (it ends in /annotate and names the study). They type their name and work in their own browser, with no password. Someone new first gets a short practice
     tutorial. Each person is handed a field nobody else is on, so no one does the same work twice; you follow their progress and download the labels on the
     same page.</>],
-  ['How does labelling work?', <>What stainID detection found is already on the picture: objects with a class are solid in its colour, objects it rejected (or someone removed) dotted grey.
-    Point at an object and press a key: <b>1–9</b> its class, <b>0</b> unsure, <b>Delete</b> not an object, <b>Tab</b> / <b>Shift+Tab</b> a bigger or smaller
-    outline, a <b>click</b> on the object to edit the outline spot by spot (a click outside keeps it), <b>Space</b> to hide the drawings for a clean look, <b>E</b> to paint bad areas (1–4 their type; Shift-drag clears, also a detected fold that is fine), <b>Z</b> undo. In <b>Fix the field</b>, clicking empty tissue outlines a missed object. Nothing
-    is saved until <b>Save</b> or <b>Save and continue</b>; unsaved changes come back after a reload. The keys are always shown in the side panel.</>],
+  ['How does labelling work?', <>What stainID detection found is already on the picture: each type solid in its own colour, objects it rejected dotted grey.
+    Point at an object and press one key: a <b>number</b> picks a counted type, a <b>letter</b> a named look-alike, <b>Del</b> rejects it (dotted grey,
+    like detection’s own rejects; a number makes it solid again), <b>`</b> unsure (dotted amber with “?”, left out of training and evaluation).
+    <b>Tab</b> / <b>Shift+Tab</b> a bigger or smaller outline, a <b>click</b> on the object to edit the outline spot by spot (a click outside or Enter
+    keeps it), <b>Space</b> to hide the drawings for a clean look, <b>B</b> the brush for bad areas, <b>Z</b> undo. In <b>Fix the field</b>, clicking empty
+    tissue outlines a missed object. Nothing is saved until <b>Save</b> or <b>Save and continue</b>; unsaved changes come back after a reload. The keys
+    are always shown in the side panel.</>],
+  ['Which key is which type?', <>The same on every labelling page, shown in the side panel:
+    <ul className="help-keys">
+      <li><b>6E10</b>: plaques <b>1</b> compact (dense-core), <b>2</b> diffuse, <b>3</b> cored-neuritic, <b>4</b> small (too small to type) · not plaques
+        {' '}<b>Q</b> CAA, <b>W</b> staining inside a neuron · <b>Del</b> not a plaque · <b>`</b> unsure</li>
+      <li><b>AT8</b>: tau+ neurons <b>1</b> pretangle, <b>2</b> mature tangle, <b>3</b> ghost tangle · not tau+ neurons <b>Q</b> neuritic crown,
+        {' '}<b>W</b> tau in an astrocyte, <b>E</b> thread · <b>Del</b> not tau · <b>`</b> unsure</li>
+      <li><b>NeuN</b>: <b>1</b> neuron · <b>Del</b> not a neuron · <b>`</b> unsure (how strongly a neuron is stained is measured, not chosen)</li>
+    </ul>
+    Only the numbers are counted (together they are “plaque” or “tau+ neuron”); the letters name what looks like one but is not. <b>0</b> also means
+    unsure and <b>Backspace</b> also rejects. With the brush on (<b>B</b>), <b>1</b>–<b>4</b> are the area types instead (fold or damage, artifact,
+    no tissue, out of focus or bad staining) and the class keys rest. Classes you add in <Link to="/settings#label-classes">Settings</Link> get
+    {' '}<b>5</b>–<b>9</b> (counted types) or <b>T Y U …</b> (look-alikes). Debris is <b>Del</b>, unclear is <b>`</b>, and bad areas are painted with the brush.</>],
+  ['What happens to the bad areas people mark?', <>Like every label, they only teach and test models: they train and score the bad-area detection
+    (<Link to="/models">Models</Link> → Bad-area detector: detection’s areas against people’s, per TMA and donor), and objects inside them are left out of
+    training and scoring. The analysis always uses detection’s own areas (hatched, “Excluded from analysis” on the Cores view), so marking an area never
+    changes a result or makes a step out of date. People’s areas are outlined on top: painted ones in their type’s colour, the parts marked fine dashed
+    green. <b>Mark bad areas</b> (a kind of session) goes core by core with all its stains; a sample of cores is enough.</>],
+  ['Which keys work on the Cores view and in Mark bad areas?', <>
+    <b>Cores view</b>: <b>Space</b> hides or shows everything drawn (the minimap stays), <b>←</b> / <b>→</b> the previous or next core with the same stain and
+    layers, <b>↑</b> / <b>↓</b> move the picture, scroll zooms, drag moves, click an object for its details; on the minimap a click or drag moves there and a
+    double-click opens that tile for annotation. <b>Mark bad areas</b>: the brush is always on — <b>1</b>–<b>4</b> the area type, drag paints, Shift-drag
+    marks fine, the wheel changes the brush (Ctrl/⌘+wheel or <b>+</b> / <b>−</b> zooms), the middle button pans, <b>Z</b> undoes a stroke, <b>Space</b> hides
+    the drawings, <b>Tab</b> / <b>Shift+Tab</b> or <b>]</b> / <b>[</b> the next or previous stain, <b>Enter</b> says this stain is fine and moves on (on the last
+    stain it saves and opens the next core).</>],
   ['A labelling session says no core has detection’s candidates.', <>The annotation rounds show the candidates of the staged detection. Run the
     <b>Detect</b> steps on the <Link to="/workflow">Run</Link> page for that stain first (at least <b>Find candidates</b> and <b>Decide</b>; <b>Run what’s left</b> runs them).</>],
-  ['A Detect step says some cores are out of date.', <>Something those cores were made from changed after they ran: a setting, a model, a hand-drawn
-    exclusion or an earlier step. Run the step again: it redoes only the out-of-date cores and keeps the rest.</>],
+  ['A Detect step says some cores are out of date.', <>Something those cores were made from changed after they ran: a setting, a model or an earlier
+    step. (Areas people mark never make a step out of date: the analysis uses detection’s own.) Run the step again: it redoes only the out-of-date cores and keeps the rest.</>],
   ['Who can sign in?', <>Everything except the annotation pages needs the admin password, from this computer or any other. It is <b>admin</b> until you
     change it in <Link to="/settings">Settings</Link>.</>],
   ['Is anything deleted?', <>No. <b>Start over</b> and uploads move old files aside with a date in their name; nothing is removed.

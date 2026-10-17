@@ -598,13 +598,29 @@ button.core-cell:focus-visible { outline: 2px solid var(--accent); outline-offse
    side panel, and the column's width when they stack. */
 .core-layout { --core-square: max(320px, calc(100dvh - 250px)); display: grid; grid-template-columns: minmax(0, calc(var(--core-square) + 26px)) minmax(270px, 380px);
   gap: 16px; align-items: start; }
-.core-side { display: grid; gap: 12px; }
+.core-side { display: grid; gap: 12px; align-content: start; }
 .core-side .advanced { margin: 0; }
+/* Side by side, the page fits the window (CoreView's useFitWindow measures --core-square and --core-side): the side
+   panel scrolls within the picture's height. */
+@media (min-width: 1181px) {
+  .core-side { max-height: var(--core-side, none); overflow-y: auto; overscroll-behavior: contain; padding-right: 2px; }
+}
 @media (max-width: 1180px) {
   .core-layout { grid-template-columns: minmax(0, 1fr); }
   .core-side { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); align-items: start; }
 }
-.core-picture { padding: 12px; }
+.core-picture { padding: 12px; position: relative; }
+.core-picture .dz-tip { white-space: pre-line; max-width: 300px; }
+.core-fixed-outline { position: absolute; pointer-events: none; overflow: hidden; z-index: 2; }
+.minimap-card { display: grid; gap: 6px; padding: 10px 12px; }
+.minimap { display: block; width: 100%; max-width: 256px; margin-inline: auto; aspect-ratio: 1 / 1; border-radius: 6px; background: var(--surface-0);
+  border: 1px solid var(--border); cursor: crosshair; touch-action: none; }
+.minimap-legend { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 2px 12px; }
+.minimap-legend li { display: flex; align-items: center; gap: 6px; }
+.minimap-legend li:first-child { grid-column: 1 / -1; }
+.minimap-legend .spacer { flex: 1; }
+.minimap-swatch { width: 12px; height: 12px; border: 1px solid rgb(0 0 0 / 30%); }
+.minimap-areas { margin: 0; }
 .core-picture .dz, .core-picture .dz-preparing { width: min(100%, var(--core-square)); aspect-ratio: 1 / 1; height: auto; margin-inline: auto; }
 .layer-toggle.indent { padding-left: 22px; color: var(--text-secondary); }
 .layer-toggle input:disabled + .swatch { opacity: 0.5; }
@@ -618,8 +634,6 @@ button.core-cell:focus-visible { outline: 2px solid var(--accent); outline-offse
 .dz-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .dz-zoom-buttons { gap: 6px; }
 .dz-toolbar-info { gap: 6px 12px; flex-wrap: wrap; }
-.outline-choice { display: inline-flex; align-items: center; gap: 6px; }
-.outline-choice select { font: inherit; padding: 2px 4px; }
 .dz-zoom { min-width: 44px; text-align: center; font-variant-numeric: tabular-nums; }
 .dz { position: relative; overflow: hidden; border-radius: 10px; background: var(--surface-0); border: 1px solid var(--border); cursor: grab; touch-action: none; user-select: none; overscroll-behavior: contain; }
 .dz.dragging { cursor: grabbing; }
@@ -1006,6 +1020,10 @@ tr.significant-row td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 .plain-fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
 .class-chooser { display: grid; gap: 8px; }
 .class-row { display: grid; gap: 5px; }
+.class-group + .class-group, .class-legend-groups > div + div, .class-overview-group + .class-overview-group { margin-top: 8px; }
+.class-group-title { margin: 0 0 3px; text-transform: none; }
+.kbd-text { font-family: var(--mono, ui-monospace, monospace); font-size: 0.92em; opacity: 0.85; }
+.unsure-mark { font-weight: 700; pointer-events: none; }
 .class-name { overflow-wrap: anywhere; }
 .type-list { position: relative; display: flex; flex-wrap: wrap; gap: 5px; margin-left: 22px; padding: 6px 0 0 8px; border-left: 2px solid var(--border); }
 .type-list.asking { border-left-color: var(--accent); }
@@ -1272,6 +1290,25 @@ details.side-details.compact > summary { font-weight: 500; }
 .outline-defaults { margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
 .viewer svg.viewer-under { will-change: transform; }  /* the field tool's objects: a layer of their own, not painted again on every mouse move */
 .look-swatch.hatched { background: repeating-linear-gradient(45deg, currentColor 0 2px, transparent 2px 5px); }
+
+/* "Mark bad areas" (labels/markareas.tsx): the stain tabs, the brush and the layers over the core picture */
+.area-tabs { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 6px; margin-bottom: 6px; }
+.area-tab { display: grid; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-1); color: inherit; font: inherit; cursor: pointer; }
+.area-tab img { display: block; width: 58px; height: 58px; object-fit: cover; border-radius: 5px; }
+.area-tab > span { display: flex; align-items: center; justify-content: center; gap: 4px; font-size: 0.8rem; }
+.area-tab.chosen { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.area-tick { color: var(--good); font-weight: 700; }
+.area-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--warning); }
+.area-tabs-keys { margin-left: auto; }
+.area-pending, .area-svg { position: absolute; left: 0; top: 0; pointer-events: none; }
+.area-svg { overflow: visible; }
+.area-types { display: grid; gap: 3px; }
+.area-type { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border: 1px solid transparent; border-radius: 6px; background: none; color: inherit; font: inherit; font-size: 0.85rem; text-align: left; cursor: pointer; }
+.area-type.chosen { border-color: var(--accent); background: var(--accent-soft); }
+.area-type.is-clear { cursor: default; color: var(--text-secondary); }
+.area-size { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.area-size input { flex: 1; }
+.areas-table td, .areas-table th { white-space: nowrap; }
 
 /* the shared job queue (Run page) */
 .queue-card .queue-title { margin: 0; }

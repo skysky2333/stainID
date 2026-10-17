@@ -2,12 +2,13 @@
    (names, keys, descriptions, example pictures, hiding, adding types and classes) is under Advanced. Built-in classes can
    be hidden and renamed but not removed, and keep what the stain's model learns from them (their role). */
 import { useEffect, useState } from 'react'
-import type { ClassDef, ClassRole, ClassSettings as Settings, SubtypeDef, Vocabulary } from '../api'
+import type { ClassDef, ClassRole, ClassSettings as Settings, KeyMap, SubtypeDef, Vocabulary } from '../api'
 import { api, classExample, enc } from '../api'
 import { ErrorNote, Loaded, withError } from '../components'
 import { useFetch } from '../hooks'
 import { Advanced, UploadButton } from '../setup/parts'
-import { classColour } from './classes'
+import { keyGroups, keyLabel, keySummary } from './classKeys'
+import { pickSwatch } from './classes'
 
 const ROLE_TEXT: Record<ClassRole, string> = {
   positive: 'the object the model finds', negative: 'not the object (teaches the model what to leave out)', skip: 'left out of training',
@@ -20,8 +21,9 @@ export function ClassSettings() {
   return (
     <section className="card class-settings" id="label-classes">
       <h2>Label classes</h2>
-      <p className="muted small">What people choose from when they label. A class can have types (for example pretangle or mature tangle): the
-        detection models learn the class; the types are kept for a later model. Keys are shown on the labelling pages.</p>
+      <p className="muted small">What people choose from when they label, one key each: numbers for the counted types (compact, diffuse… or
+        pretangle, mature tangle…), letters for the named look-alikes (CAA, a thread…), Del for “not a plaque”, ` for unsure. The detection
+        models learn the class; the types are kept for the per-type measures and a later model.</p>
       <Loaded state={state} label="Loading the classes…">
         {(data) => {
           const stains = Object.keys(data.stains)
@@ -30,7 +32,8 @@ export function ClassSettings() {
             {stains.length > 1 && <div className="segmented">{stains.map((s) => (
               <button key={s} className={`btn small${s === shown ? ' chosen' : ''}`} aria-pressed={s === shown} onClick={() => setStain(s)}>{s}</button>
             ))}</div>}
-            {shown && <StainClasses key={shown} vocabulary={data.stains[shown]} builtin={data.builtin[shown]} wait={data.subtype_wait_s} onSaved={state.reload} />}
+            {shown && <StainClasses key={shown} vocabulary={data.stains[shown]} keys={data.keys?.[shown] ?? { direct: {} }} builtin={data.builtin[shown]}
+              onSaved={state.reload} />}
           </>
         }}
       </Loaded>
@@ -38,56 +41,58 @@ export function ClassSettings() {
   )
 }
 
-function StainClasses({ vocabulary, builtin, wait, onSaved }: { vocabulary: Vocabulary; builtin: Vocabulary; wait: number; onSaved: () => void }) {
+function StainClasses({ vocabulary, keys, builtin, onSaved }: { vocabulary: Vocabulary; keys: KeyMap; builtin: Vocabulary; onSaved: () => void }) {
   return (
     <>
-      <ClassList vocabulary={vocabulary} />
+      <ClassList vocabulary={vocabulary} keys={keys} />
       <Advanced title="Change the classes" hint="names, keys, descriptions, example pictures, hide, add types and classes">
-        <ClassEditor vocabulary={vocabulary} builtin={builtin} wait={wait} onSaved={onSaved} />
+        <ClassEditor vocabulary={vocabulary} builtin={builtin} onSaved={onSaved} />
       </Advanced>
     </>
   )
 }
 
-/** The classes as people see them, with their keys and types. */
-function ClassList({ vocabulary }: { vocabulary: Vocabulary }) {
-  const shown = vocabulary.classes.filter((c) => !c.hidden)
-  const hidden = vocabulary.classes.length - shown.length
+/** The keys as people see them on the labelling pages, in their groups, with each one's colour and example. */
+function ClassList({ vocabulary, keys }: { vocabulary: Vocabulary; keys: KeyMap }) {
+  const hidden = vocabulary.classes.filter((c) => c.hidden).length
+  const exampleOf = (identity: string, subtype: string | null) => {
+    const c = vocabulary.classes.find((x) => x.id === identity)
+    return (subtype ? c?.subtypes.find((s) => s.id === subtype)?.example : '') || (subtype ? '' : c?.example) || ''
+  }
   return (
     <div className="class-overview">
-      {shown.map((c) => (
-        <div key={c.id} className="class-overview-row">
-          <span className="kbd">{c.key || '·'}</span><span className="swatch" style={{ background: classColour(vocabulary, c.id) }} />
-          <span><b>{c.name}</b> <span className="muted small">— {ROLE_TEXT[c.role]}</span>
-            {c.description && <span className="small secondary class-description">{c.description}</span>}
-            {c.subtypes.some((s) => !s.hidden) && <span className="type-chips">{c.subtypes.filter((s) => !s.hidden).map((s, i) => (
-              <span key={s.id} className="type-chip small" title={s.description}><span className="kbd">{i + 1}</span>{s.name}{s.key && <span className="kbd muted-kbd">{s.key.toUpperCase()}</span>}</span>
-            ))}</span>}
-          </span>
-          {(c.example || c.subtypes.some((s) => s.example && !s.hidden)) && <span className="class-examples">
-            {[c, ...c.subtypes.filter((s) => !s.hidden)].filter((x) => x.example).map((x) => (
-              <img key={x.id} src={classExample(vocabulary.stain, x.example)} alt={`Example: ${x.name}`} title={x.name} />
-            ))}</span>}
+      {keyGroups(vocabulary, keys).map((g) => (
+        <div key={g.group} className="class-overview-group">
+          <div className="small muted">{g.title} <span className="kbd-text">{g.keys}</span></div>
+          {g.items.map((item) => {
+            const example = exampleOf(item.identity, item.subtype)
+            return (
+              <div key={item.key} className="class-overview-row">
+                <span className="kbd">{item.label}</span><span className="swatch" style={pickSwatch(vocabulary, item.identity, item.subtype)} />
+                <span><b>{item.name}</b>{item.description && <span className="small secondary class-description">{item.description}</span>}</span>
+                {example && <span className="class-examples"><img src={classExample(vocabulary.stain, example)} alt={`Example: ${item.name}`} title={item.name} /></span>}
+              </div>
+            )
+          })}
         </div>
       ))}
-      <p className="muted small" style={{ margin: 0 }}>Press a class’s key; for its type press 1, 2, 3… right after (or a type’s letter for both at once).
+      <p className="muted small" style={{ margin: 0 }}>{keySummary(vocabulary, keys)}.
         {hidden > 0 && ` ${hidden} hidden class${hidden === 1 ? '' : 'es'} not shown to people.`}</p>
     </div>
   )
 }
 
-function ClassEditor({ vocabulary, builtin, wait, onSaved }: { vocabulary: Vocabulary; builtin: Vocabulary; wait: number; onSaved: () => void }) {
+function ClassEditor({ vocabulary, builtin, onSaved }: { vocabulary: Vocabulary; builtin: Vocabulary; onSaved: () => void }) {
   const [classes, setClasses] = useState<ClassDef[]>(() => structuredClone(vocabulary.classes))
-  const [seconds, setSeconds] = useState(wait)
   const [error, setError] = useState<string | null>(null)
   const [state, setState] = useState<'idle' | 'saving' | 'saved'>('idle')
-  useEffect(() => { setClasses(structuredClone(vocabulary.classes)); setSeconds(wait) }, [vocabulary, wait])
-  const dirty = !same(classes, vocabulary.classes) || seconds !== wait
+  useEffect(() => { setClasses(structuredClone(vocabulary.classes)) }, [vocabulary])
+  const dirty = !same(classes, vocabulary.classes)
   const atDefaults = same(vocabulary.classes.map(strip), builtin.classes.map(strip))
   const change = (next: ClassDef[]) => { setState('idle'); setClasses(next) }
   const setClass = (i: number, c: ClassDef) => change(classes.map((x, j) => (j === i ? c : x)))
   const move = (i: number, by: number) => { const next = [...classes]; [next[i], next[i + by]] = [next[i + by], next[i]]; change(next) }
-  const save = async (body: { classes: ClassDef[] | null; subtype_wait_s?: number }) => {
+  const save = async (body: { classes: ClassDef[] | null }) => {
     setState('saving')
     const done = await withError(() => api.put(`/api/labels/classes/${enc(vocabulary.stain)}`, body), setError)
     setState(done ? 'saved' : 'idle')
@@ -103,18 +108,17 @@ function ClassEditor({ vocabulary, builtin, wait, onSaved }: { vocabulary: Vocab
         <button className="btn small" onClick={() => change([...classes, { id: '', name: '', role: 'negative', description: '', key: '', example: '', hidden: false, subtypes: [] }])}>
           Add a class</button>
         <span className="spacer" />
-        <label className="field inline-field">Time to press a type’s number after the class key (seconds; 0 = wait for it)
-          <input type="number" min={0} max={10} step={0.1} value={seconds} style={{ width: 80 }} onChange={(e) => { setState('idle'); setSeconds(Number(e.target.value)) }} /></label>
       </div>
       <div className="row">
-        <button className="btn primary" disabled={!dirty || state === 'saving'} onClick={() => save({ classes, subtype_wait_s: seconds })}>
+        <button className="btn primary" disabled={!dirty || state === 'saving'} onClick={() => save({ classes })}>
           {state === 'saving' ? 'Saving…' : 'Save classes'}</button>
-        {dirty && <button className="btn" onClick={() => { setClasses(structuredClone(vocabulary.classes)); setSeconds(wait) }}>Undo changes</button>}
+        {dirty && <button className="btn" onClick={() => setClasses(structuredClone(vocabulary.classes))}>Undo changes</button>}
         {!atDefaults && !dirty && <button className="btn" onClick={() => save({ classes: null })}>Back to the built-in classes</button>}
         {state === 'saved' && !dirty && <span className="small status-finished">✓ Saved to stainid.yaml. Open labelling pages use them when reopened.</span>}
       </div>
       <p className="muted small" style={{ margin: 0 }}>Labels people already made keep their class: renaming a class or a type changes only its name; hidden ones are
-        no longer offered but their labels stay. Keys: one letter or number each; V, A, O, Z and 0 are used by the labelling pages.</p>
+        no longer offered but their labels stay. Keys: a counted type takes a number (built in 1–4, yours 5–9), anything else a letter (built in
+        Q W E R, yours T Y U …); left empty, one is given. Del, `, 0, B, S, Z, V, A and O are used by the labelling pages.</p>
       <ErrorNote error={error} />
     </div>
   )
@@ -130,7 +134,9 @@ function ClassRow({ stain, c, first, last, onChange, onMove, onRemove }: {
   return (
     <div className={`class-edit${c.hidden ? ' is-hidden' : ''}`}>
       <div className="row class-edit-head">
-        <input type="text" value={c.key} maxLength={1} style={{ width: 38 }} aria-label="Key" title="Key" onChange={(e) => onChange({ ...c, key: e.target.value.toLowerCase() })} />
+        {c.key === 'delete' || c.key === '`' || c.role === 'skip' ? <span className="kbd" title="Fixed">{keyLabel(c.key || '`')}</span>
+          : <input type="text" value={c.key} maxLength={1} style={{ width: 38 }} aria-label="Key" title="Key (a number for the counted object, else a letter)"
+            onChange={(e) => onChange({ ...c, key: e.target.value.toLowerCase() })} />}
         <input type="text" value={c.name} placeholder="Name of the class" style={{ flex: '1 1 160px' }} aria-label="Name" onChange={(e) => onChange({ ...c, name: e.target.value })} />
         {c.builtin ? <span className="muted small">{ROLE_TEXT[c.role]}</span> : (
           <select value={c.role} aria-label="What the model learns from it" onChange={(e) => onChange({ ...c, role: e.target.value as ClassRole })}>
@@ -148,9 +154,8 @@ function ClassRow({ stain, c, first, last, onChange, onMove, onRemove }: {
       <div className="type-edits">
         {c.subtypes.map((s, i) => (
           <div key={s.id || `new-${i}`} className={`row type-edit${s.hidden ? ' is-hidden' : ''}`}>
-            <span className="kbd" title="Its number after the class key">{c.subtypes.slice(0, i + 1).filter((x) => !x.hidden).length}</span>
             <input type="text" value={s.name} placeholder="Name of the type" style={{ flex: '1 1 140px' }} aria-label="Type name" onChange={(e) => setType(i, { ...s, name: e.target.value })} />
-            <input type="text" value={s.key} maxLength={1} style={{ width: 38 }} aria-label="Key for class and type at once" title="Key for class and type at once (a letter)"
+            <input type="text" value={s.key} maxLength={1} style={{ width: 38 }} aria-label="Key of the type" title="Key of the type (a number for a counted type)"
               onChange={(e) => setType(i, { ...s, key: e.target.value.toLowerCase() })} />
             <input type="text" value={s.description} placeholder="What it looks like" style={{ flex: '2 1 200px' }} aria-label={`Description of ${s.name}`}
               onChange={(e) => setType(i, { ...s, description: e.target.value })} />

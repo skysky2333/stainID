@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import type { AiView, ClassCount, LabelsOverview, Labeller, ReferenceLabels, SessionInfo, StainOverview, Vocabulary } from '../api'
-import { api, apiUrl, appPath } from '../api'
+import type { AiView, AreasOverview, ClassCount, LabelsOverview, Labeller, ReferenceLabels, SessionInfo, StainOverview, Vocabulary } from '../api'
+import { api, apiUrl, appPath, enc } from '../api'
 import { Empty, ErrorNote, HelpBox, Loaded, Modal, PageHead, Progress, fmt, timeAgo, withError } from '../components'
 import { useFetch } from '../hooks'
 import { AI_VIEW_TEXT, ConfirmDialog, CopyButton, DetectionLine, KIND_TEXT, TOOL_TEXT, objectsOf, percent } from '../labelling'
 import { SessionLabelsView } from '../labels/examine'
 import { FIELD_TEXT, FieldChoice, SessionFields } from '../labels/fields'
+import { AREAS_TITLE } from '../labels/markareas'
 import { NewRoundSession } from '../labels/newround'
 import { ROUND_TITLE } from '../labels/rounds'
 import { byKey } from '../labels/classKeys'
@@ -34,6 +35,8 @@ export default function Labels() {
         <a className="btn" href={apiUrl('/api/labels/export.csv')}>Download all labels</a>
         <a className="btn" href={appPath('/annotate/tutorial?preview=1')} target="_blank" rel="noreferrer"
           title="See exactly what annotators see first: the 4-minute practice on a field of this project (nothing is saved)">Try the tutorial</a>
+        <a className="btn" href={appPath('/annotate/tutorial?kind=areas&preview=1')} target="_blank" rel="noreferrer"
+          title="The short practice of “Mark bad areas” on a core of this project (nothing is saved)">Bad-areas tutorial</a>
         <button className="btn primary" onClick={() => setCreating(true)}>New labelling session</button>
       </PageHead>
       <HelpBox id="labels">
@@ -51,6 +54,7 @@ export default function Labels() {
       <Loaded state={overview} label="Loading labelling sessions…">
         {(data) => <>
           <Sessions sessions={data.sessions} reference={data.reference} linkFor={linkFor} onChanged={overview.reload} onNew={() => setCreating(true)} />
+          {data.sessions.some((s) => s.kind === 'areas') && <AreasSoFar />}
           <ShareCard share={share.data} error={share.error} link={linkFor()} anyOpen={data.sessions.some((s) => s.open)} />
           <LabelledSoFar stains={data.stains} onChanged={overview.reload} />
           {creating && (older
@@ -61,12 +65,15 @@ export default function Labels() {
             : <NewRoundSession stains={data.stains.map((s) => s.stain)} onClose={() => setCreating(false)} onOlder={() => setOlder(true)}
               onCreated={(s) => {
                 overview.reload()
-                const d = s as unknown as { fields?: string[] | number; fields_asked?: number; fields_remaining?: number; field_seed?: number }
+                const d = s as unknown as { fields?: string[] | number; fields_asked?: number; fields_remaining?: number; field_seed?: number
+                  fields_from_checked_areas?: number; cores?: string[]; second?: string[] }
                 const n = Array.isArray(d.fields) ? d.fields.length : d.fields ?? 0
-                const drawn = d.fields_asked == null || d.fields_remaining == null ? ''
-                  : d.fields_asked < 0 ? ` It has all ${n.toLocaleString()} remaining fields (in a random order, seed ${d.field_seed}).`
+                const fromAreas = d.fields_from_checked_areas ? ` ${n.toLocaleString()} fields: ${d.fields_from_checked_areas.toLocaleString()} from cores with checked areas.` : ''
+                const drawn = s.kind === 'areas' ? ` It has ${(d.cores?.length ?? 0).toLocaleString()} cores${d.second?.length ? `, ${d.second.length.toLocaleString()} of them also for a second person` : ''}.`
+                  : d.fields_asked == null || d.fields_remaining == null ? fromAreas
+                  : (d.fields_asked < 0 ? ` It has all ${n.toLocaleString()} remaining fields (in a random order, seed ${d.field_seed}).`
                     : d.fields_asked > d.fields_remaining ? ` Only ${d.fields_remaining.toLocaleString()} fields remained, so it has all of them (seed ${d.field_seed}).`
-                      : ` ${n.toLocaleString()} fields were drawn at random from the ${d.fields_remaining.toLocaleString()} remaining (seed ${d.field_seed}).`
+                      : ` ${n.toLocaleString()} fields were drawn at random from the ${d.fields_remaining.toLocaleString()} remaining (seed ${d.field_seed}).`) + fromAreas
                 setNotice((s.open ? `“${s.title}” is open: copy its link below and send it. Pictures and outlines are made ahead in the background.`
                   : `“${s.title}” is ready but closed. Open it when you want people to start.`) + drawn)
               }} />)}
@@ -78,6 +85,9 @@ export default function Labels() {
 
 /* ---------- sessions ---------- */
 
+/** The annotation rounds ("Fix the field", "Check detection's calls", "Mark bad areas"), shown before the older kinds. */
+const isRound = (s: SessionInfo) => !!s.round || s.kind === 'areas'
+
 function Sessions({ sessions, reference, linkFor, onChanged, onNew }: {
   sessions: SessionInfo[]; reference: ReferenceLabels | null; linkFor: (name: string) => string; onChanged: () => void; onNew: () => void
 }) {
@@ -86,12 +96,12 @@ function Sessions({ sessions, reference, linkFor, onChanged, onNew }: {
     <section className="card labels-section">
       <h2>Labelling sessions</h2>
       {ordered.length || reference ? <div className="session-list">
-        {ordered.filter((s) => s.round).map((s) => <SessionRow key={s.name} s={s} link={linkFor(s.name)} onChanged={onChanged} />)}
-        {ordered.some((s) => !s.round) && (ordered.some((s) => s.round)
+        {ordered.filter((s) => isRound(s)).map((s) => <SessionRow key={s.name} s={s} link={linkFor(s.name)} onChanged={onChanged} />)}
+        {ordered.some((s) => !isRound(s)) && (ordered.some((s) => isRound(s))
           ? <details className="advanced older-sessions">
-            <summary><span>Older kinds of session</span><span className="muted small"> · {ordered.filter((s) => !s.round).length} (segmentation checks, whole-field reviews, quick checks)
-              {ordered.some((s) => !s.round && s.open) ? ` · ${ordered.filter((s) => !s.round && s.open).length} open` : ''}</span></summary>
-            <div className="advanced-body session-list">{ordered.filter((s) => !s.round).map((s) => <SessionRow key={s.name} s={s} link={linkFor(s.name)} onChanged={onChanged} />)}</div>
+            <summary><span>Older kinds of session</span><span className="muted small"> · {ordered.filter((s) => !isRound(s)).length} (segmentation checks, whole-field reviews, quick checks)
+              {ordered.some((s) => !isRound(s) && s.open) ? ` · ${ordered.filter((s) => !isRound(s) && s.open).length} open` : ''}</span></summary>
+            <div className="advanced-body session-list">{ordered.filter((s) => !isRound(s)).map((s) => <SessionRow key={s.name} s={s} link={linkFor(s.name)} onChanged={onChanged} />)}</div>
           </details>
           : ordered.map((s) => <SessionRow key={s.name} s={s} link={linkFor(s.name)} onChanged={onChanged} />))}
         {reference && <ReferenceRow r={reference} />}
@@ -101,6 +111,44 @@ function Sessions({ sessions, reference, linkFor, onChanged, onNew }: {
           <button className="btn" onClick={onNew}>Start the first session</button>
         </Empty>}
       {!ordered.length && reference && <div className="row" style={{ marginTop: 10 }}><button className="btn" onClick={onNew}>Start the first session</button></div>}
+    </section>
+  )
+}
+
+/** "Mark bad areas" across its sessions: stain images checked per stain, cores with every stain checked, and how well
+ *  two people agree on the cores checked twice, with the disagreements to settle in the Cores view. */
+function AreasSoFar() {
+  const state = useFetch<AreasOverview>('/api/labels/areas', 30000)
+  return (
+    <section className="card labels-section">
+      <h2>{AREAS_TITLE}: checked so far</h2>
+      <Loaded state={state} label="Loading the bad areas checked…">
+        {(a) => <>
+          <div className="session-progress">
+            <Progress done={a.cores_checked} total={a.cores} />
+            <span className="small secondary">{a.cores_checked.toLocaleString()} of {a.cores.toLocaleString()} cores have every stain checked. A sample is enough: the areas
+              people mark teach and test the bad-area detection (see <Link to="/models">Models</Link>); the analysis uses detection’s own areas.</span>
+          </div>
+          <div className="table-wrap" style={{ marginTop: 8 }}><table className="compact small areas-table">
+            <thead><tr><th>Stain</th><th>Images checked</th><th>Checked by two people</th></tr></thead>
+            <tbody>{a.stains.map((s) => (
+              <tr key={s.stain}><td>{s.stain}</td><td>{s.checked.toLocaleString()} of {s.images.toLocaleString()}</td><td>{s.double_checked.toLocaleString()}</td></tr>
+            ))}</tbody>
+          </table></div>
+          <p className="small secondary" style={{ marginBottom: 4 }}>{a.agreement.pairs
+            ? <>Agreement: on {a.agreement.agree.toLocaleString()} of {a.agreement.pairs.toLocaleString()} images checked by two people they marked much the same
+              {a.agreement.mean_iou != null ? ` (mean overlap ${percent(a.agreement.mean_iou)})` : ''}.</>
+            : 'Agreement: no image has been checked by two people yet (about 1 core in 10 goes to a second person).'}</p>
+          {a.agreement.disagreements.length > 0 && <>
+            <p className="small muted" style={{ margin: '0 0 4px' }}>Where they disagree — open the core to settle it:</p>
+            <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>{a.agreement.disagreements.slice(0, 30).map((d) => (
+              <li key={`${d.core_id}-${d.stain}`}><Link to={`/cores/${enc(d.core_id)}?stain=${enc(d.stain)}`}>{d.core_id} · {d.stain}</Link>
+                <span className="muted"> · {d.people.join(' and ')} · overlap {percent(d.iou)}</span></li>
+            ))}</ul>
+            {a.agreement.disagreements.length > 30 && <p className="small muted">and {(a.agreement.disagreements.length - 30).toLocaleString()} more</p>}
+          </>}
+        </>}
+      </Loaded>
     </section>
   )
 }
@@ -146,7 +194,8 @@ function SessionRow({ s, link, onChanged }: { s: SessionInfo; link: string; onCh
           <b>{s.title}</b> {s.read_only ? <span className="badge" title="Imported from a dataset package; the labels stay as they were">read only</span> : <span className={`badge ${state.className}`}>{state.text}</span>}
           {s.labelling_now > 0 && <span className="badge status-running"><span className="pulse" />{s.labelling_now} labelling now</span>}
         </div>
-        <div className="muted small">{s.stain} · {s.round ? `Round ${s.round} · ${ROUND_TITLE[s.round]}` : KIND_TEXT[s.kind]}
+        <div className="muted small">{s.kind === 'areas' ? `Every stain · ${AREAS_TITLE}${s.order === 'random' ? ' · random order' : s.order ? ' · likely problems first' : ''}`
+          : `${s.stain} · ${s.round ? `Round ${s.round} · ${ROUND_TITLE[s.round]}` : KIND_TEXT[s.kind]}`}
           {(s.labels_needed ?? s.per_field) > 1 ? ` · ${s.labels_needed ?? s.per_field} people per ${s.kind === 'queue' ? 'object' : 'field'}` : ''}</div>
         <SessionProgress s={s} />
         <People people={s.labellers} fields={s.kind !== 'queue' ? s.fields ?? 0 : null} />
@@ -164,12 +213,24 @@ function SessionRow({ s, link, onChanged }: { s: SessionInfo; link: string; onCh
 }
 
 function SessionProgress({ s }: { s: SessionInfo }) {
+  if (s.kind === 'areas' && s.round_progress) {
+    const p = s.round_progress
+    return (
+      <div className="session-progress">
+        <Progress done={p.decided} total={p.total} />
+        <span className="small secondary">{p.decided.toLocaleString()} of {p.total.toLocaleString()} cores checked (by anyone)
+          {p.images_checked ? ` · ${p.images_checked.toLocaleString()} stain images` : ''}{p.open_now ? ` · ${p.open_now.toLocaleString()} in progress` : ''}
+          {p.second_checks ? <span className="muted"> · {p.second_checks.toLocaleString()} cores also go to a second person</span> : null}</span>
+      </div>
+    )
+  }
   if (s.round_progress) {
     const p = s.round_progress
     return (
       <div className="session-progress">
         <Progress done={p.decided} total={p.total} />
         <span className="small secondary">{p.decided.toLocaleString()} of {p.total.toLocaleString()} fields done (by anyone){p.open_now ? ` · ${p.open_now.toLocaleString()} in progress` : ''}
+          {s.round === 2 && s.fields_from_checked_areas != null && <span className="muted"> · {p.total.toLocaleString()} fields: {s.fields_from_checked_areas.toLocaleString()} from cores with checked areas</span>}
           {s.pictures && s.pictures.ready < s.pictures.total && <span className="muted"> · pictures ready: {s.pictures.ready.toLocaleString()} of {s.pictures.total.toLocaleString()}</span>}</span>
       </div>
     )
@@ -379,7 +440,7 @@ function StainDetails({ s, onChanged }: { s: StainOverview; onChanged: () => voi
 
 /** The classes people will choose from, and whether they are also asked for each object's type (pretangle or mature tangle…). */
 function SessionClasses({ vocabulary, typesAsked, onTypesAsked }: { vocabulary: Vocabulary; typesAsked: boolean; onTypesAsked: (on: boolean) => void }) {
-  const shown = byKey(vocabulary, { direct: {}, then: {} })  // in the order of the keys, unsure last
+  const shown = byKey(vocabulary, { direct: {} })  // in the order of the keys, unsure last
   const typed = shown.filter((c) => c.subtypes.some((s) => !s.hidden))
   return (
     <div className="session-classes">

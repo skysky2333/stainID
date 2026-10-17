@@ -25,7 +25,7 @@ sample_region_ids: {plain_prefix: "", prefixed_prefix: "", region: name}   # don
 groups:                      # diagnostic group codes used in the TMA map, in plot order
   - {code: CT, label: Control, color: 3}     # color = palette slot 1-8 (optional)
   - {code: AD, label: Alzheimer disease}
-labels: {classes: {}, subtype_wait_s: 1.0}   # label classes per stain (built in unless changed in Settings) and the time for a type key: label_classes.md
+labels: {classes: {}}   # label classes and their keys per stain (built in unless changed in Settings): label_classes.md
 cache_limit_gb: null         # space the pictures made for viewing (data/cache) may take; null: the server's --cache-limit, else 100 (20 when made from a dataset package)
 precision:                   # arithmetic on CUDA GPUs (CPU always fp32): fp32, tf32 or bf16 — keep one per cohort
   cellpose: bf16             # tf32 reproduces fp32 masks cell for cell; bf16 is faster, ~1% of cells differ

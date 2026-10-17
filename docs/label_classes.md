@@ -10,24 +10,40 @@ Each identity has a **role** in its stain's model:
 - *not the object* (`negative`): everything else people may say it is, which teaches the model what to leave out;
 - *left out of training* (`skip`): "unsure".
 
-## The built-in classes
+## The built-in classes and their keys
 
-| Stain | Class (role) | Types |
-| --- | --- | --- |
-| AT8 | tau+ neuron (positive) | pretangle · mature tangle · ghost (extracellular) tangle |
-| | neuritic plaque (tau crown) · thread or dystrophic neurite · not tau · artifact or unclear (negative) | |
-| | astroglial tau (negative) | tufted astrocyte · thorn-shaped astrocyte |
-| | unsure (left out) | |
-| 6E10 | plaque (positive) | compact (dense-core) · diffuse · cored-neuritic · small (too small to type) |
-| | CAA / vascular amyloid · intraneuronal staining (APP/Aβ inside neurons, which 6E10 also stains) · not a plaque · artifact or unclear (negative) | |
-| | unsure (left out) | |
-| NeuN | NeuN+ neuron (positive) | strongly stained · weakly stained · large pyramidal neuron (hidden until shown in Settings) |
-| | not a neuron (glia, endothelium) · artifact or unclear (negative) | |
-| | unsure (left out) | |
+One key picks a type at once (`stainid.labels.vocabulary.assign_keys`, the one key assignment the labelling pages,
+their key lists, Help and the tutorial all read): numbers for the **counted types**, letters for the **named
+look-alikes** (solid, in their own colour, not counted), **Del** for the stain's single reject and **`** for unsure.
 
-A stain stainID has no classes for (a dataset from another lab) starts from *object*, *not an object*, *artifact or
-unclear* and *unsure*. Every class and type has a plain description, shown on the labelling pages, and may have an
-example picture.
+| Stain | Counted (positive) | Named look-alikes (negative) | Del (negative) | ` |
+| --- | --- | --- | --- | --- |
+| 6E10 | plaque: **1** compact (dense-core) · **2** diffuse · **3** cored-neuritic · **4** small (too small to type) | **Q** CAA / vascular amyloid · **W** staining inside a neuron (APP/Aβ, which 6E10 also stains) | not a plaque | unsure |
+| AT8 | tau+ neuron: **1** pretangle · **2** mature tangle · **3** ghost (extracellular) tangle | **Q** neuritic crown (tau around a plaque) · **W** tau in an astrocyte · **E** thread or dystrophic neurite | not tau | unsure |
+| NeuN | **1** NeuN+ neuron | — | not a neuron | unsure |
+
+- Each counted type and each look-alike has its own colour on every page (`Vocabulary.colour_slots`, sent to the web
+  app as `vocabulary.slots`); the reject is dotted grey, the same as detection's own rejects, and a number key makes it
+  solid again; unsure is dotted amber with a small "?", and is left out of training and evaluation.
+- Together the counted types are the stain's object ("plaque", "tau+ neuron"): what the detection model learns and what
+  the analysis counts. A label with the identity and no type (an older one, or detection's own call without a type)
+  stays valid; the pages draw it in the identity's colour without a type until someone presses a key, and it is saved
+  as detection's call if nobody does.
+- NeuN has one type: how strongly a neuron is stained is measured, not judged, so *strongly / weakly stained* are
+  hidden (kept for older labels), and *large pyramidal neuron* stays hidden until shown in Settings. AT8's astrocyte
+  types (tufted, thorn-shaped) are hidden too: **W** names the look-alike.
+- *Artifact or unclear* is no longer a class: debris is **Del**, unclear is **`**, and bad areas are painted with the
+  brush (**B**). Its old labels read as the stain's reject (negative, as they always were).
+- Quiet second keys: **0** for **`** (for keyboards where ` is awkward) and **Backspace** for **Del** (a Mac's delete
+  key). **B** toggles the brush on the field page; while it is on, 1–4 are the area types and the class keys rest.
+  None of the keys clash with Space, Enter, Esc, Shift, Tab, the arrows, S (save), Z (undo), V A O (the older field
+  page's tools), and no Ctrl/Cmd combination is taken.
+- Classes people add (Settings) get **5**–**9** for counted types and **T Y U …** for look-alikes, unless they choose a
+  free key themselves.
+
+A stain stainID has no classes for (a dataset from another lab) starts from *object* (1), *not an object* (Del) and
+*unsure* (`). Every class and type has a plain description, shown on the labelling pages, and may have an example
+picture.
 
 ## Labels made before types existed
 
@@ -43,6 +59,7 @@ The label log is never rewritten. Older labels stored one value; they are read a
 | compact plaque · diffuse plaque · small plaque | plaque | compact · diffuse · small |
 | plaque, plaque (type not recorded) | plaque | — |
 | vascular | CAA / vascular amyloid | — |
+| artifact or unclear | the stain's reject (not tau, not a plaque, not a neuron) | — |
 
 The identity models therefore learn from exactly the same positives and negatives as before (checked on the study's
 label log: every stain's training truth is identical, and so are the objects that set the tangle-maturity and
@@ -56,22 +73,15 @@ type in Settings changes only the name people see. Pages and imports may also na
 ## Labelling with types
 
 The person who creates a session chooses whether people are also asked for the type (*Also ask for the type*, on by
-default; sessions made before this choice ask for it). On the quick check and on the field page:
+default; sessions made before this choice ask for it). With types asked, each counted type has its number (above).
+Without, the counted object has one key (1: plaque, tau+ neuron) and detection's confirmed calls (fields sessions,
+*Finished*) are stored without a type. With the mouse, the side panel lists the same keys in their groups
+("Plaques 1–4 · Not plaques Q–W · Del not a plaque · ` unsure · B brush"); a click picks one.
 
-- a class key (1–7) answers at once when the class has no types;
-- for a class with types, a number right after it (within 1 s, `labels.subtype_wait_s`) picks the type by its place
-  (tau+ neuron: 1 pretangle, 2 mature tangle, 3 ghost tangle); 0 or Enter means no type; when nothing follows, the
-  class stands without a type;
-- a type's own key (Q, W, T… by default; E is the field tool's exclusion brush) answers class and type in one press;
-- with the mouse: click the class, then its type or *No type / not sure*.
-
-The keys are shown on screen next to the classes and under the picture. Without types asked, only the class keys apply
-and detection's confirmed calls (fields sessions, *Finished*) are stored without a type.
-
-The annotation rounds use the same class and type keys, acting on the object under the mouse (round 2) or on screen
-(round 1). Their other keys are listed in [webapp.md](webapp.md#annotation-rounds): 0 unsure, Delete not an object,
-Tab / Shift+Tab for the outline size, a click on the object for precise editing (Space in round 1; in round 2
-Space hides the drawings), Z undo and Enter to keep detection's call.
+The annotation rounds use the same keys, acting on the object under the mouse (round 2) or on screen (round 1). Their
+other keys are listed in [webapp.md](webapp.md#annotation-rounds): Tab / Shift+Tab for the outline size, a click on the
+object for precise editing (Space in round 1; in round 2 Space hides the drawings), B the brush, Z undo and Enter to
+keep detection's call.
 
 ## Where types show
 
@@ -85,21 +95,22 @@ Space hides the drawings), Z undo and Enter to keep detection's call.
 
 ## Changing the classes (Settings → Label classes)
 
-The list of each stain's classes, keys and types is always shown; *Change the classes* (Advanced) edits names, keys,
-descriptions, example pictures, hides classes or types, adds types and adds classes (choosing their role), and sets the
-time for the type key. Built-in classes can be hidden and renamed but not removed, and keep their role, so a project's
-settings never change what the identity models learn from existing labels. Keys are one letter or number, unique per
-stain; V, A, O (field-page tools), E (the exclusion brush), Z (undo) and 0 (no type) are taken, and types cannot have number keys.
+The list of each stain's keys, in their groups, is always shown; *Change the classes* (Advanced) edits names, keys,
+descriptions, example pictures, hides classes or types, adds types and adds classes (choosing their role). Built-in
+classes can be hidden and renamed but not removed, and keep their role and their key, so a project's settings never
+change what the identity models learn from existing labels. A counted type's key is a number, a look-alike's a letter,
+unique per stain; Del, `, 0, B (the brush), S, Z and V A O are taken. Settings saved with the old keys (identity 1–7,
+then a type by its place, or Q W T R) get today's built-in keys (`OLD_KEYS`). `labels.subtype_wait_s` is no longer
+used (one key picks the type) and is kept only so older settings load.
 
 The classes are kept in `stainid.yaml`, per stain, only when they differ from the built-in ones:
 
 ```yaml
 labels:
-  subtype_wait_s: 1.0
   classes:
     AT8:
       - {id: tau+ neuron, name: tau+ neuron, role: positive, key: "1", description: ..., example: 3f2a9c1b7d4e.jpg, hidden: false,
-         subtypes: [{id: pretangle, name: pretangle, key: q, description: ..., example: "", hidden: false}, ...]}
+         subtypes: [{id: pretangle, name: pretangle, key: "1", description: ..., example: "", hidden: false}, ...]}
       - ...
 ```
 

@@ -1,4 +1,5 @@
 import type { ClassRole, KeyMap, Vocabulary } from './labels/classKeys'
+import type { Pyramid } from './deepzoom'
 
 export type Row = Record<string, string | number | boolean | null>
 
@@ -177,19 +178,20 @@ export interface Detection {
 export interface AddedObjects { objects: number; measured: number; could_not_be_measured: number; waiting: number }
 export interface AddedState { x: number; y: number; state: 'proposed' | 'measured' | 'could_not_be_measured' | 'measuring'; reason: string }
 export interface SessionInfo {
-  name: string; title: string; stain: string; kind: 'fields' | 'queue' | 'outline'; tools: string[]; ai_view: AiView; per_field: number; rule: string
+  name: string; title: string; stain: string; kind: 'fields' | 'queue' | 'outline' | 'areas'; tools: string[]; ai_view: AiView; per_field: number; rule: string
   instructions: string; created: number; open: boolean; people: number; labels: number
   fields?: number; fields_covered?: number; fields_prepared?: number; labellers: Labeller[]; labelling_now: number
   pictures?: QueuePictures  // quick-check queues
   subtypes?: boolean  // people are asked for the type of objects (sessions made before this choice: yes)
   read_only?: boolean; imported?: { dataset: string; rater: string }  // labels imported from a dataset package
   round?: 1 | 2; round_progress?: RoundProgress; labels_needed?: number; level?: number | null; objects?: number  // annotation rounds
+  cores?: number | string[]; order?: string; cores_asked?: number; cores_remaining?: number; fields_from_checked_areas?: number  // "Mark bad areas"; round 2
 }
 export interface Labeller { person: string; fields_done: number; labels: number; changed: number; confirmed: number; outlines: number; tags: number; last_active: number }
 export interface LabelsOverview { stains: StainOverview[]; sessions: SessionInfo[]; reference: ReferenceLabels | null }
 export interface OpenSession {
-  name: string; title: string; stain: string; kind: 'fields' | 'queue' | 'outline'; open: boolean; instructions: string; fields: number; done_by_me: number; my_labels: number
-  round?: 1 | 2 | null; progress?: RoundProgress  // annotation rounds
+  name: string; title: string; stain: string; kind: 'fields' | 'queue' | 'outline' | 'areas'; open: boolean; instructions: string; fields: number; done_by_me: number; my_labels: number
+  round?: 1 | 2 | 'areas' | null; progress?: RoundProgress; cores?: number  // annotation rounds ("areas": Mark bad areas, by core)
 }
 export interface SessionField { tile_id: string; done_by_me: boolean; annotators_done: number; open_by_others: number; prepared: boolean }
 export interface SessionDetail {
@@ -430,7 +432,7 @@ export interface ClassCount { id: string; name: string; role: ClassRole; objects
 /** The classes the labels view shows, by identity: its colour (place in the series colours; null: none) and its classes as shown. */
 export interface ClassGroup { id: string; name: string; role: ClassRole; colour: number | null; keys: string[] }
 /** Every stain's classes (as used, and as built in) and how long a type may follow a class key. */
-export interface ClassSettings { stains: Record<string, Vocabulary>; builtin: Record<string, Vocabulary>; subtype_wait_s: number }
+export interface ClassSettings { stains: Record<string, Vocabulary>; builtin: Record<string, Vocabulary>; keys: Record<string, KeyMap>; subtype_wait_s: number }
 export const classExample = (stain: string, file: string) => apiUrl(`/api/annotate/class-examples/${enc(stain)}/${enc(file)}`)
 /* ---- project kinds: image sets, whole slides, dataset packages, scoring on imported labels ---- */
 export type ProjectKind = 'tma' | 'images' | 'slides'
@@ -481,9 +483,10 @@ export interface ImportedLabels {
 /* ---------- annotation rounds over the v2 candidates (labels/checkcalls.tsx, labels/fixfield.tsx) ---------- */
 
 /** How far a round session is, in fields (tiles): done (`decided`), in progress (`open_now`), `left`, and how many each person finished. */
-export interface RoundProgress { total: number; decided: number; people: { person: string; decided: number }[]; open_now?: number; left?: number }
+export interface RoundProgress { total: number; decided: number; people: { person: string; decided: number }[]; open_now?: number; left?: number
+  images_checked?: number; second_checks?: number }  // "Mark bad areas": by core
 /** What a round session's pages get besides the session's settings. */
-export interface RoundDetail { round: 1 | 2; labels_needed: number; level: number | null; remove_class: string; segment_anything: boolean; progress: RoundProgress }
+export interface RoundDetail { round: 1 | 2 | 'areas'; labels_needed: number; level: number | null; remove_class: string; segment_anything: boolean; progress: RoundProgress }
 /** This person's saved answer on a round-1 candidate: its class (`keep`: detection's call confirmed), the mask chosen
  *  with it, or an outline they edited (crop pixels). */
 export interface RoundAnswer { identity: string; subtype: string; keep: boolean; mask: number | null; outline: number[][] | null }
@@ -511,6 +514,8 @@ export interface RoundObject<Shape = number[][]> {
   /** as RoundItem's: SAM small, medium, large, then the stain outline when there are four; `mask` shown first (the
    *  field sends only that one: the others, `more_masks` of them, come from /masks) */
   ai_probability: number | null; decision: string; reason: string; masks: (Shape | null)[]; mask: number; more_masks?: number
+  /** in an excluded area (people's final say): drawn faint, not asked about */
+  excluded?: boolean
 }
 export interface RoundField<Shape = number[][]> {
   tile_id: string; box: { x: number; y: number; width: number; height: number }; objects: RoundObject<Shape>[]; checked: Record<string, RoundCheck>
@@ -527,3 +532,26 @@ export interface RoundScope {
 }
 /** Segment Anything's outlines of a clicked object, smallest first, and the one it would choose. */
 export interface RoundSamOptions { options: { points: number[][]; area_px: number; score: number }[]; chosen: number }
+
+/* ---------- "Mark bad areas" (routes/areas.py) ---------- */
+
+/** Detection's automatic excluded areas of a core image (the analysis uses these): excluded.png, at 1/`scale`. */
+export interface ExcludedInfo {
+  status: string; scale?: number; width?: number; height?: number; version?: string
+  kinds?: { id: string; label: string; color: string; hatch?: boolean; type?: string; fraction?: number }[]
+}
+export type PictureState = (Pyramid & { ready: true }) | { ready: false; state?: string; ahead?: number; error?: string; thumb_size?: number | null }
+export interface AreaImage { stain: string; picture: PictureState | null; excluded: ExcludedInfo; checked_by: string[]; checked_by_me: boolean; edits: number }
+/** One core of a "Mark bad areas" session: all its stain images. */
+export interface AreaCore { core_id: string; images: AreaImage[]; second_check: boolean; open_by: string[]; progress: RoundProgress }
+export interface AreaNext { core_id: string | null; after: string | null; taken: number; progress: RoundProgress }
+/** People's areas of a core image so far (core px; the first ring outer, later ones holes; kind '1'–'4' or 'include'). */
+export interface PeopleAreas { regions: { kind: string; rings: number[][][] }[]; agreement: unknown; edits: { person: string; time: number; kinds: string[] }[] }
+export interface AreasOverview {
+  stains: { stain: string; images: number; checked: number; double_checked: number }[]; cores: number; cores_checked: number
+  agreement: { pairs: number; agree: number; agreement: number | null; mean_iou: number | null
+    disagreements: { core_id: string; stain: string; people: string[]; iou: number; cells_changed: number }[] }
+}
+export interface BadAreaRow { stain: string; type: string; type_name: string; images: number; added_mm2: number; cleared_mm2: number; f1: number | null; tma?: string; donor_id?: string }
+/** The bad-area detector (today: detection's rules) against people's areas. */
+export interface BadAreas { images: number; by_tma: BadAreaRow[]; by_donor: BadAreaRow[]; detector?: string; model: unknown | null }

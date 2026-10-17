@@ -676,13 +676,13 @@ def v2_manifests(project, counts: dict[tuple[str, str], int]) -> None:
     from stainid.v2 import classify, manifest, outlines, proposals
     from stainid.v2.run import groups, proposal_inputs
 
-    calibration, manual, nuclei = proposal_inputs(project)
+    calibration, nuclei = proposal_inputs(project)
     models = {stain: classify.load_model(project, stain) for stain in STAINS}
     for (core_id, stain), tiles in groups(project, STAINS).items():
         threshold = calibration[(tiles[0]["tma"], stain)]
         n = counts.get((core_id, stain), 0)
         manifest.write(project, "proposals", stain, core_id,
-                       proposals.expected(project, stain, core_id, tiles, threshold, manual.get(tiles[0]["image_path"], []), nuclei), candidates=n)
+                       proposals.expected(project, stain, core_id, tiles, threshold, nuclei), candidates=n)
         manifest.write(project, "calls", stain, core_id, classify.expected(project, stain, core_id, models[stain]), candidates=n)
         manifest.write(project, "outlines", stain, core_id, outlines.expected(project, stain, core_id), outlined=n)
         manifest.write(project, "candidates", stain, core_id, classify.assembled_expected(project, stain, core_id), candidates=n)

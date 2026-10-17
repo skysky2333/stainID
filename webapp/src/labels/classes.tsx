@@ -1,110 +1,68 @@
-/* Choosing a label class on the labelling pages: the stain's classes with their keys, and under the class being chosen
-   its types (subtypes). Keys follow labels/classKeys.ts: a class key, then within a moment a number for the type (by
-   its place), or a type's own key for both at once. With the mouse: click the class, then its type (or “No type”). */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+/* Choosing a label class on the labelling pages: the stain's keys in their groups (the server's
+   `vocabulary.assign_keys`): the counted types (1–4), the named look-alikes (Q W E R), the reject (Del) and "unsure"
+   (`). One key, or one click, picks a type at once. */
+import { useCallback, useMemo, useRef } from 'react'
 import type { CSSProperties } from 'react'
-import type { ClassDef, ClassPick, KeyMap, Vocabulary, Waiting } from './classKeys'
-import { byKey, expire, keyOf, pressKey } from './classKeys'
+import type { ClassDef, ClassPick, KeyMap, Vocabulary } from './classKeys'
+import { keyGroups, keySummary, pressKey } from './classKeys'
 import { classExample } from '../api'
 import { classColour } from '../classPalette'
 
 export { classColour }
 
-/** The class keys of a labelling page: what was answered (`onAnswer`, in order) and which class waits for its type.
- *  `waitMs` 0: a class with types waits until its type (or no type) is chosen. */
-export function useClassKeys(keys: KeyMap, waitMs: number, onAnswer: (pick: ClassPick) => void) {
-  const [waiting, setWaitingState] = useState<Waiting | null>(null)
-  const waitingRef = useRef<Waiting | null>(null)
+/** The class keys of a labelling page: a key press or a click answers (`onAnswer`) at once. */
+export function useClassKeys(keys: KeyMap, onAnswer: (pick: ClassPick) => void) {
   const answerRef = useRef(onAnswer)
   answerRef.current = onAnswer
-  const setWaiting = (next: Waiting | null) => { waitingRef.current = next; setWaitingState(next) }
-
-  useEffect(() => {  // the time for the type is up: the class stands without one
-    if (!waiting || waiting.sticky || waitMs <= 0) return
-    const timer = setTimeout(() => {
-      const answer = expire(waitingRef.current, performance.now(), waitMs)
-      if (answer) { setWaiting(null); answerRef.current(answer) }
-    }, Math.max(0, waitMs - (performance.now() - waiting.at)) + 10)
-    return () => clearTimeout(timer)
-  }, [waiting, waitMs])
 
   /** A key press; true when it meant something here. */
   const press = useCallback((key: string) => {
-    const result = pressKey(keys, waitingRef.current, key, performance.now(), waitMs)
-    if (!result.handled) return false
-    setWaiting(result.waiting)
-    result.answers.forEach((a) => answerRef.current(a))
+    const pick = pressKey(keys, key)
+    if (!pick) return false
+    answerRef.current(pick)
     return true
-  }, [keys, waitMs])
-
-  /** A class clicked: answered at once, or waiting (without a time limit) for its type to be clicked. */
-  const pick = useCallback((identity: string) => {
-    if (keys.then[identity]) setWaiting({ identity, at: performance.now(), sticky: true })
-    else { setWaiting(null); answerRef.current({ identity, subtype: null }) }
   }, [keys])
 
-  /** A type (or no type: null) clicked for the waiting class. */
-  const pickType = useCallback((subtype: string | null) => {
-    const current = waitingRef.current
-    if (!current) return
-    setWaiting(null)
-    answerRef.current({ identity: current.identity, subtype })
-  }, [])
-
-  const cancel = useCallback(() => setWaiting(null), [])
-  return useMemo(() => ({ waiting, press, pick, pickType, cancel }), [waiting, press, pick, pickType, cancel])
+  /** A class (and type) clicked. */
+  const pick = useCallback((identity: string, subtype: string | null = null) => answerRef.current({ identity, subtype }), [])
+  return useMemo(() => ({ press, pick }), [press, pick])
 }
 
+/** A swatch as a pick is drawn: solid in its colour, dotted grey for the reject, dotted amber for "unsure". */
+export function pickSwatch(vocabulary: Vocabulary, identity: string, subtype: string | null = null): CSSProperties {
+  const colour = classColour(vocabulary, identity, subtype)
+  return identity === vocabulary.reject || identity === vocabulary.unsure ? { background: 'transparent', border: `2px dotted ${colour}` } : { background: colour }
+}
 
-const shownTypes = (c: ClassDef, typesAsked: boolean) => (typesAsked ? c.subtypes.filter((s) => !s.hidden) : [])
-
-/** The classes as buttons with their keys; under the class being chosen (`active`) its types. `counts`: how many objects
- *  of each class (by identity) are on the page. */
-export function ClassChooser({ vocabulary, keys, typesAsked, active, waiting, waitMs, counts, big = false, swatch, onPick, onPickType }: {
-  vocabulary: Vocabulary; keys: KeyMap; typesAsked: boolean; active: ClassPick | null; waiting: Waiting | null; waitMs: number
-  counts?: Record<string, number>; big?: boolean; swatch?: (identity: string) => CSSProperties; onPick: (identity: string) => void; onPickType: (subtype: string | null) => void
+/** The keys as buttons in their groups ("Plaques 1–4", "Not plaques Q–W", Del, `). `counts`: how many objects of each
+ *  class (by identity) are on the page. */
+export function ClassChooser({ vocabulary, keys, active, counts, big = false, swatch, onPick }: {
+  vocabulary: Vocabulary; keys: KeyMap; active: ClassPick | null; counts?: Record<string, number>; big?: boolean
+  swatch?: (identity: string, subtype: string | null) => CSSProperties; onPick: (identity: string, subtype: string | null) => void
 }) {
-  const open = waiting?.identity ?? active?.identity
-  const described = vocabulary.classes.find((c) => c.id === open)
-  const type = described?.subtypes.find((s) => s.id === active?.subtype && active?.identity === described.id)
+  const described = vocabulary.classes.find((c) => c.id === active?.identity)
   return (
     <div className="class-chooser">
-      <div className="class-list">
-        {byKey(vocabulary, keys).map((c) => {  // in the order of the keys, unsure last
-          const types = shownTypes(c, typesAsked)
-          const chosen = c.id === open
-          return (
-            <div key={c.id} className={`class-row${chosen ? ' open' : ''}`}>
-              <button className={`btn class-btn${big ? ' big' : ''}${chosen ? ' chosen' : ''}`} aria-pressed={chosen} title={c.description}
-                onClick={() => onPick(c.id)}>
-                <span className="kbd">{keyOf(keys, c.id) ?? '·'}</span><span className="swatch" style={swatch ? swatch(c.id) : { background: classColour(vocabulary, c.id) }} />
-                <span className="class-name">{c.name}</span><span className="spacer" />
-                {types.length > 0 && <span className="muted small">{types.length} types</span>}
-                {counts && <span className="muted small">{counts[c.id] ?? ''}</span>}
-              </button>
-              {chosen && types.length > 0 && (
-                <div className={`type-list${waiting ? ' asking' : ''}`} role="group" aria-label={`Type of ${c.name}`}>
-                  {waiting && !waiting.sticky && waitMs > 0 && <span key={waiting.at} className="type-timer" style={{ animationDuration: `${waitMs}ms` }} />}
-                  {types.map((s, i) => {
-                    const own = keyOf(keys, c.id, s.id)
-                    const on = active?.identity === c.id && active.subtype === s.id && !waiting
-                    return (
-                      <button key={s.id} className={`btn small type-btn${on ? ' chosen' : ''}`} aria-pressed={on} title={s.description}
-                        onClick={() => onPickType(s.id)}>
-                        <span className="kbd">{i + 1}</span>{s.name}{own && <span className="kbd muted-kbd" title={`or ${own.toUpperCase()} at once`}>{own.toUpperCase()}</span>}
-                      </button>
-                    )
-                  })}
-                  <button className={`btn small type-btn${active?.identity === c.id && !active.subtype && !waiting ? ' chosen' : ''}`} onClick={() => onPickType(null)}
-                    title="The type is not clear, or you are not sure">
-                    <span className="kbd">0</span>No type / not sure</button>
-                </div>
-              )}
-            </div>
-          )
-        })}
-      </div>
-      {described && <ClassHelp vocabulary={vocabulary} identity={described} typeId={type?.id} />}
+      {keyGroups(vocabulary, keys).map((g) => (
+        <div key={g.group} className="class-group" role="group" aria-label={g.title}>
+          <div className="class-group-title small muted">{g.title} <span className="kbd-text">{g.keys}</span></div>
+          <div className="class-list">
+            {g.items.map((item) => {
+              const chosen = active?.identity === item.identity && (active.subtype ?? null) === item.subtype
+              return (
+                <button key={item.key} className={`btn class-btn${big ? ' big' : ''}${chosen ? ' chosen' : ''}`} aria-pressed={chosen} title={item.description}
+                  onClick={() => onPick(item.identity, item.subtype)}>
+                  <span className="kbd">{item.label}</span>
+                  <span className="swatch" style={swatch ? swatch(item.identity, item.subtype) : pickSwatch(vocabulary, item.identity, item.subtype)} />
+                  <span className="class-name">{item.name}</span><span className="spacer" />
+                  {counts && <span className="muted small">{counts[item.identity] ?? ''}</span>}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      ))}
+      {described && <ClassHelp vocabulary={vocabulary} identity={described} typeId={active?.subtype ?? undefined} />}
     </div>
   )
 }
@@ -121,17 +79,8 @@ export function ClassHelp({ vocabulary, identity, typeId }: { vocabulary: Vocabu
   )
 }
 
-/** The keys in one line, for under the picture: "1–7 class, then 1–3 type (or Q W E at once), 0 no type". */
-export function ClassKeyHint({ vocabulary, keys, typesAsked, waitMs }: { vocabulary: Vocabulary; keys: KeyMap; typesAsked: boolean; waitMs: number }) {
-  const numbers = vocabulary.classes.filter((c) => !c.hidden).map((c) => keyOf(keys, c.id)).filter((k): k is string => !!k)
-  const direct = Object.entries(keys.direct).filter(([, [, s]]) => s !== null).map(([k]) => k.toUpperCase())
-  const most = Math.max(0, ...Object.values(keys.then).map((t) => Object.keys(t).length))
-  return (
-    <span>
-      <span className="kbd">{numbers[0]}</span>{numbers.length > 1 && <>–<span className="kbd">{numbers[numbers.length - 1]}</span></>} class
-      {typesAsked && most > 0 && <>, then <span className="kbd">1</span>–<span className="kbd">{most}</span> type
-        {waitMs > 0 ? ` within ${(waitMs / 1000).toLocaleString()} s` : ''}
-        {direct.length > 0 && <> (or {direct.map((k) => <span key={k} className="kbd">{k}</span>)} at once)</>}, <span className="kbd">0</span> no type</>}
-    </span>
-  )
+/** The keys in one line, for under the picture: "Plaques 1–4 · Not plaques Q–W · Del not a plaque · ` unsure · B brush"
+ *  (`brush` false on pages without the brush). */
+export function ClassKeyHint({ vocabulary, keys, brush = false }: { vocabulary: Vocabulary; keys: KeyMap; brush?: boolean }) {
+  return <span className="class-key-hint">{keySummary(vocabulary, keys, brush)}</span>
 }

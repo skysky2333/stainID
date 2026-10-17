@@ -4,13 +4,14 @@
    Advanced, with the older kinds of session (whole-field review and quick check of the label pool, outline every object). */
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import type { RoundScope, SessionInfo, Vocabulary } from '../api'
+import type { AreasOverview, RoundScope, SessionInfo, Vocabulary } from '../api'
 import { api } from '../api'
 import { ErrorNote, Loaded, Modal, withError } from '../components'
 import { useFetch } from '../hooks'
 import { useProject } from '../project'
 import { Advanced } from '../setup/parts'
 import { FieldPicker } from './fields'
+import { AREAS_TEXT, AREAS_TITLE } from './markareas'
 import { ROUND_TEXT, ROUND_TITLE } from './rounds'
 import { byKey } from './classKeys'
 
@@ -30,7 +31,8 @@ export function NewRoundSession({ stains, onClose, onCreated, onOlder }: {
   const { tmaName, info } = useProject()
   const words = WORDS[info?.kind ?? 'tma'] ?? WORDS.tma
   const [stain, setStain] = useState(stains[0] ?? 'NeuN')
-  const [round, setRound] = useState<1 | 2>(2)  // the field tool is the default: every object of a field, corrected in place
+  const [round, setRound] = useState<1 | 2 | 'areas'>(2)  // the field tool is the default: every object of a field, corrected in place
+  const [order, setOrder] = useState<'problems' | 'random'>('problems')  // "Mark bad areas": likely problems first
   const [where, setWhere] = useState<Where>('all')
   const [tmas, setTmas] = useState<string[]>([])
   const [chosen, setChosen] = useState<string[]>([])
@@ -49,13 +51,19 @@ export function NewRoundSession({ stains, onClose, onCreated, onOlder }: {
   const [busy, setBusy] = useState(false)
   const scope = useFetch<RoundScope>(`/api/labels/rounds/scope?stain=${encodeURIComponent(stain)}`)
   const defaults = useFetch<{ vocabularies: Record<string, Vocabulary> }>('/api/labels/defaults')
-  const placeholder = `${stain} · ${ROUND_TITLE[round]} – ${new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`
-  const nothing = (where === 'pick' && !chosen.length) || (where === 'tmas' && !tmas.length)
+  const areasNow = useFetch<AreasOverview>(round === 'areas' ? '/api/labels/areas' : null)
+  const areas = round === 'areas'
+  const day = new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+  const placeholder = areas ? `${AREAS_TITLE} – ${day}` : `${stain} · ${ROUND_TITLE[round]} – ${day}`
+  const nothing = (where === 'pick' && !chosen.length && !areas) || (where === 'tmas' && !tmas.length)
   const create = async () => {
     setBusy(true)
-    const body = { stain, round, title: title.trim() || placeholder, name, open, instructions, subtypes, labels_needed: needed,
-      level: level === 'all' ? null : Number(level), n_objects: objects, n_fields: fieldCount, spread, seed: seed.trim() === '' ? null : Number(seed),
-      tmas: where === 'tmas' ? tmas : null, tile_ids: where === 'pick' ? chosen : null }
+    const body = areas
+      ? { stain: 'all', kind: 'areas', title: title.trim() || placeholder, name, open, instructions, n_fields: fieldCount, order,
+        seed: seed.trim() === '' ? null : Number(seed), tmas: where === 'tmas' ? tmas : null }
+      : { stain, round, title: title.trim() || placeholder, name, open, instructions, subtypes, labels_needed: needed,
+        level: level === 'all' ? null : Number(level), n_objects: objects, n_fields: fieldCount, spread, seed: seed.trim() === '' ? null : Number(seed),
+        tmas: where === 'tmas' ? tmas : null, tile_ids: where === 'pick' ? chosen : null }
     const made = await withError(() => api.post<SessionInfo>('/api/labels/sessions', body), setError)
     setBusy(false)
     if (made) { onCreated(made); onClose() }
@@ -65,12 +73,12 @@ export function NewRoundSession({ stains, onClose, onCreated, onOlder }: {
   return (
     <Modal title="New labelling session" onClose={onClose} wide>
       <div className="new-session">
-        <fieldset className="field"><legend>Stain</legend>
+        {!areas && <fieldset className="field"><legend>Stain</legend>
           <div className="segmented">{stains.map((s) => (
             <button key={s} type="button" className={`btn${stain === s ? ' chosen' : ''}`} aria-pressed={stain === s}
               onClick={() => { setStain(s); setChosen([]); setTmas([]) }}>{s}</button>
           ))}</div>
-        </fieldset>
+        </fieldset>}
         <fieldset className="field"><legend>What should people do?</legend>
           <div className="choice-grid">
             {([2, 1] as const).map((r) => (
@@ -79,9 +87,17 @@ export function NewRoundSession({ stains, onClose, onCreated, onOlder }: {
                 <span><b>{ROUND_TITLE[r]}{r === 2 ? ' (start here)' : ''}</b><span className="small secondary">{ROUND_TEXT[r]}</span></span>
               </label>
             ))}
+            <label className={`choice-card${areas ? ' chosen' : ''}`}>
+              <input type="radio" name="round" checked={areas} onChange={() => { setRound('areas'); if (where === 'pick') setWhere('all') }} />
+              <span><b>{AREAS_TITLE}</b><span className="small secondary">{AREAS_TEXT}</span></span>
+            </label>
           </div>
-          <p className="small muted" style={{ margin: '6px 0 0' }}>People work one field at a time: a field someone is on, or has finished, is not handed to anyone else. Both rounds share one set of answers.</p>
+          <p className="small muted" style={{ margin: '6px 0 0' }}>{areas
+            ? 'Every stain of a core in one go. A sample is enough: the areas people mark teach and test the bad-area detection; the analysis keeps detection’s own areas. About 1 core in 10 also goes to a second person, to see how well people agree.'
+            : 'People work one field at a time: a field someone is on, or has finished, is not handed to anyone else. Both rounds share one set of answers.'}</p>
         </fieldset>
+        {areas ? <AreasScope scope={scope.data} overview={areasNow} where={where} setWhere={setWhere} tmas={tmas} setTmas={setTmas}
+          count={fieldCount} setCount={setFieldCount} order={order} setOrder={setOrder} words={words} tmaName={info?.kind === 'tma' || !info?.kind ? tmaName : (t) => t} /> : (
         <Loaded state={scope} label="Looking at which cores are ready…">
           {(s) => <>
             <fieldset className="field"><legend>Which {words.pictures}?</legend>
@@ -126,10 +142,19 @@ export function NewRoundSession({ stains, onClose, onCreated, onOlder }: {
               )
             })() : null}
           </>}
-        </Loaded>
+        </Loaded>)}
         <label className="field">Title people see<input type="text" value={title} placeholder={placeholder} onChange={(e) => setTitle(e.target.value)} /></label>
         <label className="layer-toggle"><input type="checkbox" checked={open} onChange={(e) => setOpen(e.target.checked)} />Open to labellers right away</label>
-        <Advanced hint="how generous, people per field, session ID, note, types, older kinds of session">
+        {areas ? <Advanced hint="session ID, random seed, note">
+          <div className="row" style={{ alignItems: 'flex-end' }}>
+            <label className="field">Session ID (in links and files)<input type="text" value={name} placeholder="made from the title"
+              onChange={(e) => setName(e.target.value.replace(/[^A-Za-z0-9_-]/g, '_'))} /></label>
+            <label className="field">Random seed<input type="number" value={seed} placeholder="new each time" style={{ width: 130 }}
+              onChange={(e) => setSeed(e.target.value)} /></label>
+          </div>
+          <label className="field">Note for labellers (optional)<textarea rows={2} value={instructions} placeholder="e.g. Pay attention to the edges of the core."
+            onChange={(e) => setInstructions(e.target.value)} /></label>
+        </Advanced> : <Advanced hint="how generous, people per field, session ID, note, types, older kinds of session">
           <label className="field">How generous (which candidates are shown)
             <select value={level} onChange={(e) => setLevel(e.target.value)}>
               {Object.keys(scope.data?.levels ?? LEVEL_TEXT).map((k) => <option key={k} value={k}>{LEVEL_TEXT[k] ?? k}</option>)}</select></label>
@@ -147,20 +172,69 @@ export function NewRoundSession({ stains, onClose, onCreated, onOlder }: {
           </div>}
           <label className="field">Note for labellers (optional)<textarea rows={2} value={instructions} placeholder="e.g. Count only neurons with a visible nucleus."
             onChange={(e) => setInstructions(e.target.value)} /></label>
-          {vocabulary && <p className="muted small" style={{ margin: 0 }}>Classes: {byKey(vocabulary, { direct: {}, then: {} }).map((c) => c.name).join(' · ')}.
+          {vocabulary && <p className="muted small" style={{ margin: 0 }}>Classes: {byKey(vocabulary, { direct: {} }).map((c) => c.name).join(' · ')}.
             {' '}<Link to="/settings#label-classes">Change the classes</Link></p>}
           {typed.length > 0 && <label className="layer-toggle"><input type="checkbox" checked={subtypes} onChange={(e) => setSubtypes(e.target.checked)} />
             Also ask for the type ({typed.map((c) => c.name).join(', ')})</label>}
           <p className="small secondary" style={{ marginBottom: 0 }}>Older kinds of session — the whole-field review and quick check on the current label pool, and
             “Outline every object” (a segmentation check): <button className="link-btn" onClick={onOlder}>make one of those instead…</button></p>
-        </Advanced>
+        </Advanced>}
         <ErrorNote error={error ?? scope.error} />
         <div className="row"><span className="spacer" />
           {nothing && <span className="small muted">{where === 'pick' ? `Click squares on the ${words.pictures} above to choose fields.` : `Tick at least one ${words.group}.`}</span>}
           <button className="btn" onClick={onClose}>Cancel</button>
-          <button className="btn primary" disabled={busy || nothing || !scope.data?.cores_ready} onClick={create}>{busy ? 'Creating…' : 'Create session'}</button>
+          <button className="btn primary" disabled={busy || nothing || (!areas && !scope.data?.cores_ready)} onClick={create}>{busy ? 'Creating…' : 'Create session'}</button>
         </div>
       </div>
     </Modal>
   )
+}
+
+/** "Mark bad areas": which cores (every one, or some TMAs), how many (every one not checked yet, or a sample) and in
+ *  which order (likely problems first, or at random). */
+function AreasScope({ scope, overview, where, setWhere, tmas, setTmas, count, setCount, order, setOrder, words, tmaName }: {
+  scope: RoundScope | null; overview: { data: AreasOverview | null; error: string | null }
+  where: Where; setWhere: (w: Where) => void; tmas: string[]; setTmas: (t: string[]) => void
+  count: number; setCount: (n: number) => void; order: 'problems' | 'random'; setOrder: (o: 'problems' | 'random') => void
+  words: (typeof WORDS)[keyof typeof WORDS]; tmaName: (tma: string) => string
+}) {
+  const o = overview.data
+  const left = o ? o.cores - o.cores_checked : null
+  return <>
+    <fieldset className="field"><legend>Which {words.pictures}?</legend>
+      {o && <p className="small secondary" style={{ margin: '0 0 8px' }}>{o.cores_checked.toLocaleString()} of {o.cores.toLocaleString()} {words.pictures} have
+        been checked for bad areas so far.</p>}
+      <div className="segmented">
+        <button type="button" className={`btn${where !== 'tmas' ? ' chosen' : ''}`} onClick={() => setWhere('all')}>Every {words.pictures.slice(0, -1)}</button>
+        <button type="button" className={`btn${where === 'tmas' ? ' chosen' : ''}`} onClick={() => setWhere('tmas')}>Some {words.groups}</button>
+      </div>
+      {where === 'tmas' && <div className="tma-chips">{(scope?.tmas ?? []).map((t) => (
+        <label key={t.tma} className="tma-chip">
+          <input type="checkbox" checked={tmas.includes(t.tma)} onChange={() => setTmas(tmas.includes(t.tma) ? tmas.filter((x) => x !== t.tma) : [...tmas, t.tma])} />
+          <b>{tmaName(t.tma)}</b> <span className="muted small">{t.cores} {words.pictures}</span>
+        </label>
+      ))}</div>}
+    </fieldset>
+    <fieldset className="field"><legend>How many {words.pictures}</legend>
+      <div className="segmented">
+        <button type="button" className={`btn${count < 0 ? ' chosen' : ''}`} onClick={() => setCount(-1)}>All not checked yet{left != null && where !== 'tmas' ? ` (${left.toLocaleString()})` : ''}</button>
+        <button type="button" className={`btn${count > 0 ? ' chosen' : ''}`} onClick={() => setCount(count > 0 ? count : 30)}>A sample</button>
+      </div>
+      {count > 0 && <label className="inline-number small" style={{ marginTop: 6 }}>
+        <input type="number" min={1} value={count} style={{ width: 90 }} onChange={(e) => setCount(Math.max(1, Number(e.target.value) || 1))} />
+        {' '}{words.pictures}, taken in the order below</label>}
+      <p className="small muted" style={{ margin: '6px 0 0' }}>People stop whenever they like: the session is a sample, it does not need every {words.pictures.slice(0, -1)} checked.
+        {' '}{words.pictures[0].toUpperCase() + words.pictures.slice(1)} someone checked already, or in another open session, are left out.</p>
+    </fieldset>
+    <fieldset className="field"><legend>Order</legend>
+      <div className="segmented">
+        <button type="button" className={`btn${order === 'problems' ? ' chosen' : ''}`} onClick={() => setOrder('problems')}>Likely problems first</button>
+        <button type="button" className={`btn${order === 'random' ? ' chosen' : ''}`} onClick={() => setOrder('random')}>Random</button>
+      </div>
+      <p className="small muted" style={{ margin: '6px 0 0' }}>{order === 'problems'
+        ? `${words.pictures[0].toUpperCase() + words.pictures.slice(1)} where detection found much to leave out, or little tissue, come first; then the rest at random.`
+        : `${words.pictures[0].toUpperCase() + words.pictures.slice(1)} in a random order: a fair sample for testing the bad-area detection.`}</p>
+    </fieldset>
+    <ErrorNote error={overview.error} />
+  </>
 }

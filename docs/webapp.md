@@ -253,26 +253,31 @@ admin, without a name, in a new tab: what annotators see, with nothing saved or 
 **On the page.** Every object is always shown, one shape each, with a thin dark edge so it reads on light and dark
 tissue:
 
-- solid in its class colour when it has a class: every class its own saturated colour, unsure (0) white;
-- dotted grey when it is not active: detection rejected it, someone removed it (Delete), or it was just added and waits
-  for its class (with a small diamond). A class key makes any of them solid.
+- solid in its type's colour: every counted type and every named look-alike its own saturated colour (a positive
+  identity without a type, as detection may call it, in the identity's colour);
+- dotted amber with a "?" when someone is unsure (` or 0);
+- dotted grey when it is not active: detection rejected it, someone rejected it (Delete), or it was just added and
+  waits for its type (with a small diamond). A number key makes any of them solid;
+- faint when it lies in an excluded area.
 
 The page fits the window: the picture as large as it can be and the side panel scrolling by itself, so the page never
 scrolls while the picture is panned (drag, or hold the middle button; scroll to zoom). The side panel shows, from the
 top: the object under the mouse (its class, detection's call and score, why it was left out, its area and which of its
-three outlines shows, *n/3*); the class keys with their colours (0 unsure); the keys; this field (checked, changed,
+three outlines shows, *n/3*); the keys in their groups with their colours ("Plaques 1–4 · Not plaques Q–W · Del not a
+plaque · ` unsure · B brush"); the keys; this field (checked, changed,
 added; tags and a note); *Save* and *Save and continue*; **?** for the longer help, display options and the other
 fields; and the *Tutorial* link. Pointing at an object also shows its name beside it on the picture. Every key acts on the object under the mouse (round 2) or on screen (round 1):
 
 | Key | What it does |
 |---|---|
-| 1–9 | its class. For a class with types, a type number right after it (within 1 s, `labels.subtype_wait_s`) picks the type, and a type's own letter key answers class and type at once ([label_classes.md](label_classes.md)) |
-| 0 | unsure: left out of training; that person is not asked again, but the others are |
-| Delete (Backspace) | not an object: it turns dotted grey and stays visible (also an object the person added); a class key brings it back |
+| 1–4, 5–9 | its counted type: 6E10 1 compact, 2 diffuse, 3 cored-neuritic, 4 small; AT8 1 pretangle, 2 mature tangle, 3 ghost tangle; NeuN 1 neuron (classes people add take 5–9). Solid, each type its own colour ([label_classes.md](label_classes.md)) |
+| Q W E R, T Y U … | a named look-alike, solid and not counted: 6E10 Q CAA, W staining inside a neuron; AT8 Q neuritic crown, W tau in an astrocyte, E thread |
+| ` (or 0) | unsure: dotted amber with a "?", left out of training and evaluation; that person is not asked again, but the others are |
+| Delete (Backspace) | the stain's single reject (not a plaque, not tau, not a neuron): it turns dotted grey and stays visible, the same as detection's own rejects (also an object the person added); a number key makes it solid again |
 | Tab / Shift+Tab (or + / −) | a bigger or smaller outline: the three Segment Anything outputs come with the object, so it changes at once |
 | Click an object | precise editing of this object, with everything else locked (tags, note, other fields, saving): a click adds a spot to it, Shift+click leaves one out, drag the white dots (at most 48, the outline simplified to them); Z one step back; a click beyond its neighbourhood (its box grown by half its size, at least 24 screen pixels, drawn faintly) or Enter keeps the edit (the view goes back to where it was), Esc cancels. Classes only need the mouse over the object (no click). The right button has no meaning on the field; the middle one pans |
-| Space | the field tool: hide / show everything drawn over the picture (outlines, dots, names, the exclusion hatch, layers), for a clean look at the tissue; "Overlays hidden · Space" shows meanwhile. In *Check detection's calls* Space is still precise editing of the object on screen |
-| E | the exclusion brush, on and off (Esc also leaves): the keys 1–4 choose the type (1 fold or tissue damage, 2 artifact: scratch, bubble, debris, linear, 3 no tissue / empty, 4 out of focus or bad staining), a drag paints it as a hatch in the type's colour, Shift-drag erases and marks the part as fine (an *include* override, also over an exclusion detection made: "this part is fine"), the wheel sets the brush size, the middle button pans; outlines are locked meanwhile. Saved with Save as typed rings in field pixels (an `exclude` label, `labels/exclusions.py`). The excluded areas are drawn over every field from the start (Space hides them with everything else; *Display options* turns them off): detection's folds (type 1 colour), linear artifacts (type 2), no tissue (type 3), the AT8 edge guard and hand-drawn exclusions in their own colours, and what other annotators marked or cleared (GET `…/fields/{tile}/excluded`, the same layer as the Cores view's). Objects whose centre lies in it are that person's "excluded by the annotator": left out of scoring, agreement and training, and not confirmed when the field is finished. The analyses ignore the areas unless *Settings → More study settings → Apply annotators' excluded areas to the analysis* (`labels.apply_exclusions`, off by default) adds them to the hand-drawn exclusions |
+| Space | the field tool: hide / show everything drawn over the picture (outlines, dots, names, the excluded areas, layers), for a clean look at the tissue; "Overlays hidden · Space" shows meanwhile. In *Check detection's calls* Space is still precise editing of the object on screen |
+| B | the brush, on and off (Esc also leaves): while it is on, the keys 1–4 choose the area type (1 fold or tissue damage, 2 artifact: scratch, bubble, debris, linear, 3 no tissue / empty, 4 out of focus or bad staining) and the class keys rest; a drag paints it as a hatch in the type's colour, Shift-drag marks the part fine (an *include*, also over an area detection excluded), the wheel sets the brush size, the middle button pans; outlines are locked meanwhile. Saved with Save as typed rings in field pixels (an `exclude` label, `labels/exclusions.py`): **people's areas**. Over every field the page draws detection's own areas hatched, *Excluded from analysis* (GET `…/fields/{tile}/excluded`, the automatic layer, the same as the Cores view's: folds, linear artifacts, no tissue, the AT8 edge guard), and people's areas outlined on top (GET `…/fields/{tile}/annotated`: painted ones in their type's colour, the parts marked fine dashed green). People's areas only train and evaluate models: objects in them (by people's final say over detection's areas, `exclusions.final_say`) are drawn faint, are not asked about, and are left out of training and scoring; the bad-area detector is compared with them on the Models page. The analysis never reads them, so marking an area changes no result and makes no step out of date. Space hides them with everything else; *Display options* turns them off |
 | Z | undo the last unsaved change (a brush stroke too) |
 | Enter | round 1: keep detection's call |
 | Ctrl+S (⌘S) | save, and stay on the field |

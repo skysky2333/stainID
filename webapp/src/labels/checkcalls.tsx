@@ -1,8 +1,8 @@
 /* Round 1, "Check detection's calls": one field (tile) at a time, its candidates one after the other (accepted and
    rejected, most informative first) with detection's class, type, score and outline. The server hands each person a field
    nobody else is on (held while this page is open); once someone finishes a field it is not handed to anyone else.
-   The keys are those of round 2, acting on the object on screen: Enter keeps detection's call, 1–9 (and the type keys)
-   choose the class, 0 unsure, Delete not an object, Tab / Shift+Tab a bigger or smaller outline (the three Segment
+   The keys are those of round 2, acting on the object on screen: Enter keeps detection's call, 1–4 pick a counted
+   type, Q W E R a named look-alike, ` (or 0) unsure, Delete the reject (dotted grey), Tab / Shift+Tab a bigger or smaller outline (the three Segment
    Anything masks come with the object: no waiting), Space precise editing (right-click a spot to include, left-click one
    to leave out, drag the corners; Space again keeps it), Z undoes the last unsaved answer. Answers stay on this page
    ("3 unsaved changes", with a draft in this browser in case of a reload) until Save (stays on the field) or Save and
@@ -14,7 +14,7 @@ import type { RoundAnswer, RoundDetail, RoundItem, RoundProgress, RoundSamOption
 import { api, apiUrl, enc } from '../api'
 import { Empty, ErrorNote, Loading, fmt } from '../components'
 import type { ClassPick } from './classKeys'
-import { classOf } from './classKeys'
+import { resolveClass } from './classKeys'
 import { ClassChooser } from './classes'
 import { PicturesBeingMade, type Picture, usePreload } from './quickcheck'
 import type { RoundEvent } from './rounds'
@@ -57,7 +57,6 @@ export function CheckCalls({ detail, onEvent }: { detail: SessionDetail; onEvent
   const tell = (event: RoundEvent) => onEvent?.(event)
   const meta = detail.meta as SessionDetail['meta'] & RoundDetail
   const { vocabulary, keys, subtypes: typesAsked } = meta
-  const waitMs = Math.round(1000 * vocabulary.subtype_wait_s)
   const unsure = unsureClass(vocabulary)
   const [tile, setTile] = useState<RoundTile | null>(null)
   const [answers, setAnswers] = useState<Record<string, Local>>({})  // unsaved, by candidate
@@ -205,9 +204,14 @@ export function CheckCalls({ detail, onEvent }: { detail: SessionDetail; onEvent
     setMasks((m) => ({ ...m, [item.key]: i }))
   }
 
-  const classKeys = useCandidateKeys(keys, waitMs, {
+  const classKeys = useCandidateKeys(keys, {
     answering: picture === 'ready' && !precise && !!item,
-    onClass: (pick) => { tell(pick.subtype ? 'subtype' : 'class'); answer({ kind: 'class', pick }) },
+    onClass: (pick) => {
+      if (pick.identity === meta.remove_class) tell('remove')
+      else if (pick.identity === unsure) tell('unsure')
+      else tell(item && resolveClass(vocabulary, item.ai_value).identity === pick.identity ? 'subtype' : 'class')
+      answer({ kind: 'class', pick })
+    },
     onUnsure: () => { if (unsure) { tell('unsure'); answer({ kind: 'class', pick: { identity: unsure, subtype: null } }) } },
     onRemove: () => { if (meta.remove_class) { tell('remove'); answer({ kind: 'class', pick: { identity: meta.remove_class, subtype: null } }) } },
     onMask: (bigger) => { if (item) { tell('mask'); chooseMask(stepMask(item.masks, maskOf(item), bigger)) } },
@@ -241,7 +245,7 @@ export function CheckCalls({ detail, onEvent }: { detail: SessionDetail; onEvent
     return () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
   }, [dragging])  // eslint-disable-line react-hooks/exhaustive-deps
 
-  const look = item ? lookOf(vocabulary, meta.remove_class, item.ai_value) : null
+  const look = item ? lookOf(vocabulary, meta.remove_class, resolveClass(vocabulary, item.ai_value).identity, item.ai_subtype || resolveClass(vocabulary, item.ai_value).subtype) : null
   const outline = item ? (precise ? precise.points : outlineNow(item)) : null
   const unit = item ? item.crop_px / 300 : 1
   const mine = item ? (local ? asSaved(item, local) : item.mine) : null
@@ -327,16 +331,12 @@ export function CheckCalls({ detail, onEvent }: { detail: SessionDetail; onEvent
                 <fieldset className="plain-fieldset round-actions" disabled={picture !== 'ready' || !!precise}>
                   <button className="btn primary big" onClick={() => { tell('keep'); answer({ kind: 'keep' }) }}><span className="kbd">Enter</span> Keep as it is</button>
                   <div className="row">
-                    {meta.remove_class && <button className="btn" onClick={() => { tell('remove'); answer({ kind: 'class', pick: { identity: meta.remove_class, subtype: null } }) }}
-                      title={`Recorded as “${classOf(vocabulary, meta.remove_class)?.name ?? meta.remove_class}”`}><span className="kbd">Del</span> Not an object</button>}
-                    {unsure && <button className="btn" onClick={() => { tell('unsure'); answer({ kind: 'class', pick: { identity: unsure, subtype: null } }) }}><span className="kbd">0</span> Unsure</button>}
                     <button className="btn" onClick={togglePrecise} title="Fix the outline spot by spot"><span className="kbd">Space</span> Precise edit</button>
                   </div>
                 </fieldset>
-                <h3 className="round-change">Or change the class</h3>
+                <h3 className="round-change">Or change it</h3>
                 <fieldset className="plain-fieldset" disabled={picture !== 'ready' || !!precise}>
-                  <ClassChooser vocabulary={vocabulary} keys={keys} typesAsked={typesAsked} active={null} waiting={classKeys.waiting} waitMs={waitMs} swatch={lookSwatch(vocabulary, meta.remove_class)}
-                    onPick={classKeys.pick} onPickType={classKeys.pickType} />
+                  <ClassChooser vocabulary={vocabulary} keys={keys} active={null} swatch={lookSwatch(vocabulary, meta.remove_class)} onPick={classKeys.pick} />
                 </fieldset>
                 <div className="row">
                   <button className="btn small" disabled={!history.length} onClick={undo}><span className="kbd">Z</span> Undo last</button>
@@ -354,7 +354,7 @@ export function CheckCalls({ detail, onEvent }: { detail: SessionDetail; onEvent
               </div></Empty>
           )}
         </>}
-      <KeyLegend round={1} vocabulary={vocabulary} keys={keys} typesAsked={typesAsked} waitMs={waitMs} sam={meta.segment_anything} />
+      <KeyLegend round={1} vocabulary={vocabulary} keys={keys} sam={meta.segment_anything} />
     </div>
   )
 }

@@ -8,9 +8,9 @@ import type { RoundLive, RoundProgress } from '../api'
 import { api } from '../api'
 import { Progress } from '../components'
 import type { ClassPick, KeyMap, Vocabulary } from './classKeys'
-import { byKey, classText } from './classKeys'
+import { classText, keyGroups, keyName } from './classKeys'
 import { ClassKeyHint, useClassKeys } from './classes'
-import { CLASS_COLOURS, INACTIVE_GREY, classColour } from '../classPalette'
+import { CLASS_COLOURS, INACTIVE_GREY, UNSURE_AMBER, classColour } from '../classPalette'
 
 export const ROUND_TITLE: Record<1 | 2, string> = { 1: 'Check detection’s calls', 2: 'Fix the field' }
 export const ROUND_TEXT: Record<1 | 2, string> = {
@@ -206,9 +206,9 @@ export function callText(vocabulary: Vocabulary, identity: string, subtype: stri
   return classText(vocabulary, pick, typesAsked)
 }
 
-/** The class meaning "unsure" in this vocabulary (its first shown class with the role skip). */
+/** The class meaning "unsure" in this vocabulary (the server's, else its first shown class with the role skip). */
 export function unsureClass(vocabulary: Vocabulary): string | undefined {
-  return vocabulary.classes.find((c) => c.role === 'skip' && !c.hidden)?.id
+  return vocabulary.unsure || vocabulary.classes.find((c) => c.role === 'skip' && !c.hidden)?.id
 }
 
 export const polygonPoints = (points: number[][]) => points.map((p) => p.join(',')).join(' ')
@@ -234,21 +234,22 @@ export function useFitScreen() {
 }
 export type Look = 'class' | 'removed' | 'unsure' | 'new'
 
-/** How an object with this call is drawn. Dotted is grey and means "not active": rejected by detection or removed by a
- *  person (the stain's "not an object"), or just added and waiting for its class. Every chosen category is solid in its
- *  own colour: each class its class colour, unsure (0) its own. */
-export function lookOf(vocabulary: Vocabulary, removeClass: string, identity: string | null | undefined): { look: Look; colour: string; dash: boolean } {
+/** How an object with this call is drawn. Dotted grey means "not active": the reject (Del, the stain's "not a
+ *  plaque") and detection's own rejects look the same, and so does an object just added and waiting for its class.
+ *  Dotted amber with a "?" is "unsure" (` or 0). Every counted type and named look-alike is solid in its own colour
+ *  (a positive identity without a type, as detection may call it, in the identity's colour). */
+export function lookOf(vocabulary: Vocabulary, removeClass: string, identity: string | null | undefined, subtype?: string | null): { look: Look; colour: string; dash: boolean } {
   if (!identity) return { look: 'new', colour: GREY, dash: true }
   const role = vocabulary.classes.find((c) => c.id === identity)?.role
-  if (role === 'skip') return { look: 'unsure', colour: classColour(vocabulary, identity), dash: false }
-  if (identity === removeClass) return { look: 'removed', colour: GREY, dash: true }
-  return { look: 'class', colour: tissueColour(vocabulary, identity), dash: false }
+  if (role === 'skip' || identity === vocabulary.unsure) return { look: 'unsure', colour: UNSURE_AMBER, dash: true }
+  if (identity === removeClass || identity === vocabulary.reject) return { look: 'removed', colour: GREY, dash: true }
+  return { look: 'class', colour: tissueColour(vocabulary, identity, subtype), dash: false }
 }
 
-/** A class swatch drawn as its look (solid colour, or a dotted outline for "not an object" and "unsure"). */
+/** A class swatch drawn as its look (solid colour, or a dotted outline for the reject and "unsure"). */
 export function lookSwatch(vocabulary: Vocabulary, removeClass: string) {
-  return (identity: string) => {
-    const look = lookOf(vocabulary, removeClass, identity)
+  return (identity: string, subtype: string | null = null) => {
+    const look = lookOf(vocabulary, removeClass, identity, subtype)
     return look.dash ? { background: 'transparent', border: `2px dotted ${look.colour}` } : { background: look.colour }
   }
 }
@@ -256,8 +257,8 @@ export function lookSwatch(vocabulary: Vocabulary, removeClass: string) {
 /* ---------- the keys of both rounds, acting on the object under the cursor (round 2) or on screen (round 1) ---------- */
 
 export interface CandidateActions {
-  onClass: (pick: ClassPick) => void  // 1–9 and the type keys: this class
-  onUnsure: () => void  // 0
+  onClass: (pick: ClassPick) => void  // 1–9 and Q W E R …: this type
+  onUnsure: () => void  // ` (or 0)
   onRemove: () => void  // Delete / Backspace: not an object (undoable)
   onMask: (bigger: boolean) => void  // Tab / + bigger, Shift+Tab / − smaller
   onPrecise: () => void  // Space: precise editing in and out
@@ -268,11 +269,11 @@ export interface CandidateActions {
   answering: boolean
 }
 
-/** The key handling shared by both rounds; returns the class keys (which class waits for its type). */
-export function useCandidateKeys(keys: KeyMap, waitMs: number, actions: CandidateActions) {
+/** The key handling shared by both rounds; returns the class keys. */
+export function useCandidateKeys(keys: KeyMap, actions: CandidateActions) {
   const latest = useRef(actions)
   latest.current = actions
-  const classKeys = useClassKeys(keys, waitMs, (pick) => latest.current.onClass(pick))
+  const classKeys = useClassKeys(keys, (pick) => latest.current.onClass(pick))
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const a = latest.current
@@ -281,14 +282,15 @@ export function useCandidateKeys(keys: KeyMap, waitMs: number, actions: Candidat
       if (e.key === '+' || e.key === '=') { a.onMask(true); return }
       if (e.key === '-' || e.key === '_') { a.onMask(false); return }
       if (e.repeat) return
-      if (e.key === ' ') { e.preventDefault(); classKeys.cancel(); a.onPrecise(); return }
-      if (e.key === 'Escape') { classKeys.cancel(); a.onEscape?.(); return }
-      if (e.key.toLowerCase() === 'z' && !keys.direct.z) { e.preventDefault(); classKeys.cancel(); a.onUndo(); return }
+      if (e.key === ' ') { e.preventDefault(); a.onPrecise(); return }
+      if (e.key === 'Escape') { a.onEscape?.(); return }
+      if (e.key.toLowerCase() === 'z' && !keys.direct.z) { e.preventDefault(); a.onUndo(); return }
       if (!a.answering) return
-      if (e.key === 'Enter' && !classKeys.waiting) { e.preventDefault(); a.onEnter?.(); return }
-      if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); classKeys.cancel(); a.onRemove(); return }
-      if (classKeys.press(e.key)) { e.preventDefault(); return }
-      if (e.key === '0') { e.preventDefault(); a.onUnsure() }
+      if (e.key === 'Enter') { e.preventDefault(); a.onEnter?.(); return }
+      const name = keyName(keys, e.key)
+      if (name === 'delete') { e.preventDefault(); a.onRemove(); return }  // Del (or Backspace): the reject, dotted grey
+      if (name === '`' || e.key === '0') { e.preventDefault(); a.onUnsure(); return }  // ` (or 0): unsure, dotted amber
+      if (classKeys.press(e.key)) e.preventDefault()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -296,28 +298,29 @@ export function useCandidateKeys(keys: KeyMap, waitMs: number, actions: Candidat
   return classKeys
 }
 
-/** The class keys with their colours: 1–9 (each class its own colour, solid), then 0 unsure. While a class with types
- *  waits for its type, the type keys show under it. */
-export function ClassLegend({ vocabulary, keys, removeClass, waiting }: { vocabulary: Vocabulary; keys: KeyMap; removeClass: string; waiting?: string | null }) {
-  const keyOf = (id: string) => Object.entries(keys.direct).find(([, [i, s]]) => i === id && s === null)?.[0]
+/** The class keys with their colours, in their groups: "Plaques 1–4" (each type its own colour, solid), "Not plaques
+ *  Q–W" (solid), Del the reject (dotted grey), ` unsure (dotted amber "?"). `active`: the call of the object the keys
+ *  act on, marked in the list. */
+export function ClassLegend({ vocabulary, keys, removeClass, active }: { vocabulary: Vocabulary; keys: KeyMap; removeClass: string; active?: ClassPick | null }) {
   return (
-    <ul className="class-legend small">
-      {byKey(vocabulary, keys).map((c) => c.role === 'skip' ? (  // in the order of the keys: 1, 2, 3 …, unsure (0) last
-        <li key={c.id} title={c.description}><span className="kbd key-slot">0</span>
-          <span className="look-swatch look-unsure" style={{ borderColor: classColour(vocabulary, c.id), background: classColour(vocabulary, c.id) }} />{c.name}</li>
-      ) : c.id === removeClass ? (
-        <li key={c.id} title={c.description}><span className="kbd key-slot">{keyOf(c.id) ?? 'Del'}</span>
-          <span className="look-swatch look-removed" style={{ borderColor: GREY }} /><span className="ellipsis">{c.name} — dotted grey{keyOf(c.id) ? ' (or Del)' : ''}</span></li>
-      ) : (
-        <li key={c.id} className={waiting === c.id ? 'waiting' : ''} title={c.description}>
-          <span className="kbd key-slot">{keyOf(c.id) ?? '·'}</span>
-          <span className="look-swatch" style={{ borderColor: tissueColour(vocabulary, c.id), background: tissueColour(vocabulary, c.id) }} />
-          <span className="ellipsis">{c.name}</span>
-          {waiting === c.id && <span className="muted"> — now its type: {Object.entries(keys.then[c.id] ?? {}).map(([k, t]) =>
-            `${k} ${c.subtypes.find((s) => s.id === t)?.name ?? t}`).join(' · ')} · 0 none</span>}
-        </li>
+    <div className="class-legend-groups">
+      {keyGroups(vocabulary, keys).map((g) => (
+        <div key={g.group}>
+          <div className="small muted class-group-title">{g.title} <span className="kbd-text">{g.keys}</span></div>
+          <ul className="class-legend small">
+            {g.items.map((item) => {
+              const look = lookOf(vocabulary, removeClass, item.identity, item.subtype)
+              const on = !!active && active.identity === item.identity && (active.subtype ?? null) === item.subtype
+              return (
+                <li key={item.key} className={on ? 'waiting' : ''} title={item.description}><span className="kbd key-slot">{item.label}</span>
+                  <span className={`look-swatch look-${look.look}`} style={{ borderColor: look.colour, background: look.dash ? 'transparent' : look.colour }} />
+                  <span className="ellipsis">{item.name}{g.group === 'reject' ? ' — dotted grey' : g.group === 'unsure' ? ' — dotted amber ?' : ''}</span></li>
+              )
+            })}
+          </ul>
+        </div>
       ))}
-    </ul>
+    </div>
   )
 }
 
@@ -325,8 +328,9 @@ export function ClassLegend({ vocabulary, keys, removeClass, waiting }: { vocabu
 export function LookLegend() {
   return (
     <ul className="look-legend small secondary">
-      <li><span className="look-swatch" style={{ borderColor: CLASS_COLOURS[0], background: CLASS_COLOURS[0] }} />solid, in the class colour: counts as that class</li>
-      <li><span className="look-swatch look-removed" style={{ borderColor: GREY }} />dotted grey: rejected by detection or removed — a class key brings it back</li>
+      <li><span className="look-swatch" style={{ borderColor: CLASS_COLOURS[0], background: CLASS_COLOURS[0] }} />solid, in its type’s colour: that type</li>
+      <li><span className="look-swatch look-removed" style={{ borderColor: GREY }} />dotted grey: rejected (Del, or by detection) — a number key makes it solid again</li>
+      <li><span className="look-swatch look-unsure" style={{ borderColor: UNSURE_AMBER }} />dotted amber with “?”: unsure — left out of training and evaluation</li>
       <li><span className="look-swatch look-new" style={{ borderColor: GREY }} /><span className="look-diamond" aria-hidden="true" />dotted grey with a diamond: new, choose its class</li>
     </ul>
   )
@@ -359,16 +363,12 @@ export function simplifyPolygon(points: number[][], most = 48): number[][] {
 }
 
 /** The keys in one compact line, always on screen. */
-export function KeyLegend({ round, vocabulary, keys, typesAsked, waitMs, sam }: {
-  round: 1 | 2; vocabulary: Vocabulary; keys: KeyMap; typesAsked: boolean; waitMs: number; sam: boolean
-}) {
+export function KeyLegend({ round, vocabulary, keys, sam }: { round: 1 | 2; vocabulary: Vocabulary; keys: KeyMap; sam: boolean }) {
   return (
     <div className="key-help key-legend small secondary" aria-label="Keys">
       {round === 2 && <span>Point at an object: the keys act on it</span>}
       {round === 1 && <span><span className="kbd">Enter</span> keep detection’s call</span>}
-      <ClassKeyHint vocabulary={vocabulary} keys={keys} typesAsked={typesAsked} waitMs={waitMs} />
-      <span><span className="kbd">0</span> unsure</span>
-      <span><span className="kbd">Del</span> not an object</span>
+      <ClassKeyHint vocabulary={vocabulary} keys={keys} brush={round === 2} />
       <span><span className="kbd">Tab</span> / <span className="kbd">⇧ Tab</span> bigger / smaller outline</span>
       {sam && <span><span className="kbd">Space</span> precise edit</span>}
       <span><span className="kbd">Z</span> undo (unsaved changes)</span>
