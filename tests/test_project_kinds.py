@@ -190,6 +190,13 @@ def test_whole_slide_regions_are_tiled_and_points_follow_them(tmp_path):
         rgb = np.asarray(image.convert("RGB"))
     mark = placed[placed.core_id == cores.core_id.iloc[0]].iloc[0]
     assert rgb_to_hed(rgb)[int(mark.core_y), int(mark.core_x), 2] > 0.05  # the tangle is under its mark
+    # a reduced read (tissue of the tiles, previews) is read at its own size, from a smaller level, and looks the same
+    import cv2
+
+    small = core_images.read_bgr(project.root / cores.image_path.iloc[0], cv2.IMREAD_REDUCED_COLOR_8)
+    assert small.shape[:2] == (rgb.shape[0] // 8, rgb.shape[1] // 8)
+    expected = cv2.resize(rgb, (small.shape[1], small.shape[0]), interpolation=cv2.INTER_AREA)[..., ::-1]
+    assert np.abs(small.astype(int) - expected.astype(int)).mean() < 6
 
 
 def test_two_chromogen_slide_reads_only_the_stain_of_interest(tmp_path):
