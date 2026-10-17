@@ -203,7 +203,8 @@ class Reservations:
 
     def __init__(self, seconds: float = RESERVE_SECONDS, clock=time.monotonic):
         self.seconds, self.clock = seconds, clock
-        self._held: dict[tuple, dict[str, dict[str, float]]] = {}  # session -> object key -> person -> until
+        self._held: dict[tuple, dict[str, dict[str, tuple[float, int]]]] = {}  # session -> object key -> person -> (until, place)
+        self._handed = 0  # the place of each object in the order it was handed out
         self._lock = threading.Lock()
 
     def held(self, session: tuple) -> dict[str, set[str]]:
@@ -211,16 +212,30 @@ class Reservations:
         now = self.clock()
         with self._lock:
             objects = self._held.get(session, {})
-            for key in [k for k, people in objects.items() if not any(until > now for until in people.values())]:
+            for key in [k for k, people in objects.items() if not any(until > now for until, _ in people.values())]:
                 del objects[key]
-            return {k: {p for p, until in people.items() if until > now} for k, people in objects.items()}
+            return {k: {p for p, (until, _) in people.items() if until > now} for k, people in objects.items()}
+
+    def order(self, session: tuple, person: str) -> dict[str, int]:
+        """The objects this person holds, by the order they were handed to them (so they stay in that order on their
+        screen whatever changes meanwhile)."""
+        now = self.clock()
+        with self._lock:
+            return {k: people[person][1] for k, people in self._held.get(session, {}).items() if person in people and people[person][0] > now}
 
     def hold(self, session: tuple, person: str, keys: list[str]) -> None:
-        until = self.clock() + self.seconds
+        now = self.clock()
+        until = now + self.seconds
         with self._lock:
             objects = self._held.setdefault(session, {})
             for key in keys:
-                objects.setdefault(key, {})[person] = until
+                people = objects.setdefault(key, {})
+                before = people.get(person)
+                if before is not None and before[0] > now:
+                    people[person] = (until, before[1])  # renewed, in its place
+                else:
+                    self._handed += 1
+                    people[person] = (until, self._handed)
 
     def release(self, session: tuple, person: str, keys: list[str]) -> None:
         with self._lock:
@@ -266,14 +281,15 @@ def may_serve(session: dict, objects: pd.DataFrame, labels: pd.DataFrame) -> pd.
 
 def next_objects(session: dict, objects: pd.DataFrame, labels: pd.DataFrame, annotator: str, count: int = 1,
                  ready: pd.Series | None = None, held: dict[str, set[str]] | None = None,
-                 vocabulary: Vocabulary | None = None) -> tuple[list[dict], int]:
+                 vocabulary: Vocabulary | None = None, handed: dict[str, int] | None = None) -> tuple[list[dict], int]:
     """The next `count` objects for this person under the session's rule, and how many the rule leaves them in all.
 
-    Order: objects already handed to this person (still on their screen), then objects whose picture is `ready`
-    (a boolean per row of `objects`), then fewest labels first, counting the objects others are holding (`held`:
-    object key -> people) as labelled once more, so two people at once get different objects while there are any;
-    ties in an order of the person's own."""
-    held = held or {}
+    Order: objects already handed to this person (still on their screen), in the order they were handed (`handed`:
+    object key -> place, from `Reservations.order`); then objects nobody else holds (`held`: object key -> people),
+    so two people at once get different objects while there are any; among those, objects whose picture is `ready`
+    (a boolean per row of `objects`) first, then fewest labels, counting each person holding one as a label more;
+    ties in an order of the person's own. Pictures being made meanwhile change only what comes after the handed ones."""
+    held, handed = held or {}, handed or {}
     sources, values = _labels_by_object(session, labels)
     objects = objects.assign(key=object_keys(objects), ready=True if ready is None else ready.to_numpy(bool))
     mine = {k for k, s in sources.items() if annotator in s}
@@ -287,7 +303,9 @@ def next_objects(session: dict, objects: pd.DataFrame, labels: pd.DataFrame, ann
     ranked = candidates.iloc[order].assign(n=count_so_far.loc[candidates.index].iloc[order].to_numpy())
     holders = ranked.key.map(lambda k: held.get(k, set()))
     ranked = ranked.assign(handed=holders.map(lambda h: annotator in h), others=holders.map(lambda h: len(h - {annotator})))
-    ranked = ranked.assign(busy=ranked.n + ranked.others).sort_values(["handed", "ready", "busy"], ascending=[False, False, True], kind="stable")
+    ranked = ranked.assign(place=ranked.key.map(lambda k: handed.get(k, 0)).where(ranked.handed, 0), taken=ranked.others > 0,
+                           busy=ranked.n + ranked.others)
+    ranked = ranked.sort_values(["handed", "place", "taken", "ready", "busy"], ascending=[False, True, True, False, True], kind="stable")
     out = [{"tile_id": row.tile_id, "x": float(row.x), "y": float(row.y), "radius_px": float(row.radius_px), "ai_value": row.ai_value,
             "ai_probability": float(row.ai_probability), "labels_so_far": int(row.n), "remaining": int(len(candidates)), "key": row.key}
            for row in ranked.head(max(1, count)).itertuples()]
