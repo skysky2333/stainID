@@ -181,6 +181,21 @@ def _read_file(target: Path, columns: list[str] | None = None) -> pd.DataFrame:
                                       "subtype": str, "sam_status": str, "model_id": str})
 
 
+def _displayed(project: Project, stain: str, frame: pd.DataFrame) -> pd.DataFrame:
+    """`outline_default` (which outline is shown first) filled from the stain's setting where the store has none (a store
+    assembled before the setting, or the pool's)."""
+    if "outline_default" in frame and frame.outline_default.ne("").all():
+        return frame
+    try:
+        from stainid.v2.params import default_outline  # noqa: PLC0415
+
+        setting = default_outline(project, stain)
+    except (ImportError, ValueError, AttributeError):
+        return frame
+    current = frame.outline_default if "outline_default" in frame else pd.Series("", index=frame.index)
+    return frame.assign(outline_default=current.where(current.ne(""), setting))
+
+
 def _normalised(frame: pd.DataFrame, stain: str, core_id: str) -> pd.DataFrame:
     frame = frame.copy()
     for column, default in (("decision", ""), ("reason", ""), ("class", ""), ("subtype", ""), ("sources", ""), ("sam_status", ""), ("model_id", ""),
@@ -228,14 +243,14 @@ def read_core(project: Project, stain: str, core_id: str, columns: list[str] | N
     reader = _module_reader()
     if columns is not None:
         found = reader(project, stain, core_id, list(columns)) if reader else _read_file(target, list(columns))
-        return _normalised(found, stain, core_id)
+        return _displayed(project, stain, _normalised(found, stain, core_id))
     stamp = cache.signature(target)
     with _WHOLE_LOCK:
         kept = _WHOLE.get(str(target))
         if kept is not None and kept[0] == stamp:
             _WHOLE.move_to_end(str(target))
             return kept[1]
-    found = _normalised(reader(project, stain, core_id) if reader else _read_file(target), stain, core_id)
+    found = _displayed(project, stain, _normalised(reader(project, stain, core_id) if reader else _read_file(target), stain, core_id))
     with _WHOLE_LOCK:
         _WHOLE[str(target)] = (stamp, found)
         _WHOLE.move_to_end(str(target))
@@ -275,7 +290,7 @@ def in_tiles(frame: pd.DataFrame, tiles: pd.DataFrame, context_px: int) -> pd.Da
 
 FIELD_COLUMNS = ["candidate_id", "x_core", "y_core", "tile_id", "radius_px", "area_um2", "probability", "threshold", "model_id", "decision",
                  "reason", "class", "subtype", "proposal_threshold", "sources", "outline", "sam_outline", "sam_status", "sam_masks", "sam_scores",
-                 "sam_default"]  # what the annotation pages show of a candidate (no raw features)
+                 "sam_default", "outline_default"]  # what the annotation pages show of a candidate (no raw features)
 LIGHT = ["candidate_id", "x_core", "y_core", "tile_id", "radius_px", "area_um2", "probability", "threshold", "model_id", "decision", "reason",
          "class", "subtype", "proposal_threshold", "sources", "sam_status"]  # ranking and listing candidates: no outlines
 _SCHEMAS: dict[str, tuple[tuple, frozenset[str]]] = {}
@@ -316,7 +331,7 @@ def read_box(project: Project, stain: str, core_id: str, x0: float, y0: float, x
                 frame[column] = frame[column].fillna("").astype(object)
             elif isinstance(frame[column].dtype, pd.BooleanDtype) or frame[column].dtype == object:
                 frame[column] = frame[column].astype(object).where(frame[column].notna(), np.nan)
-        return _normalised(frame, stain, core_id)
+        return _displayed(project, stain, _normalised(frame, stain, core_id))
     found = read_core(project, stain, core_id)
     if found is None:
         return None
@@ -402,7 +417,7 @@ def masks(row) -> tuple[list[list[list[float]] | None], int]:
     if found and any(found):
         found = list(found) + ([own] if own else [])
         default = _get(row, "sam_default")
-        if own and (prefer_own or default is None or pd.isna(default) or int(default) < 0):
+        if own and (prefer_own or (default is not None and not pd.isna(default) and int(default) < 0)):  # -1: SAM fell back
             return found, len(found) - 1
         scores = _get(row, "sam_scores") or []
         if default is None or pd.isna(default) or not 0 <= int(default) < 3 or not found[int(default)]:
