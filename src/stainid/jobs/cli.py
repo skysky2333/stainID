@@ -184,8 +184,10 @@ def _submit(scheduler, args, project_path: Path | None) -> None:
     env = dict(item.split("=", 1) for item in args.env if "=" in item)
     if args.exec:
         cwd = args.cwd or (str(project.root) if project is not None else os.getcwd())
-        job = scheduler.submit_command(words, cwd, args.title or " ".join(words)[:60], args.klass or "pipeline", needs, project, env, args.grace,
-                                       args.after)
+        from stainid.jobs.queue import class_of
+
+        klass = args.klass or (class_of(project, "command") if project is not None else "pipeline")  # a public dataset's: public
+        job = scheduler.submit_command(words, cwd, args.title or " ".join(words)[:60], klass, needs, project, env, args.grace, args.after)
     else:
         from stainid.cli import _workflow_step, build_parser
 
