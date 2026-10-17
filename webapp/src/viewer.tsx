@@ -27,7 +27,7 @@ export interface ImagePoint { x: number; y: number; unit: number }
  * button's autoscroll never starts. With `fit`, the picture is as large as fits the space its card is given (the
  * annotation pages size that to the window), instead of the card's width.
  */
-export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, onMove, children, fit = false, onPress, onRelease, onWheelOver, onSize, panLock = false }: {
+export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, onMove, children, fit = false, onPress, onRelease, onWheelOver, onSize, panLock = false, under }: {
   src: string
   layers?: string[]
   title: ReactNode
@@ -46,6 +46,8 @@ export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, on
   onWheelOver?: (deltaY: number) => boolean
   /** the picture's size in pixels, once known */
   onSize?: (size: { w: number; h: number }) => void
+  /** drawn below `children` in a layer of its own (painted once, not again when what is above it changes) */
+  under?: (zoom: number, size: { w: number; h: number }, unit: number) => ReactNode
 }) {
   const [view, setView] = useState({ zoom: 1, x: 0, y: 0 })
   const [size, setSize] = useState({ w: 2304, h: 2304 })
@@ -157,6 +159,7 @@ export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, on
       <div style={{ position: 'absolute', inset: 0, transform: `translate(${view.x}px, ${view.y}px) scale(${zoom})`, transformOrigin: '0 0' }}>
         <img src={src} alt="field" draggable={false} />
         {layers.map((layer) => <img key={layer} src={layer} alt="" draggable={false} style={{ imageRendering: 'pixelated' }} />)}
+        {under && <svg className="viewer-under" viewBox={`0 0 ${size.w} ${size.h}`}>{under(zoom, size, size.w / width / zoom)}</svg>}
         <svg viewBox={`0 0 ${size.w} ${size.h}`}>{children(zoom, size, size.w / width / zoom)}</svg>
       </div>
     </div>

@@ -12,12 +12,12 @@
    as checked by this person, and the next field comes. Opening a field holds it for this person, so the others are
    handed other fields; what others decide meanwhile shows within seconds ("checked by Ben"). The page takes the window
    exactly: the picture as large as fits, the side panel scrolling by itself. */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import type { AddedState, Label, RoundCheck, RoundDetail, RoundField, RoundObject, RoundProgress, RoundSamOptions, RoundSaved, SessionDetail } from '../api'
 import { api, apiUrl, enc } from '../api'
-import { ErrorNote, Loaded, fmt } from '../components'
+import { ErrorNote, Loading, fmt } from '../components'
 import { useFetch, useStored } from '../hooks'
 import type { ImagePoint } from '../viewer'
 import { RASTER_LAYERS, ZoomViewer } from '../viewer'
@@ -75,11 +75,77 @@ interface Hooks { onEvent?: (event: RoundEvent) => void; onFinished?: () => void
 export function FixField({ detail, reload, tile, onEvent, onFinished, coach }: { detail: SessionDetail; reload: () => void; tile: string } & Hooks) {
   const work = useFetch<RoundField>(`/api/annotate/${detail.meta.name}/fields/${enc(tile)}`)
   useFitScreen()
-  return <Loaded state={work} label="Opening the field…">{(data) => <Fixer key={tile} detail={detail} reload={reload} tile={tile} field={data}
-    onEvent={onEvent} onFinished={onFinished} coach={coach} />}</Loaded>
+  if (!work.data) {  // the picture at once, the objects when they have arrived
+    return (
+      <div className="annotate-page round-page fit-page">
+        <div className="annotate-top"><div className="annotate-heading"><h1>{detail.meta.title}</h1>
+          <div className="muted small">{detail.meta.stain} · {ROUND_TITLE[2]}</div></div></div>
+        <ErrorNote error={work.error} />
+        <div className="annotate-workspace">
+          <div className="annotate-image field-loading">
+            <ZoomViewer fit src={apiUrl(`/api/annotate/${detail.meta.name}/fields/${enc(tile)}/image.jpg`)}
+              title={<span className="row"><span className="muted small">{tile}</span><span className="small muted">Loading the objects…</span></span>}>
+              {() => null}
+            </ZoomViewer>
+          </div>
+          <aside className="annotate-side round-side">{coach}<div className="card side-block"><Loading label="Opening the field…" /></div></aside>
+        </div>
+      </div>
+    )
+  }
+  return <Fixer key={tile} detail={detail} reload={reload} tile={tile} field={work.data} onEvent={onEvent} onFinished={onFinished} coach={coach} />
 }
 
-function Fixer({ detail, reload, tile, field, onEvent, onFinished, coach }: { detail: SessionDetail; reload: () => void; tile: string; field: RoundField } & Hooks) {
+/** The field's objects with outlines of at most `SHAPE_POINTS` corners (Segment Anything's come with hundreds): drawn,
+ *  hit-tested and dragged much faster, and the same to the eye. */
+const SHAPE_POINTS = 64
+/** An outline with about `most` corners, evenly spaced along it (one pass: fast enough for thousands of outlines). */
+function evenly(points: number[][], most: number): number[][] {
+  let length = 0
+  for (let i = 0, j = points.length - 1; i < points.length; j = i++) length += Math.hypot(points[i][0] - points[j][0], points[i][1] - points[j][1])
+  const step = Math.max(1, length / most)
+  const out = [points[0]]
+  let last = points[0]
+  for (let i = 1; i < points.length; i++) {
+    const p = points[i]
+    if (Math.hypot(p[0] - last[0], p[1] - last[1]) >= step) { out.push(p); last = p }
+  }
+  return out.length >= 3 ? out : points
+}
+function lighter(field: RoundField): RoundField {
+  return { ...field, objects: field.objects.map((o) => ({ ...o, masks: o.masks.map((m) => (m && m.length > SHAPE_POINTS ? evenly(m, SHAPE_POINTS) : m)) })) }
+}
+
+/** One object as the field draws it when it is not under the mouse (the layer of all of them is drawn once, not on
+ *  every mouse move). */
+interface Drawn { key: string; x: number; y: number; r: number; points: string | null; colour: string; look: string; dash: boolean; diamond: boolean
+  others: boolean; unsaved: boolean; fresh: boolean }
+
+const ObjectLayer = memo(function ObjectLayer({ items, unit, dim }: { items: Drawn[]; unit: number; dim: number }) {
+  return (
+    <g opacity={dim} pointerEvents="none">
+      {items.map((d) => {
+        const width = (d.dash ? 2.2 : 2.4) * unit
+        const dash = d.dash ? `${5 * unit} ${4 * unit}` : undefined
+        const shape = (extra: Record<string, unknown>) => d.points
+          ? <polygon points={d.points} {...extra} />
+          : <circle cx={d.x} cy={d.y} r={Math.max(6, d.r)} {...extra} />
+        return <g key={d.key} className={`round-object look-${d.look}${d.unsaved ? ' unsaved' : ''}`} data-key={d.key}>
+          {shape({ fill: 'none', stroke: '#000000', strokeOpacity: 0.6, strokeWidth: width + 1.8 * unit, strokeDasharray: dash, strokeLinecap: 'round' })}
+          {shape({ style: { stroke: d.colour, fill: d.colour }, fillOpacity: d.dash ? 0 : 0.08, strokeWidth: width, strokeDasharray: dash, strokeLinecap: 'round' })}
+          {d.diamond && <polygon points={`${d.x},${d.y - 5 * unit} ${d.x + 5 * unit},${d.y} ${d.x},${d.y + 5 * unit} ${d.x - 5 * unit},${d.y}`}
+            fill={d.look === 'class' || d.look === 'unsure' ? d.colour : '#ffffff'} stroke="#000" strokeWidth={0.8 * unit} />}
+          {d.others && <circle cx={d.x} cy={d.y} r={2.4 * unit} fill="#4ade80" stroke="#000" strokeWidth={0.6 * unit} />}
+          {d.unsaved && !d.fresh && <circle className="unsaved-mark" cx={d.x + Math.max(6, d.r) * 0.75} cy={d.y - Math.max(6, d.r) * 0.75} r={2.6 * unit}
+            strokeWidth={0.8 * unit} />}
+        </g>
+      })}
+    </g>
+  )
+})
+
+function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coach }: { detail: SessionDetail; reload: () => void; tile: string; field: RoundField } & Hooks) {
+  const field = useMemo(() => lighter(arrived), [arrived])
   const tell = (event: RoundEvent) => onEvent?.(event)
   const navigate = useNavigate()
   const meta = detail.meta as Meta
@@ -514,6 +580,14 @@ function Fixer({ detail, reload, tile, field, onEvent, onFinished, coach }: { de
     return () => clearTimeout(timer)
   }, [measuring, addedStates, name, tile])
 
+  const drawnItems = useMemo<Drawn[]>(() => shown.filter((s) => precise?.key !== s.key).map((s) => {
+    const call = callOf(s)
+    const look = lookOf(vocabulary, meta.remove_class, call.pick.identity)
+    const poly = outlineOf(s)
+    return { key: s.key, x: s.x, y: s.y, r: s.r, points: poly ? polygonPoints(poly) : null, colour: look.colour, look: look.look, dash: look.dash,
+      diamond: !!(s.added || s.fresh), others: call.by === 'others', unsaved: isUnsaved(s), fresh: !!s.fresh }
+  }), [own, mine, fresh, checked, masks, prompts, precise?.key, precise?.points, changes, vocabulary, meta.remove_class])  // eslint-disable-line react-hooks/exhaustive-deps
+
   const fields = detail.fields
   const position = fields.findIndex((f) => f.tile_id === tile)
   const later = [...fields.slice(position + 1), ...fields.slice(0, position)].find((f) => !f.done_by_me && f.prepared && !f.open_by_others && f.tile_id !== tile)
@@ -567,7 +641,9 @@ function Fixer({ detail, reload, tile, field, onEvent, onFinished, coach }: { de
               {precise && <span className="badge status-running">precise editing — Space keeps, Esc cancels</span>}
               {pending && <span className="small muted">Outlining…</span>}</span>}
             focus={focus} cursor={excluding ? 'none' : precise ? 'crosshair' : target ? 'pointer' : 'copy'} onClick={click} onMove={move}
-            onPress={press} onRelease={release} panLock={excluding} onWheelOver={wheelBrush} onSize={setFieldSize}>
+            onPress={press} onRelease={release} panLock={excluding} onWheelOver={wheelBrush} onSize={setFieldSize}
+            under={(_z, _s, rawUnit) => <ObjectLayer items={drawnItems} unit={Number.isFinite(rawUnit) && rawUnit > 0 ? rawUnit : 1}
+              dim={precise ? 0.25 : excluding ? 0.55 : 1} />}>
             {(_zoom, size, rawUnit) => {
               const unit = Number.isFinite(rawUnit) && rawUnit > 0 ? rawUnit : 1
               const box = field.box
@@ -584,32 +660,19 @@ function Fixer({ detail, reload, tile, field, onEvent, onFinished, coach }: { de
                   return poly ? <polygon key={o.candidate_id} points={polygonPoints(poly)} fill="none" stroke="#ffffff" strokeOpacity={0.35} strokeWidth={1.2 * unit}
                     pointerEvents="none" /> : null
                 })}
-                <g opacity={precise ? 0.25 : excluding ? 0.55 : 1} pointerEvents="none">
-                  {shown.map((s) => {
-                    if (precise?.key === s.key) return null
-                    const call = callOf(s)
-                    const look = lookOf(vocabulary, meta.remove_class, call.pick.identity)
-                    const poly = outlineOf(s)
-                    const isLit = s.key === hovered
-                    const width = (isLit ? 3.4 : look.dash ? 2.2 : 2.4) * unit
-                    const dash = look.dash ? `${5 * unit} ${4 * unit}` : undefined
-                    const style = { stroke: look.colour, fill: look.colour }
-                    const pending = isUnsaved(s)
-                    const shape = (extra: Record<string, unknown>) => poly
-                      ? <polygon points={polygonPoints(poly)} {...extra} />
-                      : <circle cx={s.x} cy={s.y} r={Math.max(6, s.r)} {...extra} />
-                    return <g key={s.key} className={`round-object look-${look.look}${isLit ? ' lit' : ''}${pending ? ' unsaved' : ''}`} data-key={s.key}>
-                      {isLit && shape({ fill: 'none', stroke: '#ffffff', strokeOpacity: 0.55, strokeWidth: width + 6 * unit })}
-                      {shape({ fill: 'none', stroke: '#000000', strokeOpacity: 0.6, strokeWidth: width + 1.8 * unit, strokeDasharray: dash, strokeLinecap: 'round' })}
-                      {shape({ style, fillOpacity: isLit ? 0.22 : look.dash ? 0 : 0.08, strokeWidth: width, strokeDasharray: dash, strokeLinecap: 'round' })}
-                      {(s.added || s.fresh) && <polygon points={`${s.x},${s.y - 5 * unit} ${s.x + 5 * unit},${s.y} ${s.x},${s.y + 5 * unit} ${s.x - 5 * unit},${s.y}`}
-                        fill={look.look === 'class' || look.look === 'unsure' ? look.colour : '#ffffff'} stroke="#000" strokeWidth={0.8 * unit} />}
-                      {call.by === 'others' && <circle cx={s.x} cy={s.y} r={2.4 * unit} fill="#4ade80" stroke="#000" strokeWidth={0.6 * unit} />}
-                      {pending && !s.fresh && <circle className="unsaved-mark" cx={s.x + Math.max(6, s.r) * 0.75} cy={s.y - Math.max(6, s.r) * 0.75} r={2.6 * unit}
-                        strokeWidth={0.8 * unit} />}
-                    </g>
-                  })}
-                </g>
+                {lit && !precise && (() => {  // the object under the mouse, on top: thicker, with a glow
+                  const look = lookOf(vocabulary, meta.remove_class, litCall!.pick.identity)
+                  const width = 3.4 * unit
+                  const dash = look.dash ? `${5 * unit} ${4 * unit}` : undefined
+                  const shape = (extra: Record<string, unknown>) => litPoly
+                    ? <polygon points={polygonPoints(litPoly)} {...extra} />
+                    : <circle cx={lit.x} cy={lit.y} r={Math.max(6, lit.r)} {...extra} />
+                  return <g className={`round-object look-${look.look} lit`} data-key={lit.key} pointerEvents="none">
+                    {shape({ fill: 'none', stroke: '#ffffff', strokeOpacity: 0.55, strokeWidth: width + 6 * unit })}
+                    {shape({ fill: 'none', stroke: '#000000', strokeOpacity: 0.6, strokeWidth: width + 1.8 * unit, strokeDasharray: dash, strokeLinecap: 'round' })}
+                    {shape({ style: { stroke: look.colour, fill: look.colour }, fillOpacity: 0.22, strokeWidth: width, strokeDasharray: dash, strokeLinecap: 'round' })}
+                  </g>
+                })()}
                 {lit && litCall && (() => {  // the name of the object under the cursor, beside it
                   const xs = litPoly ? litPoly.map((p) => p[0]) : [lit.x + lit.r]
                   const ys = litPoly ? litPoly.map((p) => p[1]) : [lit.y - lit.r]

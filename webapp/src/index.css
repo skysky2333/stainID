@@ -1269,3 +1269,4 @@ details.side-details.compact > summary { font-weight: 500; }
 }
 .tutorial-coach h3 { text-transform: none; letter-spacing: 0; font-size: 1rem; color: var(--text-primary); }
 .outline-defaults { margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.viewer svg.viewer-under { will-change: transform; }  /* the field tool's objects: a layer of their own, not painted again on every mouse move */
