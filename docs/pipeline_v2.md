@@ -30,12 +30,21 @@ pictures (about 1 GB); `--workers 0` picks as many as the free memory and the pr
 
 Each stage writes `manifests/<stage>/<stain>/<core_id>.json` after its outputs: the stage's code version
 (`stainid.v2.manifest.VERSIONS`), its parameters (`stainid.v2.params`, overridable under `v2:` in stainid.yaml) and a
-fingerprint of every input — the core image file, the number of tiles with nuclei, the slide threshold, the hand-drawn
-exclusions, the tiles, the model bundle (folder name and sha256) and its cut-off, and the digest of each upstream
+fingerprint of every input — the core image file, the number of tiles with nuclei, the slide threshold, the tiles, the model bundle (folder name and sha256) and its cut-off, and the digest of each upstream
 stage's manifest. A core image is out of date when any of these differs from what it would be made from now. Changing
 `v2.rules` makes only stage 4 (and the store) out of date; changing `v2.proposals` stage 2 and everything after it.
 
 ## Stage 2: proposals
+
+Excluded areas are detection's own only: linear artifacts and folds (NeuN: linear artifacts; NeuN neurons on a fold
+are kept and judged by `rule:fold`), no tissue, and the AT8 edge guard. Their pixels are as if they were not there: no
+proposal starts or grows into them, and they count in no measure — no numerator (DAB-positive area, amyloid extent,
+AT8 positive area and threads, nuclei, candidates), no denominator (analysis and valid areas), no background or seed
+statistic (the 6E10 levels, the 60 µm local background, the ring around a candidate, the context features of the NeuN
+and AT8 models), and not in the slide threshold (`stainid calibrate`). The hand-drawn polygons are not an input, and
+people's marked and cleared areas (`stainid.exclusions`) never change the analysis: they only leave labels out of
+training and evaluation (`exclusions.drop_excluded`). Smoothing at a few pixels' scale can still carry stain across
+the border of an excluded area by those few pixels.
 
 Per tile (the tile with its 128 px context margin) and stain; a tile keeps the candidates whose centroid lies in it or
 within 64 px of it. An object across a tile edge is segmented from each side's crop, cut at that crop, with slightly
@@ -90,8 +99,8 @@ Per core image also: `tiles/<stain>/<core>.csv.gz` (per tile: tissue and analysi
 DAB-positive area at 0.5–2 × the threshold, nucleus count, AT8 burden / thread / edge-guard measures, the v1 AT8
 network measures, the NeuN 100 µm density windows), `threads/<core>.csv.gz` (the AT8 skeleton as segments, each with
 its pixel count, width sum and the candidate it lies in), `unproposed/<stain>/<core>.csv.gz` and a 1/8-scale mask
-picture `masks/<stain>/<core>.png` (bits: 1 tissue, 2 linear artifact, 4 fold, 8 manual exclusion, 16 AT8 edge guard,
-32 analysed tile).
+picture `masks/<stain>/<core>.png` (bits: 1 tissue, 2 linear artifact, 4 fold, 8 manual exclusion — not set any more, 16 AT8
+edge guard, 32 analysed tile).
 
 Stained regions no candidate proposes (`unproposed/`, per stain `proposals.<stain>.unproposed`): NeuN and AT8 as
 before (smoothed DAB ≥ the threshold, ≥ 15 / 20 µm², touching no candidate); 6E10 the DAB smoothed over 4 µm at

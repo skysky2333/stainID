@@ -27,22 +27,33 @@ def padded_crop(image: np.ndarray, center_x: float, center_y: float, size: int, 
 
 def context_features_many(field, centers: list[tuple[float, float]], diameters_um: list[float], context_um: float = 55.0,
                           crop_size: int | None = None) -> list[dict[str, float]]:
-    """context_features of a `crop_size` crop (default: max(64, context_um / pixel size)) around each centre."""
+    """context_features of a `crop_size` crop (default: max(64, context_um / pixel size)) around each centre. Pixels in
+    the field's excluded areas (`Field.excluded`) count in none of them, as if they were not there."""
     size = crop_size or max(64, round(context_um / field.pixel_size_um))
     yy, xx = np.ogrid[:size, :size]
     distance = np.sqrt((xx - (size - 1) / 2) ** 2 + (yy - (size - 1) / 2) ** 2)
     hed, saturation, gray = field.skimage_hed, field.saturation, field.gray
+    excluded = getattr(field, "excluded", None)
+    excluded = excluded if excluded is not None and excluded.any() else None
+    everywhere = np.ones((size, size), bool)
     out = []
     for (cx, cy), diameter in zip(centers, diameters_um):
         radius = np.clip(diameter * size / context_um / 2, 3, size / 4)
-        center = distance <= radius
-        annulus = (distance > radius) & (distance <= 3 * radius)
+        keep = everywhere if excluded is None else ~padded_crop(excluded, cx, cy, size, False)
+        if not keep.any():
+            keep = everywhere
+        center_all = distance <= radius
+        annulus_all = (distance > radius) & (distance <= 3 * radius)
+        center = center_all & keep if (center_all & keep).any() else center_all
+        annulus = annulus_all & keep if (annulus_all & keep).any() else annulus_all
         crop = padded_crop(hed, cx, cy, size, 0.0)
-        hematoxylin, dab = crop[:, :, 0], crop[:, :, 2]
-        center_h, annulus_h = hematoxylin[center], hematoxylin[annulus]
-        center_dab, annulus_dab = dab[center], dab[annulus]
+        hematoxylin, dab = crop[:, :, 0][keep], crop[:, :, 2][keep]
+        center_h, annulus_h = crop[:, :, 0][center], crop[:, :, 0][annulus]
+        center_dab, annulus_dab = crop[:, :, 2][center], crop[:, :, 2][annulus]
         context_h90 = float(np.quantile(hematoxylin, 0.90))
         grey = padded_crop(gray, cx, cy, size, 255)
+        sharp = keep if keep is everywhere else cv2.erode(keep.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool)
+        sharp = sharp if sharp.any() else keep  # the Laplacian of pixels whose 3 x 3 neighbourhood is all kept
         out.append({
             "context_dab_mean": float(np.mean(dab)),
             "context_dab_p90": float(np.quantile(dab, 0.90)),
@@ -55,7 +66,7 @@ def context_features_many(field, centers: list[tuple[float, float]], diameters_u
             "center_hematoxylin_p90": float(np.quantile(center_h, 0.90)),
             "annulus_hematoxylin_mean": float(np.mean(annulus_h)),
             "center_high_hematoxylin_fraction": float(np.mean(center_h >= context_h90)),
-            "context_saturation_mean": float(np.mean(padded_crop(saturation, cx, cy, size, 0.0))),
-            "context_laplacian_variance": float(cv2.Laplacian(grey, cv2.CV_64F).var()),
+            "context_saturation_mean": float(np.mean(padded_crop(saturation, cx, cy, size, 0.0)[keep])),
+            "context_laplacian_variance": float(cv2.Laplacian(grey, cv2.CV_64F)[sharp].var()),
         })
     return out

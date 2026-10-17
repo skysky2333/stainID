@@ -21,7 +21,7 @@ class Field:
     origin: tuple[int, int]  # the crop's top-left corner in core pixels (x, y)
     threshold: float  # the slide's DAB threshold
     pixel_size_um: float
-    manual: np.ndarray  # hand-drawn exclusions (bool, crop)
+    manual: np.ndarray  # extra excluded areas (bool, crop); stage 2 passes none: people's areas only train and evaluate
     raw_nuclei: np.ndarray | None  # Cellpose labels of the crop (Find nuclei), None when missing
     glass: float | None = None
     smooth_px: float = 1.0
@@ -84,20 +84,30 @@ class Field:
 
     @cached_property
     def exclusion(self) -> np.ndarray:
-        """Linear artifacts, folds and hand-drawn exclusions (what 6E10 and AT8 leave out)."""
+        """What 6E10 and AT8 leave out: detection's linear artifacts and folds (and `manual`)."""
         return self.linear | self.fold | self.manual
 
     @cached_property
     def neun_exclusion(self) -> np.ndarray:
-        """What NeuN leaves out: linear artifacts and hand-drawn exclusions (no fold mask)."""
+        """What NeuN leaves out: detection's linear artifacts (no fold mask; and `manual`)."""
         return self.linear | self.manual
+
+    @property
+    def excluded(self) -> np.ndarray:
+        """The excluded pixels of this field's stain: they count in no measure (tissue, stain, background, context)."""
+        return self.neun_exclusion if self.tile.get("stain") == "NeuN" else self.exclusion
+
+    @cached_property
+    def valid(self) -> np.ndarray:
+        """Tissue outside the excluded areas of this field's stain."""
+        return self.tissue & ~self.excluded
 
     @cached_property
     def local_background(self) -> np.ndarray:
         """Tissue-weighted mean of the smoothed DAB over `background_um` (the legacy dense-body background)."""
         size = max(3, round(self.background_um / self.pixel_size_um))
-        tissue = self.tissue.astype(np.float32)
-        return cv2.blur(np.where(self.tissue, self.smooth, 0), (size, size)) / np.maximum(cv2.blur(tissue, (size, size)), 1e-3)
+        tissue = self.valid.astype(np.float32)  # excluded pixels are not background
+        return cv2.blur(np.where(self.valid, self.smooth, 0), (size, size)) / np.maximum(cv2.blur(tissue, (size, size)), 1e-3)
 
     @cached_property
     def gradient(self) -> np.ndarray:

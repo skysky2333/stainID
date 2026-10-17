@@ -49,9 +49,9 @@ def border_project(tmp_path: Path, draw, size: int = 2 * TILE, context: int = 32
 
 def propose(root: Path, stain: str = "6E10") -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     project = load_project(root)
-    calibration, manual, nuclei = run.proposal_inputs(project)
+    calibration, nuclei = run.proposal_inputs(project)
     for core, s, tiles, _ in run.todo(project, "proposals", [stain]):
-        proposals.propose_core(project, s, core, tiles, calibration[(tiles[0]["tma"], s)], [], nuclei)
+        proposals.propose_core(project, s, core, tiles, calibration[(tiles[0]["tma"], s)], nuclei)
     read = lambda kind: store.read_table(store.path(project, stain, "LIP-1_B-2", kind))  # noqa: E731
     return read("proposals"), read("tiles"), read("unproposed")
 

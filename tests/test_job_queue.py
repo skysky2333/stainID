@@ -247,7 +247,7 @@ def test_calibration_keeps_each_slide_as_it_is_done_and_stops_between_slides(tmp
     project.analysis_tiles().parent.mkdir(parents=True, exist_ok=True)
     project.analysis_tiles().write_text("tile_id,core_id,tma,stain,image_path,x_px,y_px,width_px,height_px\n" + "".join(
         f"t{tma}{s},c{tma},{tma},{s},x.png,0,0,10,10\n" for tma in (1, 2) for s in ("NeuN", "AT8")))
-    monkeypatch.setattr(calibrate, "sample_dab", lambda root, group, stride: np.linspace(0, 0.3, 1000, dtype=np.float32))
+    monkeypatch.setattr(calibrate, "sample_dab", lambda *a, **k: {"values": np.linspace(0, 0.3, 1000, dtype=np.float32), "excluded_px": 0, "tissue_px": 1})
     control = tmp_path / "control"
     monkeypatch.setenv(units.CONTROL_ENV, str(control))
     calls = []

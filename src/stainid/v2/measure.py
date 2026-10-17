@@ -51,7 +51,7 @@ def generic_features(field, region: Region) -> dict[str, object]:
     dab = field.dab[box]
     values = dab[local]
     hematoxylin = field.hematoxylin[box][local]
-    ring = cv2.dilate(local.astype(np.uint8), disk(ring_px)).astype(bool) & ~local & field.tissue[box]
+    ring = cv2.dilate(local.astype(np.uint8), disk(ring_px)).astype(bool) & ~local & field.valid[box]  # not excluded pixels
     ring_mean = float(dab[ring].mean()) if ring.any() else float("nan")
     eroded = cv2.erode(local.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool)
     boundary = local & ~eroded
