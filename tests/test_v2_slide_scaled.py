@@ -58,7 +58,7 @@ def test_training_uses_scaled_inputs_by_default_for_6e10(tmp_path):
     assert np.isnan(out.s_core_fraction.iloc[0]) and out.s_core_fraction.iloc[1] == 0.3
 
 
-def test_neun_and_at8_store_slide_scaled_inputs(v2_project):
+def test_neun_and_at8_store_slide_scaled_inputs(v2_project):  # noqa: F811 - the fixture imported above
     from test_v2_pipeline import _proposals
 
     from stainid import candidates as store
