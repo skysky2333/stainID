@@ -1,7 +1,9 @@
 # Methods
 
 What each step computes, in workflow order, with its parameters. How to run the steps is in
-[webapp.md](webapp.md); the files they read and write are in [project.md](project.md).
+[webapp.md](webapp.md); the files they read and write are in [project.md](project.md). The staged (v2) detection,
+which keeps every candidate with its call for the viewer and the annotation rounds and redoes only what is out of
+date, is described in [pipeline_v2.md](pipeline_v2.md).
 
 All measurements are made on native-resolution fields (default 2048 px ≈ 560 µm at
 0.274 µm/px). Each field is read with a 128 px context margin so that objects at the

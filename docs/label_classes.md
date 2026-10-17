@@ -68,6 +68,10 @@ default; sessions made before this choice ask for it). On the quick check and on
 The keys are shown on screen next to the classes and under the picture. Without types asked, only the class keys apply
 and the AI's confirmed calls (fields sessions, *Finished*) are stored without a type.
 
+The annotation rounds use the same class and type keys, acting on the object under the mouse (round 2) or on screen
+(round 1). Their other keys are listed in [webapp.md](webapp.md#annotation-rounds): 0 unsure, Delete not an object,
+Tab / Shift+Tab for the outline size, Space for precise editing, Z undo and Enter to keep the AI's call.
+
 ## Where types show
 
 - **Look at the labels** groups the class filter by identity (*plaque: all*, then each type and *type not recorded*);

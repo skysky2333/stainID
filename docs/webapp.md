@@ -58,9 +58,9 @@ The list is kept in `~/.stainid/app.json` (`recent`, the folders opened, most re
 | 1 | **Projects** | *New study*: a study name and where to keep it. |
 | 2 | **Guided setup** | Slides, cores, TMA maps, donor information and checks, in six short screens (see [The guided setup](#the-guided-setup)); it ends with *Run everything*. |
 | 3 | **Models** | Download the published models. Add the NeuN, 6E10 and AT8 models, or train them (see [Training a model](#training-a-model)). |
-| 4 | **Workflow** | Follow the steps as they run; run any step on its own with its options. |
-| 5 | **Cohort & cores** | Look at the detections on the tissue, core by core. |
-| 6 | **Labels** | Review fields (alone or with others) to measure how accurate the detections are and to collect labels for training. |
+| 4 | **Run** | Follow the steps as they run; run any step on its own with its options. |
+| 5 | **Cores** | Look at the detections on the tissue, core by core. |
+| 6 | **Labels** | Ask colleagues to check and correct the AI's calls in annotation rounds (see [Annotation rounds](#annotation-rounds)), to measure how accurate detection is and to collect labels for training. |
 | 7 | **Results** | Download the results table (one row per donor and region) and read what every column means. |
 
 ## The guided setup
@@ -85,10 +85,10 @@ sheets (*Map → Advanced → How donor ids are written*, `donor_ids` in `staini
 way the project's saved maps name them (e.g. `BRC_1673_FR`, `JOG_003_FR`) and shown in the preview before saving; a
 project without saved maps uses the rule under *Map → Advanced* (`sample_region_ids`).
 
-## The Workflow page
+## The Run page
 
-- **Summary.** How many steps are done, the next one, and **Run all remaining steps** (with a rough time), which queues
-  every unfinished step except the optional outlines.
+- **Summary.** How many steps are done, the next one, and **Run what's left** (with a rough time), which queues
+  every unfinished step of Set up, Detect and Results except the optional outlines.
 - **Now running** (while something runs): progress, elapsed time, time left and why a step is waiting.
 - **Steps**, one row each, in order: what it does, its progress, its state and one button (*Run*, *Continue*,
   *Run again* or *Stop*). A step that cannot start yet says what it needs first; a failed step says why in plain words.
@@ -98,6 +98,10 @@ project without saved maps uses the rule under *Map → Advanced* (`sample_regio
     the step that makes it, download it, or show the expected format and a template;
   - options, with advanced ones hidden, and *Run with these options*;
   - *Show log*.
+- **Detect (v2)**: the four stages of the staged detection (*Find candidates*, *Decide*, *Outline objects*, *Make
+  results tables*; see [pipeline_v2.md](pipeline_v2.md)), each run on its own (not by *Run what's left*). Each says
+  how many cores are done and how many are **out of date**: something they were made from changed since (a setting,
+  a model, a hand-drawn exclusion or an earlier stage). Running the step again redoes only those cores.
 - **Pipeline map** (folded): every step as a box in the order steps can run; an arrow means "needs the result of".
   Colours show done, partly done, running, waiting, failed and "made with an older model".
 - **All jobs** (folded): every run with its command and log.
@@ -166,9 +170,9 @@ the sign-in as a token instead of a cookie.
 | Page | What it is for |
 |---|---|
 | **Home** | Your next step (the guided setup while the study is not set up, or new slides to add), a checklist of every step, cohort numbers and recent jobs. |
-| **Cohort & cores** | Every core of every TMA; click one to see the whole core, then click any spot for a full-resolution preview (220–660 µm) with the AI detections where detection has run and the DAB layer. Only the preview is sent over the network, never the whole scan. The analysed fields themselves are reviewed on Labels. |
+| **Cores** | Every core of every TMA (or every image or slide); click one to see the whole core, then click any spot for a full-resolution preview (220–660 µm) with the AI detections where detection has run and the DAB layer. Where the v2 detection has run, the preview reads its saved candidates: the counted objects with their exact outlines, and, as layers to switch on, the rejected ones (each with why, in plain words), the AT8 threads it saved and the stained areas no candidate covers. Only the preview is sent over the network, never the whole scan. The analysed fields themselves are reviewed on Labels. |
 | **Stain thresholds** | The DAB threshold of every slide and why it exists. |
-| **Labels** | Labelling progress per stain, how often people and the AI agree, the labelling sessions (create, start, stop, share the link, follow people, download) and all labels as CSV. |
+| **Labels** | Labelling progress per stain, how often people and the AI agree, the labelling sessions (create, open, close, share the link, follow people, download) and all labels as CSV. |
 | **Models** | Every model with its status and settings, download buttons, training from all labels, and trained models compared with the current one. |
 | **Results** | The main results table (download), every other table, plots by group and region, and the meaning of every column. |
 | **Settings** | Study name, TMA layout, diagnostic groups and every file location, with a folder picker. Also leads to the Projects page to open or create another project, changes the admin password and (folded away) chooses the server. |
@@ -192,34 +196,126 @@ with each other, and how often the AI agrees with people (precision and recall).
 on are included in the last figure, which therefore flatters the model; the cross-validated figures on Models are the
 fair estimate.
 
-### Labelling sessions
+### Annotation rounds
 
-Other people label in their browser; everything is managed on the Labels page.
+Labelling in stainID means checking and correcting the AI's work. People start from every object the AI considered,
+with its call and outline already on the screen, and fix only what is wrong. The rounds read the candidate store of the
+staged detection ([pipeline_v2.md](pipeline_v2.md)): every candidate it proposed, accepted and rejected, with its
+three Segment Anything outlines. So a stain needs its *Detect (v2)* steps first. Until then, `stainid labels
+store-from-pool` writes a store from the prepared label pool, to try the rounds out. Rounds work the same in TMA
+studies, image sets and whole-slide projects.
 
-1. **Create a session**: the stain, then either
-   - **Review whole fields**: fields that stainID picks (nobody has reviewed them yet, spread over TMAs and groups, in
-     shuffled order) or that you click on the cores yourself in the field picker (filtered by TMA, region, group or core;
-     cores that are not ready for labelling, for example not yet detected, are greyed out with the step to run first; or a list
-     of field IDs), and how many people should review each field (1 shares them out; 2 or more gives repeat reviews
-     for agreement). People see the field with the AI's calls and outlines pre-filled: dashed circles are the AI's call,
-     solid ones their own decision. They change the class of wrong objects, add objects the AI missed, drag the corners
-     of an outline or draw a new one, tag the field, and press *Finished*, which records every AI call they left alone
-     as confirmed by them. A blind variant shows the candidates without the AI's calls.
-   - **Quick object queue**: one object at a time, labelled with the keyboard. The next object is chosen anew each time
-     from all prepared fields: where the AI is unsure, where people disagree with each other or with the AI, objects
-     one other person has labelled, or at random; each person gets objects they have not labelled, fewest labels first.
-2. **Start** it and send the link shown on the page (`http://<this computer>:8765/p/<project>/annotate`: the link
-   names the project, so people label in the right study whatever others have open). People register a name
-   and can stop and continue later under the same name. Links of the previous release without a project
-   (`…:8765/annotate`) still work and open the project opened last. Only started sessions are listed, and nothing else in stainID
-   is reachable without the admin password.
-3. Follow progress field by field (not started, in progress, done, by whom), the people and their changes; **Add fields**
-   extends a session and **Remove** takes a field out (its labels stay); **Look at the labels** shows every labelled object
-   on its field; **Stop** closes it but keeps
-   everything; **Delete** moves the session definition aside (its labels stay).
+**Making a session** (Labels → *New labelling session*):
 
-Fields have to be **prepared** before people can label them: the *Prepare fields for labelling* step (`stainid labels
-prepare`) finds every candidate exactly as the detection step does and stores its measurements and the AI's call in
+1. **Stain.**
+2. **What should people do?**
+   - **Round 1, Check the AI's calls** (start here). One field at a time, object by object, accepted and rejected
+     ones, with the AI's class, type, score and outline. The most informative come first: near the decision
+     threshold (closest first), then strong ones the AI rejected, then weak ones it accepted. *How many objects*
+     (default 500; 0 = every one).
+   - **Round 2, Fix the field.** Whole fields with every object the AI considered: add what it missed, fix outlines,
+     change any call. *How many fields*: fields nobody has checked, spread over TMAs and groups.
+3. **Which cores**: every ready core, some TMAs (batches, for slides and images), or fields clicked on the cores. Each
+   core shows whether it has the AI's candidates yet.
+4. **Title**, and whether it opens to labellers right away.
+
+*Advanced* holds:
+
+- *How generous*: which candidates are shown, from every candidate the AI proposed down to only clearly stained ones
+  (1.5 × the stain threshold);
+- *People who must finish each field* (default 1; 2 or more gives repeat labels for agreement);
+- the session ID, a note for labellers, and *Also ask for the type*;
+- the older kinds of session (see below).
+
+**Sharing.** *Link for labellers* on the Labels page (`http://<this computer>:8765/p/<project>/annotate`) opens every
+open session of the study. The link names the project, so people label in the right study whatever others have open.
+People type their name, with no account or password, and can stop and continue later under the same name. Nothing else
+in stainID is reachable without the admin password. Links without a project (`…:8765/annotate`) open the project
+opened last.
+
+**The first time.** A name that has not been through the tutorial goes there first. It is a practice on a real field
+of the project, in both rounds, where nothing is saved (about 3–5 minutes). A coach asks for one thing at a time and
+waits until it is done. *Skip tutorial* is always there, and *Tutorial* at the top shows it again. Who finished it is
+kept in `outputs.reviews/tutorials.json`.
+
+**On the page.** Every object is always shown:
+
+- solid in its class colour when it counts as that class;
+- dotted grey when the AI rejected it or someone said it is not an object;
+- dotted in the unsure colour when unsure;
+- dotted with "new — choose a class" when just added.
+
+Pointing at an object lights it up and shows what the AI said about it at the side: the AI's class and score, why it was
+left out (when it was), who has checked it already, and which of its outline sizes is shown. Every key acts on the object under the mouse (round 2) or on screen (round 1):
+
+| Key | What it does |
+|---|---|
+| 1–9 | its class. For a class with types, a type number right after it (within 1 s, `labels.subtype_wait_s`) picks the type, and a type's own letter key answers class and type at once ([label_classes.md](label_classes.md)) |
+| 0 | unsure: left out of training; that person is not asked again, but the others are |
+| Delete (Backspace) | not an object: a candidate turns dotted grey and stays visible; an object the person added goes |
+| Tab / Shift+Tab (or + / −) | a bigger or smaller outline: the three Segment Anything outputs come with the object, so it changes at once |
+| Space | precise editing of this object, with everything else locked: right-click a spot to include it, left-click one to leave it out, drag the white dots; Space again keeps it, Esc cancels |
+| Z | undo the last unsaved change |
+| Enter | round 1: keep the AI's call |
+| Ctrl+S (⌘S) | save, and stay on the field |
+| Ctrl+Enter (⌘Enter) | save and continue |
+
+In round 2, a click on empty tissue outlines a missed object with one click (Segment Anything). It stays dotted
+("new") until a class key gives it a class. *Draw an object by hand…* is the last resort. One click answers at once,
+because the server makes the Segment Anything features of the session's fields ahead: on a GPU every field of the
+open sessions, and on the CPU the field someone has open and their next ones. They are kept in
+`data/cache/sam_embeddings/`, and the page says *Preparing one-click outlines…* until its field is ready.
+
+**Saving.** Nothing is saved until the person presses *Save* or *Save and continue*. The count at the top says how many
+unsaved changes there are, and a small orange dot marks each changed object. A draft is kept in the browser in case of
+a reload, and leaving the page with unsaved changes asks first. *Save and continue* finishes the field:
+
+- in round 1 every object needs an answer first;
+- in round 2 every call nobody decided and every outline left as it is counts as checked by this person;
+- new objects need a class first.
+
+A tile's labels are written all at once (`routes.rounds.save_tile`) or not at all.
+
+**Fields are claimed, so people never collide.** The unit people claim is a field (a tile), in both rounds:
+
+- Opening a field holds it for that person while their page is open, so the others are handed other fields.
+- A field that enough people finished (*People who must finish each field*) is not handed to anyone else.
+- What others decide meanwhile shows within seconds ("checked by Ben").
+
+**One set of answers.** Both rounds, every session and every person write class labels on the same candidates, keyed by
+candidate id (`labels.decisions`). A candidate that enough people decided leaves every round-1 list at once and shows
+as checked in round 2. Labels made before the rounds (earlier sessions, imported label sets) are matched onto the
+candidates by position, so nothing anyone labelled is asked again. The decisions train the models like any other label
+([Training a model](#training-a-model)).
+
+**Following a session** (Labels page). Each session shows:
+
+- the fields done, by anyone, and those in progress;
+- who is labelling now, and how many fields each person finished;
+- whether its pictures are ready (they are made ahead in the background).
+
+*More* opens the labelling page, *Look at the labels* (every labelled object, field by field), the session's labels
+as CSV, its fields (round 2), and *Delete session*. Deleting moves the session's settings aside and keeps every label. *Close*
+stops people from opening it; nothing is lost.
+
+### Older kinds of session
+
+Under *Advanced* in *New labelling session* (*make one of those instead…*), on the current label pool rather than the
+v2 store:
+
+- **Review whole fields**: fields that stainID picks (nobody has reviewed them yet, spread over TMAs and groups, in
+  shuffled order) or that you click on the cores, and how many people should review each field. People see the field
+  with the AI's calls and outlines pre-filled (dashed: the AI's call; solid: their own decision). They change the class
+  of wrong objects, add missed objects, drag outline corners or draw new ones, tag the field (*white matter*,
+  *unusable*, …), and press *Finished*, which records every AI call they left alone as confirmed by them. A blind
+  variant shows the candidates without the AI's calls.
+- **Quick object queue**: one object at a time, labelled with the keyboard. The next object is chosen anew each time
+  from all prepared fields: where the AI is unsure, where people disagree with each other or with the AI, objects one
+  other person has labelled, or at random.
+- **Outline every object**: the segmentation check (below).
+
+These need their fields **prepared**. The *Prepare fields for labelling* step (`stainid labels prepare`) finds every
+candidate as the detection step does and stores its measurements and the AI's call in
 `outputs.reviews/pool/<stain>/<field>.csv` (10–30 s per field). Sessions prepare their own fields in the background.
 
 Labels made before the label store (training sets, the CNN-outlier adjudication and the white-matter field review)
@@ -269,10 +365,13 @@ its own (`imported` in the report).
 you choose (on the Models page; every session by default, `reference` = the imported labels). The report of each model
 records the sessions it learned from:
 
-- **Labels.** Each object's majority label, positive or negative; "unsure" and ties are skipped. Labels on positions no
-  candidate covers (objects people added) cannot train the classifier. It needs at least 10 positive and 10 negative
-  labels; 100–200 is a good start.
-- **Model.** The same random forest the pipeline uses, on the candidate measurements stored when the field was prepared.
+- **Labels.** Each object's majority label, positive or negative; "unsure" and ties are skipped. The decisions of the
+  annotation rounds count like any other label. An object people added where detection proposed nothing is measured
+  at the clicked position first and then trains the model like a candidate; the report counts these, and those that
+  could not be measured (their labels stay, but cannot train). It needs at least 10 positive and 10 negative labels;
+  100–200 is a good start.
+- **Model.** The same random forest the pipeline uses, on the candidate measurements: those of the v2 candidate store
+  for objects of the annotation rounds, else those stored when the field was prepared.
 - **Thresholds.** The compact/diffuse threshold (6E10) and the tangle/pretangle threshold (AT8) come from your labels
   when there are enough, otherwise from the current model.
 - **Validation.** Leave-one-TMA-out; if a fold would train without one class, stratified folds of whole TMAs. Every donor sits on one TMA, so no donor is ever in both training and testing. The current model is scored on the same labels,

@@ -33,6 +33,7 @@ precision:                   # arithmetic on CUDA GPUs (CPU always fp32): fp32, 
 
 imaging: {native_pixel_size_um: null, rescale: on_import, stains: {}}   # image sets and whole slides (project_kinds.md)
 dataset: {}                  # the dataset package a project was made from (project_kinds.md)
+v2: {}                       # overrides of the v2 detection parameters (proposals, rules, outlines): pipeline_v2.md
 
 inputs:
   image_list: data/images.csv                                    # image sets and whole slides: every image, its donor and stain
@@ -61,6 +62,7 @@ outputs:
   fields: data/analysis/cohort_v3
   nuclei: data/analysis/tile_nuclei
   masks: data/analysis/cohort_object_masks
+  v2: data/analysis/v2      # the staged (v2) detection and its candidate store: pipeline_v2.md
   tables: data/analysis
   reviews: data/annotations
   trained_models: data/models/trained
@@ -139,7 +141,8 @@ core-image pixel coordinates) to drop before measurement.
 | `outputs.tables` | `results_<level>.csv` (every stain in one table) and `neun_`, `fields_`, `masks_<level>.csv` (level = `donor_region` or `core`) |
 | `outputs.qc` | `grids/<slide>.jpg`: the fitted core grid on every slide; `grids/<slide>.json`: the grid size, how it was chosen, how well it fits (and whether someone marked it as right); `grids/previews/<slide>.jpg`: the plain slide picture behind the core thumbnails |
 | `outputs.trained_models` | `<stain>_<time>/bundle.joblib` and `report.json` for every model trained in the app |
-| `outputs.reviews` | `reviews/<name>/`: review sets (see [webapp.md](webapp.md)) |
+| `outputs.v2` | the staged detection: `proposals/`, `calls/`, `outlines/`, `measures/` (the results tables made from the calls), `manifests/<stage>/<stain>/<core>.json` (what each core was made from, for out-of-date detection) and `candidates/<stain>/<core>.csv.gz`, the candidate store the viewer and the annotation rounds read; see [pipeline_v2.md](pipeline_v2.md) |
+| `outputs.reviews` | `labels/labels.jsonl` (every label), `sessions/<name>/` (labelling sessions; a round-1 session's objects in `items.json`), `pool/<stain>/` (prepared fields of the older session kinds), `class_examples/`, `tutorials.json` (who finished the annotators' tutorial) and `reviews/<name>/`: review sets (see [webapp.md](webapp.md)) |
 | `outputs.jobs` | job records and logs from the web app |
 
 Object coordinates (`centroid_x_px`, `centroid_y_px`) are in context-crop pixels, whose origin is

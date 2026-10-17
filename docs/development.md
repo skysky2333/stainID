@@ -71,7 +71,7 @@ take its screenshots, `tools/demo/make_setup_demo.py OUT_DIR` makes a synthetic 
    - `writes`: shared files it updates (such as the core table), so two steps never write one at the same time.
 
    Dependencies (the pipeline-map arrows and the queue order) are derived from these lists, so the job runner, the
-   pipeline map and the Workflow page pick the step up without further changes. A new input file gets a `Resource`
+   pipeline map and the Run page pick the step up without further changes. A new input file gets a `Resource`
    with its `download`, `template`, `setting` or `format`, which gives the missing-file buttons on the step card.
 
 ## Adding a cache
@@ -192,6 +192,9 @@ routes:
 | `GET /api/summary`, `/api/calibration`, `/api/cores`, `/api/cores/{id}`, `/api/tmas/{tma}/layout` | cohort browsing |
 | `GET /api/fields/{tile}/objects`, `/api/fields/{tile}/outlines`; `GET /api/images/...` | detections, outlines, images and overlays |
 | `GET/POST /api/reviews`; `/api/reviews/{name}/items`, `/labels`, `/summary`, `/image/{id}.jpg` | labelling sets |
+| `POST /api/labels/sessions` (with `round` 1 or 2 for an annotation round), `/open`, `/fields`; `DELETE /api/labels/sessions/{name}`; `GET /api/labels/rounds/scope`, `/api/labels/share`, `/api/labels/export.csv` | labelling sessions and annotation rounds (`routes/annotate.py`, `routes/rounds.py`) |
+| `GET /api/annotate`, `/api/annotate/{name}`, `/next`; `POST /api/annotate/{name}/live`, `/tiles/{tile}/save`, `/fields/{tile}/segment`; `GET/POST /api/session/tutorial` | the annotators' pages: the next field, who holds which field, saving a field at once, one-click outlines, the tutorial |
+| `GET /api/labels/classes`, `PUT /api/labels/classes/{stain}`; `GET/PUT /api/project/cache`, `POST /api/project/cache/clear` | label classes; the space for pictures made for viewing |
 | `GET /api/models`, `/api/models/trained`; `POST /api/models/activate` | models |
 | `GET /api/tables`, `/api/tables/{name}/columns`, `/rows`, `/feature` | output tables and column meanings |
 

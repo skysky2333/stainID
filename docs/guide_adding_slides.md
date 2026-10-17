@@ -89,14 +89,14 @@ not stop it.
 ## 6. Run
 
 stainID lists what is left to do and roughly how long it will take on this computer. Press **Run everything**. The
-steps start in the right order by themselves; you can close the browser, and the Workflow page shows how far they
+steps start in the right order by themselves; you can close the browser, and the Run page shows how far they
 have got. When they are done, the results are on the **Results** page.
 
 ## If something goes wrong
 
-- A step that fails says why on the Workflow page; the guided setup's screens can be opened again at any time to
+- A step that fails says why on the Run page; the guided setup's screens can be opened again at any time to
   correct a slide, a map or the donor sheet, and the step run again.
 - Nothing is lost by going back: saving a map replaces only that TMA's map, and saving donors only updates the donors
   in the sheet.
 - Everything the guided setup does is also visible under **Advanced** on each screen (the files it writes, the full
-  tables, the options of the steps) and on the [Workflow page](webapp.md#the-workflow-page).
+  tables, the options of the steps) and on the [Run page](webapp.md#the-run-page).
