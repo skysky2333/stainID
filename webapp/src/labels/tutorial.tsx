@@ -26,12 +26,11 @@ interface Step { round: 1 | 2; title: string; text: string; done: RoundEvent[]; 
  *  stain with types), unsure (`), a clean look (Space), precise editing, the brush (B), saving. `keys`: the practice
  *  stain's key line (`Vocabulary.keymap` summary); `typed`: its objects have several types to choose from. */
 function stepsFor(typed: boolean, keys: string, counted: string): Step[] {
-  const others = 'On 6E10 and AT8, 1–4 pick the type (compact, diffuse… or pretangle, mature tangle…) and Q W E the named look-alikes (CAA, a thread…).'
   const steps: Step[] = [
     { round: 2, title: 'Point at an object', text: 'Move the mouse over an outlined object. It lights up, its name shows beside it, and what detection said about it shows on the right. Every key acts on the object under the mouse.', done: ['hover'] },
     { round: 2, title: 'Reject what detection got wrong', text: 'Find a few objects detection got wrong, point at each and press Del. They turn dotted grey and stay visible. Some objects are already dotted grey: detection rejected those itself, and they look just the same.', done: ['remove'], times: 2 },
-    { round: 2, title: 'Bring the type back', text: `Point at a dotted grey object that is a real one and press ${counted}: it becomes solid in that type’s colour. Each type has its own colour.${typed ? '' : ` ${others}`}`, done: ['class'] },
-    { round: 2, title: 'Change the type', text: `Point at a solid object and press another number: it changes to that type and colour. ${others}`, done: ['subtype'] },
+    { round: 2, title: 'Bring the type back', text: `Point at a dotted grey object that is a real one and press ${counted}: it becomes solid in that type’s colour. Each type has its own colour (see the panel on the right).`, done: ['class'] },
+    { round: 2, title: 'Change the type', text: 'Point at a solid object and press another number: it changes to that type and colour. Things that look like one but are not have letters (Q, W …): solid too, but not counted.', done: ['subtype'] },
     { round: 2, title: 'Not sure?', text: 'Point at an object you cannot decide and press ` (the key left of 1; 0 works too). It turns dotted amber with a “?” and is left out of training and evaluation.', done: ['unsure'] },
     { round: 2, title: 'Undo', text: 'Pressed the wrong key? Press Z to undo your last change. Z takes back changes you have not saved yet.', done: ['undo'] },
     { round: 2, title: 'A clean look', text: 'Press Space to hide everything drawn over the picture and see the tissue alone. Press Space again to bring it back.', done: ['overlays'] },

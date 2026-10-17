@@ -1011,31 +1011,48 @@ def practice_name(round_: int, stain: str) -> str:
     return f"{PRACTICE}-{round_}-{stain}"
 
 
+PRACTICE_STAIN = "6E10"  # amyloid: the most standard stain to learn on, with four plaque types and named look-alikes
+
+
 def practice_tile(stain: str) -> str | None:
-    """The field the tutorial practises on: of the first cores with candidates, the ready field with most of them, one
-    with a candidate detection rejected itself first (the tutorial shows that people's rejects look the same); kept
-    until the store changes."""
+    """The field the tutorial practises on (both rounds): of the first cores with candidates, the ready field that best
+    shows every step: the most plaque (or other) types detection called there (up to four), a candidate detection
+    rejected itself (the tutorial shows that people's rejects look the same), an area detection excluded (a fold or an
+    artifact, for the brush), then the most candidates. Kept until the store changes."""
     state = get_state()
 
     def make() -> str | None:
+        from stainid import exclusions  # noqa: PLC0415
+
         tiles = state.labelling_tiles
         if tiles.empty:
             return None
         tiles = tiles[tiles.stain == stain]
         with_candidates = candidate_store.cores(state.project, stain)  # a folder listing: only these cores' fields are checked
-        first = sorted(set(tiles.core_id.astype(str)) & with_candidates)[:3]
+        first = sorted(set(tiles.core_id.astype(str)) & with_candidates)[:6]
         ready = store_ready(stain, tiles[tiles.core_id.astype(str).isin(first)])
-        best, most = None, (False, 0)
-        for core_id in sorted(set(ready.core_id.astype(str)))[:3]:
-            found = candidate_store.read_core(state.project, stain, core_id, [*candidate_store.POSITIONS, "decision"])
+        best, most = None, (0, False, False, 0)
+        for core_id in sorted(set(ready.core_id.astype(str)))[:6]:
+            found = candidate_store.read_core(state.project, stain, core_id, candidate_store.CALLS)
             if found is None or found.empty:
                 continue
-            counts = found.tile_id.value_counts()
-            rejected = set(found.tile_id[~found.decision.astype(str).map(candidate_store.accepted)])
-            for tile_id in ready.tile_id[ready.core_id.astype(str) == core_id]:
-                rank = (tile_id in rejected, int(counts.get(tile_id, 0)))
-                if rank[1] and rank > most:
-                    best, most = tile_id, rank
+            layer = exclusions.automatic(state.project, core_id, stain)
+            took = found.decision.astype(str).map(candidate_store.accepted)
+            for _, tile in ready[ready.core_id.astype(str) == core_id].iterrows():
+                mine = found[found.tile_id == tile["tile_id"]]
+                if mine.empty:
+                    continue
+                kept = mine[took.loc[mine.index]]
+                types = len(set(zip(kept["class"].astype(str), kept.subtype.fillna("").astype(str))))
+                bad = False
+                if layer is not None:
+                    x0, y0 = int(tile["x_px"]) // layer.scale, int(tile["y_px"]) // layer.scale
+                    x1, y1 = (int(tile["x_px"]) + int(tile["width_px"])) // layer.scale, (int(tile["y_px"]) + int(tile["height_px"])) // layer.scale
+                    part = layer.codes[y0:y1 + 1, x0:x1 + 1]
+                    bad = bool(((part == 1) | (part == 2)).any())
+                rank = (min(types, 4), bool((~took.loc[mine.index]).any()), bad, len(mine))
+                if rank > most:
+                    best, most = str(tile["tile_id"]), rank
         return best
 
     return cache.memo(("practice field", str(state.root), stain), [candidate_store.folder(state.project, stain)], make, folders=True)
@@ -1093,7 +1110,8 @@ def tutorial(request: Request, person: str = Depends(annotator)) -> dict:
 def _practice() -> dict | None:
     state = get_state()
     metas = [sessions.meta(root(), n) for n in sessions.names(root())]
-    stains = [m["stain"] for m in metas if rounds.is_round(m) and m.get("open")]
+    stains = [PRACTICE_STAIN] if candidate_store.cores(state.project, PRACTICE_STAIN) else []  # amyloid first, for everyone
+    stains += [m["stain"] for m in metas if rounds.is_round(m) and m.get("open")]
     stains += [s for s in STAINS if candidate_store.cores(state.project, s)]
     for stain in dict.fromkeys(stains):
         tile = practice_tile(stain)
