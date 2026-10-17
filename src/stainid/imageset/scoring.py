@@ -1,6 +1,7 @@
 """Score the models on imported labels: the external test of stainID's detection on another lab's annotations.
 
-The AI's objects (the published detections, `stainid.outputs`) are compared with every rater's annotations and with
+The AI's objects (the v2 calls, `stainid.candidates`, where the v2 detection has run; else the published detections,
+`stainid.outputs`) are compared with every rater's annotations and with
 the consensus, per stain, on the images that rater annotated:
 
 - points: an accepted object within `MATCH_UM` (or the object's own radius, if larger) of a mark finds it, one object
@@ -69,13 +70,52 @@ def _f1(precision: float | None, recall: float | None) -> float | None:
     return round(2 * precision * recall / (precision + recall), 4)
 
 
+DETECTION_COLUMNS = ["core_id", "tile_id", "cx", "cy", "radius_px", "value", "accepted", "probability", "model_class"]
+V2_COLUMNS = ["tile_id", "x_core", "y_core", "radius_px", "area_um2", "probability", "decision", "reason", "class", "subtype"]
+
+
+def v2_detections(project: Project, stain: str, core_ids: set[str]) -> pd.DataFrame | None:
+    """The v2 detection's candidates of these cores (`stainid.candidates`, after stage 4), in the frame `detections`
+    gives: accepted = the call `accepted`, `value` its class and type ("plaque/compact"), `model_class` the type, or
+    `vascular_or_edge` for deposits the vessel / edge rule set aside. None when no core has a v2 store."""
+    from stainid import candidates as store
+
+    frames = []
+    for core in sorted(core_ids):
+        if store.path(project, stain, core).exists():
+            found = store.read_core(project, stain, core, V2_COLUMNS)
+            if len(found):
+                frames.append(found.assign(core_id=core))
+    if not frames:
+        return None
+    found = pd.concat(frames, ignore_index=True)
+    text = {c: found[c].fillna("").astype(str) if c in found else pd.Series("", index=found.index) for c in ("decision", "reason", "class", "subtype")}
+    accepted = text["decision"].eq("accepted").to_numpy()
+    values = [f"{c}/{t}" if a and t else c for c, t, a in zip(text["class"], text["subtype"], accepted)]
+    radius = pd.to_numeric(found.radius_px, errors="coerce") if "radius_px" in found else pd.Series(np.nan, index=found.index)
+    area = pd.to_numeric(found.area_um2, errors="coerce") if "area_um2" in found else pd.Series(np.nan, index=found.index)
+    radius = radius.fillna(np.sqrt(area / np.pi) / project.pixel_size_um)
+    model_class = np.where(text["reason"].eq("rule:vascular_or_edge"), "vascular_or_edge", np.where(text["subtype"].ne(""), text["subtype"], text["class"]))
+    return pd.DataFrame({"core_id": found.core_id.to_numpy(), "tile_id": text_column(found, "tile_id"), "cx": found.x_core.to_numpy(float),
+                         "cy": found.y_core.to_numpy(float), "radius_px": radius.to_numpy(float), "value": values, "accepted": accepted,
+                         "probability": pd.to_numeric(found.probability, errors="coerce").to_numpy(), "model_class": model_class})
+
+
+def text_column(frame: pd.DataFrame, column: str) -> np.ndarray:
+    return frame[column].fillna("").astype(str).to_numpy() if column in frame else np.full(len(frame), "", dtype=object)
+
+
 def detections(project: Project, stain: str, core_ids: set[str]) -> pd.DataFrame:
-    """The AI's objects of these cores in core-image pixels, with whether each was accepted and its class."""
+    """The AI's objects of these cores in core-image pixels, with whether each was accepted and its class: the v2
+    detection's calls where it has run (`v2_detections`), else the published v1 detections."""
+    found = v2_detections(project, stain, core_ids)
+    if found is not None:
+        return found
     tiles = table(project.analysis_tiles())
     tiles = tiles[(tiles.stain == stain) & tiles.core_id.isin(core_ids)]
     found = pipeline_objects(project, tiles, stain) if len(tiles) else pd.DataFrame()
     if found.empty:
-        return pd.DataFrame(columns=["core_id", "tile_id", "cx", "cy", "radius_px", "value", "accepted", "probability", "model_class"])
+        return pd.DataFrame(columns=DETECTION_COLUMNS)
     origin = tiles.drop_duplicates("tile_id").set_index("tile_id")
     ox = (origin.x_px - project.context_px).clip(lower=0)
     oy = (origin.y_px - project.context_px).clip(lower=0)

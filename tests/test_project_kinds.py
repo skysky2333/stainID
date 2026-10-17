@@ -85,6 +85,33 @@ def test_scoring_against_points_per_rater_and_consensus(tmp_path):
     assert scoring.scores_csv(project).exists() and scoring.saved(project)["rows"]
 
 
+def test_scoring_reads_the_v2_calls_where_the_v2_detection_has_run(tmp_path):
+    from stainid import candidates
+
+    project, (folder, truth) = _made(tmp_path, tiles_with_points)
+    tiles = table(project.analysis_tiles())
+    scale = 0.5 / 0.2738
+    for core_id, group in tiles.groupby("core_id"):
+        centres = [(x * scale, y * scale) for x, y in truth[group.image_id.iloc[0] if "image_id" in group else core_id]]
+        rows = [{"x": x, "y": y, "decision": "accepted", "class": "plaque", "subtype": "compact", "reason": "accepted", "p": 0.9} for x, y in centres[:3]]
+        rows.append({"x": 50.0, "y": 50.0, "decision": "accepted", "class": "plaque", "subtype": "compact", "reason": "accepted", "p": 0.8})
+        x, y = centres[3]
+        rows.append({"x": x, "y": y, "decision": "rejected", "class": "not a plaque", "subtype": "", "reason": "rejected_by_model", "p": 0.3})
+        frame = pd.DataFrame({"candidate_id": [candidates.candidate_id("6E10", core_id, r["x"], r["y"]) for r in rows],
+                              "tile_id": group.tile_id.iloc[0], "x_core": [r["x"] for r in rows], "y_core": [r["y"] for r in rows],
+                              "radius_px": 10.0, "area_um2": 50.0, "probability": [r["p"] for r in rows], "decision": [r["decision"] for r in rows],
+                              "reason": [r["reason"] for r in rows], "class": [r["class"] for r in rows], "subtype": [r["subtype"] for r in rows]})
+        target = candidates.path(project, "6E10", core_id)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        candidates.write_table(target, frame)
+    found = scoring.detections(project, "6E10", set(tiles.core_id))
+    assert found.accepted.sum() == 12 and set(found.value[found.accepted]) == {"plaque/compact"} and (~found.accepted).sum() == 3
+    rows = {(r["rater"], r["kind"]): r for r in scoring.score(project)["rows"]}
+    consensus = rows[("consensus", "objects")]
+    assert consensus["marks"] == 12 and consensus["found"] == 9 and consensus["ai_objects"] == 12 and consensus["precision"] == 0.75
+    assert consensus["recall"] == 0.75  # the candidate on the fourth plaque was rejected: not found
+
+
 def test_regions_with_boxes_are_read_where_they_lie_and_recoloured(tmp_path):
     project, folder = _made(tmp_path, regions_with_boxes)
     cores = pd.read_csv(project.input("core_images"), dtype=str)

@@ -172,7 +172,7 @@ objects?*, `stainid score-segmentation`; see docs/webapp.md): their outlines are
 detection step proposes and with the objects it counts, by IoU, on the fields where all of a rater's marks are
 polygons. That shows objects never proposed, cut into pieces or merged, which the matching below cannot.
 
-On the Models page, *Score the models on these labels* (or `stainid score`) compares the AI's published detections with
+On the Models page, *Score the models on these labels* (or `stainid score`) compares the AI's objects (the v2 detection's calls where it has run, else the published detections) with
 every rater and with the consensus, per stain, and saves `scores.json` and `scores.csv` next to the imported labels:
 
 - **points**: an object the AI accepted finds a mark when it lies within 12 µm (plaques), 8 µm (tau) or 6 µm (neurons)
