@@ -212,6 +212,8 @@ function cellsIn(prepared: Prepared, x0: number, y0: number, x1: number, y1: num
 
 /** A picture drawn over the whole image (e.g. the excluded areas), `width` × `height` image px, any resolution. */
 export interface Overlay { src: string; width: number; height: number; opacity?: number }
+/** A pointer position for painting (`onPress`, `onMove`): image px, the zoom (screen px per image px) and Shift. */
+export interface PaintPoint { x: number; y: number; s: number; shift: boolean }
 
 /**
  * A whole core image to zoom (wheel, double-click, + / −, keyboard) and drag around. Only the tiles in view are
@@ -220,7 +222,8 @@ export interface Overlay { src: string; width: number; height: number; opacity?:
  * `boxes` (tiles, fields) are drawn on a canvas on top; `overlays` are pictures laid over the whole image. A click near
  * a mark or inside its outline reports its index to `onPick` (null for empty space), hovering shows `describe(index)`.
  */
-export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lineColor = '#fff', boxes = [], overlays = [], selected = null, describe, onPick, target, pixelUm, toolbar, height = 'min(72vh, 760px)', onTileError, onView }: {
+export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lineColor = '#fff', boxes = [], overlays = [], selected = null, describe, onPick, target, pixelUm, toolbar, height = 'min(72vh, 760px)', onTileError, onView,
+  onPress, onMove, onRelease, panLock = false, onWheelOver, over, cursor }: {
   pyramid: Pyramid
   tileUrl: (level: number, col: number, row: number, layer?: string) => string
   layers?: string[]
@@ -240,6 +243,21 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
   onTileError?: () => void
   /** The image-pixel rectangle in view, whenever the view settles (at most every COMMIT_MS while it moves). */
   onView?: (view: { x0: number; y0: number; x1: number; y1: number }) => void
+  /** Painting (with `panLock`): the left button pressed at an image point; the middle button still pans. */
+  onPress?: (p: PaintPoint) => void
+  /** The pointer moved over the image (also while the left button is held after `onPress`). */
+  onMove?: (p: PaintPoint | null) => void
+  /** The left button was let go after `onPress`. */
+  onRelease?: () => void
+  /** A left drag does not move the picture (it paints); the middle button does, and a double click does not zoom. */
+  panLock?: boolean
+  /** The wheel turned over the picture: return true when it was used (e.g. for the brush size), so it does not zoom. */
+  onWheelOver?: (deltaY: number, e: WheelEvent) => boolean
+  /** Drawn on the image under the objects, in image px (e.g. an SVG or a canvas the size of the image); `unit` is one
+   *  screen px in image px. */
+  over?: (unit: number) => ReactNode
+  /** The CSS cursor over the picture. */
+  cursor?: string
 }) {
   const box = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
@@ -465,6 +483,7 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
       e.preventDefault()
       const rect = element.getBoundingClientRect()
       const delta = e.deltaMode === 1 ? e.deltaY * 30 : e.deltaY
+      if (onWheelOver?.(delta, e)) return
       zoomAt(Math.exp(-Math.max(-300, Math.min(300, delta)) * 0.0022), e.clientX - rect.left, e.clientY - rect.top)
     }
     element.addEventListener('wheel', onWheel, { passive: false })
@@ -505,10 +524,17 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
   // hovering: the pointer's last position, hit-tested once per frame
   const pointer = useRef<{ px: number; py: number } | null>(null)
   const hoverFrame = useRef(0)
+  const painting = useRef(false)
+  const at = (e: React.PointerEvent): PaintPoint | null => {
+    const v = viewRef.current
+    if (!v) return null
+    const { px, py } = local(e)
+    return { x: (px - v.x) / v.s, y: (py - v.y) / v.s, s: v.s, shift: e.shiftKey }
+  }
   const hoverTest = () => {
     hoverFrame.current = 0
     const at = pointer.current
-    if (!at || drag.current?.moved) return
+    if (!at || drag.current?.moved || onPress) return
     const hit = nearest(at.px, at.py)
     setHovered(hit)
     if (describe) setTip(hit === null ? null : { x: at.px, y: at.py, text: describe(hit) })
@@ -552,14 +578,23 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
           <button className="btn small" onClick={() => setView(fit(), true)} title="Show the whole core">Whole core</button>
         </span>
       </div>
-      <div ref={box} className={`dz${dragging ? ' dragging' : ''}`} style={{ height }} tabIndex={0} aria-label="Core image: scroll or use + and − to zoom, drag or use the arrow keys to move"
+      <div ref={box} className={`dz${dragging ? ' dragging' : ''}`} style={{ height, ...(cursor ? { cursor } : {}) }} tabIndex={0} aria-label="Core image: scroll or use + and − to zoom, drag or use the arrow keys to move"
+        onMouseDown={(e) => { if (e.button === 1) e.preventDefault() }}  // no autoscroll on the middle button
         onPointerDown={(e) => {
           const v = viewRef.current
-          if (!v || e.button !== 0) return
+          if (!v || (e.button !== 0 && !(panLock && e.button === 1))) return
           e.currentTarget.setPointerCapture(e.pointerId)
+          if (panLock && e.button === 0) {  // painting
+            const p = at(e)
+            painting.current = true
+            if (p) onPress?.(p)
+            return
+          }
           drag.current = { x: e.clientX, y: e.clientY, vx: v.x, vy: v.y, moved: false }
         }}
         onPointerMove={(e) => {
+          if (onMove) onMove(at(e))
+          if (painting.current) return
           const d = drag.current
           if (d) {
             if (!d.moved && Math.hypot(e.clientX - d.x, e.clientY - d.y) > 4) { d.moved = true; setDragging(true); setTip(null); setHovered(null) }
@@ -571,14 +606,15 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
           if (!hoverFrame.current) hoverFrame.current = requestAnimationFrame(hoverTest)
         }}
         onPointerUp={(e) => {
+          if (painting.current) { painting.current = false; onRelease?.(); return }
           const d = drag.current
           drag.current = null
           setDragging(false)
           if (d?.moved) setView(viewRef.current, true)
-          if (d && !d.moved && onPick) { const { px, py } = local(e); onPick(nearest(px, py)) }
+          if (d && !d.moved && onPick && e.button === 0) { const { px, py } = local(e); onPick(nearest(px, py)) }
         }}
-        onPointerLeave={() => { pointer.current = null; setTip(null); setHovered(null) }}
-        onDoubleClick={(e) => { const { px, py } = local(e); zoomAt(2, px, py, true) }}
+        onPointerLeave={() => { pointer.current = null; setTip(null); setHovered(null); onMove?.(null) }}
+        onDoubleClick={(e) => { if (panLock) return; const { px, py } = local(e); zoomAt(2, px, py, true) }}
         onKeyDown={(e) => {
           const moves: Record<string, [number, number]> = { ArrowLeft: [80, 0], ArrowRight: [-80, 0], ArrowUp: [0, 80], ArrowDown: [0, -80] }
           const move = moves[e.key]
@@ -600,6 +636,7 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
               <img key={o.src} className="dz-overlay" src={o.src} alt="" draggable={false}
                 style={{ left: 0, top: 0, width: o.width, height: o.height, opacity: o.opacity ?? 1 }} />
             ))}
+            {over?.(1 / view.s)}
           </div>
         )}
         <canvas ref={canvas} className="dz-canvas" style={{ width: size.w, height: size.h }} />

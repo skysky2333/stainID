@@ -13,6 +13,7 @@ import { FieldThumb } from '../labels/fields'
 import { QuickCheck } from '../labels/quickcheck'
 import { CheckCalls } from '../labels/checkcalls'
 import { FixField } from '../labels/fixfield'
+import { MarkAreas } from '../labels/markareas'
 import { ROUND_TITLE, RoundProgressLine, useFitScreen } from '../labels/rounds'
 import type { RoundDetail } from '../api'
 import { Register, useSession } from '../session'
@@ -46,11 +47,13 @@ export default function AnnotatePage() {
   const { session } = useSession()
   const { name = '', tile } = useParams()
   const detail = useFetch<SessionDetail>(session.annotator ? `/api/annotate/${name}` : null)
-  useFirstTutorial()  // someone new who followed a session's link: the tutorial first, then back here
+  // someone new who followed a session's link: the tutorial first ("Mark bad areas": its own), then back here
+  useFirstTutorial(!session.annotator ? 'objects' : !detail.data ? null : detail.data.meta.kind === 'areas' ? 'areas' : 'objects')
   if (!session.annotator) return <><PageHead title="Help check tissue images" subtitle="Type your name to start." /><Register /></>
   if (detail.error) return <SessionProblem error={detail.error} retry={detail.reload} />
   if (!detail.data) return <Loading label="Opening the session…" />
   const round = (detail.data.meta as Partial<RoundDetail>).round
+  if (round === 'areas' || detail.data.meta.kind === 'areas') return <MarkAreas detail={detail.data} />
   if (round === 1) return <CheckCalls detail={detail.data} />
   if (round === 2 && tile) return <FixField key={tile} detail={detail.data} reload={detail.reload} tile={tile} />
   if (detail.data.meta.kind === 'queue') return <QuickCheck detail={detail.data} />
