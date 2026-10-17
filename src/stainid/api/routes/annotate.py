@@ -748,6 +748,7 @@ class Mark(BaseModel):
     keep: bool = False  # annotation rounds: the AI's call on `candidate` is right (recorded as confirmed)
     mask: int | None = None  # annotation rounds: which of the candidate's Segment Anything masks is right (small to large)
     png: str = ""  # round 2, task "exclude": the area marked as bad, painted (a PNG data URL at 1/`scale` of the field picture)
+    pngs: dict[str, str] = {}  # … one painted mask per type (labels.exclusions.KINDS: "1"–"4", "include" for a cleared part)
     scale: float = 1.0
 
 

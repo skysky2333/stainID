@@ -716,9 +716,13 @@ def clean(meta: dict, mark, person: str) -> dict:
     words = vocabulary(stain)
     if mark.task == exclusions.TASK:  # the area marked as bad on this field (the exclusion brush): rings in field pixels
         field_tile(meta, mark.tile_id)
-        rings, holes = ([], []) if mark.deleted or not mark.png else exclusions.from_png(mark.png, mark.scale)
+        pngs = dict(mark.pngs) or ({"1": mark.png} if mark.png else {})  # one painted mask per type (`exclusions.KINDS`)
+        try:
+            rings, holes, kinds = ([], [], []) if mark.deleted else exclusions.from_pngs(pngs, mark.scale)
+        except ValueError as error:
+            raise HTTPException(400, str(error))
         return record | {"id": exclusions.label_id(mark.tile_id), "x": None, "y": None, "points": rings or None,
-                         "value": exclusions.holes_text(holes), "deleted": mark.deleted or not rings}
+                         "value": exclusions.value_text(holes, kinds), "deleted": mark.deleted or not rings}
     if mark.candidate:
         row = candidate_row(stain, mark.candidate)
         record |= {"tile_id": str(row.tile_id), "x": round(float(row.x), 1), "y": round(float(row.y), 1)}
@@ -803,7 +807,7 @@ def _confirmations(meta: dict, tile: dict, person: str, mine: pd.DataFrame) -> l
     classes = mine[mine.task == "class"]
     said = {k: words.positive(v, s) for k, v, s in zip(classes.id, classes.value, classes.subtype)}
     marked = mine[mine.task == exclusions.TASK]
-    area = exclusions.rings_of(marked.iloc[-1].to_dict()) if len(marked) else ([], [])  # the area this person marked as bad
+    area = exclusions.rings_of(marked.iloc[-1].to_dict()) if len(marked) else ([], [], [])  # the area this person marked as bad
     outlined = set(mine.id[mine.task == "outline"])
     records = []
     stamp = {"source": person, "stain": meta["stain"], "tile_id": tile_id, "session": meta["name"], "confirmed": True}
@@ -882,6 +886,27 @@ def _round_meta(name: str, request: Request) -> dict:
     if not rounds.is_round(meta):
         raise HTTPException(404, f"{name} is not an annotation round")
     return meta
+
+
+@router.get("/annotate/{name}/fields/{tile_id}/excluded")
+def field_excluded(name: str, tile_id: str, request: Request, person: str = Depends(annotator)) -> dict:
+    """The excluded areas over a field (`store_view.field_excluded`: detection's folds, artifacts, no tissue, edge guard,
+    hand-drawn exclusions and what other annotators marked; this person's own marks are drawn by their page)."""
+    from stainid.api import store_view  # noqa: PLC0415
+
+    meta = _round_meta(name, request)
+    return store_view.field_excluded(get_state().project, field_tile(meta, tile_id), person)[0]
+
+
+@router.get("/annotate/{name}/fields/{tile_id}/excluded.png")
+def field_excluded_png(name: str, tile_id: str, request: Request, person: str = Depends(annotator)) -> Response:
+    from stainid.api import store_view  # noqa: PLC0415
+
+    meta = _round_meta(name, request)
+    png = store_view.field_excluded(get_state().project, field_tile(meta, tile_id), person)[1]
+    if png is None:
+        raise HTTPException(404, f"the excluded areas of {tile_id} are not made yet (the v2 proposals make them)")
+    return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
 
 
 @router.get("/annotate/{name}/fields/{tile_id}/segment")

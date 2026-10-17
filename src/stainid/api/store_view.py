@@ -130,25 +130,30 @@ def unproposed_count(project, core_id: str, stain: str) -> int | None:
 # ---------------------------------------------------------------- excluded areas
 
 class ExcludedKind:
-    """One kind of area left out of the analysis, as the "Excluded areas" layer draws it: which pixels of the stage-2
-    mask (`stainid.v2.proposals.BITS`, one byte per 8 × 8 core-image px) are of this kind (`pick`), its colour and its
+    """One kind of area left out of the analysis, as the "Excluded areas" layer draws it: which pixels are of this kind
+    (`pick(mask, marks)`: the stage-2 mask, `stainid.v2.proposals.BITS`, one byte per 8 × 8 core-image px, and the
+    annotators' marks on the same grid, `MARK_*`), its colour (by exclusion type, `labels.exclusions.KINDS`) and its
     hatching ("\\\\", "/", "|", "-", or "" for none)."""
 
-    def __init__(self, id: str, label: str, color: tuple[int, int, int], hatch: str, pick):
-        self.id, self.label, self.color, self.hatch, self.pick = id, label, color, hatch, pick
+    def __init__(self, id: str, label: str, color: tuple[int, int, int], hatch: str, pick, type: str = ""):
+        self.id, self.label, self.color, self.hatch, self.pick, self.type = id, label, color, hatch, pick, type
 
 
 TISSUE, LINEAR, FOLD, MANUAL, EDGE_GUARD, TILE = 1, 2, 4, 8, 16, 32  # stainid.v2.proposals.BITS
-ANNOTATOR = 64  # not in the stage-2 mask: the areas annotators marked as bad on the field page, painted on here (`_annotated`)
-# Drawn in this order, each pixel as the first kind it is: what a person drew comes first. A further kind (e.g. the areas
-# annotators mark on the field page) is one more entry here; `pick` gets the mask and returns that kind's pixels.
+MARK_INCLUDE = 5  # the annotators' marks on the mask grid: 1–4 the exclusion types, 5 a part they cleared ("include")
+TYPE_COLOR = {"1": (255, 176, 0), "2": (168, 85, 247), "3": (156, 163, 175), "4": (0, 229, 255)}  # by `labels.exclusions.KINDS`
+# Drawn in this order, each pixel as the first kind it is: what a person drew comes first. Detection's own kinds take the
+# colour of the exclusion type they are (folds 1, linear artifacts 2, no tissue 3); the edge guard and hand-drawn
+# exclusions keep their own.
 EXCLUDED_KINDS = (
-    ExcludedKind("annotators", "marked by annotators (the field tool's brush)", (255, 77, 210), "/", lambda m: (m & ANNOTATOR) > 0),
-    ExcludedKind("manual", "drawn by hand (manual exclusion)", (255, 59, 59), "\\", lambda m: (m & MANUAL) > 0),
-    ExcludedKind("fold", "tissue fold", (255, 176, 0), "/", lambda m: (m & FOLD) > 0),
-    ExcludedKind("linear", "linear artifact (scratch, tear, edge line)", (168, 85, 247), "|", lambda m: (m & LINEAR) > 0),
-    ExcludedKind("edge_guard", "AT8 edge guard (brown rim along an edge)", (20, 184, 166), "-", lambda m: (m & EDGE_GUARD) > 0),
-    ExcludedKind("no_tissue", "no tissue (empty glass, holes)", (156, 163, 175), "", lambda m: ((m & TILE) > 0) & ((m & TISSUE) == 0)),
+    ExcludedKind("cleared", "cleared by annotators (fine after all)", (34, 197, 94), "-", lambda m, a: a == MARK_INCLUDE, "include"),
+    *(ExcludedKind(f"marked_{t}", f"marked by annotators: {name}", TYPE_COLOR[t], "\\", lambda m, a, t=int(t): a == t, t)
+      for t, name in (("1", "fold or tissue damage"), ("2", "artifact"), ("3", "no tissue / empty"), ("4", "out of focus or bad staining"))),
+    ExcludedKind("manual", "drawn by hand (manual exclusion)", (255, 59, 59), "\\", lambda m, a: (m & MANUAL) > 0),
+    ExcludedKind("fold", "fold or tissue damage (found by detection)", TYPE_COLOR["1"], "/", lambda m, a: (m & FOLD) > 0, "1"),
+    ExcludedKind("linear", "artifact: linear (scratch, tear, edge line; found by detection)", TYPE_COLOR["2"], "|", lambda m, a: (m & LINEAR) > 0, "2"),
+    ExcludedKind("edge_guard", "AT8 edge guard (brown rim along an edge)", (20, 184, 166), "-", lambda m, a: (m & EDGE_GUARD) > 0),
+    ExcludedKind("no_tissue", "no tissue / empty (found by detection)", TYPE_COLOR["3"], "", lambda m, a: ((m & TILE) > 0) & ((m & TISSUE) == 0), "3"),
 )
 EXCLUDED_SCALE = 8  # stainid.v2.proposals.MASK_SCALE: core-image px per mask px
 HATCH_PX = 4  # mask px between hatching lines (32 core-image px)
@@ -158,18 +163,30 @@ def excluded_path(project, core_id: str, stain: str):
     return candidates.root(project) / "masks" / stain / f"{core_id}.png"
 
 
-def _annotated(project, core_id: str, stain: str, shape: tuple[int, int]) -> np.ndarray:
-    """The areas annotators marked as bad on this core image's fields (`labels.exclusions`), on the mask's grid."""
+def _marks(project, core_id: str, stain: str, shape: tuple[int, int], but: str | None = None) -> tuple[np.ndarray, np.ndarray]:
+    """The areas annotators marked on this core image's fields (`labels.exclusions`), on the mask's grid: each pixel's
+    type (1–4, 5 cleared; the latest drawn wins), and the parts `but` (one person, whose own marks the page draws itself)
+    cleared (left transparent)."""
     import cv2  # noqa: PLC0415
 
     from stainid.api.state import get_state  # noqa: PLC0415
     from stainid.labels import exclusions, store  # noqa: PLC0415
 
-    out = np.zeros(shape, np.uint8)
+    marks = np.zeros(shape, np.uint8)
+    own_clear = np.zeros(shape, np.uint8)
     for area in exclusions.in_core(store.current(project.output("reviews")), get_state().tiles, project.context_px, core_id, stain):
-        for ring, hole in zip(area["rings"], area["holes"]):
-            cv2.fillPoly(out, [np.round(np.asarray(ring) / EXCLUDED_SCALE).astype(np.int32)], 0 if hole else 1)
-    return out > 0
+        mine = but is not None and area["source"] == but
+        for kind in dict.fromkeys(area["kinds"]):
+            layer = np.zeros(shape, np.uint8)
+            for ring, hole, k in zip(area["rings"], area["holes"], area["kinds"]):
+                if k == kind:
+                    cv2.fillPoly(layer, [np.round(np.asarray(ring) / EXCLUDED_SCALE).astype(np.int32)], 0 if hole else 1)
+            if mine:
+                if kind == exclusions.INCLUDE:
+                    own_clear |= layer
+                continue
+            marks[layer > 0] = MARK_INCLUDE if kind == exclusions.INCLUDE else int(kind) if kind.isdigit() else 1
+    return marks, own_clear > 0
 
 
 def _deps(project, path) -> list:
@@ -179,34 +196,39 @@ def _deps(project, path) -> list:
     return [path, store.log_path(project.output("reviews"))]
 
 
-def _excluded(path, project=None, core_id: str = "", stain: str = "") -> dict:
-    """The excluded areas of one mask (with the annotators' areas when `project` is given): each kind's pixels (a pixel
-    counts as the first kind it is) and the analysed area."""
+def _version(project, path) -> int:
+    return sum(p.stat().st_mtime_ns for p in _deps(project, path) if p.exists())  # changes with the mask and the labels
+
+
+def _excluded(path, project=None, core_id: str = "", stain: str = "", but: str | None = None) -> dict:
+    """The excluded areas of one mask (with the annotators' marks when `project` is given; `but` one person's own marks
+    left out but their cleared parts made transparent): each kind's pixels (a pixel counts as the first kind it is) and
+    the analysed area."""
     import cv2  # noqa: PLC0415
 
     mask = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
     if mask is None:
         raise FileNotFoundError(path)
     mask = mask if mask.ndim == 2 else mask[..., 0]
-    if project is not None:
-        mask = mask.astype(np.uint8) | np.where(_annotated(project, core_id, stain, mask.shape), ANNOTATOR, 0).astype(np.uint8)
-    left = np.ones(mask.shape, bool)
+    marks, own_clear = _marks(project, core_id, stain, mask.shape, but) if project is not None else (np.zeros(mask.shape, np.uint8),
+                                                                                                    np.zeros(mask.shape, bool))
+    left = ~own_clear
     kinds = []
     for kind in EXCLUDED_KINDS:
-        pixels = kind.pick(mask) & left
+        pixels = kind.pick(mask, marks) & left
         left &= ~pixels
         kinds.append((kind, pixels))
     return {"shape": mask.shape, "kinds": kinds, "analysed": int(((mask & TILE) > 0).sum())}
 
 
 def kind_info(kind: ExcludedKind, fraction: float | None) -> dict:
-    return {"id": kind.id, "label": kind.label, "color": "#%02x%02x%02x" % kind.color, "hatch": kind.hatch, "fraction": fraction}
+    return {"id": kind.id, "label": kind.label, "color": "#%02x%02x%02x" % kind.color, "hatch": kind.hatch, "type": kind.type, "fraction": fraction}
 
 
 def excluded_info(project, core_id: str, stain: str) -> dict:
     """The "Excluded areas" layer of one core image: status ("done", or "not_made" before the v2 proposals), the mask's
-    size in mask px and its scale (core-image px per mask px), and each kind with its colour, hatching and share of the
-    analysed area."""
+    size in mask px and its scale (core-image px per mask px), and each kind with its colour, hatching, exclusion type
+    and share of the analysed area."""
     from stainid import cache  # noqa: PLC0415
 
     path = excluded_path(project, core_id, stain)
@@ -215,15 +237,35 @@ def excluded_info(project, core_id: str, stain: str) -> dict:
     found = cache.memo(("excluded", str(path)), _deps(project, path), lambda: _excluded(path, project, core_id, stain))
     height, width = found["shape"]
     analysed = max(1, found["analysed"])
-    return {"status": "done", "scale": EXCLUDED_SCALE, "width": int(width), "height": int(height), "version": sum(p.stat().st_mtime_ns for p in _deps(project, path) if p.exists()),  # changes with the mask and the labels
+    return {"status": "done", "scale": EXCLUDED_SCALE, "width": int(width), "height": int(height), "version": _version(project, path),
             "kinds": [kind_info(kind, round(float(pixels.sum()) / analysed, 4)) for kind, pixels in found["kinds"]]}
 
 
-def excluded_png(project, core_id: str, stain: str) -> bytes | None:
-    """The layer as an RGBA PNG at the mask's resolution: each kind a translucent fill in its colour with stronger
-    hatching lines (no lines for "no tissue"), the rest transparent; kept until the mask changes. None without a mask."""
+def _rgba(found: dict, window: tuple[slice, slice] | None = None) -> bytes:
+    """The layer as an RGBA PNG: each kind a translucent fill in its colour with stronger hatching lines (none for "no
+    tissue"), the rest transparent; `window` a part of it (rows, columns of the mask)."""
     import cv2  # noqa: PLC0415
 
+    height, width = found["shape"]
+    yy, xx = np.mgrid[0:height, 0:width]
+    lines = {"\\": (xx - yy) % HATCH_PX == 0, "/": (xx + yy) % HATCH_PX == 0, "|": xx % HATCH_PX == 0, "-": yy % HATCH_PX == 0}
+    out = np.zeros((height, width, 4), np.uint8)  # cv2 writes BGRA
+    for kind, pixels in found["kinds"]:
+        r, g, b = kind.color
+        out[pixels] = (b, g, r, 70)
+        if kind.hatch:
+            out[pixels & lines[kind.hatch]] = (b, g, r, 210)
+    if window is not None:
+        out = out[window]
+    ok, encoded = cv2.imencode(".png", out)
+    if not ok:
+        raise RuntimeError("could not encode the excluded areas")
+    return encoded.tobytes()
+
+
+def excluded_png(project, core_id: str, stain: str) -> bytes | None:
+    """The layer as an RGBA PNG at the mask's resolution (`_rgba`), kept until the mask or the labels change; None without
+    a mask."""
     from stainid import cache  # noqa: PLC0415
 
     path = excluded_path(project, core_id, stain)
@@ -231,19 +273,34 @@ def excluded_png(project, core_id: str, stain: str) -> bytes | None:
         return None
 
     def make() -> bytes:
-        found = cache.memo(("excluded", str(path)), _deps(project, path), lambda: _excluded(path, project, core_id, stain))
-        height, width = found["shape"]
-        yy, xx = np.mgrid[0:height, 0:width]
-        lines = {"\\": (xx - yy) % HATCH_PX == 0, "/": (xx + yy) % HATCH_PX == 0, "|": xx % HATCH_PX == 0, "-": yy % HATCH_PX == 0}
-        out = np.zeros((height, width, 4), np.uint8)  # cv2 writes BGRA
-        for kind, pixels in found["kinds"]:
-            r, g, b = kind.color
-            out[pixels] = (b, g, r, 70)
-            if kind.hatch:
-                out[pixels & lines[kind.hatch]] = (b, g, r, 210)
-        ok, encoded = cv2.imencode(".png", out)
-        if not ok:
-            raise RuntimeError(f"could not encode the excluded areas of {path}")
-        return encoded.tobytes()
+        return _rgba(cache.memo(("excluded", str(path)), _deps(project, path), lambda: _excluded(path, project, core_id, stain)))
 
     return cache.memo(("excluded png", str(path)), _deps(project, path), make)
+
+
+def field_excluded(project, tile: dict, person: str | None) -> tuple[dict, bytes | None]:
+    """The excluded areas of one field for the annotation pages: where the part of the core's layer lies in the field
+    picture (`x`, `y`, `width`, `height` in field px, `scale` field px per pixel of the picture), its kinds, and the PNG.
+    The person's own marks are left out (their page draws them, and can change them); the parts they cleared show no
+    automatic exclusion."""
+    from stainid import cache  # noqa: PLC0415
+    from stainid.labels import frames  # noqa: PLC0415
+
+    core_id, stain = str(tile["core_id"]), str(tile["stain"])
+    path = excluded_path(project, core_id, stain)
+    if not path.exists():
+        return {"status": "not_made", "kinds": [kind_info(k, None) for k in EXCLUDED_KINDS]}, None
+    found = cache.memo(("excluded field", str(path), person), _deps(project, path), lambda: _excluded(path, project, core_id, stain, but=person or ""))
+    x0, y0 = frames.field_origin(tile, project.context_px)
+    x1, y1 = int(tile["x_px"]) + int(tile["width_px"]) + project.context_px, int(tile["y_px"]) + int(tile["height_px"]) + project.context_px
+    height, width = found["shape"]
+    c0, r0 = x0 // EXCLUDED_SCALE, y0 // EXCLUDED_SCALE
+    c1, r1 = min(width, -(-x1 // EXCLUDED_SCALE)), min(height, -(-y1 // EXCLUDED_SCALE))
+    window = (slice(r0, max(r0, r1)), slice(c0, max(c0, c1)))
+    present = [(kind, pixels[window]) for kind, pixels in found["kinds"]]
+    area = max(1, (r1 - r0) * (c1 - c0))
+    info = {"status": "done", "scale": EXCLUDED_SCALE, "x": c0 * EXCLUDED_SCALE - x0, "y": r0 * EXCLUDED_SCALE - y0,
+            "width": (c1 - c0) * EXCLUDED_SCALE, "height": (r1 - r0) * EXCLUDED_SCALE, "version": _version(project, path),
+            "kinds": [kind_info(kind, round(float(p.sum()) / area, 4)) for kind, p in present if p.any()]}
+    png = cache.memo(("excluded field png", str(path), person, str(tile["tile_id"])), _deps(project, path), lambda: _rgba(found, window))
+    return info, png

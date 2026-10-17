@@ -162,8 +162,8 @@ def main() -> None:
             if name == "annotate-precise.jpg":
                 zoom_in(page, 2)
                 point_at(page, ".round-object.look-class polygon:last-child")
-                page.mouse.down(button="right")  # a right-click on the object: precise editing
-                page.mouse.up(button="right")
+                page.mouse.down()  # a click on the object: precise editing
+                page.mouse.up()
                 time.sleep(1.2)
             if name == "workflow.png":
                 page.locator(".flow-node", has_text="Find candidates").first.hover()

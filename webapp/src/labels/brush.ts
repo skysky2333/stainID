@@ -1,5 +1,5 @@
 /* The exclusion brush of the field tool (key E): a person paints the bad areas of a field (folds, smudges, empty glass…)
-   on a mask at a quarter of the field picture's size. Left-drag paints, right-drag (or Shift-drag) erases; each stroke
+   on a mask at a quarter of the field picture's size. A drag paints, Shift-drag erases; each stroke
    is one step Z takes back. The mask is sent as a PNG with the field's other changes on Save, and the server keeps it
    as rings in field pixels (labels/exclusions.py), which come back here when the field opens again. Objects whose
    centre lies in the painted area are left out of scoring and training. */
