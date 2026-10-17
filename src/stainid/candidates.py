@@ -7,7 +7,8 @@ decision, reason, class). Before stage 4 has run for a core, `read_core` serves 
 
 Encodings (see also the contract in the v2 brief):
 - `candidate_id` = "<stain>:<core_id>:<round(x_core)>:<round(y_core)>" (a later candidate rounding to the same pixel gets
-  "~2", "~3"); labels attach to it, and `match` finds a candidate by position when ids change between runs;
+  "~2", "~3"); labels attach to it, and labels without one are matched onto it by position (`labels.candidate_store.match`,
+  within `MATCH_RADIUS_UM`);
 - coordinates: `x_core`, `y_core` core-image pixels; `x_tile`, `y_tile` the tile's own frame; `x_field`, `y_field` the
   frame of the labelling field picture (the tile with its context margin);
 - `bbox` "x0 y0 x1 y1"; `outline` and each ring of `sam_outline` (";"-separated) a flat "x0 y0 x1 y1 …" of core pixels;
@@ -20,6 +21,10 @@ Encodings (see also the contract in the v2 brief):
 
 Also per core: thread segments (`threads/<core_id>.csv.gz`, AT8) and stained regions no candidate covers
 (`unproposed/<stain>/<core_id>.csv.gz`).
+
+This is the one reader of these files: the stages, the viewer and the annotation pages (`labels.candidate_store`, which
+parses outlines into point lists for the labelling pages) all read through `read_core` / `read_bbox`, and every view
+draws the outline `outline_options` chooses.
 """
 from __future__ import annotations
 
@@ -28,6 +33,8 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+from stainid import cache
 
 KINDS = ("candidates", "proposals", "outlines", "calls", "unproposed", "tiles")  # per stain and core image
 MATCH_RADIUS_UM = {"NeuN": 4.0, "6E10": 6.0, "AT8": 4.0}
@@ -118,7 +125,34 @@ def bbox(text) -> tuple[int, int, int, int] | None:
 # ---------------------------------------------------------------- where things are
 
 def root(project) -> Path:
-    return project.output("v2")
+    try:
+        return project.output("v2")
+    except KeyError:  # a project configured before the v2 outputs had their own entry
+        return project.root / "data" / "analysis" / "v2"
+
+
+def folder(project, stain: str | None = None, kind: str = "candidates") -> Path:
+    return root(project) / kind / stain if stain else root(project) / kind
+
+
+def stored(project, stain: str, core_id: str, kind: str = "candidates") -> Path | None:
+    """The table of one core image of one kind when it exists (`.parquet` first), else None; from the folder's listing
+    (`cache.names`), so asking about many cores lists the folder once."""
+    names = cache.names(folder(project, stain, kind))
+    for suffix in (".parquet", ".csv.gz"):
+        if f"{core_id}{suffix}" in names:
+            return folder(project, stain, kind) / f"{core_id}{suffix}"
+    return None
+
+
+def cores(project, stain: str, kind: str = "candidates") -> frozenset[str]:
+    """The core images of this stain that have a table of this kind."""
+    out = set()
+    for name in cache.names(folder(project, stain, kind)):
+        for suffix in (".parquet", ".csv.gz"):
+            if name.endswith(suffix) and not name.startswith("."):
+                out.add(name[: -len(suffix)])
+    return frozenset(out)
 
 
 def path(project, stain: str, core_id: str, kind: str = "candidates") -> Path:
@@ -192,6 +226,39 @@ def _for_parquet(frame: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+_SCHEMAS: dict[str, tuple[tuple[int, int], frozenset[str]]] = {}
+
+
+def _schema(file: Path, stamp: tuple[int, int]) -> frozenset[str]:
+    import pyarrow.parquet as pq  # noqa: PLC0415
+
+    kept = _SCHEMAS.get(str(file))
+    if kept is not None and kept[0] == stamp:
+        return kept[1]
+    names = frozenset(pq.read_schema(file).names)
+    _SCHEMAS[str(file)] = (stamp, names)
+    return names
+
+
+def _read_parquet(file: Path, wanted: tuple[str, ...] | list[str] | None, filters: list | None = None) -> pd.DataFrame:
+    """A parquet table (only `wanted` columns, only rows passing `filters`) decoded as the csv.gz store reads back: text
+    columns "" for none, other missing values NaN."""
+    import pyarrow.parquet as pq  # noqa: PLC0415
+
+    columns = None
+    if wanted is not None:
+        stat = file.stat()
+        present = _schema(file, (stat.st_mtime_ns, stat.st_size))
+        columns = [c for c in wanted if c in present]
+    frame = pq.read_table(file, columns=columns, filters=filters).to_pandas()
+    for column in frame.columns:
+        if column in TEXT_COLUMNS:
+            frame[column] = frame[column].fillna("").astype(object)
+        elif isinstance(frame[column].dtype, pd.BooleanDtype) or frame[column].dtype == object:  # None as NaN, as csv.gz reads back
+            frame[column] = frame[column].astype(object).where(frame[column].notna(), np.nan)
+    return frame
+
+
 def read_table(file: Path, columns: list[str] | None = None) -> pd.DataFrame:
     """A store table (cached by mtime and size); an empty frame when the file does not exist. With `columns`, only those
     are read (the whole table when it is in memory already): a stage-5 pass or a viewer layer parses a fraction of a
@@ -214,18 +281,7 @@ def read_table(file: Path, columns: list[str] | None = None) -> pd.DataFrame:
         frame = part[1]
     else:
         if file.suffix == ".parquet":
-            if wanted is None:
-                frame = pd.read_parquet(file)
-            else:
-                import pyarrow.parquet as pq  # noqa: PLC0415
-
-                present = set(pq.read_schema(file).names)
-                frame = pd.read_parquet(file, columns=[c for c in wanted if c in present])
-            for column in frame.columns:
-                if column in TEXT_COLUMNS:
-                    frame[column] = frame[column].fillna("").astype(object)
-                elif isinstance(frame[column].dtype, pd.BooleanDtype) or frame[column].dtype == object:  # None as NaN, as csv.gz reads back
-                    frame[column] = frame[column].astype(object).where(frame[column].notna(), np.nan)
+            frame = _read_parquet(file, wanted)
         else:
             header = pd.read_csv(file, nrows=0).columns
             use = list(header) if wanted is None else [c for c in header if c in wanted]
@@ -303,8 +359,30 @@ def read_tile(project, stain: str, tile_id: str, core_id: str | None = None, col
     return frame if columns is None else frame[[c for c in columns if c in frame]]
 
 
+def _whole_cached(file: Path) -> bool:
+    try:
+        stat = file.stat()
+    except FileNotFoundError:
+        return False
+    with _GUARD:
+        whole = _CACHE.get((str(file), None))
+    return whole is not None and whole[0] == (stat.st_mtime_ns, stat.st_size)
+
+
 def read_bbox(project, stain: str, core_id: str, x0: float, y0: float, x1: float, y1: float, columns: list[str] | None = None) -> pd.DataFrame:
-    """The candidates whose centroid lies in [x0, x1) × [y0, y1) (core pixels)."""
+    """The candidates whose centroid lies in [x0, x1) × [y0, y1) (core pixels), as `read_core` gives them. An assembled
+    parquet store not in memory is filtered while it is read (a field's few hundred rows, not a core's thousands of
+    outlines); otherwise the core is read (or taken from memory) and filtered."""
+    store = twin(path(project, stain, core_id, "candidates"))
+    if store.suffix == ".parquet" and store.exists() and not _whole_cached(store):
+        wanted = None if columns is None else tuple(dict.fromkeys([*columns, "x_core", "y_core"]))
+        bounds = [("x_core", ">=", float(x0)), ("x_core", "<", float(x1)), ("y_core", ">=", float(y0)), ("y_core", "<", float(y1))]
+        frame = _read_parquet(store, wanted, bounds)
+        if (columns is None or "outline_default" in columns) and "outline_default" not in frame:
+            from stainid.v2.params import default_outline
+
+            frame = frame.assign(outline_default=default_outline(project, stain))
+        return frame if columns is None else frame[[c for c in columns if c in frame]]
     frame = read_core(project, stain, core_id, None if columns is None else list(dict.fromkeys([*columns, "x_core", "y_core"])))
     if frame.empty:
         return frame
@@ -330,49 +408,80 @@ def by_id(project, ids: list[str], columns: list[str] | None = None) -> pd.DataF
     return out.loc[[v for v in ids if v in out.index]].reset_index(drop=True)
 
 
-def match(project, stain: str, core_id: str, x_core: float, y_core: float, radius_um: float | None = None,
-          frame: pd.DataFrame | None = None) -> str | None:
-    """The id of the candidate nearest a position (core pixels) within the stain's match radius, else None: how a label
-    made on an earlier run (or before ids existed) finds its candidate."""
-    frame = read_core(project, stain, core_id, ["candidate_id", "x_core", "y_core"]) if frame is None else frame
-    if frame.empty:
+def _given(value) -> bool:
+    """A cell that holds something: not None / NaN, not empty text, not an empty list."""
+    if value is None or (isinstance(value, float) and value != value):
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    try:
+        return len(value) > 0
+    except TypeError:
+        return True
+
+
+def _number(value) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
         return None
-    radius_px = (radius_um or MATCH_RADIUS_UM.get(stain, DEFAULT_MATCH_RADIUS_UM)) / project.pixel_size_um
-    distance = np.hypot(frame.x_core.to_numpy(float) - float(x_core), frame.y_core.to_numpy(float) - float(y_core))
-    nearest = int(np.argmin(distance))
-    return str(frame.candidate_id.iloc[nearest]) if distance[nearest] <= radius_px else None
+    return None if number != number else number
 
 
-def match_many(project, stain: str, core_id: str, xy: np.ndarray, radius_um: float | None = None) -> list[str | None]:
-    """`match` for many positions at once (an (n, 2) array of core pixels); each candidate is given to one position at most."""
-    from scipy.spatial import cKDTree
+def _flat(value) -> list[int]:
+    """A polygon in either encoding (store text, the largest ring of several; or a list of points) as flat whole pixels."""
+    if isinstance(value, str):
+        found = rings(value)
+        return max(found, key=len) if found else []
+    return np.rint(np.asarray(value, dtype=float).reshape(-1)).astype(np.int64).tolist()
 
-    frame = read_core(project, stain, core_id, ["candidate_id", "x_core", "y_core"])
-    xy = np.asarray(xy, float).reshape(-1, 2)
-    if frame.empty or not len(xy):
-        return [None] * len(xy)
-    radius_px = (radius_um or MATCH_RADIUS_UM.get(stain, DEFAULT_MATCH_RADIUS_UM)) / project.pixel_size_um
-    k = min(8, len(frame))
-    distance, nearest = cKDTree(frame[["x_core", "y_core"]].to_numpy(float)).query(xy, k=k, distance_upper_bound=radius_px)
-    distance, nearest = distance.reshape(len(xy), k), nearest.reshape(len(xy), k)
-    pairs = sorted((d, p, int(n)) for p in range(len(xy)) for d, n in zip(distance[p], nearest[p]) if np.isfinite(d))
-    out: list[str | None] = [None] * len(xy)
-    taken: set[int] = set()
-    for _, position, candidate in pairs:  # closest pairs first, each candidate and position used once
-        if out[position] is None and candidate not in taken:
-            taken.add(candidate)
-            out[position] = str(frame.candidate_id.iloc[candidate])
-    return out
+
+def outline_options(row) -> tuple[list, int]:
+    """The outlines one can switch between for a candidate and the index of the one drawn by default: the one rule every
+    view and page follows. With Segment Anything's three outputs: those (small → large, so "mask 0–2" keep their
+    meaning, None where SAM gave nothing) and then the candidate's stain outline ("mask 3"); drawn by default is the
+    stain outline where `outline_default` is "stain" or Segment Anything fell back (`sam_default` -1), else the stored
+    default output (the best-scored usable one when none is stored). Without them: its one outline (`sam_outline`, or
+    the stain outline where `outline_default` is "stain" or SAM gave none).
+
+    Works on a row as the store has it (text cells: the options are texts) and as `labels.candidate_store` parses it
+    (lists of points: the options are those); `row` is a dict, a Series or an itertuples row."""
+    get = row.get if hasattr(row, "get") else (lambda name: getattr(row, name, None))
+    own = get("outline") if _given(get("outline")) else None
+    found = get("sam_masks")
+    found = (str(found).split("|") if isinstance(found, str) else list(found)) if _given(found) else []
+    found = [m if _given(m) else None for m in found]
+    prefer_own = get("outline_default") == "stain"
+    if any(m is not None for m in found):
+        found = found + ([own] if own is not None else [])
+        default = _number(get("sam_default"))
+        if own is not None and (prefer_own or (default is not None and default < 0)):
+            return found, len(found) - 1
+        if default is None or not 0 <= int(default) < min(3, len(found)) or found[int(default)] is None:
+            kept = _flat(get("sam_outline")) if _given(get("sam_outline")) else None
+            same = [i for i, m in enumerate(found[:3]) if m is not None and kept is not None and _flat(m) == kept]
+            if same:  # no default stored, but the output stage 3 kept (`sam_outline`) is one of them
+                return found, same[0]
+            scores = get("sam_scores")
+            scores = (sam_scores(scores) if isinstance(scores, str) else list(scores)) if _given(scores) else []
+            usable = [i for i, m in enumerate(found[:3]) if m is not None]
+            default = max(usable, key=lambda i: scores[i] if i < len(scores) and scores[i] == scores[i] else 0.0)
+        return found, int(default)
+    sam = get("sam_outline") if _given(get("sam_outline")) and get("sam_status") in ("ok", "", None) else None
+    one = (own if own is not None else sam) if prefer_own else (sam if sam is not None else own)
+    return ([one] if one is not None else []), 0
 
 
 def outline_rings(row) -> list[list[int]]:
-    """The outline to draw for a candidate: its stain outline where `outline_default` is "stain", else its default
-    Segment Anything output when one was kept, else the stain outline."""
-    own = [points(row.get("outline"))] if points(row.get("outline")) else []
-    if row.get("outline_default") == "stain" and own:
-        return own
-    sam = rings(row.get("sam_outline")) if row.get("sam_status") == "ok" else []
-    return sam or own
+    """The outline to draw for a candidate (`outline_options`' default) as rings of flat core-pixel points."""
+    found, default = outline_options(row)
+    chosen = found[default] if found else None
+    if chosen is None:
+        return []
+    if isinstance(chosen, str):
+        return rings(chosen)
+    flat = np.asarray(chosen, dtype=float).reshape(-1)
+    return [np.rint(flat).astype(np.int64).tolist()] if len(flat) else []
 
 
 def outlines(project, stain: str, core_id: str, decision: str | None = None) -> list[dict]:
@@ -427,7 +536,7 @@ def forget() -> None:
 
 
 __all__ = [
-    "MATCH_RADIUS_UM", "by_id", "candidate_id", "encode_points", "encode_rings", "match", "match_many", "model_matrix",
-    "outline_rings", "outlines", "parse_id", "path", "points", "read_bbox", "read_core", "read_table", "read_tile", "rings",
-    "threads", "threads_path", "unique_ids", "unproposed", "write_table",
+    "MATCH_RADIUS_UM", "by_id", "candidate_id", "cores", "encode_points", "encode_rings", "folder", "model_matrix",
+    "outline_options", "outline_rings", "outlines", "parse_id", "path", "points", "read_bbox", "read_core", "read_table", "read_tile",
+    "rings", "stored", "threads", "threads_path", "unique_ids", "unproposed", "write_table",
 ]

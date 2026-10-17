@@ -79,7 +79,23 @@ def _old_in_field(project, stain, tile, context_px, level):
                        sam_masks=[None if not m else [shift(p) for p in m] for m in near.sam_masks]).reset_index(drop=True)
 
 
+def _latest(group: pd.DataFrame) -> pd.Series:
+    """The latest row of a group: by time, then the order of the rows."""
+    time = pd.to_numeric(group.time, errors="coerce").fillna(0.0) if "time" in group else pd.Series(0.0, index=group.index)
+    return group.assign(_t=time.to_numpy(), _q=np.arange(len(group))).sort_values(["_t", "_q"], kind="stable").iloc[-1].drop(["_t", "_q"])
+
+
+def _call(group: pd.DataFrame) -> tuple[str, str, str, str]:
+    """(majority identity, its majority subtype, latest identity, latest subtype) of one object's rows that say something."""
+    top, _ = store.majority(group.identity.astype(str))
+    sub = group.subtype.fillna("").astype(str)
+    typed = sub[(group.identity.astype(str) == top) & (sub != "")] if top else sub.iloc[:0]
+    last = _latest(group)
+    return top, store.majority(typed)[0], str(last.identity), "" if pd.isna(last.subtype) else str(last.subtype)
+
+
 def _old_state_of(rows: pd.DataFrame) -> decisions.State:
+    """`decisions._state_of` candidate by candidate: the majority call (`store.tally`), the latest said when split."""
     out = decisions.State(rows=rows)
     if rows.empty:
         return out
@@ -87,29 +103,34 @@ def _old_state_of(rows: pd.DataFrame) -> decisions.State:
     said = rows[rows.role != vocab.SKIP].sort_values("time", kind="stable")
     for candidate, group in said.groupby("candidate", sort=False):
         out.decided[candidate] = list(dict.fromkeys(group.source))
-        top = group.identity.value_counts()
-        identity = str(top.index[0])
-        typed = group.subtype[(group.identity == identity) & (group.subtype.fillna("") != "")]
-        out.calls[candidate] = (identity, str(typed.value_counts().index[0]) if len(typed) else "")
+        top, subtype, latest, latest_subtype = _call(group)
+        out.calls[candidate] = (top, subtype) if top else (latest, latest_subtype)
         out.times[candidate] = float(group.time.max())
     return out
 
 
 def _old_consensus(labels: pd.DataFrame, stain: str, vocabulary=None) -> pd.DataFrame:
+    """`store.consensus` object by object: keyed by candidate, else field and rounded position; each person's latest label."""
     rows = store.classes(labels, stain, vocabulary)
-    rows = rows[rows.role != vocab.SKIP].copy()
     if rows.empty:
-        return pd.DataFrame(columns=["tile_id", "x", "y", "value", "subtype", "n", "agreement", "positive", "sources"])
-    rows["rx"], rows["ry"] = rows.x.round().astype(int), rows.y.round().astype(int)
+        return pd.DataFrame(columns=store.CONSENSUS)
+    named = rows.candidate.fillna("").astype(str) if "candidate" in rows else pd.Series("", index=rows.index)
+    keys = [n or f"at:{t}:{round(float(x))}:{round(float(y))}" for n, t, x, y in zip(named, rows.tile_id, rows.x, rows.y)]
+    rows = rows.assign(object=keys, _p=np.arange(len(rows)))
+    rows = rows.reset_index(drop=True)
+    rows = rows.loc[[_latest(g).name for _, g in rows.groupby(["source", "object"], sort=False)]].sort_values("_p")
+    rows = rows[rows.role != vocab.SKIP]
     out = []
-    for (tile, rx, ry), group in rows.groupby(["tile_id", "rx", "ry"], sort=False):
-        top, agreement = store.majority(group.identity)
-        typed = group.subtype[(group.identity == top) & (group.subtype != "")] if top else group.subtype.iloc[:0]
+    for key, group in rows.groupby("object", sort=False):
+        top, agreement = store.majority(group.identity.astype(str))
+        _, subtype, latest, latest_subtype = _call(group)
         votes = (group.role == vocab.POSITIVE).to_numpy()
-        out.append({"tile_id": tile, "x": float(group.x.iloc[0]), "y": float(group.y.iloc[0]), "value": top, "subtype": store.majority(typed)[0],
-                    "n": len(group), "agreement": agreement, "positive": bool(votes.mean() > 0.5) if votes.mean() != 0.5 else None,
-                    "sources": ", ".join(sorted(group.source))})
-    return pd.DataFrame(out)
+        time = pd.to_numeric(group.time, errors="coerce").fillna(0.0) if "time" in group else pd.Series([0.0])
+        out.append({"object": key, "candidate": "" if key.startswith("at:") else key, "tile_id": group.tile_id.iloc[0],
+                    "x": float(group.x.iloc[0]), "y": float(group.y.iloc[0]), "value": top, "subtype": subtype, "n": len(group),
+                    "agreement": agreement, "positive": bool(votes.mean() > 0.5) if votes.mean() != 0.5 else None,
+                    "sources": ", ".join(sorted(group.source)), "latest": latest, "latest_subtype": latest_subtype, "time": float(time.max())})
+    return pd.DataFrame(out, columns=store.CONSENSUS)
 
 
 # ---------- a synthetic store ----------

@@ -11,15 +11,16 @@ threshold), raw feature columns, `outline` / `sam_outline` (polygons in core pix
 `model_id`, `decision` (`accepted` or `rejected`), `reason` (`accepted`, `rejected_by_model`, `rule:<why>`), `class`,
 `subtype` (label-vocabulary ids).
 
-This module only reads it (through `stainid.candidates` when that module is installed, else straight from the files) and
-turns it into what the labelling pages need: positions in a field picture (`stainid.labels.frames`), the AI's call in
-the stain's label classes, and old labels matched onto candidate ids by position. `from_pool` writes a store from the
-current candidate pool and detections, for trying the annotation rounds out before the v2 detection has run.
+This module does not read the files itself: `stainid.candidates` is the one reader (and writer) of the store, and the
+outline drawn first is the one `candidates.outline_options` chooses. Here the rows are turned into what the labelling
+pages need: outlines as point lists, positions in a field picture (`stainid.labels.frames`), the AI's call in the
+stain's label classes, and old labels matched onto candidate ids by position (`match`, the one position matcher).
+`from_pool` writes a store from the current candidate pool and detections, for trying the annotation rounds out before
+the v2 detection has run.
 """
 from __future__ import annotations
 
 import json
-import os
 import threading
 from collections import OrderedDict
 from pathlib import Path
@@ -29,16 +30,15 @@ import pandas as pd
 from scipy.spatial import cKDTree
 
 from stainid import cache
+from stainid import candidates as v2
 from stainid.labels import frames
 from stainid.labels import vocabulary as vocab
 from stainid.project import Project
 from stainid.tables import write_text_atomic
 
-FOLDER = Path("data/analysis/v2/candidates")
-SUFFIXES = (".parquet", ".csv.gz")
 ACCEPTED = "accepted"
-MATCH_UM = {"NeuN": 4.0, "6E10": 6.0, "AT8": 4.0}  # as the contract's MATCH_RADIUS_UM: how far an old label may sit from a candidate's centre to be about it
-DEFAULT_MATCH_UM = 5.0
+MATCH_UM = v2.MATCH_RADIUS_UM  # how far an old label may sit from a candidate's centre to be about it
+DEFAULT_MATCH_UM = v2.DEFAULT_MATCH_RADIUS_UM
 POLYGONS = ("outline", "sam_outline")
 MASKS = ("sam_masks", "sam_scores", "sam_default")
 # columns that are not measurements of the object (everything else numeric is a raw feature)
@@ -48,34 +48,20 @@ NOT_FEATURES = {"candidate_id", "x_core", "y_core", "tile_id", "x_tile", "y_tile
 
 
 def folder(project: Project, stain: str | None = None) -> Path:
-    try:
-        base = project.output("v2") / "candidates"
-    except KeyError:
-        base = project.root / FOLDER
-    return base / stain if stain else base
+    return v2.folder(project, stain)
 
 
-def candidate_id(stain: str, core_id: str, x_core: float, y_core: float) -> str:
-    return f"{stain}:{core_id}:{round(float(x_core))}:{round(float(y_core))}"
+candidate_id = v2.candidate_id
 
 
 def path(project: Project, stain: str, core_id: str) -> Path | None:
     """The store file of one core image (None when the detection has not written it)."""
-    names = cache.names(folder(project, stain))
-    for suffix in SUFFIXES:
-        if f"{core_id}{suffix}" in names:
-            return folder(project, stain) / f"{core_id}{suffix}"
-    return None
+    return v2.stored(project, stain, core_id)
 
 
 def cores(project: Project, stain: str) -> frozenset[str]:
     """The core images of this stain that have candidates."""
-    out = set()
-    for name in cache.names(folder(project, stain)):
-        for suffix in SUFFIXES:
-            if name.endswith(suffix) and not name.startswith("."):
-                out.add(name[: -len(suffix)])
-    return frozenset(out)
+    return v2.cores(project, stain)
 
 
 def _missing(value) -> bool:
@@ -164,22 +150,6 @@ def encode(polygon) -> str:
     return " ".join(str(int(round(v))) for point in polygon for v in point) if polygon else ""
 
 
-def _module_reader():
-    """`stainid.candidates.read_core(project, stain, core_id)` of the v2 detection, when it is installed."""
-    try:
-        from stainid import candidates as v2  # noqa: PLC0415 - optional: written by the v2 detection
-    except ImportError:
-        return None
-    return getattr(v2, "read_core", None)
-
-
-def _read_file(target: Path, columns: list[str] | None = None) -> pd.DataFrame:
-    if target.suffix == ".parquet":
-        return pd.read_parquet(target, columns=columns)
-    return pd.read_csv(target, usecols=(lambda c: c in columns) if columns else None, dtype={"tile_id": str, "candidate_id": str, "sources": str, "decision": str, "reason": str, "class": str,
-                                      "subtype": str, "sam_status": str, "model_id": str})
-
-
 def _displayed(project: Project, stain: str, frame: pd.DataFrame) -> pd.DataFrame:
     """`outline_default` (which outline is shown first) filled from the stain's setting where the store has none (a store
     assembled before the setting, or the pool's)."""
@@ -239,17 +209,15 @@ def read_core(project: Project, stain: str, core_id: str, columns: list[str] | N
     target = path(project, stain, core_id)
     if target is None:
         return None
-    reader = _module_reader()
     if columns is not None:
-        found = reader(project, stain, core_id, list(columns)) if reader else _read_file(target, list(columns))
-        return _displayed(project, stain, _normalised(found, stain, core_id))
+        return _displayed(project, stain, _normalised(v2.read_core(project, stain, core_id, list(columns)), stain, core_id))
     stamp = cache.signature(target)
     with _WHOLE_LOCK:
         kept = _WHOLE.get(str(target))
         if kept is not None and kept[0] == stamp:
             _WHOLE.move_to_end(str(target))
             return kept[1]
-    found = _displayed(project, stain, _normalised(reader(project, stain, core_id) if reader else _read_file(target), stain, core_id))
+    found = _displayed(project, stain, _normalised(v2.read_core(project, stain, core_id), stain, core_id))
     with _WHOLE_LOCK:
         _WHOLE[str(target)] = (stamp, found)
         _WHOLE.move_to_end(str(target))
@@ -292,49 +260,19 @@ FIELD_COLUMNS = ["candidate_id", "x_core", "y_core", "tile_id", "radius_px", "ar
                  "sam_default", "outline_default"]  # what the annotation pages show of a candidate (no raw features)
 LIGHT = ["candidate_id", "x_core", "y_core", "tile_id", "radius_px", "area_um2", "probability", "threshold", "model_id", "decision", "reason",
          "class", "subtype", "proposal_threshold", "sources", "sam_status"]  # ranking and listing candidates: no outlines
-_SCHEMAS: dict[str, tuple[tuple, frozenset[str]]] = {}
 _FIELDS: OrderedDict[tuple, pd.DataFrame] = OrderedDict()
 _FIELDS_LIMIT = 96  # fields' candidates kept parsed (a few hundred rows each)
-
-
-def _schema(target: Path, stamp) -> frozenset[str]:
-    import pyarrow.parquet as pq  # noqa: PLC0415 - parquet stores only
-
-    kept = _SCHEMAS.get(str(target))
-    if kept is not None and kept[0] == stamp:
-        return kept[1]
-    names = frozenset(pq.read_schema(target).names)
-    _SCHEMAS[str(target)] = (stamp, names)
-    return names
 
 
 def read_box(project: Project, stain: str, core_id: str, x0: float, y0: float, x1: float, y1: float,
              columns: list[str] | None = FIELD_COLUMNS) -> pd.DataFrame | None:
     """The candidates of one core image whose centre lies in [x0, x1) × [y0, y1) (core pixels), as `read_core` gives
-    them (None when the core has none). A parquet store is filtered while it is read and only `columns` are parsed (a
-    field's few hundred rows, not the core's thousands of outlines); a csv.gz store is read whole (`read_core`)."""
-    target = path(project, stain, core_id)
-    if target is None:
+    them (None when the core has none), from `candidates.read_bbox` (a parquet store is filtered while it is read and
+    only `columns` are parsed: a field's few hundred rows, not the core's thousands of outlines)."""
+    if path(project, stain, core_id) is None:
         return None
-    if target.suffix == ".parquet" and _module_reader() is not None:
-        import pyarrow.parquet as pq  # noqa: PLC0415
-
-        from stainid import candidates as v2  # noqa: PLC0415
-
-        present = _schema(target, cache.signature(target))
-        wanted = None if columns is None else [c for c in dict.fromkeys(columns) if c in present]
-        bounds = [("x_core", ">=", float(x0)), ("x_core", "<", float(x1)), ("y_core", ">=", float(y0)), ("y_core", "<", float(y1))]
-        frame = pq.read_table(target, columns=wanted, filters=bounds).to_pandas()
-        for column in frame.columns:  # as `stainid.candidates.read_table` reads a parquet store
-            if column in v2.TEXT_COLUMNS:
-                frame[column] = frame[column].fillna("").astype(object)
-            elif isinstance(frame[column].dtype, pd.BooleanDtype) or frame[column].dtype == object:
-                frame[column] = frame[column].astype(object).where(frame[column].notna(), np.nan)
-        return _displayed(project, stain, _normalised(frame, stain, core_id))
-    found = read_core(project, stain, core_id)
-    if found is None:
-        return None
-    return found[(found.x_core >= x0) & (found.x_core < x1) & (found.y_core >= y0) & (found.y_core < y1)].reset_index(drop=True)
+    columns = None if columns is None else list(dict.fromkeys([*columns, "x_core", "y_core", "tile_id"]))
+    return _displayed(project, stain, _normalised(v2.read_bbox(project, stain, core_id, x0, y0, x1, y1, columns), stain, core_id))
 
 
 def _shifted(polygon, x0: int, y0: int):
@@ -405,26 +343,10 @@ def _get(row, name: str):
 
 
 def masks(row) -> tuple[list[list[list[float]] | None], int]:
-    """The outlines one can switch between for a candidate and the one shown first. With Segment Anything's three masks
-    in the store: those (small to large, so "mask 0–2" keep their meaning) and then the candidate's stain outline
-    ("mask 3"); shown first is the stain outline where the stain's `outline_default` is "stain" or Segment Anything fell
-    back (`sam_default` -1), else the default mask. Without them: its one outline (by `outline_default`, else Segment
-    Anything's, else the candidate's own)."""
-    found = _get(row, "sam_masks")
-    own = _get(row, "outline")
-    prefer_own = _get(row, "outline_default") == "stain"
-    if found and any(found):
-        found = list(found) + ([own] if own else [])
-        default = _get(row, "sam_default")
-        if own and (prefer_own or (default is not None and not pd.isna(default) and int(default) < 0)):  # -1: SAM fell back
-            return found, len(found) - 1
-        scores = _get(row, "sam_scores") or []
-        if default is None or pd.isna(default) or not 0 <= int(default) < 3 or not found[int(default)]:
-            usable = [i for i, m in enumerate(found[:3]) if m]
-            default = max(usable, key=lambda i: scores[i] if i < len(scores) else 0.0)
-        return found, int(default)
-    one = (own or _get(row, "sam_outline")) if prefer_own else (_get(row, "sam_outline") or own)
-    return ([one] if one else []), 0
+    """The outlines one can switch between for a candidate (point lists) and the one shown first, as
+    `candidates.outline_options` chooses them for every view: Segment Anything's three masks small to large ("mask
+    0–2"), then the stain outline ("mask 3")."""
+    return v2.outline_options(row)
 
 
 def ai_outline(row) -> list[list[float]] | None:
@@ -483,10 +405,13 @@ def _light(project: Project, stain: str, core_id: str) -> dict | None:
         if kept is not None and kept[0] == stamp:
             _LIGHT.move_to_end(str(target))
             return kept[1]
-    frame = _calls_fast(target, stain, core_id, stamp) if target.suffix == ".parquet" and _module_reader() is not None else None
-    if frame is None:
-        frame = read_core(project, stain, core_id, CALLS)
-    if frame is None or frame.empty:
+    frame = v2.read_core(project, stain, core_id, CALLS)  # the raw columns only: nothing parsed
+    if not frame.empty and "candidate_id" not in frame:
+        frame = frame.assign(candidate_id=[candidate_id(stain, core_id, a, b) for a, b in zip(frame.x_core, frame.y_core)])
+    for column in ("decision", "class", "subtype"):
+        if not frame.empty:
+            frame[column] = frame[column].fillna("").astype(str) if column in frame else ""
+    if frame.empty or "x_core" not in frame:
         found = None
     else:
         combos = pd.MultiIndex.from_arrays([frame.decision, frame["class"], frame.subtype])
@@ -501,25 +426,6 @@ def _light(project: Project, stain: str, core_id: str) -> dict | None:
     return found
 
 
-def _calls_fast(target: Path, stain: str, core_id: str, stamp) -> pd.DataFrame | None:
-    """`read_core(..., CALLS)` of a parquet store straight from its columns (no other column made), None to fall back."""
-    import pyarrow.parquet as pq  # noqa: PLC0415
-
-    present = _schema(target, stamp)
-    if not {"x_core", "y_core"} <= present:
-        return None
-    table = pq.read_table(target, columns=[c for c in CALLS if c in present])
-    out = {}
-    for column in ("decision", "class", "subtype", "tile_id"):  # text: "" for none, as read_core gives them
-        out[column] = table.column(column).to_pandas().fillna("").astype(str).to_numpy(object) if column in present else np.full(table.num_rows, "", object)
-    x, y = table.column("x_core").to_numpy().astype(float), table.column("y_core").to_numpy().astype(float)
-    if "candidate_id" in present:
-        ids = table.column("candidate_id").to_pandas().fillna("").astype(str).to_numpy(object)
-    else:
-        ids = np.array([candidate_id(stain, core_id, a, b) for a, b in zip(x, y)], dtype=object)
-    return pd.DataFrame({"candidate_id": ids, "x_core": x, "y_core": y, **out})
-
-
 def _nearest(project: Project, stain: str, labels: pd.DataFrame, tiles: pd.DataFrame):
     """For each core with labels: (the core's compact candidates, the labels' index, the candidate row of each label or
     -1) — the nearest candidate within `MATCH_UM` of each label (tile_id, x, y in its field picture, `labels.frames`)."""
@@ -527,6 +433,8 @@ def _nearest(project: Project, stain: str, labels: pd.DataFrame, tiles: pd.DataF
         return
     boxes = tiles.drop_duplicates("tile_id").set_index("tile_id") if not tiles.empty else pd.DataFrame(columns=["core_id"])
     have = cores(project, stain)
+    if not have or "core_id" not in boxes:  # no store, or fields that do not say their core: nothing to match onto
+        return
     placed = labels[labels.x.notna() & (labels.tile_id.isin(set(boxes.index)) | labels.tile_id.isin(have))]  # a field, or a whole core
     if placed.empty:
         return
@@ -573,8 +481,8 @@ def feature_names(frame: pd.DataFrame) -> list[str]:
 # ---------- a store from the current candidate pool (for trying the rounds out before the v2 detection) ----------
 
 def write_core(project: Project, stain: str, core_id: str, frame: pd.DataFrame) -> Path:
+    """Write one core's store from parsed rows (outlines as point lists), through `candidates.write_table`."""
     target = folder(project, stain) / f"{core_id}.csv.gz"
-    target.parent.mkdir(parents=True, exist_ok=True)
     out = frame.copy()
     for column in POLYGONS:
         if column in out:
@@ -583,10 +491,7 @@ def write_core(project: Project, stain: str, core_id: str, frame: pd.DataFrame) 
         out["sam_masks"] = ["|".join(encode(p) for p in m) if m else "" for m in out.sam_masks]
     if "sam_scores" in out:
         out["sam_scores"] = ["|".join(f"{v:.3f}" for v in m) if m else "" for m in out.sam_scores]
-    temporary = target.with_name(f".{target.name}.tmp")
-    out.to_csv(temporary, index=False, compression="gzip")
-    os.replace(temporary, target)
-    return target
+    return v2.write_table(target, out)
 
 
 def _circle(x: float, y: float, r: float, n: int = 16) -> list[list[float]]:
@@ -652,7 +557,11 @@ def training_rows(project: Project, stain: str, objects: pd.DataFrame, tiles: pd
     inputs). Candidates whose table lacks one of the names are left out."""
     if objects.empty:
         return {}, names
-    matched = match(project, stain, objects, tiles).dropna()
+    matched = match(project, stain, objects, tiles)
+    if "candidate" in objects:  # the consensus's own key (`store.object_keys`): the candidate, matched by position only where unnamed
+        named = objects.candidate.fillna("").astype(str)
+        matched = named.where(named != "", matched)
+    matched = matched.dropna()
     if matched.empty:
         return {}, names
     tma = tiles.drop_duplicates("tile_id").set_index("tile_id").tma.astype(str)

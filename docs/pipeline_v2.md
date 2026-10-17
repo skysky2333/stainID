@@ -157,9 +157,10 @@ outline for a 4,278 µm² plaque), and the viewer drew that speck as the plaque.
 
 Which outline is an object's own for display is a per-stain setting, `v2.outlines.default_outline` (advanced; default
 NeuN `sam`, 6E10 `stain`, AT8 `stain`: SAM clips diffuse plaques to their dense part, is as good or better on neurons
-and mixed on AT8). The assembled store records it per row (`outline_default`); the viewer's outline layer
-(`candidates.outline_rings`) and the annotation pages (`labels.candidate_store.masks`: the three SAM masks small → large,
-then the stain outline as "mask 3", shown first where the setting is `stain` or SAM fell back) follow it. Changing it
+and mixed on AT8). The assembled store records it per row (`outline_default`); one function chooses for every view,
+`candidates.outline_options`: the three SAM masks small → large, then the stain outline as "mask 3", shown first where
+the setting is `stain` or SAM fell back, else the stored default output. The viewer's outline layer
+(`candidates.outline_rings`) and the annotation pages (`labels.candidate_store.masks`) both call it. Changing it
 re-assembles the store only; areas in the measures come from the stain outline either way.
 
 ## Stage 5: measures and the mapping to the current tables
