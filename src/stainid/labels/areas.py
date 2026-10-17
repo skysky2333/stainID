@@ -1,6 +1,6 @@
 """The "Mark bad areas" round: people check the excluded areas of whole core images, a core at a time with all its stain
-images, and fix them with the brush. It is apart from the object rounds because its edits change the analysis (the
-resolved layer, `stainid.exclusions`), while object labels only train and evaluate models.
+images, and fix them with the brush. It is apart from the object rounds because its unit is a whole core image (folds and
+bubbles cross tile borders) and its labels are areas, not objects.
 
 - A task is one core (`core_id`) with each of its stain images (6E10, AT8, NeuN, whichever exist); status, edits and
   digests stay per core image (core x stain) underneath.
@@ -8,8 +8,11 @@ resolved layer, `stainid.exclusions`), while object labels only train and evalua
   (`value` `AREAS`, `tile_id` the core id, `stain` the stain, id `done:areas:<core>:<stain>`), also when nothing was
   changed (that confirms detection's areas), and each stain image whose areas were painted or cleared one edit
   (`exclude`, rings in core pixels, `tile_id` the core id; `labels.exclusions`).
+- Like every human annotation, people's areas only train and evaluate models: the bad-area detector (`evaluation`:
+  detection's automatic areas against people's) and the object models (labels in people's areas are left out). The
+  analysis uses detection's automatic areas only (`exclusions.automatic`). A sample of cores is enough.
 - Each core is checked by one person; a share (`SECOND_SHARE`, drawn with the session's seed) by a second person
-  independently, to measure how well people agree (`agreement`). The layer takes both, the latest edit winning;
+  independently, to measure how well people agree (`agreement`). People's areas take both, the latest edit winning;
   cores where they disagree are listed for an admin.
 - Cores come in the session's order: "problems" (the default: those detection's own signals say most likely need fixing
   first, `priority`, then the rest at random) or "random".
@@ -76,10 +79,10 @@ def signals(project, core_id: str, stain: str) -> dict | None:
     and the share of strongly stained area."""
     from stainid import candidates  # noqa: PLC0415
 
-    layer = exclusions.resolved(project, core_id, stain)
+    layer = exclusions.automatic(project, core_id, stain)
     if layer is None:
         return None
-    auto = exclusions.automatic(layer.bits, stain)
+    auto = layer.codes
     analysed = max(1, int((auto != exclusions.OUTSIDE).sum()))
     excluded = float(np.isin(auto, (1, 2, 5)).sum()) / analysed
     tissue = 1.0 - float((auto == 3).sum()) / analysed
@@ -186,7 +189,7 @@ def agreement(project, checked: dict[tuple[str, str], set[str]], min_cells: int 
     for (core, stain), people in sorted(checked.items()):
         if len(people) < 2:
             continue
-        layer = exclusions.resolved(project, core, stain)
+        layer = exclusions.annotated(project, core, stain)
         if layer is None:
             continue
         first, second = sorted(people)[:2]
@@ -202,23 +205,25 @@ def agreement(project, checked: dict[tuple[str, str], set[str]], min_cells: int 
             "mean_iou": float(np.mean([r["iou"] for r in rows])) if rows else None, "disagreements": [r for r in rows if not r["agree"]]}
 
 
-def evaluation(project, checked: dict[tuple[str, str], set[str]], tiles: pd.DataFrame) -> list[dict]:
-    """Detection's automatic areas against people's final areas on the checked core images, per type and TMA: the area
-    people added (mm²), the area they cleared, and the pixel F1 of detection's areas of that type with the final ones."""
-    tma = tiles.drop_duplicates(["core_id", "stain"]).set_index(["core_id", "stain"]).tma.astype(str).to_dict() if not tiles.empty else {}
+def evaluation(project, checked: dict[tuple[str, str], set[str]], tiles: pd.DataFrame, by: str = "tma") -> list[dict]:
+    """The bad-area detector against people: detection's automatic areas (`exclusions.automatic`) against people's final
+    say (`exclusions.final_say`) on the checked core images, per stain, type and `by` (a tile column: "tma" or
+    "donor_id"; "all" sums every group): the area people added (mm²), the area they cleared and the pixel F1."""
+    group_of = tiles.drop_duplicates(["core_id", "stain"]).set_index(["core_id", "stain"])[by].astype(str).to_dict() if not tiles.empty and by in tiles else {}
     sums: dict[tuple[str, str, int], list[float]] = {}
     for (core, stain) in sorted(checked):
-        layer = exclusions.resolved(project, core, stain)
-        if layer is None:
+        layer = exclusions.final_say(project, core, stain)
+        detected = exclusions.automatic(project, core, stain)
+        if layer is None or detected is None:
             continue
-        auto = exclusions.automatic(layer.bits, stain)
+        auto = detected.codes
         final = layer.codes
         mm2 = (layer.scale * project.pixel_size_um) ** 2 / 1e6
         for code in (1, 2, 3, 4, 5):
             a, f = auto == code, final == code
             if not (a.any() or f.any()):
                 continue
-            for group in (tma.get((core, stain), ""), "all"):
+            for group in (group_of.get((core, stain), ""), "all"):
                 key = (stain, group, code)
                 found = sums.setdefault(key, [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
                 found[0] += float((f & ~a).sum()) * mm2  # added
@@ -229,7 +234,7 @@ def evaluation(project, checked: dict[tuple[str, str], set[str]], tiles: pd.Data
                 found[5] += 1
     out = []
     for (stain, group, code), (added, cleared, both, auto_n, final_n, images) in sorted(sums.items()):
-        out.append({"stain": stain, "tma": group, "type": code, "type_name": exclusions.CODES[code], "images": int(images),
+        out.append({"stain": stain, by: group, "type": code, "type_name": exclusions.CODES[code], "images": int(images),
                     "added_mm2": round(added, 4), "cleared_mm2": round(cleared, 4),
                     "f1": round(2 * both / (auto_n + final_n), 3) if auto_n + final_n else None})
     return out

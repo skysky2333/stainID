@@ -930,8 +930,9 @@ def _round_meta(name: str, request: Request) -> dict:
 
 @router.get("/annotate/{name}/fields/{tile_id}/excluded")
 def field_excluded(name: str, tile_id: str, request: Request, person: str = Depends(annotator)) -> dict:
-    """The excluded areas over a field: its part of the core's resolved layer (`store_view.field_excluded`), the same
-    pixels the Cores view, the analysis, training and scoring use. The page draws its unsaved edits over it."""
+    """The areas detection excludes from the analysis over a field: its part of the core's automatic layer
+    (`store_view.field_excluded`), the same pixels the Cores view draws and the analysis uses. People's areas are
+    `…/annotated`; the page draws its unsaved strokes over both."""
     from stainid.api import store_view  # noqa: PLC0415
 
     meta = _round_meta(name, request)
@@ -947,6 +948,20 @@ def field_excluded_png(name: str, tile_id: str, request: Request, person: str = 
     if png is None:
         raise HTTPException(404, f"the excluded areas of {tile_id} are not made yet (the v2 proposals make them)")
     return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
+
+
+@router.get("/annotate/{name}/fields/{tile_id}/annotated")
+def field_annotated(name: str, tile_id: str, request: Request, person: str = Depends(annotator)) -> dict:
+    """People's areas over a field (`store_view.people_areas`, field-picture px): painted areas by type and the parts
+    marked fine, with how they compare with detection's. They train and evaluate models; the analysis never reads them."""
+    from stainid.api import store_view  # noqa: PLC0415
+
+    meta = _round_meta(name, request)
+    tile = field_tile(meta, tile_id)
+    x0, y0 = render.crop_origin(tile, get_state().project.context_px)
+    x1 = int(tile["x_px"]) + int(tile["width_px"]) + get_state().project.context_px
+    y1 = int(tile["y_px"]) + int(tile["height_px"]) + get_state().project.context_px
+    return store_view.people_areas(get_state().project, str(tile["core_id"]), str(tile["stain"]), (x0, y0), (x0, y0, x1, y1))
 
 
 @router.get("/annotate/{name}/fields/{tile_id}/segment")
