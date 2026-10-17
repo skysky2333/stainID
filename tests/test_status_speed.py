@@ -17,7 +17,7 @@ def _status_before(project) -> dict:
     if not project.analysis_tiles().exists():
         return {stage: {stain: {"done": 0, "outdated": 0, "total": 0} for stain in STAINS} for stage in out}
     found = run.groups(project, STAINS)
-    calibration, manual, nuclei = run.proposal_inputs(project, fresh=False)
+    calibration, nuclei = run.proposal_inputs(project, fresh=False)
     for stain in STAINS:
         keys = sorted(core for core, s in found if s == stain)
         recorded = {stage: manifest.read_all(project, stage, stain) for stage in out}
@@ -34,8 +34,7 @@ def _status_before(project) -> dict:
                         stale = True
                     continue
                 if stage == "proposals":
-                    made = None if threshold is None else proposals.expected(project, stain, core, tiles, threshold,
-                                                                              manual.get(tiles[0]["image_path"], []), nuclei)
+                    made = None if threshold is None else proposals.expected(project, stain, core, tiles, threshold, nuclei)
                 elif stage == "calls":
                     if model is None and project.model(classify.MODEL_KEY[stain]).exists():
                         model = classify.load_model(project, stain)

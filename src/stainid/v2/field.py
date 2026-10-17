@@ -21,12 +21,11 @@ class Field:
     origin: tuple[int, int]  # the crop's top-left corner in core pixels (x, y)
     threshold: float  # the slide's DAB threshold
     pixel_size_um: float
-    manual: np.ndarray  # the areas people's edits exclude (painted, drawn; bool, crop)
+    manual: np.ndarray  # extra excluded areas (bool, crop); stage 2 passes none: people's areas only train and evaluate
     raw_nuclei: np.ndarray | None  # Cellpose labels of the crop (Find nuclei), None when missing
     glass: float | None = None
     smooth_px: float = 1.0
     background_um: float = 60.0
-    edited: np.ndarray | None = None  # where an edit decides (painted or cleared): detection's own areas do not count there
     memo: dict = field(default_factory=dict)  # values derived once per field by the stain modules
 
     @property
@@ -85,16 +84,13 @@ class Field:
 
     @cached_property
     def exclusion(self) -> np.ndarray:
-        """What 6E10 and AT8 leave out (the resolved excluded areas, `stainid.exclusions`): detection's linear artifacts and
-        folds where no edit decides, and the areas edits exclude."""
-        automatic = self.linear | self.fold
-        return (automatic & ~self.edited if self.edited is not None else automatic) | self.manual
+        """What 6E10 and AT8 leave out: detection's linear artifacts and folds (and `manual`)."""
+        return self.linear | self.fold | self.manual
 
     @cached_property
     def neun_exclusion(self) -> np.ndarray:
-        """What NeuN leaves out: detection's linear artifacts where no edit decides (no fold mask) and the areas edits
-        exclude."""
-        return (self.linear & ~self.edited if self.edited is not None else self.linear) | self.manual
+        """What NeuN leaves out: detection's linear artifacts (no fold mask; and `manual`)."""
+        return self.linear | self.manual
 
     @property
     def excluded(self) -> np.ndarray:
@@ -160,6 +156,6 @@ class Field:
         """Free the big derived pictures (the field is done)."""
         for name in list(self.__dict__):
             if name not in ("tile", "rgb", "inner", "origin", "threshold", "pixel_size_um", "manual", "raw_nuclei", "glass",
-                            "smooth_px", "background_um", "edited", "memo"):
+                            "smooth_px", "background_um", "memo"):
                 del self.__dict__[name]
         self.memo.clear()

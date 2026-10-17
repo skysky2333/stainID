@@ -20,7 +20,6 @@ from PIL import Image
 from scipy.spatial import cKDTree
 
 from stainid import candidates as store
-from stainid import exclusions
 from stainid.imaging.core_images import open_image
 from stainid.imaging.shared import shared_pictures
 from stainid.imaging.tissue import core_glass_darkness
@@ -364,36 +363,13 @@ def mask_piece(field: Field, stain: str) -> np.ndarray:
 
 # ---------------------------------------------------------------- one core image
 
-def edit_cells(edits: list, shape: tuple[int, int]) -> tuple[np.ndarray, np.ndarray] | None:
-    """Where the core's area edits decide, on the excluded-areas grid (`exclusions.SCALE` core px per cell; the edits
-    applied in time order by `exclusions.apply`): (edited: painted or cleared, painted: excluded by an edit), or None
-    without edits. Detection's own areas count only where no edit decides."""
-    if not edits:
-        return None
-    untouched = 254
-    codes = np.full(shape, untouched, np.uint8)
-    for edit in edits:
-        exclusions.apply(codes, edit)
-    edited = codes != untouched
-    return edited, edited & (codes != exclusions.COUNTED)
-
-
-def field_cells(cells: np.ndarray, origin: tuple[int, int], shape: tuple[int, int]) -> np.ndarray:
-    """A grid map (`exclusions.SCALE` core px per cell) at the pixels of a field crop whose top-left corner is `origin`
-    (core px)."""
-    scale = exclusions.SCALE
-    rows = np.clip((origin[1] + np.arange(shape[0])) // scale, 0, cells.shape[0] - 1)
-    cols = np.clip((origin[0] + np.arange(shape[1])) // scale, 0, cells.shape[1] - 1)
-    return cells[np.ix_(rows, cols)]
-
-
 def inputs_of(project, stain: str, core_id: str, tiles: list[dict], threshold: float, nuclei_names: frozenset) -> dict:
-    # the area edits of the core (painted, drawn and cleared areas, `stainid.exclusions`): an edit redoes the core
+    # no exclusion input: the analysis leaves out detection's own areas only (folds, linear artifacts, no tissue, the AT8
+    # edge guard), found here; people's marked areas only train and evaluate models (`stainid.exclusions.drop_excluded`)
     image = project.root / tiles[0]["image_path"]
     return {
         "image": manifest.file_signature(image),
         "threshold": round(float(threshold), 10),
-        "exclusion_edits": digest([e.key() for e in exclusions.edits(project, core_id, stain)]),
         "tiles": digest([(t["tile_id"], t["x_px"], t["y_px"], t["width_px"], t["height_px"]) for t in tiles]),
         "nuclei_tiles": sum(f"{t['tile_id']}.npz" in nuclei_names for t in tiles),
     }
@@ -422,7 +398,6 @@ def propose_core(project, stain: str, core_id: str, tiles: list[dict], threshold
         glass = core_glass_darkness(image)
         size = (image.height, image.width)
         mask = np.zeros(((size[0] + MASK_SCALE - 1) // MASK_SCALE, (size[1] + MASK_SCALE - 1) // MASK_SCALE), np.uint8)
-        decided = edit_cells(exclusions.edits(project, core_id, stain), mask.shape)
         cutting = threading.Lock()
 
         def one(tile: dict) -> tuple[dict, np.ndarray]:
@@ -435,12 +410,10 @@ def propose_core(project, stain: str, core_id: str, tiles: list[dict], threshold
             if f"{tile['tile_id']}.npz" in nuclei_names or nuclei_path.exists():
                 with np.load(nuclei_path) as loaded:
                     raw = loaded["masks"]
-            edited, painted = (None, np.zeros(rgb.shape[:2], bool)) if decided is None else \
-                (field_cells(decided[0], origin, rgb.shape[:2]), field_cells(decided[1], origin, rgb.shape[:2]))
             field = Field({**tile, "context_px": context}, rgb, inner, origin, threshold,
                           float(np.sqrt(float(tile["pixel_width_um"]) * float(tile["pixel_height_um"]))),
-                          painted, raw, glass, smooth_px=float(p["smooth_px"]), background_um=float(p["local_background_um"]),
-                          edited=edited)
+                          np.zeros(rgb.shape[:2], bool), raw, glass,
+                          smooth_px=float(p["smooth_px"]), background_um=float(p["local_background_um"]))
             with shared_pictures(rgb):  # the stain separation and tissue mask of the field, made once for every step
                 result = process_tile(field, stain, settings, shared)
                 piece = mask_piece(field, stain)

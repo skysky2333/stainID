@@ -48,7 +48,12 @@ the Labels page shows any other core with what is missing and the step that make
 ## 3. Slide calibration — `stainid calibrate`
 
 One DAB threshold per slide (TMA × stain), computed from tissue pixels pooled across every tile of
-every core of that slide (every 64th tissue pixel of each tile) and blind to diagnosis:
+every core of that slide (every 64th tissue pixel of each tile's own area) and blind to diagnosis. The
+excluded areas are left out — linear artifacts and folds (NeuN: linear artifacts only), the same masks
+stage 2 finds on the same crops (tile plus its context margin), none of which depends on the threshold;
+folds are dark and would raise it. The AT8 edge guard is not left out: it is decided from the pixels
+above the threshold. `excluded_tissue_fraction` records the share left out (`--workers` reads several
+core images at once):
 
 ```
 threshold = max(Otsu(pooled DAB OD), median + 6 × MAD, 0.01 OD)

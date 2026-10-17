@@ -52,6 +52,8 @@ def context_features_many(field, centers: list[tuple[float, float]], diameters_u
         center_dab, annulus_dab = crop[:, :, 2][center], crop[:, :, 2][annulus]
         context_h90 = float(np.quantile(hematoxylin, 0.90))
         grey = padded_crop(gray, cx, cy, size, 255)
+        sharp = keep if keep is everywhere else cv2.erode(keep.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool)
+        sharp = sharp if sharp.any() else keep  # the Laplacian of pixels whose 3 x 3 neighbourhood is all kept
         out.append({
             "context_dab_mean": float(np.mean(dab)),
             "context_dab_p90": float(np.quantile(dab, 0.90)),
@@ -65,6 +67,6 @@ def context_features_many(field, centers: list[tuple[float, float]], diameters_u
             "annulus_hematoxylin_mean": float(np.mean(annulus_h)),
             "center_high_hematoxylin_fraction": float(np.mean(center_h >= context_h90)),
             "context_saturation_mean": float(np.mean(padded_crop(saturation, cx, cy, size, 0.0)[keep])),
-            "context_laplacian_variance": float(cv2.Laplacian(grey, cv2.CV_64F)[keep].var()),
+            "context_laplacian_variance": float(cv2.Laplacian(grey, cv2.CV_64F)[sharp].var()),
         })
     return out

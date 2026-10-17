@@ -79,6 +79,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--redo", action="store_true", help="calibrate slides again that already have a threshold")
     p.add_argument("--output", type=Path)
     p.add_argument("--core", action="append", help="only the slides of this core image, from its tiles (repeat; a file of core ids works too)")
+    p.add_argument("--workers", type=int, default=1, help="core images read at once")
 
     p = sub.add_parser("nuclei", help="Cellpose-SAM nuclei for every tile")
     p.add_argument("--stain", action="append", required=True)
@@ -248,7 +249,7 @@ def run(args: argparse.Namespace, project) -> None:
     elif args.command == "calibrate":
         from stainid.workflows.calibrate import calibrate_slides
 
-        print(calibrate_slides(project, args.stain, args.redo, output=args.output, cores=_cores(args.core)))
+        print(calibrate_slides(project, args.stain, args.redo, output=args.output, cores=_cores(args.core), workers=args.workers))
     elif args.command == "nuclei":
         from stainid.workflows.nuclei import run_nuclei
 
