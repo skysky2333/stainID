@@ -8,7 +8,7 @@ import type { RoundLive, RoundProgress } from '../api'
 import { api } from '../api'
 import { Progress } from '../components'
 import type { ClassPick, KeyMap, Vocabulary } from './classKeys'
-import { classText } from './classKeys'
+import { byKey, classText } from './classKeys'
 import { ClassKeyHint, useClassKeys } from './classes'
 import { CLASS_COLOURS, INACTIVE_GREY, classColour } from '../classPalette'
 
@@ -302,7 +302,13 @@ export function ClassLegend({ vocabulary, keys, removeClass, waiting }: { vocabu
   const keyOf = (id: string) => Object.entries(keys.direct).find(([, [i, s]]) => i === id && s === null)?.[0]
   return (
     <ul className="class-legend small">
-      {vocabulary.classes.filter((c) => !c.hidden && c.role !== 'skip' && c.id !== removeClass).map((c) => (
+      {byKey(vocabulary, keys).map((c) => c.role === 'skip' ? (  // in the order of the keys: 1, 2, 3 …, unsure (0) last
+        <li key={c.id} title={c.description}><span className="kbd key-slot">0</span>
+          <span className="look-swatch look-unsure" style={{ borderColor: classColour(vocabulary, c.id), background: classColour(vocabulary, c.id) }} />{c.name}</li>
+      ) : c.id === removeClass ? (
+        <li key={c.id} title={c.description}><span className="kbd key-slot">{keyOf(c.id) ?? 'Del'}</span>
+          <span className="look-swatch look-removed" style={{ borderColor: GREY }} /><span className="ellipsis">{c.name} — dotted grey{keyOf(c.id) ? ' (or Del)' : ''}</span></li>
+      ) : (
         <li key={c.id} className={waiting === c.id ? 'waiting' : ''} title={c.description}>
           <span className="kbd key-slot">{keyOf(c.id) ?? '·'}</span>
           <span className="look-swatch" style={{ borderColor: tissueColour(vocabulary, c.id), background: tissueColour(vocabulary, c.id) }} />
@@ -310,14 +316,6 @@ export function ClassLegend({ vocabulary, keys, removeClass, waiting }: { vocabu
           {waiting === c.id && <span className="muted"> — now its type: {Object.entries(keys.then[c.id] ?? {}).map(([k, t]) =>
             `${k} ${c.subtypes.find((s) => s.id === t)?.name ?? t}`).join(' · ')} · 0 none</span>}
         </li>
-      ))}
-      {vocabulary.classes.filter((c) => c.id === removeClass).map((c) => (
-        <li key={c.id} title={c.description}><span className="kbd key-slot">{keyOf(c.id) ?? 'Del'}</span>
-          <span className="look-swatch look-removed" style={{ borderColor: GREY }} /><span className="ellipsis">{c.name} — dotted grey{keyOf(c.id) ? ' (or Del)' : ''}</span></li>
-      ))}
-      {vocabulary.classes.filter((c) => c.role === 'skip' && !c.hidden).slice(0, 1).map((c) => (
-        <li key={c.id} title={c.description}><span className="kbd key-slot">0</span>
-          <span className="look-swatch look-unsure" style={{ borderColor: classColour(vocabulary, c.id), background: classColour(vocabulary, c.id) }} />{c.name}</li>
       ))}
     </ul>
   )

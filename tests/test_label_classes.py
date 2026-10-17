@@ -156,6 +156,21 @@ def test_the_page_logic_of_the_keys(tmp_path):
     assert done.returncode == 0, done.stdout + done.stderr
 
 
+def test_classes_are_listed_in_the_order_of_their_keys_with_unsure_last():
+    from stainid.api.routes.annotate import class_groups
+    from stainid.labels.overview import class_counts
+
+    for stain in ("NeuN", "6E10", "AT8"):
+        words = vocabulary.defaults(stain)
+        keys = {i: k for k, (i, sub) in words.keymap()["direct"].items() if sub is None}
+        listed = [c for c in words.by_key() if not c.hidden]
+        numbers = [int(keys[c.id]) for c in listed if c.role != SKIP and keys.get(c.id, "").isdigit()]
+        assert numbers == sorted(numbers), (stain, numbers)  # 1, 2, 3 … never 1, 3, 2
+        assert listed[-1].role == SKIP  # unsure (0 on the pages) last
+        assert [g["id"] for g in class_groups(words, set())][: len(listed)] == [c.id for c in listed]
+        assert [c["id"] for c in class_counts(pd.DataFrame(), words)] == [c.id for c in listed]
+
+
 def test_every_page_gives_a_class_the_same_colour():
     """One palette for every page (webapp/src/classPalette.ts), in the order of `class_groups`, run by Node when installed."""
     node = shutil.which("node") or str(Path.home() / ".local/node/bin/node")

@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import type { ClassDef, ClassPick, KeyMap, Vocabulary, Waiting } from './classKeys'
-import { expire, keyOf, pressKey } from './classKeys'
+import { byKey, expire, keyOf, pressKey } from './classKeys'
 import { classExample } from '../api'
 import { classColour } from '../classPalette'
 
@@ -70,7 +70,7 @@ export function ClassChooser({ vocabulary, keys, typesAsked, active, waiting, wa
   return (
     <div className="class-chooser">
       <div className="class-list">
-        {vocabulary.classes.filter((c) => !c.hidden).map((c) => {
+        {byKey(vocabulary, keys).map((c) => {  // in the order of the keys, unsure last
           const types = shownTypes(c, typesAsked)
           const chosen = c.id === open
           return (

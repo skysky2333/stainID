@@ -747,13 +747,13 @@ def _unanswered(meta: dict, tile_id: str, mine: pd.DataFrame) -> list[str]:
 
 
 def _confirmations(meta: dict, tile: dict, person: str, mine: pd.DataFrame) -> list[dict]:
-    """Round 2, finishing a field: the calls of its candidates nobody has decided and this person left untouched count as
-    confirmed by them, and so do the AI's outlines of the objects that stay positive."""
+    """Round 2, finishing a field: the whole field counts as checked by this person. Every candidate of it they left
+    untouched gets detection's call as their answer (confirmed; whatever others decided), and so do detection's outlines
+    of the objects that stay positive."""
     tile_id = str(tile["tile_id"])
     found = _field_candidates(meta, tile)
     own = found[found.own]
     words = vocabulary(meta["stain"])
-    decided = decided_now(meta["stain"])
     classes = mine[mine.task == "class"]
     said = {k: words.positive(v, s) for k, v, s in zip(classes.id, classes.value, classes.subtype)}
     outlined = set(mine.id[mine.task == "outline"])
@@ -765,9 +765,7 @@ def _confirmations(meta: dict, tile: dict, person: str, mine: pd.DataFrame) -> l
         identity, subtype = candidate_store.ai_call(words, r.decision, r.klass, r.subtype)
         if key in said:
             positive = said[key]
-        elif decided.count(r.candidate_id):
-            positive = words.positive(*decided.calls[r.candidate_id])
-        else:
+        else:  # left as detection called it: that is this person's answer (also where others decided it)
             records.append({**stamp, "id": key, "task": "class", "x": x, "y": y, "value": identity,
                             "subtype": (subtype or None) if asks_subtypes(meta) else None, "candidate": r.candidate_id})
             positive = words.positive(identity, subtype)
@@ -797,11 +795,9 @@ def save_tile(meta: dict, tile_id: str, marks: list, submit: bool, person: str) 
             cleaned.append(outline)
     practice = bool(meta.get("practice"))
     if submit:
-        if rounds.round_of(meta) == 1 and not practice:
-            missing = _unanswered(meta, tile_id, _mine_after(meta, tile_id, person, cleaned))
-            if missing:
-                raise HTTPException(400, f"{len(missing)} object{'s' if len(missing) > 1 else ''} on this field still need{'' if len(missing) > 1 else 's'} "
-                                         "an answer before it can be finished")
+        if rounds.round_of(meta) == 1 and not practice:  # objects not answered keep detection's call, confirmed by this person
+            for candidate in _unanswered(meta, tile_id, _mine_after(meta, tile_id, person, cleaned)):
+                cleaned.append(clean(meta, Mark(task="class", candidate=candidate, keep=True, tile_id=tile_id), person))
         if rounds.round_of(meta) == 2 and not practice:
             cleaned += _confirmations(meta, tile, person, _mine_after(meta, tile_id, person, cleaned))
         cleaned.append({"id": rounds.done_id(meta, tile_id), "source": person, "stain": meta["stain"], "task": "done", "tile_id": tile_id,

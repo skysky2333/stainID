@@ -221,6 +221,18 @@ class Vocabulary:
                     direct.setdefault(s.key, [c.id, s.id])
         return {"direct": direct, "then": then}
 
+    def by_key(self) -> list[Identity]:
+        """The classes in the order every page lists them: by their key (1, 2, … 9, then letters), classes without a key
+        after them, "unsure" (skip; key 0 on the pages) last; hidden ones too, in the same rule (webapp classKeys.byKey)."""
+        keys = {ident: key for key, (ident, sub) in self.keymap()["direct"].items() if sub is None}
+        place = {c.id: i for i, c in enumerate(self.classes)}
+
+        def order(c: Identity) -> tuple:
+            key = keys.get(c.id, c.key or "")
+            return (c.role == SKIP, not key, not key.isdigit(), int(key) if key.isdigit() else 0, key, place[c.id])
+
+        return sorted(self.classes, key=order)
+
     def to_api(self) -> dict:
         """The classes as the web app uses them, with how old values map onto them."""
         return {"stain": self.stain, "subtype_wait_s": self.subtype_wait_s,

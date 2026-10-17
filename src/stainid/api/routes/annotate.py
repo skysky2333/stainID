@@ -306,12 +306,15 @@ def _session_objects(name: str, labels: pd.DataFrame, stain: str) -> pd.DataFram
 
 
 def class_groups(vocabulary: vocab.Vocabulary, shown: set[str]) -> list[dict]:
-    """The classes the labels view shows, grouped by identity in the vocabulary's order (positive ones first): each
-    identity's name, its colour (its place, so a class keeps its colour whatever is shown) and the classes under it
+    """The classes the labels view shows, grouped by identity in the order of their keys (`Vocabulary.by_key`): each
+    identity's name, its colour slot (its place among the classes, positive ones first, so a class keeps its colour
+    whatever is shown: webapp classPalette.ts) and the classes under it
     (`Vocabulary.display` names: the identity itself, typed or not, and each of its subtypes). Classes the vocabulary
     no longer has, and objects people split on, come last."""
     groups, known = [], set()
-    for colour, c in enumerate(sorted(vocabulary.classes, key=lambda c: c.role != vocab.POSITIVE)):
+    slot = {c.id: i for i, c in enumerate(sorted(vocabulary.classes, key=lambda c: c.role != vocab.POSITIVE))}  # colours never move
+    for c in vocabulary.by_key():  # listed in the order of their keys, as on every page
+        colour = slot[c.id]
         keys = [*(vocabulary.display(c.id, s.id) for s in c.subtypes if not s.hidden or vocabulary.display(c.id, s.id) in shown), vocabulary.display(c.id)]
         keys += [vocabulary.disputed(c.id)] if c.subtypes and vocabulary.disputed(c.id) in shown else []
         known |= set(keys)
