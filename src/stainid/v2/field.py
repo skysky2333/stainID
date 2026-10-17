@@ -21,11 +21,12 @@ class Field:
     origin: tuple[int, int]  # the crop's top-left corner in core pixels (x, y)
     threshold: float  # the slide's DAB threshold
     pixel_size_um: float
-    manual: np.ndarray  # hand-drawn exclusions (bool, crop)
+    manual: np.ndarray  # the areas people's edits exclude (painted, drawn; bool, crop)
     raw_nuclei: np.ndarray | None  # Cellpose labels of the crop (Find nuclei), None when missing
     glass: float | None = None
     smooth_px: float = 1.0
     background_um: float = 60.0
+    edited: np.ndarray | None = None  # where an edit decides (painted or cleared): detection's own areas do not count there
     memo: dict = field(default_factory=dict)  # values derived once per field by the stain modules
 
     @property
@@ -84,20 +85,33 @@ class Field:
 
     @cached_property
     def exclusion(self) -> np.ndarray:
-        """Linear artifacts, folds and hand-drawn exclusions (what 6E10 and AT8 leave out)."""
-        return self.linear | self.fold | self.manual
+        """What 6E10 and AT8 leave out (the resolved excluded areas, `stainid.exclusions`): detection's linear artifacts and
+        folds where no edit decides, and the areas edits exclude."""
+        automatic = self.linear | self.fold
+        return (automatic & ~self.edited if self.edited is not None else automatic) | self.manual
 
     @cached_property
     def neun_exclusion(self) -> np.ndarray:
-        """What NeuN leaves out: linear artifacts and hand-drawn exclusions (no fold mask)."""
-        return self.linear | self.manual
+        """What NeuN leaves out: detection's linear artifacts where no edit decides (no fold mask) and the areas edits
+        exclude."""
+        return (self.linear & ~self.edited if self.edited is not None else self.linear) | self.manual
+
+    @property
+    def excluded(self) -> np.ndarray:
+        """The excluded pixels of this field's stain: they count in no measure (tissue, stain, background, context)."""
+        return self.neun_exclusion if self.tile.get("stain") == "NeuN" else self.exclusion
+
+    @cached_property
+    def valid(self) -> np.ndarray:
+        """Tissue outside the excluded areas of this field's stain."""
+        return self.tissue & ~self.excluded
 
     @cached_property
     def local_background(self) -> np.ndarray:
         """Tissue-weighted mean of the smoothed DAB over `background_um` (the legacy dense-body background)."""
         size = max(3, round(self.background_um / self.pixel_size_um))
-        tissue = self.tissue.astype(np.float32)
-        return cv2.blur(np.where(self.tissue, self.smooth, 0), (size, size)) / np.maximum(cv2.blur(tissue, (size, size)), 1e-3)
+        tissue = self.valid.astype(np.float32)  # excluded pixels are not background
+        return cv2.blur(np.where(self.valid, self.smooth, 0), (size, size)) / np.maximum(cv2.blur(tissue, (size, size)), 1e-3)
 
     @cached_property
     def gradient(self) -> np.ndarray:
@@ -146,6 +160,6 @@ class Field:
         """Free the big derived pictures (the field is done)."""
         for name in list(self.__dict__):
             if name not in ("tile", "rgb", "inner", "origin", "threshold", "pixel_size_um", "manual", "raw_nuclei", "glass",
-                            "smooth_px", "background_um", "memo"):
+                            "smooth_px", "background_um", "edited", "memo"):
                 del self.__dict__[name]
         self.memo.clear()

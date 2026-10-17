@@ -99,7 +99,7 @@ def cellpose_cells(field) -> list[tuple[dict, Region]]:
     its legacy row (largest piece inside valid tissue, DAB neighbourhood within 5 px)."""
     if field.raw_nuclei is None:
         return []
-    valid = field.tissue & ~field.linear
+    valid = field.tissue & ~field.neun_exclusion  # a cell's pixels in an excluded area are not there (half or more: no cell)
     pixel_area = field.pixel_width_um * field.pixel_height_um
     height, width = field.shape
     out = []
