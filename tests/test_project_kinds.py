@@ -85,6 +85,60 @@ def test_scoring_against_points_per_rater_and_consensus(tmp_path):
     assert scoring.scores_csv(project).exists() and scoring.saved(project)["rows"]
 
 
+def test_scoring_reads_the_v2_calls_where_the_v2_detection_has_run(tmp_path):
+    from stainid import candidates
+
+    project, (folder, truth) = _made(tmp_path, tiles_with_points)
+    tiles = table(project.analysis_tiles())
+    scale = 0.5 / 0.2738
+    for core_id, group in tiles.groupby("core_id"):
+        centres = [(x * scale, y * scale) for x, y in truth[group.image_id.iloc[0] if "image_id" in group else core_id]]
+        rows = [{"x": x, "y": y, "decision": "accepted", "class": "plaque", "subtype": "compact", "reason": "accepted", "p": 0.9} for x, y in centres[:3]]
+        rows.append({"x": 50.0, "y": 50.0, "decision": "accepted", "class": "plaque", "subtype": "compact", "reason": "accepted", "p": 0.8})
+        x, y = centres[3]
+        rows.append({"x": x, "y": y, "decision": "rejected", "class": "not a plaque", "subtype": "", "reason": "rejected_by_model", "p": 0.3})
+        frame = pd.DataFrame({"candidate_id": [candidates.candidate_id("6E10", core_id, r["x"], r["y"]) for r in rows],
+                              "tile_id": group.tile_id.iloc[0], "x_core": [r["x"] for r in rows], "y_core": [r["y"] for r in rows],
+                              "radius_px": 10.0, "area_um2": 50.0, "probability": [r["p"] for r in rows], "decision": [r["decision"] for r in rows],
+                              "reason": [r["reason"] for r in rows], "class": [r["class"] for r in rows], "subtype": [r["subtype"] for r in rows]})
+        target = candidates.path(project, "6E10", core_id)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        candidates.write_table(target, frame)
+    found = scoring.detections(project, "6E10", set(tiles.core_id))
+    assert found.accepted.sum() == 12 and set(found.value[found.accepted]) == {"plaque/compact"} and (~found.accepted).sum() == 3
+    result = scoring.score(project)
+    rows = {(r["rater"], r["kind"]): r for r in result["rows"]}
+    consensus = rows[("consensus", "objects")]
+    assert consensus["marks"] == 12 and consensus["found"] == 9 and consensus["ai_objects"] == 12 and consensus["precision"] == 0.75
+    assert "of the 12 compact plaques the consensus" in result["summary"][0]
+    assert consensus["recall"] == 0.75  # the candidate on the fourth plaque was rejected: not found
+    # ranking every candidate: the marked ones (9 at 0.9, 3 rejected at 0.3) against the unmarked false alarms (0.8)
+    assert consensus["candidate_auc"] == pytest.approx(27 / 36)
+
+
+def test_marks_of_other_things_count_the_ai_false_alarms():
+    from types import SimpleNamespace
+
+    project = SimpleNamespace(pixel_size_um=0.2738)
+    marks = pd.DataFrame({"image_id": ["a", "a", "b"], "core_id": ["a", "a", "b"], "kind": "polygon", "class": "neuritic plaque",
+                          "core_x": [100.0, 400.0, 100.0], "core_y": [100.0, 400.0, 100.0], "x0": [50.0, 350.0, 50.0], "y0": [50.0, 350.0, 50.0],
+                          "x1": [150.0, 450.0, 150.0], "y1": [150.0, 450.0, 150.0]})
+    found = pd.DataFrame({"core_id": ["a", "a", "b"], "cx": [130.0, 900.0, 100.0], "cy": [70.0, 900.0, 100.0], "radius_px": 10.0,
+                          "value": ["tau+ neuron/mature tangle", "tau+ neuron/pretangle", "not tau"], "accepted": [True, True, False],
+                          "probability": [0.9, 0.8, 0.2]})
+    [row] = scoring.score_negatives(project, marks, found, "AT8")
+    assert row["marks"] == 3 and row["found"] == 1 and row["specificity"] == pytest.approx(2 / 3, abs=1e-3)  # one tangle inside an outline
+    text = scoring.summary_text("AT8", {"kind": "negatives", "rater": "expert", **row}, [])
+    assert "3 neuritic plaques" in text and "on 1 of them (33%)" in text
+
+
+def test_precision_counts_the_images_each_rater_read():
+    marks = pd.DataFrame({"rater": ["a"] * 6 + ["b"] * 2 + ["c"], "core_id": ["i0", "i1", "i2", "i3", "i4", "i5", "i6", "i7", "i0"]})
+    assert scoring.reviewed_images(marks, "a") == {f"i{n}" for n in range(8)}  # marked on most images: read them all
+    assert scoring.reviewed_images(marks, "b") == {"i6", "i7"}  # their own images (and a shared one) only
+    assert scoring.reviewed_images(marks, "c") == {"i0"}
+
+
 def test_regions_with_boxes_are_read_where_they_lie_and_recoloured(tmp_path):
     project, folder = _made(tmp_path, regions_with_boxes)
     cores = pd.read_csv(project.input("core_images"), dtype=str)
@@ -152,6 +206,13 @@ def test_whole_slide_regions_are_tiled_and_points_follow_them(tmp_path):
         rgb = np.asarray(image.convert("RGB"))
     mark = placed[placed.core_id == cores.core_id.iloc[0]].iloc[0]
     assert rgb_to_hed(rgb)[int(mark.core_y), int(mark.core_x), 2] > 0.05  # the tangle is under its mark
+    # a reduced read (tissue of the tiles, previews) is read at its own size, from a smaller level, and looks the same
+    import cv2
+
+    small = core_images.read_bgr(project.root / cores.image_path.iloc[0], cv2.IMREAD_REDUCED_COLOR_8)
+    assert small.shape[:2] == (rgb.shape[0] // 8, rgb.shape[1] // 8)
+    expected = cv2.resize(rgb, (small.shape[1], small.shape[0]), interpolation=cv2.INTER_AREA)[..., ::-1]
+    assert np.abs(small.astype(int) - expected.astype(int)).mean() < 6
 
 
 def test_two_chromogen_slide_reads_only_the_stain_of_interest(tmp_path):

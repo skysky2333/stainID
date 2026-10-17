@@ -78,6 +78,22 @@ def test_calibration_pools_every_tile_and_keeps_existing_thresholds(tmp_path):
     assert float(again["NeuN"]["threshold_dab_od"]) != 0.123 and again["AT8"]["threshold_dab_od"] == rows["AT8"]["threshold_dab_od"]
 
 
+def test_calibration_and_nuclei_can_be_limited_to_some_core_images(tmp_path):
+    from stainid.cli import build_parser
+    from stainid.sampling.whole_core import write_whole_core_manifest
+    from stainid.workflows.calibrate import calibrate_slides
+
+    project = _core_project(tmp_path, ("NeuN",))
+    write_whole_core_manifest(project, 512)
+    with pytest.raises(ValueError, match="None of these core images"):
+        calibrate_slides(project, stride=1, cores={"elsewhere"})
+    calibrate_slides(project, stride=1, cores={"LIP-1_B-2"})
+    assert [r["tma"] for r in read_csv(project.input("calibration"))] == ["1"]
+    args = build_parser().parse_args(["nuclei", "--stain", "NeuN", "--core", "LIP-1_B-2", "--core", "LIP-1_B-3"])
+    assert args.core == ["LIP-1_B-2", "LIP-1_B-3"]
+    assert build_parser().parse_args(["calibrate", "--core", "cores.txt"]).core == ["cores.txt"]
+
+
 def test_labelling_fields_come_from_full_whole_core_tiles_and_old_fields_stay_known(tmp_path):
     from stainid.sampling.tiles import known_tile_rows, known_tiles, labelling_tiles
 

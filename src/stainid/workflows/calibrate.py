@@ -37,19 +37,20 @@ def sample_dab(root: Path, tiles: list[dict[str, str]], stride: int = STRIDE) ->
 
 
 def calibrate_slides(project: Project, stains: list[str] | None = None, redo: bool = False, stride: int = STRIDE,
-                     output: Path | None = None) -> Path:
+                     output: Path | None = None, cores: set[str] | None = None) -> Path:
     """Pool tissue DAB from every whole-core tile of a slide and apply `calibrate_threshold` (Otsu / median + 6 MAD /
-    0.01 floor). Slides that already have a threshold keep it unless `redo`."""
+    0.01 floor). Slides that already have a threshold keep it unless `redo`. With `cores`, only the slides of these core
+    images are calibrated, from these core images' tiles (all of a slide's for the same threshold as without)."""
     output = output or project.input("calibration")
     wanted = lambda stain: stains is None or stain in stains  # noqa: E731
     kept = [r for r in (read_csv(output) if output.exists() else []) if not (redo and wanted(r["stain"]))]
     have = {(r["tma"], r["stain"]) for r in kept}
     groups = defaultdict(list)
     for tile in read_csv(project.analysis_tiles()):
-        if wanted(tile["stain"]) and (tile["tma"], tile["stain"]) not in have:
+        if wanted(tile["stain"]) and (tile["tma"], tile["stain"]) not in have and (cores is None or tile["core_id"] in cores):
             groups[(tile["tma"], tile["stain"])].append(tile)
     if not groups and not have:
-        raise ValueError("No tiles to calibrate on: run “Cut cores into tiles” first")
+        raise ValueError("None of these core images has tiles" if cores is not None else "No tiles to calibrate on: run “Cut cores into tiles” first")
     if have:
         print(f"{len(have)} slides already have a threshold (kept)", flush=True)
     rows = []
