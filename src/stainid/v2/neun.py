@@ -7,7 +7,7 @@ Order (the first geometry of an object is kept, later ones only add their source
 3. component-tree and local-background components (stain-visible profiles the chromogen-fraction rule broke up, dark
    neurons in brown bands, merged neurons the legacy filter dropped above 650 µm², split at higher DAB levels or by
    the tree's watershed, …);
-4. the Cellpose cells the legacy combination dropped (beside a profile, pale, excluded): merged into the DAB region they
+4. the Cellpose cells the legacy combination dropped (beside a profile, pale): merged into the DAB region they
    lie in, else kept as their own candidates with the legacy reason flagged.
 """
 from __future__ import annotations
@@ -33,16 +33,17 @@ def _largest(mask: np.ndarray) -> np.ndarray:
 
 
 def stained_mask(field) -> np.ndarray:
-    """The legacy profile stain mask: tissue, not excluded, DAB above 0.35 × threshold and at least half chromogen."""
+    """The legacy profile stain mask: tissue (exclusions are applied downstream), DAB above 0.35 × threshold and at least
+    half chromogen."""
     if "neun_stained" not in field.memo:
         minimum = max(0.012, 0.35 * field.threshold)
-        field.memo["neun_stained"] = field.tissue & ~field.neun_exclusion & (field.dab >= minimum) & (field.chromogen_fraction >= 0.50)
+        field.memo["neun_stained"] = field.tissue & (field.dab >= minimum) & (field.chromogen_fraction >= 0.50)
     return field.memo["neun_stained"]
 
 
 def profile_row(field, component: np.ndarray, box: tuple[slice, slice]) -> tuple[dict, np.ndarray] | None:
     """`stainid.stains.neun.profiles.segment_dab_profiles` for one component (local mask in `box`): the legacy row and the
-    profile mask (contour filled, tissue, not excluded), or None when the profile has no pixel left."""
+    profile mask (contour filled, in tissue), or None when the profile has no pixel left."""
     y, x = box[0].start, box[1].start
     height, width = component.shape
     pixel_area = field.pixel_width_um * field.pixel_height_um
@@ -53,7 +54,7 @@ def profile_row(field, component: np.ndarray, box: tuple[slice, slice]) -> tuple
     aspect = max(width / height, height / width)
     filled = np.zeros(component.shape, np.uint8)
     cv2.drawContours(filled, [contour], -1, 1, -1)
-    profile = filled.astype(bool) & field.tissue[box] & ~field.neun_exclusion[box]
+    profile = filled.astype(bool) & field.tissue[box]
     if not profile.any():
         return None
     ys, xs = np.nonzero(profile)
@@ -220,9 +221,7 @@ def propose(field, settings: dict, shared: dict) -> list[Region]:
         xi = min(width - 1, max(0, round(row["centroid_x_px"])))
         yi = min(height - 1, max(0, round(row["centroid_y_px"])))
         reason = ""
-        if field.manual[yi, xi] or field.manual[region.box][region.mask].mean() >= 0.25:
-            reason = "excluded"
-        elif supported[yi, xi]:
+        if supported[yi, xi]:
             reason = "near_profile"
         elif row["source_candidate_class"] == "negative" and row["mean_hematoxylin_od"] < 0.025:
             reason = "pale_nucleus"
@@ -235,7 +234,7 @@ def propose(field, settings: dict, shared: dict) -> list[Region]:
 
     for region in shape_failed:  # after the legacy cells, so a cell the legacy pipeline kept stays the candidate there
         offer(region)
-    allowed = field.tissue & ~field.neun_exclusion
+    allowed = field.tissue
     for region in tree_regions(field, settings["levels"], allowed, settings["min_um2"], settings["max_um2"], settings["significant_um2"],
                                settings["split_max_um2"], settings["mode"], settings.get("split")):
         region.style = "profile"

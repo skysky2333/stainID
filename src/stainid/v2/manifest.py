@@ -19,7 +19,7 @@ from stainid.tables import write_text_atomic
 from stainid.v2.params import digest as params_digest
 
 # Bump a stage's version when its code changes what it writes: every output of that stage becomes outdated.
-VERSIONS = {"proposals": 3, "outlines": 2, "calls": 2, "candidates": 2}
+VERSIONS = {"proposals": 4, "outlines": 2, "calls": 2, "candidates": 2}
 STAGES = ("proposals", "outlines", "calls", "candidates")
 
 

@@ -58,7 +58,7 @@ def rings(field, minimum: float, ring_um: float = 5.0) -> list[dict]:
     made once: the legacy candidates (contrast >= LEGACY_CONTRAST) and the fainter ones are the same loop."""
     key = ("tau_rings", minimum, ring_um)
     if key not in field.memo:
-        field.memo[key] = nucleus_rings(field.nuclei, field.tissue & ~field.exclusion, _soma_smooth(field), field.threshold,
+        field.memo[key] = nucleus_rings(field.nuclei, field.tissue, _soma_smooth(field), field.threshold,
                                         field.pixel_size_um, ring_um, min(minimum, LEGACY_CONTRAST))
     return field.memo[key]
 
@@ -71,8 +71,11 @@ def faint_rings(field, minimum: float, below: float = LEGACY_CONTRAST, ring_um: 
 
 def tau_row(field, kind: str, center: tuple[float, float], soma: np.ndarray, origin: tuple[int, int]) -> dict:
     """The legacy tau candidate measurements of a soma mask (local, at `origin`) with a margin around it."""
-    tissue = field.tissue & ~field.exclusion
-    features = _local_features(field.dab, field.hematoxylin, tissue, field.nuclei, center, soma, origin, field.threshold, field.pixel_size_um)
+    features = _local_features(field.dab, field.hematoxylin, field.tissue & ~field.exclusion, field.nuclei, center, soma, origin,
+                               field.threshold, field.pixel_size_um)
+    if np.isnan(features["background_dab_median"]):  # wholly inside an excluded area: its own surroundings
+        features = _local_features(field.dab, field.hematoxylin, field.tissue, field.nuclei, center, soma, origin, field.threshold,
+                                   field.pixel_size_um)
     x0, y0 = origin
     features["edge_fraction"] = float(field.edge_band[y0: y0 + soma.shape[0], x0: x0 + soma.shape[1]][soma].mean())
     return {"candidate_source": kind, "centroid_x_px": float(center[0]), "centroid_y_px": float(center[1]), **features}
@@ -80,8 +83,9 @@ def tau_row(field, kind: str, center: tuple[float, float], soma: np.ndarray, ori
 
 def propose(field, settings: dict, shared: dict) -> list[Region]:
     ps = field.pixel_size_um
-    objects, labels = tau_neuron_candidates(field.rgb, field.nuclei, field.threshold, ps, field.exclusion,
-                                            rings=rings(field, settings["ring_contrast"]))
+    # proposed on all tissue (exclusions are applied downstream); the excluded pixels stay out of the background measures
+    objects, labels = tau_neuron_candidates(field.rgb, field.nuclei, field.threshold, ps, None,
+                                            rings=rings(field, settings["ring_contrast"]), background_exclusion=field.exclusion)
     regions = label_regions(labels, "legacy", style="tau")
     occupancy = Occupancy(field.shape)
     for row in objects:
@@ -102,7 +106,7 @@ def propose(field, settings: dict, shared: dict) -> list[Region]:
         elif how == "new":
             region.legacy = tau_row(field, "nucleus_ring", center, soma, (x0, y0))
             occupancy.add(region)
-    allowed = field.tissue & ~field.exclusion
+    allowed = field.tissue
     found = tree_regions(field, settings["levels"], allowed, settings["min_um2"], settings["max_um2"], settings["significant_um2"],
                          settings["split_max_um2"], settings["mode"], settings.get("split"))
     if settings.get("local_contrast"):
@@ -121,9 +125,11 @@ def propose(field, settings: dict, shared: dict) -> list[Region]:
 
 
 def extras(field, regions: list[Region]) -> list[dict]:
-    """Per candidate: whether its centre lies in valid tissue (the legacy filter) and its share on traced threads."""
+    """Per candidate: whether its centre lies in valid tissue (the legacy filter: tissue, off a guarded edge; an excluded
+    area counts as valid here, exclusions are applied downstream) and its share on traced threads."""
     found = maps(field)
-    valid, line = found["maps"]["valid"], found["threads"]["line"]
+    network, line = found["maps"], found["threads"]["line"]
+    valid = network["valid"] | (network["manual_excluded"] & ~network["edge_excluded"] & field.tissue)
     out = []
     for region in regions:
         x, y = float(region.legacy["centroid_x_px"]), float(region.legacy["centroid_y_px"])

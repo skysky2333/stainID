@@ -13,7 +13,6 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing import get_context
 
 from stainid import cache
-from stainid.qc.exclusions import read_manual_exclusions
 from stainid.tables import claim_field
 from stainid.v2 import manifest
 from stainid.v2.params import STAINS
@@ -47,30 +46,13 @@ def _claim(project, stage: str, stain: str, core_id: str):
 
 # ---------------------------------------------------------------- what is to do
 
-def annotator_exclusions(project, manual: dict) -> dict:
-    """The hand-drawn exclusions with the areas annotators marked as bad added (`labels.exclusions.for_analysis`), for
-    the project setting "Apply annotators' excluded areas to the analysis"."""
-    import pandas as pd
-
-    from stainid.labels import exclusions, store
-
-    tiles = pd.read_csv(project.analysis_tiles(), dtype={"tma": str}) if project.analysis_tiles().exists() else pd.DataFrame()
-    marked = exclusions.for_analysis(project, store.current(project.output("reviews")), tiles) if not tiles.empty else {}
-    out = {k: list(v) for k, v in manual.items()}
-    for image, polygons in marked.items():
-        out[image] = out.get(image, []) + polygons
-    return out
-
-
 def proposal_inputs(project, fresh: bool = True):
-    """The slide thresholds, hand-drawn exclusions and the names of the nuclei files (empty before they exist); `fresh`
-    lists the nuclei folder now (a run), else at most every 30 s (the app's status: the folder holds a file per tile)."""
+    """The slide thresholds and the names of the nuclei files (empty before they exist); `fresh` lists the nuclei folder
+    now (a run), else at most every 30 s (the app's status: the folder holds a file per tile). No exclusions: stage 2
+    proposes on all tissue and the excluded areas are applied downstream."""
     calibration = calibration_table(project.input("calibration")) if project.input("calibration").exists() else {}
-    manual = read_manual_exclusions(project.input("manual_exclusions"))
-    if (project.config.get("labels") or {}).get("apply_exclusions"):  # off by default: the analyses use every tile as it is
-        manual = annotator_exclusions(project, manual)
     nuclei = cache.names(project.output("nuclei"), every=0 if fresh else 30)
-    return calibration, manual, nuclei
+    return calibration, nuclei
 
 
 def todo(project, stage: str, stains, cores: set[str] | None = None, redo: bool = False) -> list[tuple[str, str, list[dict], str]]:
@@ -80,7 +62,7 @@ def todo(project, stage: str, stains, cores: set[str] | None = None, redo: bool 
     out = []
     found = groups(project, stains, cores)
     if stage == "proposals":
-        calibration, manual, nuclei = proposal_inputs(project)
+        calibration, nuclei = proposal_inputs(project)
     models = {}
     for (core_id, stain), tiles in found.items():
         recorded = manifest.read_all(project, stage, stain).get(core_id)
@@ -88,7 +70,7 @@ def todo(project, stage: str, stains, cores: set[str] | None = None, redo: bool 
             threshold = calibration.get((tiles[0]["tma"], stain))
             if threshold is None:
                 continue
-            made = proposals.expected(project, stain, core_id, tiles, threshold, manual.get(tiles[0]["image_path"], []), nuclei)
+            made = proposals.expected(project, stain, core_id, tiles, threshold, nuclei)
         elif stage == "calls":
             if stain not in models:
                 models[stain] = classify.load_model(project, stain)
@@ -113,7 +95,7 @@ def status(project) -> dict:
     if not project.analysis_tiles().exists():
         return {stage: {stain: {"done": 0, "outdated": 0, "total": 0} for stain in STAINS} for stage in out}
     found = groups(project, STAINS)
-    calibration, manual, nuclei = proposal_inputs(project, fresh=False)
+    calibration, nuclei = proposal_inputs(project, fresh=False)
     for stain in STAINS:
         keys = sorted(core for core, s in found if s == stain)
         recorded = {stage: manifest.read_all(project, stage, stain) for stage in out}
@@ -130,8 +112,7 @@ def status(project) -> dict:
                         stale = True  # what depends on a missing stage is not up to date either
                     continue
                 if stage == "proposals":
-                    made = None if threshold is None else proposals.expected(project, stain, core, tiles, threshold,
-                                                                              manual.get(tiles[0]["image_path"], []), nuclei)
+                    made = None if threshold is None else proposals.expected(project, stain, core, tiles, threshold, nuclei)
                 elif stage == "calls":
                     if model is None and project.model(classify.MODEL_KEY[stain]).exists():
                         model = classify.load_model(project, stain)
@@ -154,7 +135,7 @@ def default_threads(workers: int) -> int:
     return max(1, min(4, (os.cpu_count() or 2) // max(1, workers)))
 
 
-def _propose_worker(root: str, stain: str, core_id: str, tiles: list[dict], threshold: float, polygons: list, nuclei: frozenset,
+def _propose_worker(root: str, stain: str, core_id: str, tiles: list[dict], threshold: float, nuclei: frozenset,
                     threads: int = 1, tiles_at_once: int = 1) -> dict:
     import cv2
 
@@ -169,7 +150,7 @@ def _propose_worker(root: str, stain: str, core_id: str, tiles: list[dict], thre
     if claim is None:
         return {"skipped": True}
     try:
-        return propose_core(project, stain, core_id, tiles, threshold, polygons, nuclei, tiles_at_once)
+        return propose_core(project, stain, core_id, tiles, threshold, nuclei, tiles_at_once)
     finally:
         claim.unlink(missing_ok=True)
 
@@ -184,7 +165,7 @@ def run_proposals(project, stains=STAINS, cores: set[str] | None = None, workers
     """Stage 2 on every core image to do, `workers` at once, each with `threads` filter threads (`stainid.imaging.parallel`)
     and `tiles_at_once` tiles in flight (sharing the decoded core image); the results depend on none of them."""
     jobs = todo(project, "proposals", stains, cores, redo)[shard_index::shard_count]
-    calibration, manual, nuclei = proposal_inputs(project)
+    calibration, nuclei = proposal_inputs(project)
     workers = workers or default_workers(2.2 + 1.0 * (tiles_at_once - 1))
     threads = threads or default_threads(workers * tiles_at_once)
     print(f"[0/{len(jobs)}] stage 2 (proposals): {len(jobs)} core images to do with {workers} at once ({threads} filter threads and "
@@ -195,7 +176,7 @@ def run_proposals(project, stains=STAINS, cores: set[str] | None = None, workers
     started = time.time()
     with ProcessPoolExecutor(workers, mp_context=get_context("spawn")) as pool:
         futures = {pool.submit(_propose_worker, str(project.root), stain, core, tiles, calibration[(tiles[0]["tma"], stain)],
-                               manual.get(tiles[0]["image_path"], []), nuclei, threads, tiles_at_once): (core, stain, why)
+                               nuclei, threads, tiles_at_once): (core, stain, why)
                    for core, stain, tiles, why in jobs}
         for number, future in enumerate(as_completed(futures), start=1):
             core, stain, why = futures[future]

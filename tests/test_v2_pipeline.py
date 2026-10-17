@@ -279,9 +279,9 @@ def v2_project(tmp_path: Path) -> Path:
 
 def _proposals(project):
     jobs = run.todo(project, "proposals", ["NeuN", "6E10", "AT8"])
-    calibration, manual, nuclei = run.proposal_inputs(project)
+    calibration, nuclei = run.proposal_inputs(project)
     for core, stain, tiles, _ in jobs:
-        proposals.propose_core(project, stain, core, tiles, calibration[(tiles[0]["tma"], stain)], [], nuclei)
+        proposals.propose_core(project, stain, core, tiles, calibration[(tiles[0]["tma"], stain)], nuclei)
     return jobs
 
 
@@ -315,9 +315,9 @@ def test_stages_end_to_end_with_stable_ids_and_outdated_detection(v2_project, mo
     assert run.todo(project, "calls", ["NeuN", "6E10", "AT8"]) == []
     # the same inputs give the same ids
     _redo = run.todo(project, "proposals", ["AT8"], redo=True)
-    calibration, manual, nuclei = run.proposal_inputs(project)
+    calibration, nuclei = run.proposal_inputs(project)
     for core, stain, tiles, _ in _redo:
-        proposals.propose_core(project, stain, core, tiles, calibration[(tiles[0]["tma"], stain)], [], nuclei)
+        proposals.propose_core(project, stain, core, tiles, calibration[(tiles[0]["tma"], stain)], nuclei)
     again = store.read_table(store.path(project, "AT8", "LIP-1_B-2", "proposals"))
     assert list(again.candidate_id) == list(first["AT8"].candidate_id)
     # a new rule makes only stage 4 outdated; a new proposal setting stage 2 (and so stage 4) too
@@ -470,14 +470,14 @@ def test_tiles_at_once_and_filter_threads_do_not_change_the_outputs(v2_project):
 
     project = load_project(v2_project)
     root = store.root(project)
-    calibration, manual, nuclei = run.proposal_inputs(project)
+    calibration, nuclei = run.proposal_inputs(project)
     jobs = run.todo(project, "proposals", ["NeuN", "6E10", "AT8"])
 
     def outputs(tiles_at_once: int, threads: int) -> dict:
         parallel.threads(threads)
         try:
             for core, stain, tiles, _ in jobs:
-                proposals.propose_core(project, stain, core, tiles, calibration[(tiles[0]["tma"], stain)], [], nuclei, tiles_at_once)
+                proposals.propose_core(project, stain, core, tiles, calibration[(tiles[0]["tma"], stain)], nuclei, tiles_at_once)
         finally:
             parallel.threads(1)
         files = sorted(p for kind in ("proposals", "tiles", "unproposed", "threads", "masks") for p in (root / kind).rglob("*.*"))

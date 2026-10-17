@@ -358,7 +358,6 @@ def test_an_area_marked_as_bad_saves_reloads_and_keeps_its_objects_out_of_scorin
     from dataclasses import replace
 
     from stainid.labels import exclusions, store
-    from stainid.v2.run import annotator_exclusions
 
     project, tiles = state.get_state().project, state.get_state().tiles
     labels = store.current(project.output("reviews"))
@@ -367,7 +366,6 @@ def test_an_area_marked_as_bad_saves_reloads_and_keeps_its_objects_out_of_scorin
     marked = exclusions.for_analysis(on, labels, tiles)
     (image, polygons), = marked.items()
     assert polygons[0]["source"] == "annotator Ann" and min(p[0] for p in polygons[0]["polygon_core_px"]) >= 360  # core pixels
-    assert annotator_exclusions(on, {})[image] == polygons  # what the v2 proposals take as hand-drawn exclusions when it is on
     cleared = _save(ann, name, TILE, [{"task": "exclude", "png": "", "scale": 4}])  # an empty area: the mark goes
     assert cleared.status_code == 200 and not [m for m in ann.get(f"/api/annotate/{name}/fields/{TILE}").json()["mine"] if m["task"] == "exclude"]
 

@@ -204,9 +204,9 @@ def test_boxed_shape_and_radial_features_equal_whole_field_ones():
 
 
 def _faint_reference(field, minimum, below=0.3, ring_um=5.0):
-    """The faint-ring loop as it was (its own pass over the nuclei)."""
+    """The faint-ring loop as it was (its own pass over the nuclei), on all tissue as stage 2 proposes now."""
     ps = field.pixel_size_um
-    tissue = field.tissue & ~field.exclusion
+    tissue = field.tissue
     smooth = cv2.GaussianBlur(field.dab, (0, 0), 1.0 / ps)
     height, width = field.shape
     margin, ring_px = max(1, round(14 / ps)), max(1, round(ring_um / ps))
@@ -250,8 +250,9 @@ def test_shared_nucleus_rings_equal_the_separate_loops():
         assert len(faint) == len(expected)
         for a, b in zip(faint, expected):
             assert a[0] == b[0] and a[1] == b[1] and a[3] == b[3] and np.array_equal(a[2], b[2])
-        alone = tau_neuron_candidates(rgb, field.nuclei, field.threshold, PS, field.exclusion)
-        shared = tau_neuron_candidates(rgb, field.nuclei, field.threshold, PS, field.exclusion, rings=tau.rings(field, 0.05))
+        alone = tau_neuron_candidates(rgb, field.nuclei, field.threshold, PS, None, background_exclusion=field.exclusion)
+        shared = tau_neuron_candidates(rgb, field.nuclei, field.threshold, PS, None, rings=tau.rings(field, 0.05),
+                                       background_exclusion=field.exclusion)
     assert alone[0] == shared[0] and np.array_equal(alone[1], shared[1])
     assert any(row["candidate_source"] == "nucleus_ring" for row in alone[0])
 
