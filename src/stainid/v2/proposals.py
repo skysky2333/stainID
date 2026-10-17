@@ -32,8 +32,8 @@ from stainid.v2.field import Field
 from stainid.v2.geometry import Region, components, disk, outline
 from stainid.v2.measure import generic_features
 from stainid.v2.params import digest, params, stage_params
-from stainid.v2.tree import stained_level
 from stainid.v2.threads import segments
+from stainid.v2.tree import stained_level
 
 Image.MAX_IMAGE_PIXELS = None
 TILE_KEYS = ("tile_id", "core_id", "tma", "donor_id", "sample_region_id", "region", "disease_group", "technical_replicate", "stain",

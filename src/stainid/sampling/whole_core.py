@@ -65,7 +65,8 @@ def earlier_fields(project: Project) -> dict[tuple[str, str], dict[tuple[int, in
 def write_whole_core_manifest(project: Project, field_size_px: int = 2048) -> list:
     """The core image table (one row per core and stain, from the core table) and the tiles of every core image."""
     core_images = write_analysis_manifest(project.input("core_manifest"), project.input("core_images"), project.tma_prefix)
-    cores = [r for r in read_csv(core_images) if r.get("tissue_status", "") != "no_tissue"]
+    # an image QC calls empty (under 2 % tissue: glass and debris) has no tiles; the 0.5 % squares would be its specks
+    cores = [r for r in read_csv(core_images) if r.get("tissue_status", "") not in ("no_tissue", "empty")]
     known = earlier_fields(project)
     rows = []
     for number, row in enumerate(cores, start=1):
