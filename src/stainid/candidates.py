@@ -365,14 +365,31 @@ def match_many(project, stain: str, core_id: str, xy: np.ndarray, radius_um: flo
     return out
 
 
+def shows_sam(outline_default, sam_status, has_outline: bool = True) -> bool:
+    """Whether a candidate's own outline (what the views draw and the measures measure) is its Segment Anything output:
+    where the stain's `outline_default` is not "stain" (or it has no stain outline) and a Segment Anything output was
+    kept; else its stain outline."""
+    return (outline_default != "stain" or not has_outline) and sam_status == "ok"
+
+
 def outline_rings(row) -> list[list[int]]:
-    """The outline to draw for a candidate: its stain outline where `outline_default` is "stain", else its default
-    Segment Anything output when one was kept, else the stain outline."""
+    """The outline to draw for a candidate (`shows_sam`): its stain outline where `outline_default` is "stain", else its
+    default Segment Anything output when one was kept, else the stain outline."""
     own = [points(row.get("outline"))] if points(row.get("outline")) else []
-    if row.get("outline_default") == "stain" and own:
-        return own
-    sam = rings(row.get("sam_outline")) if row.get("sam_status") == "ok" else []
+    sam = rings(row.get("sam_outline")) if shows_sam(row.get("outline_default"), row.get("sam_status"), bool(own)) else []
     return sam or own
+
+
+def shown_area_um2(frame: pd.DataFrame) -> pd.Series:
+    """Each candidate's area as its own outline (`shows_sam`) has it: the Segment Anything area where that outline is
+    the default one, else the stain outline's (`area_um2`). The measures use it, so what is drawn is what is measured."""
+    stain_area = pd.to_numeric(frame.get("area_um2", pd.Series(np.nan, index=frame.index)), errors="coerce")
+    if "sam_area_um2" not in frame or "sam_status" not in frame:
+        return stain_area
+    sam_area = pd.to_numeric(frame["sam_area_um2"], errors="coerce")
+    default = frame["outline_default"] if "outline_default" in frame else pd.Series("", index=frame.index)
+    use = np.array([shows_sam(d, st) for d, st in zip(default, frame["sam_status"])], bool) & sam_area.notna().to_numpy()
+    return stain_area.where(~use, sam_area)
 
 
 def outlines(project, stain: str, core_id: str, decision: str | None = None) -> list[dict]:

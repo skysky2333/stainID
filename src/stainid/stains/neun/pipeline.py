@@ -13,7 +13,6 @@ from stainid.imaging.core_images import open_image
 from stainid.imaging.tissue import core_glass_darkness, linear_artifact_mask, tissue_area_mask
 from stainid.nuclei import CELLPOSE_SETTINGS, cellpose_masks, load_cellpose
 from stainid.pipelines.cohort_v1 import context_crop, local_profile_density
-from stainid.qc.exclusions import rasterize_core_exclusions, read_manual_exclusions
 from stainid.stains.neun.cellpose import classify_cellpose_masks
 from stainid.stains.neun.classifier import build_matrix_from_contexts, object_contexts
 from stainid.stains.neun.profiles import combine_profile_and_cellpose_reviews, review_table_rows, segment_dab_profiles
@@ -208,7 +207,6 @@ def run_neun_cohort(
     cellpose_model_path: Path,
     output_dir: Path,
     mask_dir: Path,
-    manual_exclusions_path: Path,
     tile_ids: set[str] | None = None,
     nested_samples: set[str] | None = None,
     shard_index: int = 0,
@@ -269,7 +267,6 @@ def run_neun_cohort(
         for row in read_csv(calibration_path)
         if row["stain"] == "NeuN"
     }
-    manual_exclusions = read_manual_exclusions(manual_exclusions_path)
     CELLPOSE_SETTINGS["batch_size"] = batch_size
     model = None  # loaded only for a tile without Find nuclei outlines
     image_path = None
@@ -290,12 +287,7 @@ def run_neun_cohort(
         rgb, inner = context_crop(image, x, y, width, height, context_px)
         crop_x = x - inner[1].start
         crop_y = y - inner[0].start
-        manual_mask = rasterize_core_exclusions(
-            manual_exclusions.get(row["image_path"], []),
-            crop_x,
-            crop_y,
-            rgb.shape[:2],
-        )
+        manual_mask = np.zeros(rgb.shape[:2], bool)  # detection's own areas only
         mask_path = mask_dir / f"{row['tile_id']}.npz"
         if mask_path.exists():
             with np.load(mask_path) as loaded:

@@ -11,7 +11,7 @@ from stainid.imaging.core_images import open_image
 from stainid.imaging.tissue import core_glass_darkness, fold_mask, linear_artifact_mask
 from stainid.pipelines.cohort_v1 import context_crop
 from stainid.project import Project
-from stainid.qc.exclusions import rasterize_core_exclusions, read_manual_exclusions
+from stainid.qc.exclusions import rasterize_core_exclusions
 from stainid.stains.amyloid.field_pipeline import analyze_6e10_v2
 from stainid.stains.tau.field_pipeline import analyze_at8_v2
 from stainid.tables import claim_field, file_names, write_records, write_text_atomic
@@ -58,7 +58,7 @@ def run_fields(project: Project, stains: list[str] = ("6E10", "AT8"), shard_inde
     project.apply_environment()
     groups = tiles_for(project.analysis_tiles(), set(stains), shard_index, shard_count, core_ids)
     calibration = calibration_table(project.input("calibration"))
-    manual = read_manual_exclusions(project.input("manual_exclusions"))
+    manual: dict = {}  # detection's own areas only (the hand-drawn polygons are people's areas: training and evaluation)
     tau = load(project.model("tau"))
     bundles = {"tau": {**tau, "probability_threshold": project.acceptance("tau", tau)}, "amyloid": load(project.model("amyloid"))}
     parts = project.output("fields") / "parts"

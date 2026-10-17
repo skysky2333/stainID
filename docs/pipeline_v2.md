@@ -46,14 +46,22 @@ people's marked and cleared areas (`stainid.exclusions`) never change the analys
 training and evaluation (`exclusions.drop_excluded`). Smoothing at a few pixels' scale can still carry stain across
 the border of an excluded area by those few pixels.
 
-Per tile (the tile with its 128 px context margin) and stain; a tile keeps the candidates whose centroid lies in it or
-within 64 px of it. An object across a tile edge is segmented from each side's crop, cut at that crop, with slightly
-different centroids, so the old rule (centroid in the tile) lost large plaques on an edge from both tiles, or counted
-both halves. Now every object is kept once per core image (`proposals.owned_once`): of the copies of one object (rows of
-different tiles whose outlines overlap with IoU ≥ 0.3, or one lying half inside the other) the most complete stays — not
-cut by its crop, then centroid in its own tile, then the largest — and it belongs to the tile holding its centroid
-(`tile_id`, `x_tile`, `x_field` are of that tile). Two whole objects whose centroids lie in their own tiles are never
-merged.
+Per tile and stain, each tile detecting in a window that reaches `proposals.<stain>.context_px` beyond it: as far as
+the largest object reaches from its centre (accepted whole objects of the cohort reach at most NeuN 221 px, AT8 168 px,
+6E10 926 px = 253 µm; the windows are 256, 256 and 1024 px). So the tile that owns an object's centre sees all of it,
+and every object is detected whole, once: a tile keeps the candidates whose centroid lies in it or within 64 px of it,
+and of the copies of one object (rows of different tiles whose outlines overlap with IoU ≥ 0.3, or one lying half
+inside the other; `proposals.owned_once`) the most complete stays — not cut by its crop, then centroid in its own tile,
+then the largest — and it belongs to the tile holding its centroid (`tile_id`, `x_tile`, `x_field` are of that tile).
+Two whole objects whose centroids lie in their own tiles are never merged. With the project's 128 px context alone, a
+plaque wider than that was cut at every crop and kept in pieces (2–4 at a corner of four tiles), some with straight
+crop edges.
+
+The window changes only what detection sees. The tiles, their ids, the tissue areas (each tile's own area), the
+calibration and the nuclei stay as they are: the linear-artifact and fold masks are made per tile on its standard crop
+(the tile and 128 px, as the calibration makes them) and cut from there for the wider window
+(`proposals.automatic_masks`), and the window's nuclei are the tile's own Cellpose crop and, beyond it, the other
+tiles' nuclei of their own areas (`proposals.window_nuclei`; a nucleus on the seam keeps the part on each side).
 
 - **NeuN**: the legacy DAB profiles and the legacy Cellpose cells, with the legacy filters recorded instead of applied
   (`flag_legacy_kept`, `flag_legacy_drop` = shape / excluded / near_profile / pale_nucleus); the legacy cells come before
