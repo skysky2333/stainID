@@ -1,21 +1,19 @@
-"""The two annotation rounds over the v2 candidates: corrections only, every candidate shown, one shared decision store.
+"""The annotation round over the v2 candidates: "Fix the field" (a session of kind `fields`): whole fields with every
+candidate and detection's outlines; people add what was missed, fix outlines and may change any call. Corrections only,
+one shared decision store (`labels.decisions`, keyed by candidate id).
 
-- Round 1, "Check the AI's calls" (a session of kind `queue`): one candidate at a time, accepted and rejected ones, with the
-  AI's class, type, score and outline; people keep the call, change the class or type, remove it (not an object) or say
-  they are unsure. The most informative come first (`rank`): near the decision threshold, then rejected but strong, then
-  accepted but weak. A session's candidates are chosen when it is made (`choose`) and kept in `sessions/<name>/items.json`.
-- Round 2, "Fix the field" (kind `fields`): whole fields with every candidate and the AI's outlines; people add what was
-  missed, fix outlines and may change any call (recorded exactly like a round-1 decision on that candidate).
+"Check detection's calls" (round 1, kind `queue`, one candidate at a time) is no longer made: its sessions stay readable
+as history (their candidates in `sessions/<name>/items.json`, `items`, for their progress) and their labels stay valid
+object labels for training and evaluation. "Mark bad areas" (`labels.areas`) is the other kind of round.
 
-Both write the same decisions (`labels.decisions`, keyed by candidate id). The unit people claim is a tile (field), in
-both rounds: opening one holds it for that person (`sessions.Reservations`, renewed while their page is open), so the
-others are handed other tiles meanwhile; once someone saves it as finished (a `done` label: `value` CALLS in round 1, ""
-in round 2) it is done for that round, and once `labels_needed` people (default 1) finished it nobody else is handed it.
-Round 1 walks the objects of one tile after the other. Nothing reaches the label log until the person saves the tile:
-all its answers at once (`routes.rounds.save_tile`).
+The unit people claim is a field: opening one holds it for that person (`sessions.Reservations`, renewed while their
+page is open), so the others are handed other fields meanwhile; once someone saves it as finished (a `done` label) it
+is done, and once `labels_needed` people (default 1) finished it nobody else is handed it. Nothing reaches the label log
+until the person saves the field: all its answers at once (`routes.rounds.save_tile`).
 
-A round session's meta holds `source: "candidates"`, `round` (1 or 2), `scope` (the tiles it draws from), `level` (how
-generous: the lowest proposal level shown, `candidate_store.at_level`; None = every candidate) and `labels_needed`.
+A round session's meta holds `source: "candidates"`, `round` (2; 1 for the old ones), `scope` (the fields it draws
+from), `level` (how generous: the lowest proposal level shown, `candidate_store.at_level`; None = every candidate) and
+`labels_needed`.
 """
 from __future__ import annotations
 
@@ -27,17 +25,13 @@ import pandas as pd
 
 from stainid import cache
 from stainid.labels import candidate_store, sessions
-from stainid.labels.decisions import State
 from stainid.project import Project
-from stainid.tables import write_text_atomic
 
 SOURCE = "candidates"
 KIND = {1: "queue", 2: "fields"}
 TITLE = {1: "Check detection’s calls", 2: "Fix the field"}
 RULE = "informative"
-NEAR = 0.15  # how close to the decision threshold a score is "near" it
 LEVELS = {"all": None, "0.5": 0.5, "0.75": 0.75, "1": 1.0, "1.5": 1.5}  # how generous: lowest proposal level shown (× the slide threshold)
-DEFAULT_OBJECTS = 500
 TILE_HOLD_SECONDS = 90.0  # a tile stays someone's this long after their page last asked (every few seconds while open)
 CALLS = "calls"  # the `value` of the `done` label that finishes a tile of round 1 (round 2's has none)
 
@@ -70,38 +64,6 @@ def done_id(meta: dict, tile_id: str) -> str:
 
 # ---------- ordering ----------
 
-def decision_threshold(frame: pd.DataFrame) -> float:
-    """The score above which the AI accepts: the store's `threshold` column when it has one, else the cut that best
-    separates the model's accepted from its rejected candidates, else 0.5."""
-    if "threshold" in frame and pd.to_numeric(frame.threshold, errors="coerce").notna().any():
-        return float(pd.to_numeric(frame.threshold, errors="coerce").median())
-    model = frame[candidate_store.by_model(frame) & frame.probability.notna()]
-    if model.empty or model.decision.nunique() < 2:
-        return 0.5
-    p = model.probability.to_numpy(float)
-    yes = (model.decision == candidate_store.ACCEPTED).to_numpy()
-    cuts = np.unique(p)
-    right = [((p >= c) == yes).sum() for c in cuts]
-    return float(cuts[int(np.argmax(right))])
-
-
-def rank(frame: pd.DataFrame, threshold: float | None = None) -> pd.DataFrame:
-    """The candidates, most informative first, with their `tier`: 0 near the threshold (closest first), 1 rejected but
-    strong (highest score first), 2 accepted but weak (lowest score first)."""
-    if frame.empty:
-        return frame.assign(tier=[])
-    threshold = decision_threshold(frame) if threshold is None else threshold
-    p = frame.probability.astype(float)
-    accepted = frame.decision.map(candidate_store.accepted).astype(bool)
-    near = (p - threshold).abs() <= NEAR
-    tier = np.where(near.fillna(False), 0, np.where(~accepted, 1, 2))
-    key = np.where(tier == 0, (p - threshold).abs(), np.where(tier == 1, -p.fillna(-1.0), p.fillna(1.0)))
-    ordered = frame.assign(tier=tier, _key=key).sort_values(["tier", "_key", "candidate_id"], kind="stable")
-    return ordered.drop(columns=["_key"])
-
-
-# ---------- round 1: the objects of a session ----------
-
 def items_path(root: Path, name: str) -> Path:
     return sessions.folder(root, name) / "items.json"
 
@@ -113,39 +75,8 @@ def scope_cores(tiles: pd.DataFrame, scope: list[str]) -> list[str]:
 def candidates_in(project: Project, stain: str, tiles: pd.DataFrame, scope: list[str], at: float | None) -> pd.DataFrame:
     """The candidates of these tiles (their own), at the session's level, with field-picture positions."""
     mine = tiles[(tiles.stain == stain) & tiles.tile_id.isin(set(scope))]
-    found = candidate_store.for_cores(project, stain, scope_cores(mine, scope), candidate_store.LIGHT)  # no outlines: `with_shapes`
+    found = candidate_store.for_cores(project, stain, scope_cores(mine, scope), candidate_store.LIGHT)
     return candidate_store.in_tiles(candidate_store.at_level(found, at), mine, project.context_px)
-
-
-SHAPES = ("outline", "sam_outline", "sam_masks", "sam_scores", "sam_default")
-
-
-def with_shapes(project: Project, stain: str, frame: pd.DataFrame, tile: dict) -> pd.DataFrame:
-    """These candidates of one tile (`candidates_in`) with their outlines and masks (core pixels), read for that tile only."""
-    if frame.empty:
-        return frame
-    rows = candidate_store.field_rows(project, stain, tile, project.context_px)
-    if rows is None or rows.empty:
-        return frame
-    rows = rows.drop_duplicates("candidate_id").set_index("candidate_id")
-    at = [rows.index.get_loc(c) if c in rows.index else -1 for c in frame.candidate_id]
-    return frame.assign(**{c: [rows[c].iloc[i] if i >= 0 else None for i in at] for c in SHAPES if c in rows})
-
-
-def choose(project: Project, stain: str, tiles: pd.DataFrame, scope: list[str], at: float | None, n: int, decided: State,
-           needs: int = 1) -> list[str]:
-    """The candidates a new round-1 session asks about: the `n` most informative of its tiles (all when n is 0) that are
-    not decided already."""
-    found = candidates_in(project, stain, tiles, scope, at)
-    if found.empty:
-        return []
-    found = found[[not decided.done(c, needs) for c in found.candidate_id]]
-    ordered = rank(found)
-    return list(ordered.candidate_id.head(n) if n > 0 else ordered.candidate_id)
-
-
-def save_items(root: Path, name: str, ids: list[str]) -> None:
-    write_text_atomic(items_path(root, name), json.dumps({"candidates": ids}))
 
 
 def load_items(root: Path, name: str) -> list[str]:
@@ -174,15 +105,6 @@ def tiles_of(frame: pd.DataFrame) -> list[str]:
     """The tiles of a round-1 session's candidates, in the order its most informative candidate on each comes."""
     return list(dict.fromkeys(frame.tile_id)) if len(frame) else []
 
-
-def open_items(frame: pd.DataFrame, finished: dict[str, set[str]], needs: int) -> pd.DataFrame:
-    """A round-1 session's candidates on tiles that still need people (whose pictures are worth making)."""
-    if frame.empty:
-        return frame
-    return frame[[len(finished.get(t, set())) < needs for t in frame.tile_id]]
-
-
-# ---------- tiles: who is handed which, and how far a session is (both rounds) ----------
 
 def next_tile(tiles: list[str], finished: dict[str, set[str]], person: str, held: dict[str, set[str]], needs: int,
               ready: set[str] | None = None, skip: set[str] | None = None, prefer: set[str] | None = None) -> tuple[str | None, int]:

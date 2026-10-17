@@ -155,8 +155,7 @@ def session_progress(meta: dict, labels: pd.DataFrame) -> dict:
     if rounds.is_round(meta):
         progress |= {"round_progress": _rounds().progress(meta)}
     if rounds.is_round(meta) and meta["kind"] == "queue":
-        frame = rounds.items(get_state().project, meta, get_state().tiles)
-        progress |= {"pictures": queue_pictures.prepare_wanted(get_state(), meta, _rounds().open_items(meta, frame))}
+        pass  # an old "Check detection's calls" session: its progress in tiles only
     elif meta["kind"] != "queue":
         reviewed = finished_fields(meta, labels)
         covered = sum(len(reviewed.get(t, set())) >= meta["per_field"] for t in meta["fields"])
@@ -824,10 +823,12 @@ def next_item(name: str, request: Request, person: str = Depends(annotator), cou
     """A fields session: the next field for this person. A queue session: the next `count` objects (up to 20, the
     page shows the first and loads the others' pictures meanwhile), held for this person for a while so others get
     other objects; with how many the rule leaves them and how many of the queue's pictures are made. An annotation
-    round: the next tile for this person (round 1 with its candidates); `skip` puts the tile they are on aside."""
+    round: the next field for this person; `skip` puts the field they are on aside (an old round-1 session: 410)."""
     meta = session_meta(name, request)
     if rounds.is_round(meta):
-        return fast_json(request, _rounds().next_tile_objects(meta, person, skip)) if meta["kind"] == "queue" else _rounds().next_field(meta, person, skip)
+        if meta["kind"] == "queue":
+            raise HTTPException(410, _rounds().NO_ROUND_ONE)
+        return _rounds().next_field(meta, person, skip)
     labels = store.current(root())
     state = get_state()
     if meta["kind"] != "queue":

@@ -219,12 +219,13 @@ studies, image sets and whole-slide projects.
 
 1. **Stain.**
 2. **What should people do?**
-   - **Fix the field** (round 2, the default). Whole fields with every object detection considered: point at an
-     object and press a key to change its call or its outline, click to add what it missed. *How many fields*: fields
-     nobody has checked, spread over TMAs and groups.
-   - **Check detection's calls** (round 1). One object at a time, accepted and rejected ones, with detection's
-     class, type, score and outline. The most informative come first: near the decision threshold (closest first),
-     then strong ones detection rejected, then weak ones it accepted. *How many objects* (default 500; 0 = every one).
+   - **Fix the field** (objects). Whole fields with every object detection considered: point at an object and
+     press a key to change its call or its outline, click to add what it missed. *How many fields*: fields nobody has
+     checked, spread over TMAs and groups.
+   - **Mark bad areas** (brush only). One core at a time with all its stains: paint folds, artifacts, empty glass and
+     blur, or say a stain looks fine. A sample of cores is enough.
+   - "Check detection's calls" (one object at a time) is no longer made. Its old sessions stay listed as history and
+     their labels stay valid object labels for training and evaluation.
 3. **Which cores**: every ready core, some TMAs (batches, for slides and images), or fields clicked on the cores. Each
    core shows whether it has detection's candidates yet.
 4. **Title**, and whether it opens to labellers right away.
@@ -245,7 +246,9 @@ opened last.
 
 **The first time.** A name that has not been through the tutorial goes there first, from the list of sessions or from
 a session's own link (and back there afterwards; `/api/session/tutorial` names the practice field). It is a practice on a real field
-of the project, in both rounds, where nothing is saved (about 3–5 minutes). A coach asks for one thing at a time and
+of the project (a 6E10 field with several plaque types, detection rejects and a detected fold or artifact), where
+nothing is saved (about 3–5 minutes): reject (Del), bring types back (numbers), unsure (`), a clean look (Space),
+precise editing, the brush (B), saving. A coach asks for one thing at a time and
 waits until it is done. *Skip tutorial* is always there, and *Tutorial* at the top shows it again. Who finished it is
 kept in `outputs.reviews/tutorials.json`. **Try the tutorial** on the Labels page opens the same practice for the
 admin, without a name, in a new tab: what annotators see, with nothing saved or remembered.
@@ -266,7 +269,7 @@ top: the object under the mouse (its class, detection's call and score, why it w
 three outlines shows, *n/3*); the keys in their groups with their colours ("Plaques 1–4 · Not plaques Q–W · Del not a
 plaque · ` unsure · B brush"); the keys; this field (checked, changed,
 added; tags and a note); *Save* and *Save and continue*; **?** for the longer help, display options and the other
-fields; and the *Tutorial* link. Pointing at an object also shows its name beside it on the picture. Every key acts on the object under the mouse (round 2) or on screen (round 1):
+fields; and the *Tutorial* link. Pointing at an object also shows its name beside it on the picture. Every key acts on the object under the mouse:
 
 | Key | What it does |
 |---|---|
@@ -276,10 +279,10 @@ fields; and the *Tutorial* link. Pointing at an object also shows its name besid
 | Delete (Backspace) | the stain's single reject (not a plaque, not tau, not a neuron): it turns dotted grey and stays visible, the same as detection's own rejects (also an object the person added); a number key makes it solid again |
 | Tab / Shift+Tab (or + / −) | a bigger or smaller outline: the three Segment Anything outputs come with the object, so it changes at once |
 | Click an object | precise editing of this object, with everything else locked (tags, note, other fields, saving): a click adds a spot to it, Shift+click leaves one out, drag the white dots (at most 48, the outline simplified to them); Z one step back; a click beyond its neighbourhood (its box grown by half its size, at least 24 screen pixels, drawn faintly) or Enter keeps the edit (the view goes back to where it was), Esc cancels. Classes only need the mouse over the object (no click). The right button has no meaning on the field; the middle one pans |
-| Space | the field tool: hide / show everything drawn over the picture (outlines, dots, names, the excluded areas, layers), for a clean look at the tissue; "Overlays hidden · Space" shows meanwhile. In *Check detection's calls* Space is still precise editing of the object on screen |
+| Space | the field tool: hide / show everything drawn over the picture (outlines, dots, names, the excluded areas, layers), for a clean look at the tissue; "Overlays hidden · Space" shows meanwhile. |
 | B | the brush, on and off (Esc also leaves): while it is on, the keys 1–4 choose the area type (1 fold or tissue damage, 2 artifact: scratch, bubble, debris, linear, 3 no tissue / empty, 4 out of focus or bad staining) and the class keys rest; a drag paints it as a hatch in the type's colour, Shift-drag marks the part fine (an *include*, also over an area detection excluded), the wheel sets the brush size, the middle button pans; outlines are locked meanwhile. Saved with Save as typed rings in field pixels (an `exclude` label, `labels/exclusions.py`): **people's areas**. Over every field the page draws detection's own areas hatched, *Excluded from analysis* (GET `…/fields/{tile}/excluded`, the automatic layer, the same as the Cores view's: folds, linear artifacts, no tissue, the AT8 edge guard), and people's areas outlined on top (GET `…/fields/{tile}/annotated`: painted ones in their type's colour, the parts marked fine dashed green). People's areas only train and evaluate models: objects in them (by people's final say over detection's areas, `exclusions.final_say`) are drawn faint, are not asked about, and are left out of training and scoring; the bad-area detector is compared with them on the Models page. The analysis never reads them, so marking an area changes no result and makes no step out of date. Space hides them with everything else; *Display options* turns them off |
 | Z | undo the last unsaved change (a brush stroke too) |
-| Enter | round 1: keep detection's call |
+| Enter | precise editing: keep the edit; drawing by hand: close the outline |
 | Ctrl+S (⌘S) | save, and stay on the field |
 | Ctrl+Enter (⌘Enter) | save and continue |
 
@@ -300,7 +303,7 @@ a reload, and leaving the page with unsaved changes asks first. *Save and contin
 
 A tile's labels are written all at once (`routes.rounds.save_tile`) or not at all.
 
-**Fields are claimed, so people never collide.** The unit people claim is a field (a tile), in both rounds:
+**Fields are claimed, so people never collide.** The unit people claim is a field (a tile):
 
 - Opening a field holds it for that person while their page is open, so the others are handed other fields.
 - A field that enough people finished (*People who must finish each field*) is not handed to anyone else.

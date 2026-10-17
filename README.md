@@ -107,9 +107,8 @@ page:
 1. **Choose a stain and what people should do.**
    - **Fix the field** (start here): the whole field with every object detection considered. People point at an
      object and press a key to change its call, fix its outline, or click to add what detection missed.
-   - **Check detection's calls**: one object at a time, with detection's class, type, score and outline. Press Enter
-     to keep the call, or a key to change it. The most informative objects come first: those where detection is
-     unsure, then strong ones it rejected, then weak ones it accepted.
+   - **Mark bad areas**: one core at a time with all its stains, brush only: paint folds, artifacts, empty glass and
+     blur, or press Enter when a stain looks fine. A sample of cores is enough.
 2. **Choose where the fields come from**: every ready core, some TMAs, or squares you click on the cores. The same
    works for slides and images.
 3. **Copy the link and send it.** People open it in their browser and type their name. No account or password is
@@ -134,7 +133,6 @@ What annotators see:
   | **Space** | hide / show everything drawn over the picture, for a clean look at the tissue |
   | **B** | the brush: paint bad areas (1–4 the type while it is on); they teach and test bad-area detection and their objects are left out of training and scoring — the analysis keeps detection's own areas |
   | **Z** | undo |
-  | **Enter** | keep detection's call (round 1) |
   | **Ctrl+S** / **Ctrl+Enter** | save / save and continue |
 
 - **Click to add a missed object.** In *Fix the field*, a click on empty tissue outlines the object at once, because
@@ -208,8 +206,8 @@ All screenshots show a synthetic demo project: the tissue images, donors, labels
 |---|---|
 | ![Fix the field](docs/images/annotate.jpg) | ![Precise editing](docs/images/annotate-precise.jpg) |
 | **Fix the field** (at `/p/<project>/annotate`): every candidate of the field, solid in its class colour or dotted grey when rejected or removed; the object under the mouse lights up, its name beside it and its facts (class, detection's call and score, area, outline) in the side panel with the class keys and colours | **Precise editing** (click the object): only this object can change; a click adds a spot, Shift+click leaves one out, the white dots drag; a click beyond the faint frame keeps it |
-| ![Check detection's calls](docs/images/check-calls.jpg) | ![Tutorial](docs/images/tutorial.jpg) |
-| **Check detection's calls**: the other kind of round, one object at a time, Enter keeps detection's call | **Tutorial**: where a new annotator starts, on a practice field where nothing is saved; *Try the tutorial* on the Labels page shows it to the admin |
+| ![Tutorial](docs/images/tutorial.jpg) | |
+| **Tutorial**: where a new annotator starts, on a practice field where nothing is saved; *Try the tutorial* on the Labels page shows it to the admin | |
 | ![Home](docs/images/home.png) | ![Models](docs/images/models.png) |
 | **Home**: your next step and overall progress | **Models**: download published models; train from labels, compare, switch |
 | ![Core viewer](docs/images/viewer.jpg) | ![Labels](docs/images/labels.png) |

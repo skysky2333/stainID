@@ -1,4 +1,4 @@
-/* Pieces shared by the two annotation rounds (labels/checkcalls.tsx, labels/fixfield.tsx): the words, the heartbeat
+/* Pieces of the annotation round pages (labels/fixfield.tsx; "Check detection's calls" is no longer made): the words, the heartbeat
    (polled from the server: the field on the page stays this person's, and the live progress in fields), switching
    between the Segment Anything masks of an object (smaller / bigger, no waiting), and unsaved changes: both pages keep
    every change on the page until the person presses Save (a draft in this browser survives a reload, never sent before),
@@ -12,9 +12,10 @@ import { classText, keyGroups, keyName } from './classKeys'
 import { ClassKeyHint, useClassKeys } from './classes'
 import { CLASS_COLOURS, INACTIVE_GREY, UNSURE_AMBER, classColour } from '../classPalette'
 
-export const ROUND_TITLE: Record<1 | 2, string> = { 1: 'Check detection’s calls', 2: 'Fix the field' }
+/* Round 1, "Check detection's calls", is no longer made: its title stays for old sessions listed as history. */
+export const ROUND_TITLE: Record<1 | 2, string> = { 1: 'Check detection’s calls (no longer used)', 2: 'Fix the field' }
 export const ROUND_TEXT: Record<1 | 2, string> = {
-  1: 'One object at a time, with detection’s call and outline: keep it, change it, or say it is not an object.',
+  1: 'One object at a time. No longer made: its labels still count for training and evaluation.',
   2: 'Whole fields with every object detection considered: point at one and press a key to change its call, fix its outline, add what it missed.',
 }
 /** What someone does on a round page, as the tutorial follows it. */

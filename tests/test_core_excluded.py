@@ -87,7 +87,8 @@ def test_excluded_areas(client, synthetic_project):
     assert rgba[12, 5, 3] == 0 and rgba[5, 19, 3] == 0  # plain tissue and outside the tiles (no tissue there): transparent
     assert rgba[3, 15, 3] > 0 and tuple(rgba[3, 15, :3][::-1]) == (255, 176, 0)  # fold (BGRA on disk)
     assert {int(rgba[y, x, 3]) for y in range(2, 4) for x in range(19)} == {70, 210}  # translucent fill and hatching lines
-    assert rgba[17, 17, 3] == 70  # no tissue: a fill without hatching
+    assert {int(rgba[y, x, 3]) for y in range(15, 19) for x in range(15, 19)} == {40, 120}  # no tissue: lighter, a faint wash with fine dots
+    assert tuple(rgba[15, 15, :3][::-1]) == (120, 128, 140)
 
 
 def test_tissue_in_no_tile_is_drawn_as_not_analysed(client, synthetic_project, monkeypatch):

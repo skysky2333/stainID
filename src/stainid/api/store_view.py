@@ -132,18 +132,19 @@ def unproposed_count(project, core_id: str, stain: str) -> int | None:
 
 class ExcludedKind:
     """One type of area left out of the analysis as the "Excluded from analysis" layer draws it: its code in the layer
-    (`stainid.exclusions.CODES`), colour, hatching (a backslash, "/", "|", "-", or "" for none) and the brush type it is
-    (`labels.exclusions.KINDS`; "" for the AT8 edge guard, which only detection makes)."""
+    (`stainid.exclusions.CODES`), colour, hatching (a backslash, "/", "|", "-", "." fine dots, or "" for none), the brush
+    type it is (`labels.exclusions.KINDS`; "" for the AT8 edge guard, which only detection makes) and how strongly it is
+    drawn (`fill`, `line`: alpha of the wash and of the hatching)."""
 
-    def __init__(self, id: str, code: int, color: tuple[int, int, int], hatch: str, type: str = ""):
-        self.id, self.code, self.color, self.hatch, self.type = id, code, color, hatch, type
+    def __init__(self, id: str, code: int, color: tuple[int, int, int], hatch: str, type: str = "", fill: int = 70, line: int = 210):
+        self.id, self.code, self.color, self.hatch, self.type, self.fill, self.line = id, code, color, hatch, type, fill, line
         self.label = excluded_areas.CODES[code]
 
 
 EXCLUDED_KINDS = (  # the colours are the brush's (webapp labels/brush.ts EXCLUDE_TYPES)
     ExcludedKind("fold", 1, (255, 176, 0), "/", "1"),
     ExcludedKind("artifact", 2, (168, 85, 247), "\\", "2"),
-    ExcludedKind("no_tissue", 3, (156, 163, 175), "", "3"),
+    ExcludedKind("no_tissue", 3, (120, 128, 140), ".", "3", fill=40, line=120),  # lighter: glass is much of an edge tile
     ExcludedKind("focus", 4, (0, 229, 255), "|", "4"),
     ExcludedKind("edge_guard", 5, (20, 184, 166), "-"),
     ExcludedKind("not_analysed", 6, (100, 116, 139), "/"),
@@ -181,23 +182,24 @@ def excluded_info(project, core_id: str, stain: str) -> dict:
 
 
 def _rgba(codes: np.ndarray, rows: int = 0, columns: int = 0) -> bytes:
-    """Codes of the layer as an RGBA PNG: each type a translucent fill in its colour with stronger hatching lines (none
-    for "no tissue"), the rest transparent; (`rows`, `columns`) where `codes` start in the core's layer (so a field's
+    """Codes of the layer as an RGBA PNG: each type a translucent wash in its colour with stronger hatching lines ("no
+    tissue" lighter: a faint grey wash with fine dots), counted tissue transparent; (`rows`, `columns`) where `codes` start in the core's layer (so a field's
     hatching lines up with its core's)."""
     import cv2  # noqa: PLC0415
 
     height, width = codes.shape
     yy, xx = np.mgrid[rows:rows + height, columns:columns + width]
-    lines = {"\\": (xx - yy) % HATCH_PX == 0, "/": (xx + yy) % HATCH_PX == 0, "|": xx % HATCH_PX == 0, "-": yy % HATCH_PX == 0}
+    lines = {"\\": (xx - yy) % HATCH_PX == 0, "/": (xx + yy) % HATCH_PX == 0, "|": xx % HATCH_PX == 0, "-": yy % HATCH_PX == 0,
+             ".": (xx % 3 == 0) & (yy % 3 == 0)}
     out = np.zeros((height, width, 4), np.uint8)  # cv2 writes BGRA
     for kind in EXCLUDED_KINDS:
         pixels = codes == kind.code
         if not pixels.any():
             continue
         r, g, b = kind.color
-        out[pixels] = (b, g, r, 70)
+        out[pixels] = (b, g, r, kind.fill)
         if kind.hatch:
-            out[pixels & lines[kind.hatch]] = (b, g, r, 210)
+            out[pixels & lines[kind.hatch]] = (b, g, r, kind.line)
     ok, encoded = cv2.imencode(".png", out)
     if not ok:
         raise RuntimeError("could not encode the excluded areas")

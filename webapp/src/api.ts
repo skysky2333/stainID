@@ -522,7 +522,7 @@ export interface RoundSessionField extends SessionField { open_by?: string[]; do
 /** What a new round session can draw from, per TMA. */
 export interface RoundScope {
   stain: string; tmas: { tma: string; cores: number; cores_ready: number; fields: number; fields_ready: number; fields_remaining?: number }[]
-  cores: number; cores_ready: number; fields_ready: number; levels: Record<string, number | null>; default_objects: number; from_pool: boolean
+  cores: number; cores_ready: number; fields_ready: number; levels: Record<string, number | null>; from_pool: boolean
   /** ready fields not annotated yet and not in an open session: what "Fix the field" draws from */
   fields_remaining?: number
 }

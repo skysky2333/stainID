@@ -696,6 +696,9 @@ function UnproposedToggle({ count, on, onToggle, state }: {
 function hatchSwatch(kind: ExcludedKind) {
   const angle: Record<string, string> = { '\\': '135deg', '/': '45deg', '|': '90deg', '-': '0deg' }
   const fill = `${kind.color}55`
+  if (kind.hatch === '.') {  // "no tissue": lighter, a faint wash with fine dots
+    return { background: `radial-gradient(${kind.color} 0.8px, ${kind.color}33 1px) 0 0 / 3px 3px`, boxShadow: '0 0 0 1px rgb(0 0 0 / 35%)' }
+  }
   return { background: kind.hatch ? `repeating-linear-gradient(${angle[kind.hatch] ?? '45deg'}, ${kind.color} 0 1.5px, ${fill} 1.5px 4px)` : fill,
     boxShadow: '0 0 0 1px rgb(0 0 0 / 35%)' }
 }

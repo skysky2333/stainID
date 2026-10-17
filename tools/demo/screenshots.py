@@ -21,7 +21,6 @@ the light theme and writes:
   and rejected candidates dotted grey), zoomed in a little, pointing at an object (its name beside it, its facts in the
   side panel);
 - annotate-precise.jpg: the same field in precise editing (the dots to drag);
-- check-calls.jpg: "Check detection's calls", one object at a time;
 - tutorial.jpg: the tutorial a new annotator (Dana) is sent to first.
 """
 from __future__ import annotations
@@ -43,7 +42,6 @@ SHOTS = {  # name: (path in the project, or None when chosen from the data, view
     "labels.png": ("/labels", 1400, 900),
     "annotate.jpg": (None, 1500, 900),
     "annotate-precise.jpg": (None, 1500, 900),
-    "check-calls.jpg": (None, 1500, 900),
     "tutorial.jpg": ("/annotate", 1500, 900),
     "results.png": ("/results", 1500, 911),
     "settings.png": ("/settings", 1500, 911),
@@ -151,8 +149,6 @@ def main() -> None:
                 path = viewer_target(page, api, args.stain)
             if name in ("annotate.jpg", "annotate-precise.jpg"):
                 path = f"/annotate/{rounds['fix']}/{rounds['ann_field']}"
-            if name == "check-calls.jpg":
-                path = f"/annotate/{rounds['check']}"
             page.set_viewport_size({"width": width, "height": height})
             page.goto(f"{base}/" if name == "projects.png" else pages + path)
             settle(page, 1.5)

@@ -43,8 +43,8 @@ export default function Labels() {
         <p style={{ marginTop: 0 }}>{FIELD_TEXT}</p>
         <ol className="plain-steps">
           <li><b>Start a session</b>: pick a stain and what people do. <b>Fix the field</b> (start here): whole fields with every object detection
-            considered; people point at an object and press a key to change its call or outline, and click to add what it missed. <b>Check detection’s
-            calls</b>: one object at a time, people keep or correct detection’s call with one key. Both share one set of answers, so nothing is checked twice.</li>
+            considered; people point at an object and press a key to change its call or outline, and click to add what it missed. <b>Mark bad
+            areas</b>: core by core with a brush, for folds, artifacts, glass and blur (a sample of cores is enough).</li>
           <li><b>Try the tutorial</b> to see what annotators see first (nothing is saved).</li>
           <li><b>Send the link</b>. People type their name and label in their browser — no account needed. Each person gets their own field, and their work is kept when they press Save.</li>
           <li><b>Watch progress</b> here, field by field, then <Link to="/models">train a new model</Link> from the sessions you choose and compare it with the one in use.</li>
@@ -85,7 +85,7 @@ export default function Labels() {
 
 /* ---------- sessions ---------- */
 
-/** The annotation rounds ("Fix the field", "Check detection's calls", "Mark bad areas"), shown before the older kinds. */
+/** The annotation rounds ("Fix the field", "Mark bad areas"; old "Check detection's calls" ones as history), shown before the older kinds. */
 const isRound = (s: SessionInfo) => !!s.round || s.kind === 'areas'
 
 function Sessions({ sessions, reference, linkFor, onChanged, onNew }: {

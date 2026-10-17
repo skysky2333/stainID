@@ -39,7 +39,7 @@ const FAQ: [string, ReactNode][] = [
   ['A step says “Made with an older model”.', <>You switched to a different model after that step ran. Its results stay as they are
     until you run the step again with <b>Start over</b> (under Advanced); then make the results tables again.</>],
   ['How do other people label for me?', <>On <Link to="/labels">Labels</Link>, press <b>New labelling session</b>, pick a stain and a round
-    (<b>Fix the field</b>: whole fields, adding what detection missed; <b>Check detection’s calls</b>: object by object), then send people the <b>Link for labellers</b>
+    (<b>Fix the field</b>: whole fields, correcting detection and adding what it missed; <b>Mark bad areas</b>: core by core with a brush), then send people the <b>Link for labellers</b>
     (it ends in /annotate and names the study). They type their name and work in their own browser, with no password. Someone new first gets a short practice
     tutorial. Each person is handed a field nobody else is on, so no one does the same work twice; you follow their progress and download the labels on the
     same page.</>],

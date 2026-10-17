@@ -19,3 +19,18 @@ evaluate models: the analysis reads detection's outputs only.
 `exclusions.final_say` (people's areas over detection's) exists only as the label set for training and evaluating:
 labels on objects there are left out (`drop_excluded`), and it is the target the bad-area detector is scored against.
 It is never an analysis input, so painting or clearing an area changes no stage input and no digest.
+
+## What was removed
+
+- **"Check detection's calls" (round 1)**, one candidate at a time. No new sessions can be made (the API answers 400),
+  and an old one answers 410 to its annotators. Old sessions stay listed with their progress as history
+  (`labels.rounds.items` reads their `items.json`), and their labels stay valid object labels for training and evaluation.
+  Removed with it:
+  - the candidate ranking (`labels.rounds.decision_threshold`, `rank`, `choose`, `save_items`, `with_shapes`, `open_items`);
+  - the round-1 routes (`next_tile_objects`, `my_answers`, `_item`, `_unanswered`, the round-1 branches of `save_tile` and `warm`);
+  - its practice session (`practice-1-*`) and its picture queue (`queue_pictures.round_wanted`);
+  - the page (`webapp/src/labels/checkcalls.tsx`), its tutorial steps, its screenshot and the demo's round-1 session.
+
+  The two round types left are **Fix the field** (objects) and **Mark bad areas** (brush only).
+- **"Apply area edits"** (`v2/area_edits.py`, `api/area_batch.py`, the `v2_area_edits` step, `stainid v2 area-edits`):
+  people's areas no longer reach the analysis.

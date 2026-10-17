@@ -46,28 +46,15 @@ def _cores(state: ProjectState, stain: str, objects: pd.DataFrame) -> pd.Series:
     return objects.tile_id.map(place)
 
 
-def round_wanted(state: ProjectState, meta: dict) -> pd.DataFrame:
-    """The candidates of a "Check the AI's calls" session on tiles that still need people (`labels.rounds`)."""
-    frame = rounds.items(state.project, meta, state.tiles)
-    if frame.empty:
-        return frame.assign(key=[])
-    finished = store.reviewed_fields(store.current(_reviews(state)), meta["stain"], rounds.CALLS)
-    frame = rounds.open_items(frame, finished, rounds.needed(meta))
-    return frame.assign(key=sessions.object_keys(frame)) if len(frame) else frame.assign(key=[])
-
-
 def _wanted(state: ProjectState, stain: str) -> pd.DataFrame:
     """Every object any queue session of this stain may serve."""
     root = _reviews(state)
-    queues = [m for m in (sessions.meta(root, n) for n in sessions.names(root)) if m["kind"] == "queue" and m["stain"] == stain]
+    queues = [m for m in (sessions.meta(root, n) for n in sessions.names(root))
+              if m["kind"] == "queue" and m["stain"] == stain and not rounds.is_round(m)]  # old round-1 sessions take no work
     if not queues:
         return pd.DataFrame(columns=["tile_id", "x", "y"])
-    parts = [round_wanted(state, m)[["tile_id", "x", "y", "key"]] for m in queues if rounds.is_round(m)]
-    older = [m for m in queues if not rounds.is_round(m)]
-    if older:
-        objects, labels = pool.all_objects(state.project, stain), store.current(root)
-        parts += [sessions.may_serve(m, objects, labels) for m in older]
-    return pd.concat(parts).drop_duplicates("key")
+    objects, labels = pool.all_objects(state.project, stain), store.current(root)
+    return pd.concat([sessions.may_serve(m, objects, labels) for m in queues]).drop_duplicates("key")
 
 
 def _spots(stain: str, objects: pd.DataFrame) -> list[label_crops.Spot]:

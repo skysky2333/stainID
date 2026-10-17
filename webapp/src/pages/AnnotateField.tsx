@@ -11,7 +11,6 @@ import { classText, resolveClass, roleOf } from '../labels/classKeys'
 import { ClassChooser, ClassKeyHint, classColour, useClassKeys } from '../labels/classes'
 import { FieldThumb } from '../labels/fields'
 import { QuickCheck } from '../labels/quickcheck'
-import { CheckCalls } from '../labels/checkcalls'
 import { FixField } from '../labels/fixfield'
 import { MarkAreas } from '../labels/markareas'
 import { ROUND_TITLE, RoundProgressLine, useFitScreen } from '../labels/rounds'
@@ -54,7 +53,9 @@ export default function AnnotatePage() {
   if (!detail.data) return <Loading label="Opening the session…" />
   const round = (detail.data.meta as Partial<RoundDetail>).round
   if (round === 'areas' || detail.data.meta.kind === 'areas') return <MarkAreas detail={detail.data} />
-  if (round === 1) return <CheckCalls detail={detail.data} />
+  if (round === 1) return <><PageHead title={detail.data.meta.title} subtitle="Check detection’s calls" />
+    <Empty><p style={{ marginTop: 0 }}>This kind of session is no longer used: its labels stay in the label log for training and evaluation.
+      Ask for a “Fix the field” session instead.</p><Link className="btn" to="/annotate">All sessions</Link></Empty></>
   if (round === 2 && tile) return <FixField key={tile} detail={detail.data} reload={detail.reload} tile={tile} />
   if (detail.data.meta.kind === 'queue') return <QuickCheck detail={detail.data} />
   if (detail.data.meta.kind === 'outline' && tile) return <OutlineWorkspace key={tile} detail={detail.data} reload={detail.reload} tile={tile} />
