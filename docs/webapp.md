@@ -107,7 +107,10 @@ project without saved maps uses the rule under *Map → Advanced* (`sample_regio
 - **Detect** is the staged detection (*Find nuclei*, then *Find candidates*, *Decide*, *Outline objects*; see
   [pipeline_v2.md](pipeline_v2.md)) and **Results** its *Make results tables*. Each v2 step says how many cores are
   done and how many are **out of date**: something they were made from changed since (a setting, a model, a
-  hand-drawn exclusion or an earlier stage). Running the step again redoes only those cores.
+  hand-drawn exclusion or an earlier stage). Running the step again redoes only those cores. *Outline objects →
+  Advanced → Outline shown for each stain* sets which outline each stain shows first, its stain outline or Segment
+  Anything's (`v2.outlines.default_outline`; NeuN Segment Anything, 6E10 and AT8 the stain outline); changing it only
+  puts the candidate tables together again, Segment Anything does not run again.
 - **Legacy detection (v1)** (folded, under the stages): the first detection (*Detect NeuN neurons*, *Detect plaques and
   tau*, *Outline objects*, *Make results tables*, each marked *legacy v1*). Still runnable one by one; never run by
   *Run what's left* or *Run everything*.

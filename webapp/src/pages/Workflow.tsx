@@ -240,7 +240,9 @@ export function StepCard({ step, onChanged, anchor = true, startOpen = false }: 
                 {job && <button className="link-btn small" onClick={() => setLog(!log)}>{log ? 'Hide log' : 'Show log'}</button>}
               </div>
               {log && job && <JobLog id={job.id} job={job} />}
-              <Advanced hint={extra.length ? 'more options, start over, the files and the command' : 'the files and the command'}>
+              <Advanced hint={step.id === 'v2_outlines' ? 'which outline each stain shows, more options, the files and the command'
+                : extra.length ? 'more options, start over, the files and the command' : 'the files and the command'}>
+                {step.id === 'v2_outlines' && <OutlineDefaults onSaved={onChanged} />}
                 {extra.length > 0 && <div className="row options">{extra.map((o) => <OptionField key={o.key} option={o} value={values[o.key]} onChange={(v) => setValues({ ...values, [o.key]: v })} />)}</div>}
                 <div>
                   <div className="io-title">Files</div>
@@ -335,6 +337,50 @@ function NeedRow({ need, onChanged, optional = false }: { need: ResourceInfo; on
       <ErrorNote error={error} />
       {picking && <FilePicker title={`Choose the ${need.label.toLowerCase()}`} pickFiles={need.id.startsWith('model_')} show={need.id.startsWith('model_') ? 'models' : 'slides'}
         onClose={() => setPicking(false)} onPick={choose} />}
+    </div>
+  )
+}
+
+/** The outline each stain shows first (the Cores view, the annotation pages and the results' shape measures):
+ *  `v2.outlines.default_outline` in stainid.yaml. */
+const OUTLINE_DEFAULTS: Record<string, 'stain' | 'sam'> = { NeuN: 'sam', '6E10': 'stain', AT8: 'stain' }
+
+function OutlineDefaults({ onSaved }: { onSaved: () => void }) {
+  const { info, reload } = useProject()
+  const stored = ((info?.config as unknown as { v2?: { outlines?: { default_outline?: Record<string, string> } } })?.v2?.outlines?.default_outline) ?? {}
+  const current = useMemo(() => Object.fromEntries(Object.entries(OUTLINE_DEFAULTS).map(([s, d]) => [s, stored[s] === 'sam' || stored[s] === 'stain' ? stored[s] : d])),
+    [JSON.stringify(stored)])  // eslint-disable-line react-hooks/exhaustive-deps
+  const [values, setValues] = useState<Record<string, string>>(current)
+  useEffect(() => setValues(current), [current])
+  const [busy, setBusy] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const changed = JSON.stringify(values) !== JSON.stringify(current)
+  const save = () => withError(async () => {
+    setBusy(true)
+    try {
+      await api.put('/api/project/config', { changes: { v2: { outlines: { default_outline: values } } } })
+      reload(); onSaved(); setSaved(true)
+    } finally { setBusy(false) }
+  }, setError)
+  return (
+    <div className="outline-defaults">
+      <div className="io-title">Outline shown for each stain</div>
+      <p className="small secondary" style={{ margin: '2px 0 8px' }}>Which outline an object shows first, on the Cores view and when people label: its
+        stain outline (the brown-stained shape detection found) or Segment Anything’s. Changing it only puts the candidate tables together again
+        (quick); Segment Anything does not run again.</p>
+      <div className="row options">
+        {Object.keys(OUTLINE_DEFAULTS).map((stain) => (
+          <label key={stain} className="field">{stain}
+            <select value={values[stain]} onChange={(e) => { setSaved(false); setValues({ ...values, [stain]: e.target.value }) }}>
+              <option value="stain">Stain outline</option>
+              <option value="sam">Segment Anything</option>
+            </select></label>
+        ))}
+        <button className="btn small" disabled={!changed || busy} onClick={save}>{busy ? 'Saving…' : 'Save'}</button>
+        {saved && !changed && <span className="small status-finished">Saved. The candidate tables are put together again with it (the quick “Decide” step); Segment Anything does not run again.</span>}
+      </div>
+      <ErrorNote error={error} />
     </div>
   )
 }

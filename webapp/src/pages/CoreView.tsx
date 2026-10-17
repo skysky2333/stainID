@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import type { CoreDetail } from '../api'
 import { apiUrl, coreThumb, enc } from '../api'
@@ -26,7 +26,22 @@ interface CoreObjects {
 /** Stained regions no v2 candidate covers: rows of [x, y, area µm², DAB / threshold, rings] in core-image pixels. */
 interface CoreUnproposed { status: 'done' | 'not_run'; columns: string[]; rows: [number, number, number, number, number[][]][] }
 /** Segment Anything outlines: per detection (its exact x, y) the outlined area and polygons, in core-image pixels. */
-interface CoreOutlines { status: 'done' | 'not_made'; columns: string[]; rows: [number, number, number | null, number[][]][] }
+interface CoreOutlines { status: 'done' | 'not_made'; columns: string[]; rows: [number, number, number | null, number[][]][]; outline?: OutlineChoice }
+/** Which outline of every candidate the picture shows (v2 store): the stain's default, the candidate's own outline as
+ *  the stain's segmentation found it, or one of Segment Anything's three sizes (the own outline where it gave none). */
+type OutlineChoice = 'default' | 'stain' | 'sam0' | 'sam1' | 'sam2'
+const OUTLINE_CHOICES: OutlineChoice[] = ['default', 'stain', 'sam0', 'sam1', 'sam2']
+const OUTLINE_NAME: Record<OutlineChoice, string> = { default: 'default', stain: 'stain', sam0: 'SAM small', sam1: 'SAM medium', sam2: 'SAM large' }
+const OUTLINE_HINT: Record<OutlineChoice, string> = {
+  default: 'The outline this stain uses by default', stain: 'The outline the stain’s segmentation found each object with',
+  sam0: 'Segment Anything’s small outline (objects without one keep their stain outline)',
+  sam1: 'Segment Anything’s medium outline (objects without one keep their stain outline)',
+  sam2: 'Segment Anything’s large outline (objects without one keep their stain outline)',
+}
+const typing = (target: EventTarget | null) => {
+  const element = target as HTMLElement | null
+  return !!element && (['INPUT', 'SELECT', 'TEXTAREA'].includes(element.tagName) || element.isContentEditable)
+}
 /** AT8 neuropil threads traced on the server (the first time, a few minutes; tiles done so far meanwhile): per piece its
  *  mean width (µm) and polyline, in core-image pixels. */
 interface CoreThreads {
@@ -121,7 +136,33 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
   const outlinesMade = !!found.data?.outlines
   const [wantOutlines, setWantOutlines] = useState(false)  // fetched once asked for, kept when the layer is turned off
   useEffect(() => { if (layers.outlines) setWantOutlines(true) }, [layers.outlines])
-  const shapes = useFetch<CoreOutlines>(wantOutlines && outlinesMade ? `${base}/outlines` : null)
+  const [choice, setChoice] = useStored<OutlineChoice>('stainid.core.outline', 'default')
+  const outlineChoice: OutlineChoice = OUTLINE_CHOICES.includes(choice) ? choice : 'default'
+  const kept = useRef(new Map<string, CoreOutlines>())  // each outline choice fetched once per core and stain: switching back is instant
+  const keptKey = `${base}|${outlineChoice}`
+  const fetched = useFetch<CoreOutlines>(wantOutlines && outlinesMade && !kept.current.has(keptKey) ? `${base}/outlines?outline=${outlineChoice}` : null)
+  const fresh = fetched.data && (!fetched.data.outline || fetched.data.outline === outlineChoice) ? fetched.data : null  // the current outputs have one outline for every choice
+  if (fresh && !kept.current.has(keptKey)) kept.current.set(keptKey, fresh)
+  const current = kept.current.get(keptKey) ?? null
+  const switching = !current && !!fetched.data  // the previous choice stays on the picture until the new one is here
+  const shapes = { data: current ?? fetched.data, error: fetched.error, reload: fetched.reload }
+  const v2 = found.data?.source === 'v2'
+  const cycle = (step: number) => {
+    setChoice(OUTLINE_CHOICES[(OUTLINE_CHOICES.indexOf(outlineChoice) + step + OUTLINE_CHOICES.length) % OUTLINE_CHOICES.length])
+    if (!layers.outlines) setLayers({ ...layers, outlines: true })
+  }
+  const cycleRef = useRef(cycle)
+  cycleRef.current = cycle
+  useEffect(() => {  // Tab: the next outline for every object (Shift+Tab the previous); never while typing in a field
+    if (!v2 || !outlinesMade) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab' || e.ctrlKey || e.metaKey || e.altKey || typing(e.target)) return
+      e.preventDefault()
+      cycleRef.current(e.shiftKey ? -1 : 1)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [v2, outlinesMade])
   const threadsMeasured = found.data?.threads ?? null
   const [threadPoll, setThreadPoll] = useState(true)
   const traced = useFetch<CoreThreads>(layers.threads && threadsMeasured ? `${base}/threads` : null, threadPoll ? 3000 : undefined)
@@ -182,7 +223,16 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
             boxes={boxes} pixelUm={image?.pixel_width_um} height="auto"
             selected={pick ? drawn.indexOf(pick) : null} describe={describe} target={target}
             onPick={(i) => setSelected(i === null || i >= drawn.length ? null : drawn[i].index)} onTileError={() => setPoll(true)}
-            toolbar={<span className="small muted">Scroll to zoom · drag to move · click an object for details</span>} />
+            toolbar={<span className="row dz-toolbar-info"><span className="small muted">Scroll to zoom · drag to move · click an object for details</span>
+              {v2 && outlinesMade && layers.outlines && (
+                <label className="outline-choice small" title={`${OUTLINE_HINT[outlineChoice]}. Tab: the next outline for every object, Shift+Tab: the previous`}>
+                  <span className="badge">Outlines: {OUTLINE_NAME[outlineChoice]}</span>
+                  <select value={outlineChoice} onChange={(e) => setChoice(e.target.value as OutlineChoice)} aria-label="Outline shown for every object">
+                    {OUTLINE_CHOICES.map((c) => <option key={c} value={c}>{OUTLINE_NAME[c]}</option>)}
+                  </select>
+                  <span className="kbd">Tab</span>{switching && <span className="muted"> loading…</span>}
+                </label>
+              )}</span>} />
         ) : (
           <Preparing core={core} stain={stain} state={picture.data} error={picture.error} />
         )}

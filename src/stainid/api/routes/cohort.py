@@ -211,14 +211,19 @@ def core_objects(core_id: str, stain: str) -> dict:
 
 
 @router.get("/cores/{core_id}/{stain}/outlines")
-def core_outlines(core_id: str, stain: str, request: Request) -> Response:
+def core_outlines(core_id: str, stain: str, request: Request, outline: str = "default") -> Response:
     """The Segment Anything outline of each detection of `objects` that has one: rows of `columns`, where `x`, `y` are
     exactly that detection's position (to match them up), `area_um2` the outlined area and `rings` its polygons
     (flat [x0, y0, x1, y1, …] in core-image pixel indices). `status` is "not_made" until the step has outlined the core.
+    `outline` picks which outline of each v2 candidate (`store_view.OUTLINE_CHOICES`: default, stain, sam0, sam1, sam2;
+    `outline` in the answer says which); the current outputs have one outline per object, sent for every choice.
     Sent gzip-compressed when the browser accepts it (a busy core is ~1.5 MB of JSON, ~0.6 MB compressed)."""
+    if outline not in store_view.OUTLINE_CHOICES:
+        raise HTTPException(400, f"outline must be one of {', '.join(store_view.OUTLINE_CHOICES)}")
     state = get_state()
     if store_view.available(state.project, core_id, stain):
-        return _json({"status": "done", "columns": OUTLINE_COLUMNS, "rows": store_view.outline_rows(state.project, core_id, stain)}, request)
+        return _json({"status": "done", "columns": OUTLINE_COLUMNS, "outline": outline,
+                      "rows": store_view.outline_rows(state.project, core_id, stain, outline)}, request)
     tiles = _core_tiles(state, core_id, stain)
     made = outlines.core_outlines(state, core_id, stain, tiles) if not tiles.empty else None
     rows = []

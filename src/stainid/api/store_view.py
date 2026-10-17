@@ -52,15 +52,40 @@ def found(project, core_id: str, stain: str) -> pd.DataFrame:
                          "area_um2": frame.area_um2.round(1), "reason": frame.reason.fillna(""), "candidate_id": frame.candidate_id})
 
 
-def outline_rows(project, core_id: str, stain: str) -> list[list]:
-    """Each candidate's outline: [x, y, area µm², rings] (the default Segment Anything outline where one was kept, else the
-    candidate's own outline)."""
-    frame = candidates.read_core(project, stain, core_id, COLUMNS)
+OUTLINE_CHOICES = ("default", "stain", "sam0", "sam1", "sam2")  # which outline the core viewer draws for every candidate
+
+
+def _polygon_um2(flat: list[int], pixel_um: float) -> float:
+    xs, ys = np.asarray(flat[0::2], float) + 0.5, np.asarray(flat[1::2], float) + 0.5
+    return float(abs(np.dot(xs, np.roll(ys, -1)) - np.dot(ys, np.roll(xs, -1))) / 2) * pixel_um ** 2
+
+
+def outline_rows(project, core_id: str, stain: str, outline: str = "default") -> list[list]:
+    """Each candidate's outline: [x, y, area µm², rings]. `outline`: "default" the outline the stain draws
+    (`candidates.outline_rings`), "stain" the candidate's own outline (as the stain's segmentation found it), "sam0" /
+    "sam1" / "sam2" the small / medium / large Segment Anything output (its own area), else the candidate's own outline
+    where Segment Anything gave none."""
+    if outline not in OUTLINE_CHOICES:
+        raise ValueError(f"outline must be one of {', '.join(OUTLINE_CHOICES)}")
+    sam = outline.startswith("sam")
+    frame = candidates.read_core(project, stain, core_id, [*COLUMNS, "sam_masks"] if sam else COLUMNS)
     rows = []
     for row in frame.to_dict("records"):
-        rings = candidates.outline_rings(row)
+        area = float(row["area_um2"])
+        own = candidates.points(row.get("outline"))
+        if outline == "default":
+            rings = candidates.outline_rings(row)
+        elif outline == "stain":
+            rings = [own] if own else []
+        else:
+            masks = candidates.sam_masks(row.get("sam_masks"))
+            index = int(outline[3:])
+            chosen = masks[index] if index < len(masks) and len(masks[index]) >= 6 else []
+            rings = [chosen] if chosen else ([own] if own else [])
+            if chosen:
+                area = _polygon_um2(chosen, project.pixel_size_um)
         if rings:
-            rows.append([round(float(row["x_core"]), 1), round(float(row["y_core"]), 1), round(float(row["area_um2"]), 1), rings])
+            rows.append([round(float(row["x_core"]), 1), round(float(row["y_core"]), 1), round(area, 1), rings])
     return rows
 
 

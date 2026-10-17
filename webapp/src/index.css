@@ -616,6 +616,9 @@ button.core-cell:focus-visible { outline: 2px solid var(--accent); outline-offse
 .dz-wrap { display: grid; gap: 8px; }
 .dz-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .dz-zoom-buttons { gap: 6px; }
+.dz-toolbar-info { gap: 6px 12px; flex-wrap: wrap; }
+.outline-choice { display: inline-flex; align-items: center; gap: 6px; }
+.outline-choice select { font: inherit; padding: 2px 4px; }
 .dz-zoom { min-width: 44px; text-align: center; font-variant-numeric: tabular-nums; }
 .dz { position: relative; overflow: hidden; border-radius: 10px; background: var(--surface-0); border: 1px solid var(--border); cursor: grab; touch-action: none; user-select: none; overscroll-behavior: contain; }
 .dz.dragging { cursor: grabbing; }
@@ -1265,3 +1268,4 @@ details.side-details.compact > summary { font-weight: 500; }
   .flow-arrow.down { margin-left: 16px; }
 }
 .tutorial-coach h3 { text-transform: none; letter-spacing: 0; font-size: 1rem; color: var(--text-primary); }
+.outline-defaults { margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }

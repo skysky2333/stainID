@@ -706,10 +706,13 @@ def practice_tile(stain: str) -> str | None:
         tiles = state.labelling_tiles
         if tiles.empty:
             return None
-        ready = store_ready(stain, tiles[tiles.stain == stain])
+        tiles = tiles[tiles.stain == stain]
+        with_candidates = candidate_store.cores(state.project, stain)  # a folder listing: only these cores' fields are checked
+        first = sorted(set(tiles.core_id.astype(str)) & with_candidates)[:3]
+        ready = store_ready(stain, tiles[tiles.core_id.astype(str).isin(first)])
         best, most = None, 0
         for core_id in sorted(set(ready.core_id.astype(str)))[:3]:
-            found = candidate_store.read_core(state.project, stain, core_id)
+            found = candidate_store.read_core(state.project, stain, core_id, candidate_store.POSITIONS)  # only what is counted
             if found is None or found.empty:
                 continue
             counts = found.tile_id.value_counts()
