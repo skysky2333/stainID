@@ -24,7 +24,9 @@ export function QueuePanel() {
               <div className="row">
                 <h2 className="queue-title">Queue</h2>
                 <span className="muted small">
-                  {used.cpus}/{budget.cpus} processors · {used.gpus}/{budget.gpus} GPUs · {Math.round(used.ram_gb)}/{Math.round(budget.ram_gb)} GB in use
+                  {used.cpus} of {budget.cpus} processors · {used.gpus} of {budget.gpus} GPUs · {data.memory
+                    ? `RAM: ${Math.round(data.memory.used_gb)} of ${Math.round(data.memory.total_gb)} GB used · ${Math.round(data.memory.free_for_jobs_gb)} free for jobs`
+                    : `${Math.round(used.ram_gb)} of ${Math.round(budget.ram_gb)} GB in use`}
                 </span>
                 <span className="spacer" />
                 {data.paused_all
@@ -33,6 +35,7 @@ export function QueuePanel() {
                       Pause all background work</button>}
               </div>
               {!data.led && <div className="warning-note small">Nothing runs the queue right now: it starts again with the app or with <code>stainid jobs serve</code>.</div>}
+              {(data.alerts ?? []).map((a) => <div key={a.id} className="warning-note small">Queue watchdog: {a.text}</div>)}
               {data.paused_all && <div className="muted small">All background work is paused. Running jobs stop at their next unit boundary; their finished units are kept.</div>}
               {live.length === 0 && <div className="muted small">Nothing is running or waiting.</div>}
               {live.map((group) => (

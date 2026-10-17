@@ -56,6 +56,8 @@ def submit(request: JobRequest) -> dict:
         return jobs.describe(jobs.submit(request.workflow, request.options))
     except KeyError:
         raise HTTPException(400, f"unknown step {request.workflow}")
+    except ValueError as error:  # it could never run on this computer
+        raise HTTPException(400, str(error))
 
 
 @router.delete("/jobs/{job_id}")

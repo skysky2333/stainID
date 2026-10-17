@@ -145,6 +145,10 @@ export interface QueueClass { id: string; title: string; rank: number; jobs: Job
 export interface QueueOverview {
   classes: QueueClass[]; recent: Job[]; paused_all: boolean; led: boolean
   budget: { cpus: number; gpus: number; ram_gb: number }; used: { cpus: number; gpus: number; ram_gb: number }
+  /** the computer's memory as measured (GB), when the queue looks at it */
+  memory?: { total_gb: number; used_gb: number; app_gb: number; jobs_gb: number; free_for_jobs_gb: number } | null
+  /** jobs the watchdog reports: waiting long although what they need is (or can be made) free */
+  alerts?: { id: string; text: string }[]
 }
 /** Why a queued job has not started, with its place in the queue: "2 ahead of it · waits for a free slot". */
 export function queueText(job: Job): string {

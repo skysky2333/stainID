@@ -158,7 +158,8 @@ def test_command_line_run_holds_back_conflicting_queued_jobs_and_counts_in_the_b
     assert scheduler.store.load(scheduler.store.path(outside.id)).status == "finished"
     scheduler.refresh()
     scheduler._schedule()
-    assert scheduler.jobs[outside.id].status == "finished" and started == ["neun"]  # NeuN takes all 8 processors first
+    # the GPU is free and a light GPU job waits: it goes first (no idle GPU); NeuN needs all 8 processors and waits for room
+    assert scheduler.jobs[outside.id].status == "finished" and started == ["v2_outlines"]
 
 
 def test_command_line_runs_that_die_or_are_stopped_from_the_app(tmp_path, monkeypatch):

@@ -1,6 +1,8 @@
-"""How the queue schedules (`stainid.jobs.policy`): EASY backfill, conflict keys, job arrays, fair share, caps, sizes."""
+"""How the queue schedules: work-conserving starts, pre-emption, measured memory, conflict keys, job arrays, fair share,
+ageing, the watchdog, and that any mix of jobs drains."""
 from __future__ import annotations
 
+import random
 import time
 from pathlib import Path
 
@@ -34,27 +36,6 @@ def _project(root: Path, name: str = "study", **config):
 
 def _command(scheduler, title, klass, cpus, seconds=0.0, project=None, **needs):
     return scheduler.submit_command(["true"], "/tmp", title, klass, {"cpus": cpus, "ram_gb": 1, **needs}, project=project, time_s=seconds)
-
-
-def test_backfill_starts_small_jobs_around_a_big_one_but_never_delays_it(tmp_path, started):
-    scheduler = queue.Scheduler(tmp_path / "q", budget=queue.Budget(12, 0, 64))
-    running = _command(scheduler, "running", "pipeline", 4, 100)
-    scheduler._schedule()
-    assert started == ["running"]
-    top = _command(scheduler, "big main-study job", "pipeline", 10, 1000)
-    short = _command(scheduler, "short", "public", 2, 50)  # ends before the big job can start
-    beside = _command(scheduler, "beside", "public", 2, 500)  # long, but uses only what the big job leaves over (12 - 10)
-    long = _command(scheduler, "long", "public", 2, 500)  # long, and would take what the big job needs
-    quick = _command(scheduler, "quick", "public", 2, 30)
-    scheduler._schedule()
-    assert started == ["running", "short", "beside", "quick"]
-    assert top.status == "queued" and "expected to start in about" in top.waiting
-    assert long.status == "queued" and long.waiting.startswith("Waits so as not to delay “big main-study job”")
-    for job in (running, short, quick):  # what ends before the big job's start ended
-        job.status = "finished"
-    scheduler._schedule()
-    assert started[-1] == "big main-study job"  # it starts on time: nothing that started meanwhile is in its way
-    assert long.status == "queued" and beside.status == "running"
 
 
 def test_a_second_writer_of_the_same_outputs_waits_and_readers_and_other_cores_do_not(tmp_path, started):
@@ -160,22 +141,6 @@ def test_fair_share_takes_turns_between_projects(tmp_path, started):
     assert started == ["A0", "B0", "A1", "B1"]  # not A0-A3: the other project gets its turn
 
 
-def test_at_most_one_big_public_job_and_two_io_heavy_jobs_per_disk(tmp_path, started):
-    scheduler = queue.Scheduler(tmp_path / "q", budget=queue.Budget(64, 0, 64))
-    _command(scheduler, "big 1", "public", 2, 7200)
-    second = _command(scheduler, "big 2", "public", 2, 7200)
-    small = _command(scheduler, "small public", "public", 1, 60)
-    heavy = [_command(scheduler, f"io {n}", "pipeline", 1, 60, io="heavy") for n in range(3)]
-    for job in heavy:
-        job.cwd = str(tmp_path)  # one disk
-    scheduler._schedule()
-    assert "big 1" in started and "big 2" not in started and "small public" in started
-    assert second.waiting == "At most 1 big public datasets job at a time"
-    assert started.count("io 0") + started.count("io 1") + started.count("io 2") == 2
-    assert heavy[2].waiting == "Waits for its disk: 2 io-heavy jobs use it already"
-    assert small.status == "running"
-
-
 def test_sizes_and_estimates_come_from_resources_and_earlier_runs(tmp_path):
     scheduler = queue.Scheduler(tmp_path / "q", budget=queue.Budget(32, 2, 64))
     project = _project(tmp_path / "p")
@@ -193,3 +158,200 @@ def test_sizes_and_estimates_come_from_resources_and_earlier_runs(tmp_path):
     from stainid.jobs import policy
 
     assert policy.duration_text(120) == "2 min" and policy.duration_text(5 * 3600) == "5 h"
+
+
+def _memory(scheduler, monkeypatch, total=53.0, available=40.0, app=3.0):
+    """The scheduler looks at a computer with this memory (GB) and no GPUs used outside the queue."""
+    found = {"total_gb": total, "available_gb": available, "app_gb": app}
+    scheduler.watch_outside = True
+    monkeypatch.setattr(scheduler, "memory", lambda: found)
+    monkeypatch.setattr(scheduler, "outside", lambda: {"ram_gb": found["available_gb"], "gpus": set()})
+    return found
+
+
+def _measured(scheduler, job, gb, minutes=10):
+    job.started = time.time() - minutes * 60
+    scheduler._ram_seen[job.id] = (job.started, gb, gb)
+
+
+def test_nothing_stays_idle_while_a_job_that_fits_waits(tmp_path, started):
+    scheduler = queue.Scheduler(tmp_path / "q", budget=queue.Budget(12, 0, 64))
+    _command(scheduler, "running", "pipeline", 4, 100)
+    scheduler._schedule()
+    big = _command(scheduler, "big main-study job", "pipeline", 10, 1000)  # does not fit, and nothing lower runs to pause
+    later = [_command(scheduler, f"public {n}", "public", 2, 500) for n in range(4)]
+    scheduler._schedule()
+    assert started == ["running", "public 0", "public 1", "public 2", "public 3"]  # the free processors are used, whatever the class
+    assert big.waiting.startswith("Waits for room: needs 10 processors") and all(j.status == "running" for j in later)
+    first = next(j for j in scheduler.jobs.values() if j.title == "running")
+    first.status = "finished"  # the pipeline job ends: the big one pauses as few public jobs as make room
+    scheduler._schedule()
+    asked = [j for j in later if j.request == "preempt"]
+    assert big.status == "queued" and len(asked) == 3  # 12 processors, 4 free: 3 of the 4 public jobs (2 each) pause
+    for job in asked:
+        scheduler._ended(job, PAUSED)
+    scheduler._schedule()
+    assert big.status == "running" and started[-1] == "big main-study job"
+    assert {j.status for j in later} == {"running", "queued"} and sum(j.status == "running" for j in later) == 1
+
+
+def test_an_idle_gpu_gets_the_waiting_gpu_job_even_a_public_one(tmp_path, started):
+    scheduler = queue.Scheduler(tmp_path / "q", budget=queue.Budget(32, 2, 48))
+    _command(scheduler, "SEA-AD calibrate", "public", 8, 7200)
+    _command(scheduler, "fusion check", "models", 6, 3600)
+    _command(scheduler, "Tangle-Tracer find candidates", "public", 12, 7200, ram_gb=40)  # queued first, takes the memory
+    nuclei = scheduler.submit_command(["true"], "/tmp", "SEA-AD find nuclei", "public", {"cpus": 4, "gpus": 1, "ram_gb": 8}, time_s=7200)
+    second = scheduler.submit_command(["true"], "/tmp", "SEA-AD find nuclei 2", "public", {"cpus": 4, "gpus": 1, "ram_gb": 8}, time_s=7200)
+    scheduler._schedule()
+    assert nuclei.status == "running" and second.status == "running" and sorted(nuclei.gpus + second.gpus) == [0, 1]
+    assert [j.status for j in scheduler.jobs.values() if j.title == "Tangle-Tracer find candidates"] == ["queued"]
+
+
+def test_a_high_job_needing_memory_pauses_the_right_low_jobs_and_they_resume_afterwards(tmp_path, started, monkeypatch):
+    scheduler = queue.Scheduler(tmp_path / "q", budget=queue.Budget(32, 0, 999))
+    _memory(scheduler, monkeypatch, total=53, available=40, app=3)  # 53 - 3 - 4 headroom - 3 reserve = 43 GB for jobs
+    low = {name: _command(scheduler, name, klass, 2, ram_gb=gb) for name, klass, gb in (("public small", "public", 3), ("public large", "public", 12),
+                                                                                       ("models large", "models", 14))}
+    scheduler._schedule()
+    for name, gb in (("public small", 3), ("public large", 12), ("models large", 14)):
+        _measured(scheduler, low[name], gb)
+    scheduler._memory = (0.0, {})
+    found = scheduler.memory()
+    found["available_gb"] = 53 - 3 - 3 - 12 - 14 - 3  # what they use, measured
+    assert scheduler.current_budget().ram_gb == 43
+    main = scheduler.submit_command(["true"], "/tmp", "main study", "pipeline", {"cpus": 4, "ram_gb": 20})
+    scheduler._schedule()
+    assert main.status == "queued" and main.waiting == "Starts as soon as lower-priority work has paused"
+    assert [n for n, j in low.items() if j.request == "preempt"] == ["public large"]  # lowest class, largest holder, one pause
+    scheduler._ended(low["public large"], PAUSED)
+    found["available_gb"] += 12
+    scheduler._schedule()
+    assert main.status == "running" and low["public large"].status == "queued"
+    assert low["public small"].status == "running" and low["models large"].status == "running"
+    main.status = "finished"  # once the main study's job is done, the paused one goes on where it stopped
+    scheduler._schedule()
+    assert low["public large"].status == "running" and low["public large"].paused_by == "preempt"
+
+
+def test_memory_is_measured_so_declared_but_unused_memory_does_not_block_work(tmp_path, started, monkeypatch):
+    scheduler = queue.Scheduler(tmp_path / "q", budget=queue.Budget(32, 0, 999))
+    found = _memory(scheduler, monkeypatch, total=53, available=45, app=3)
+    checks = [scheduler.submit_command(["true"], "/tmp", f"fusion check {n}", "models", {"cpus": 2, "ram_gb": 9}) for n in range(4)]
+    scheduler._schedule()
+    assert all(j.status == "running" for j in checks)  # 36 of 43 GB declared
+    for job in checks:
+        _measured(scheduler, job, 2.0)  # they use 2 GB each
+    found["available_gb"] = 37.0
+    other = scheduler.submit_command(["true"], "/tmp", "SEA-AD calibrate", "public", {"cpus": 4, "ram_gb": 16})
+    scheduler._schedule()
+    assert other.status == "running"  # counted: 4 x 2.2 GB, not 4 x 9 GB
+    warm = scheduler.submit_command(["true"], "/tmp", "just started", "public", {"cpus": 1, "ram_gb": 8})
+    scheduler._schedule()  # available 37 - 4 headroom - 2 margin - 16 (calibrate, not measured yet) = 15 GB: it fits
+    assert warm.status == "running"
+    too_much = scheduler.submit_command(["true"], "/tmp", "one more", "public", {"cpus": 1, "ram_gb": 8})
+    scheduler._schedule()  # 15 - 8 = 7 GB left of what is available
+    assert too_much.status == "queued" and "GB of memory" in too_much.waiting
+
+
+def test_memory_pressure_pauses_the_lowest_class_jobs_at_once(tmp_path, started, monkeypatch):
+    scheduler = queue.Scheduler(tmp_path / "q", budget=queue.Budget(32, 0, 999))
+    found = _memory(scheduler, monkeypatch, total=53, available=30, app=3)
+    jobs = {name: _command(scheduler, name, klass, 2) for name, klass in (("annotation", "annotation"), ("pipeline", "pipeline"),
+                                                                          ("public a", "public"), ("public b", "public"))}
+    scheduler._schedule()
+    for name, gb in (("annotation", 2), ("pipeline", 6), ("public a", 1), ("public b", 5)):
+        _measured(scheduler, jobs[name], gb)
+    found["available_gb"], found["app_gb"] = 3.0, 14.0  # many annotators: the app grew, less than its headroom is left
+    scheduler._schedule()
+    assert [n for n, j in jobs.items() if j.request] == ["public b"]  # 3 GB short (6 - 3): the largest public job is enough
+    assert "public b" in [j.title for j in jobs.values() if j.id in scheduler._urgent]
+    scheduler._ended(jobs["public b"], PAUSED)
+    assert jobs["public b"].status == "queued" and jobs["public b"].waiting.startswith("Paused to keep memory free")
+    assert scheduler.current_budget().ram_gb == 53 - 14 - 4 - 3
+
+
+def test_jobs_that_could_never_run_or_wait_in_a_circle_are_refused(tmp_path, started):
+    scheduler = queue.Scheduler(tmp_path / "q", budget=queue.Budget(8, 1, 32))
+    with pytest.raises(ValueError, match="can never run: it needs 2 GPUs"):
+        scheduler.submit_command(["true"], "/tmp", "two GPUs", "models", {"gpus": 2})
+    with pytest.raises(ValueError, match="no job nowhere"):
+        scheduler.submit_command(["true"], "/tmp", "after nothing", "models", {"cpus": 1}, after=["nowhere"])
+    a = scheduler.submit_command(["true"], "/tmp", "a", "models", {"cpus": 1})
+    b = scheduler.submit_command(["true"], "/tmp", "b", "models", {"cpus": 1}, after=[a.id])
+    a.after = [b.id]  # a record edited by hand into a circle
+    with pytest.raises(ValueError, match="cycle"):
+        scheduler.check(queue.Job(id=a.id, workflow="command", options={}, argv=["true"], after=[b.id]))
+    c = scheduler.submit_command(["true"], "/tmp", "c", "models", {"cpus": 1}, after=[b.id])
+    a.after = []
+    scheduler._schedule()
+    scheduler._ended(a, 1)  # a fails: b and what waits for b are not started, with the reason
+    scheduler._schedule()
+    scheduler._schedule()
+    assert b.status == "skipped" and "“a” failed" in b.outcome["error"] and c.status == "skipped"
+
+
+def test_a_job_that_waited_long_goes_first_and_may_pause_newer_jobs_of_its_class(tmp_path, started):
+    scheduler = queue.Scheduler(tmp_path / "q", budget=queue.Budget(8, 0, 64))
+    big = _command(scheduler, "big", "public", 8, 3600)
+    big.created -= queue.AGE_S + 60
+    scheduler._ready_since[big.id] = time.time() - queue.AGE_S - 60  # it has waited half an hour while small ones kept coming
+    smalls = []
+    for n in range(4):
+        job = _command(scheduler, f"small {n}", "public", 2, 600)
+        smalls.append(job)
+    for job in smalls:
+        job.status, job.started = "running", time.time()  # started after the big job was queued
+    scheduler._schedule()
+    assert big.status == "queued" and sum(j.request == "preempt" for j in smalls) == 4
+    for job in smalls:
+        scheduler._ended(job, PAUSED)
+    newer = _command(scheduler, "newest small", "public", 2, 60)
+    scheduler._schedule()
+    assert big.status == "running" and newer.status == "queued"  # the old job first; the new small one waits its turn
+
+
+def test_room_being_made_is_not_taken_by_lower_jobs_and_the_watchdog_reports_a_long_wait(tmp_path, started):
+    scheduler = queue.Scheduler(tmp_path / "q", budget=queue.Budget(8, 0, 64))
+    low = _command(scheduler, "public", "public", 6, 3600)
+    scheduler._schedule()
+    main = _command(scheduler, "main", "pipeline", 8, 600)
+    scheduler._schedule()
+    assert low.request == "preempt"
+    other = _command(scheduler, "another public", "public", 2, 60)
+    scheduler._schedule()
+    assert other.status == "queued"  # the 2 free processors are the main job's while the public one stops
+    assert scheduler.overview()["alerts"] == []
+    scheduler._making_room[main.id] -= queue.WATCHDOG_S + 1  # the public job never stops
+    scheduler._schedule()
+    assert [a["id"] for a in scheduler.overview()["alerts"]] == [main.id]
+
+
+@pytest.mark.parametrize("seed", range(8))
+def test_any_mix_of_jobs_with_dependencies_drains_completely(tmp_path, started, seed):
+    rng = random.Random(seed)
+    scheduler = queue.Scheduler(tmp_path / "q", budget=queue.Budget(8, 2, 32, io_per_disk=1))
+    work, made = {}, []
+    for n in range(40):
+        after = rng.sample([j.id for j in made], k=min(len(made), rng.choice([0, 0, 1, 2])))
+        needs = {"cpus": rng.choice([0.5, 1, 2, 4, 8]), "gpus": rng.choice([0, 0, 0, 1, 2]), "ram_gb": rng.choice([1, 4, 8, 16, 32]),
+                 "io": rng.choice(["light", "heavy"])}
+        job = scheduler.submit_command(["true"], str(tmp_path), f"job {n}", rng.choice(queue.CLASSES), needs, after=after,
+                                       conflicts=[rng.choice(["x", "y", "z"])] if rng.random() < 0.3 else [], time_s=rng.choice([0, 60, 3600]))
+        made.append(job)
+        work[job.id] = rng.randint(1, 6)  # rounds of work
+    for round_ in range(3000):
+        for job in [j for j in scheduler.jobs.values() if j.status == "running"]:
+            if job.request:
+                scheduler._ended(job, PAUSED)  # stops at its unit boundary; its done work is kept
+                continue
+            work[job.id] -= 1
+            if work[job.id] <= 0:
+                scheduler._ended(job, 1 if rng.random() < 0.05 else 0)
+        scheduler._schedule()
+        if all(j.status in queue.FINAL for j in scheduler.jobs.values()):
+            break
+        if rng.random() < 0.02:  # now and then a job comes in late, of any class
+            late = scheduler.submit_command(["true"], str(tmp_path), "late", rng.choice(queue.CLASSES), {"cpus": rng.choice([1, 8]), "ram_gb": 4})
+            work[late.id] = rng.randint(1, 3)
+    states = {j.status for j in scheduler.jobs.values()}
+    assert states <= {"finished", "failed", "skipped"}, (round_, [(j.title, j.status, j.waiting) for j in scheduler.jobs.values() if j.status not in queue.FINAL])

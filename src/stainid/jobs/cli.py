@@ -105,7 +105,10 @@ def run(args, project_path: Path | None) -> None:
         return
     scheduler = Scheduler(queue_dir(), lead=False)
     if args.action == "submit":
-        _submit(scheduler, args, project_path)
+        try:
+            _submit(scheduler, args, project_path)
+        except ValueError as error:  # it could never run: refused
+            raise SystemExit(f"Not queued: {error}")
     elif args.action == "list":
         overview = scheduler.overview()
         if args.json:
@@ -114,8 +117,9 @@ def run(args, project_path: Path | None) -> None:
         print(f"Queue {scheduler.dir}: " + ("run by " + ("this process" if scheduler.leader else "the app or `stainid jobs serve`")
                                               if overview["led"] else "NOT RUNNING: start the app or `stainid jobs serve`")
               + (" · ALL BACKGROUND WORK PAUSED" if overview["paused_all"] else ""))
-        b, used = overview["budget"], overview["used"]
-        print(f"Budget: {used['cpus']:g}/{b['cpus']:g} processors, {used['gpus']}/{b['gpus']} GPUs, {used['ram_gb']:g}/{b['ram_gb']:g} GB in use")
+        print(_resources(overview))
+        for alert in overview.get("alerts") or []:
+            print(f"WARNING: {alert['text']}")
         for group in overview["classes"]:
             if group["jobs"]:
                 print(f"{group['rank']}. {group['title']}")
@@ -164,7 +168,17 @@ def run(args, project_path: Path | None) -> None:
         if any(v is not None for v in (args.cpus, args.gpus, args.ram)):
             path.write_text(json.dumps(saved, indent=1))
         b: Budget = scheduler.budget
-        print(f"{b.cpus:g} processors, {b.gpus} GPUs, {b.ram_gb:g} GB of memory for all jobs together ({path})")
+        print(f"{b.cpus:g} processors, {b.gpus} GPUs" + (f", at most {b.ram_cap:g} GB of memory" if b.ram_cap else "")
+              + f" for all jobs together, {b.io_per_disk} io-heavy jobs per disk ({path})")
+        print(_resources(scheduler.overview()))
+
+
+def _resources(overview: dict) -> str:
+    """"14 of 32 processors · 1 of 2 GPUs · RAM: 21 of 53 GB used · 26 free for jobs"."""
+    b, used, memory = overview["budget"], overview["used"], overview.get("memory")
+    ram = (f"RAM: {memory['used_gb']:.0f} of {memory['total_gb']:.0f} GB used (app {memory['app_gb']:.1f}, jobs {memory['jobs_gb']:.1f})"
+           f" · {memory['free_for_jobs_gb']:.0f} free for jobs" if memory else f"{used['ram_gb']:g} of {b['ram_gb']:g} GB")
+    return f"In use: {used['cpus']:g} of {b['cpus']:g} processors · {used['gpus']} of {b['gpus']} GPUs · {ram}"
 
 
 def _hint(scheduler) -> None:
