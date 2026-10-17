@@ -78,6 +78,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--stain", action="append")
     p.add_argument("--redo", action="store_true", help="calibrate slides again that already have a threshold")
     p.add_argument("--output", type=Path)
+    p.add_argument("--core", action="append", help="only the slides of this core image, from its tiles (repeat; a file of core ids works too)")
 
     p = sub.add_parser("nuclei", help="Cellpose-SAM nuclei for every tile")
     p.add_argument("--stain", action="append", required=True)
@@ -85,6 +86,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--batch-size", type=int, default=8)
     p.add_argument("--threads", type=int, default=4)
     p.add_argument("--workers", type=int, default=2, help="tiles in flight at once (one model); keeps the GPU busy")
+    p.add_argument("--core", action="append", help="only this core image (repeat for several; a file with one core id per line works too)")
     _shard(p)
 
     p = sub.add_parser("neun", help="NeuN neuron detection")
@@ -246,11 +248,12 @@ def run(args: argparse.Namespace, project) -> None:
     elif args.command == "calibrate":
         from stainid.workflows.calibrate import calibrate_slides
 
-        print(calibrate_slides(project, args.stain, args.redo, output=args.output))
+        print(calibrate_slides(project, args.stain, args.redo, output=args.output, cores=_cores(args.core)))
     elif args.command == "nuclei":
         from stainid.workflows.nuclei import run_nuclei
 
-        run_nuclei(project, args.stain, args.device, args.batch_size, args.threads, args.shard_index, args.shard_count, args.workers)
+        run_nuclei(project, args.stain, args.device, args.batch_size, args.threads, args.shard_index, args.shard_count, args.workers,
+                   _cores(args.core))
     elif args.command == "neun":
         from stainid.workflows.neun import follow_neun, merge_neun, run_neun
 
