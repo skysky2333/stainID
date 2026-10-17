@@ -106,45 +106,70 @@ def todo(project, stage: str, stains, cores: set[str] | None = None, redo: bool 
 
 def status(project) -> dict:
     """Per stage and stain: core images done and up to date, outdated (made, but an input, a parameter or an upstream stage
-    changed since, also when that upstream stage has not been re-run yet), and the total."""
+    changed since, also when that upstream stage has not been re-run yet), and the total. The parameters, the model and
+    the weights are looked at once per stain and the manifests read in one pass per folder (`manifest.read_all`), not
+    once per core: a project of 15 000 core images is counted in seconds."""
     from stainid.v2 import classify, outlines, proposals
+    from stainid.v2.params import stage_params
 
     out = {stage: {} for stage in ("proposals", "calls", "outlines", "candidates")}
     if not project.analysis_tiles().exists():
         return {stage: {stain: {"done": 0, "outdated": 0, "total": 0} for stain in STAINS} for stage in out}
     found = groups(project, STAINS)
     calibration, manual, nuclei = proposal_inputs(project, fresh=False)
+    sam = manifest.file_signature(project.model("sam"))
     for stain in STAINS:
         keys = sorted(core for core, s in found if s == stain)
         recorded = {stage: manifest.read_all(project, stage, stain) for stage in out}
-        model = None
+        settings = {stage: stage_params(project, stage, stain) for stage in out} if keys else {}
+        model, model_looked = None, False
         counts = {stage: {"done": 0, "outdated": 0, "total": len(keys)} for stage in out}
         for core in keys:
             tiles = found[(core, stain)]
             threshold = calibration.get((tiles[0]["tma"], stain))
+            mine_all = {stage: recorded[stage].get(core) for stage in out}
             stale = False
             for stage in ("proposals", "calls", "outlines", "candidates"):
-                mine = recorded[stage].get(core)
+                mine = mine_all[stage]
                 if mine is None:
                     if stage != "outlines":
                         stale = True  # what depends on a missing stage is not up to date either
                     continue
                 if stage == "proposals":
                     made = None if threshold is None else proposals.expected(project, stain, core, tiles, threshold,
-                                                                              manual.get(tiles[0]["image_path"], []), nuclei)
+                                                                              manual.get(tiles[0]["image_path"], []), nuclei, settings[stage])
                 elif stage == "calls":
-                    if model is None and project.model(classify.MODEL_KEY[stain]).exists():
-                        model = classify.load_model(project, stain)
-                    made = classify.expected(project, stain, core, model) if model is not None else None
+                    if not model_looked:
+                        model_looked = True
+                        model = classify.load_model(project, stain) if project.model(classify.MODEL_KEY[stain]).exists() else None
+                    made = classify.expected(project, stain, core, model, settings[stage], mine_all["proposals"]) if model is not None else None
                 elif stage == "outlines":
-                    made = outlines.expected(project, stain, core)
+                    made = outlines.expected(project, stain, core, settings[stage], mine_all["proposals"], mine_all["calls"], sam)
                 else:
-                    made = classify.assembled_expected(project, stain, core)
+                    made = classify.assembled_expected(project, stain, core, settings[stage], mine_all)
                 stale = stale or made is None or not manifest.up_to_date(mine, made)
                 counts[stage]["outdated" if stale else "done"] += 1
         for stage in out:
             out[stage][stain] = counts[stage]
     return out
+
+
+def status_inputs(project) -> list:
+    """What `status` is made from, for keeping it until one of them changes: every manifest folder, the tiles, the slide
+    thresholds, the hand-drawn exclusions, the settings, the models and the Segment Anything weights."""
+    from stainid.v2 import classify
+
+    folders = [manifest.root(project) / "manifests" / stage / stain for stage in manifest.STAGES for stain in STAINS]
+    models = [project.model(key) for key in sorted(set(classify.MODEL_KEY.values()))] + [project.model("sam")]
+    config = project.config_file
+    return [*folders, project.analysis_tiles(), project.input("calibration"), project.input("manual_exclusions"), config, *models,
+            project.output("nuclei")]
+
+
+def cached_status(project) -> dict:
+    """`status`, made once while its inputs stay the same (looked at no more often than every 10 s while it is slow to
+    make); parallel callers wait for the one making it."""
+    return cache.memo(("v2 status", str(project.root)), status_inputs(project), lambda: status(project), every=10.0, folders=True)
 
 
 # ---------------------------------------------------------------- stage 2

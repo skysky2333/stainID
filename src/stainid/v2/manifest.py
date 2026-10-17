@@ -19,6 +19,7 @@ from stainid.tables import write_text_atomic
 from stainid.v2.params import digest as params_digest
 
 # Bump a stage's version when its code changes what it writes: every output of that stage becomes outdated.
+READ = object()  # "read the manifest from its file": the default of the `expected` functions' known-manifest arguments
 VERSIONS = {"proposals": 3, "outlines": 2, "calls": 2, "candidates": 2}
 STAGES = ("proposals", "outlines", "calls", "candidates")
 
@@ -81,13 +82,36 @@ def read_all(project, stage: str, stain: str) -> dict[str, dict]:
     folder = root(project) / "manifests" / stage / stain
 
     def load() -> dict[str, dict]:
-        out = {}
-        for name in cache.names(folder, every=0):
-            if name.endswith(".json"):
+        """Read again only the manifests that changed since the last look (a running stage adds one per core)."""
+        kept = _FILES.setdefault(str(folder), {})
+        out, seen = {}, set()
+        try:
+            entries = list(os.scandir(folder))
+        except (FileNotFoundError, NotADirectoryError):
+            entries = []
+        for entry in entries:
+            name = entry.name
+            if not name.endswith(".json"):
+                continue
+            try:
+                stat = entry.stat()
+            except OSError:
+                continue
+            seen.add(name)
+            signature = (stat.st_mtime_ns, stat.st_size)
+            known = kept.get(name)
+            if known is None or known[0] != signature:
                 try:
-                    out[name[:-5]] = json.loads((folder / name).read_text())
+                    known = (signature, json.loads(Path(entry.path).read_text()))
                 except (OSError, ValueError):
                     continue
+                kept[name] = known
+            out[name[:-5]] = known[1]
+        for name in set(kept) - seen:
+            del kept[name]
         return out
 
     return cache.memo(("v2 manifests", str(folder)), [folder], load, folders=True)
+
+
+_FILES: dict[str, dict[str, tuple[tuple[int, int], dict]]] = {}  # folder -> file name -> (its mtime and size, its manifest)
