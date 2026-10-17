@@ -167,7 +167,7 @@ def session_progress(meta: dict, labels: pd.DataFrame) -> dict:
 
 
 def prepare_job(stain: str, fields: int = 0, session: str = "") -> None:
-    get_state().jobs.submit("prepare_labels", {"stain": stain, "fields": fields, "session": session})
+    get_state().jobs.submit("prepare_labels", {"stain": stain, "fields": fields, "session": session}, owner=session or stain)  # turns per session
 
 
 _MEASURING: dict[tuple[str, str], bool] = {}  # (project, stain) being measured -> another round was asked for meanwhile

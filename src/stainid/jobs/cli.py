@@ -18,6 +18,8 @@ import sys
 import time
 from pathlib import Path
 
+from stainid.jobs import policy
+
 
 def add_parser(sub) -> None:
     p = sub.add_parser("jobs", help="the shared job queue: submit, list, pause, resume, cancel, reorder; `jobs serve` runs it")
@@ -35,6 +37,14 @@ def add_parser(sub) -> None:
     s.add_argument("--grace", type=float, default=0.0, help="seconds it gets to reach a unit boundary when paused (default: its class's)")
     s.add_argument("--env", action="append", default=[], metavar="KEY=VALUE", help="extra environment for the command")
     s.add_argument("--after", action="append", default=[], metavar="ID", help="start only once this job has finished (repeat for several)")
+    s.add_argument("--time", default="", metavar="DURATION", help="how long it is expected to take (e.g. 90s, 20m, 5h): its size and backfill")
+    s.add_argument("--conflict", action="append", default=[], metavar="KEY",
+                   help="never run at the same time as another job with this key (e.g. what both write)")
+    s.add_argument("--io", choices=("light", "heavy"), default=None, help="io-heavy jobs are limited per disk (default: from the step)")
+    s.add_argument("--owner", default="", help="who asked for it (annotation work takes turns between people)")
+    array = s.add_mutually_exclusive_group()
+    array.add_argument("--array", default=None, metavar="tma|N", help="split a step over many core images into chunks: per TMA or per N core images")
+    array.add_argument("--no-array", action="store_true", help="run a big step as one job instead of an array of chunks")
     s.add_argument("--id-only", action="store_true", help="print only the new job's id (for scripts: --after $(...))")
     s.add_argument("words", nargs=argparse.REMAINDER)
     p_list = actions.add_parser("list", help="the queue by priority class (with --all also what ended in the last day)")
@@ -71,7 +81,8 @@ def _line(info: dict) -> str:
     done = f"{progress.get('done', 0)}/{progress.get('total', 0)}" if progress.get("total") else ""
     state = info["status"] + (f" ({info['stopping']}ing)" if info.get("stopping") else "")
     where = f"#{info['queue']['position']}" if info.get("queue") else ""
-    eta = f"~{_duration(info['eta_s'])} left" if info.get("eta_s") else ""
+    took = policy.duration_text(info.get("estimate_s"))
+    eta = f"~{_duration(info['eta_s'])} left" if info.get("eta_s") else f"{info.get('size', '')}{' ~' + took if took else ''}"
     note = info.get("waiting") or ""
     return f"  {info['id']}  {state:<12} {where:<4} {info['title'][:34]:<34} {info.get('project_name', '')[:28]:<28} {done:<10} {eta:<12} {note}"
 
@@ -181,13 +192,17 @@ def _submit(scheduler, args, project_path: Path | None) -> None:
     needs = {k: v for k, v in (("cpus", args.cpus), ("gpus", args.gpus), ("ram_gb", args.ram)) if v is not None}
     if args.network:
         needs["network"] = True
+    if args.io:
+        needs["io"] = args.io
+    time_s = _seconds(args.time)
     env = dict(item.split("=", 1) for item in args.env if "=" in item)
     if args.exec:
         cwd = args.cwd or (str(project.root) if project is not None else os.getcwd())
         from stainid.jobs.queue import class_of
 
         klass = args.klass or (class_of(project, "command") if project is not None else "pipeline")  # a public dataset's: public
-        job = scheduler.submit_command(words, cwd, args.title or " ".join(words)[:60], klass, needs, project, env, args.grace, args.after)
+        job = scheduler.submit_command(words, cwd, args.title or " ".join(words)[:60], klass, needs, project, env, args.grace, args.after,
+                                       time_s, args.conflict, args.owner)
     else:
         from stainid.cli import _workflow_step, build_parser
 
@@ -195,18 +210,17 @@ def _submit(scheduler, args, project_path: Path | None) -> None:
         if step is not None and not env and not args.grace:
             parsed = build_parser().parse_args(["--project", str(project.root), *words])
             options = {o.key: o.default if getattr(parsed, o.key, None) is None else getattr(parsed, o.key) for o in step.options}
+            array = False if args.no_array else (int(args.array) if (args.array or "").isdigit() else args.array)
             job = scheduler.submit_step(project, step.id, options, args.klass, {**_step_needs(step.id, options), **needs} if needs else None,
-                                        argv=words, after=args.after)
-            if args.title:
-                job.title = args.title
-                scheduler.store.save(job)
+                                        argv=words, after=args.after, array=array, time_s=time_s, owner=args.owner, conflicts=args.conflict,
+                                        title=args.title)
         else:
             from stainid.jobs.queue import class_of
 
             command = [sys.executable, "-u", "-m", "stainid.cli", "--project", str(project.root), *words]
             klass = args.klass or (class_of(project, step.id) if step is not None else class_of(project, "command"))
             job = scheduler.submit_command(command, str(project.root), args.title or f"stainid {' '.join(words)}"[:60], klass, needs, project,
-                                           env, args.grace, args.after)
+                                           env, args.grace, args.after, time_s, args.conflict, args.owner)
             if step is not None:
                 job.workflow = step.id
                 scheduler.store.save(job)
@@ -214,8 +228,26 @@ def _submit(scheduler, args, project_path: Path | None) -> None:
         print(job.id)
         return
     info = scheduler.describe(job)
-    print(f"Queued {job.id} ({info['class_title']}, place {info['queue']['position']} of {info['queue']['in_class']}): {info['title']}")
+    took = policy.duration_text(info["estimate_s"])
+    parts = f", an array of {len(job.children)} chunks" if job.children else ""
+    print(f"Queued {job.id} ({info['class_title']}, place {info['queue']['position']} of {info['queue']['in_class']}{parts}, "
+          f"{info['size']}{' · ~' + took if took else ''}): {info['title']}")
     _hint(scheduler)
+
+
+def _seconds(text: str) -> float:
+    """"90s", "20m", "5h", "1h30m" or a number of seconds."""
+    import re
+
+    text = (text or "").strip().lower()
+    if not text:
+        return 0.0
+    if re.fullmatch(r"[\d.]+", text):
+        return float(text)
+    parts = re.findall(r"([\d.]+)\s*([hms])", text)
+    if not parts:
+        raise SystemExit(f"--time: cannot read {text!r} (e.g. 90s, 20m, 5h)")
+    return sum(float(v) * {"h": 3600, "m": 60, "s": 1}[u] for v, u in parts)
 
 
 def _step_needs(workflow: str, options: dict) -> dict:
