@@ -360,9 +360,10 @@ def _plain_mask(project):
     cv2.imwrite(str(target), bits)
 
 
-def test_brush_edits_resolve_into_one_layer_that_scoring_follows(rounds_project):
-    """Each Save of the brush is one edit of the core's resolved layer: painting keeps the objects there out of everyone's
-    scoring, a later clear (also over detection's fold) counts them again, and both views draw the same pixels."""
+def test_brush_edits_are_people_s_areas_that_scoring_follows_and_the_views_draw_apart(rounds_project):
+    """Each Save of the brush is one edit of people's areas: painting keeps the objects there out of everyone's scoring
+    and training, a later clear (also over detection's fold) counts them again; the analysis' layer (detection's areas,
+    drawn as "Excluded from analysis" in both views, the same pixels) never changes, and people's areas are drawn apart."""
     import cv2
 
     from stainid import exclusions
@@ -397,7 +398,7 @@ def test_brush_edits_resolve_into_one_layer_that_scoring_follows(rounds_project)
     assert len(exclusions.edits(project, "LIP-1_B-2", "6E10")) == 2
     assert _save(ann, name, TILE, [{"task": "exclude", "pngs": {"9": _png((1, 2, 1, 2))}, "scale": 4}]).status_code == 400  # an unknown type
 
-    # the annotation view and the Cores view draw the same resolved pixels
+    # the annotation view and the Cores view draw the same automatic pixels; people's areas come apart
     info = ann.get(f"/api/annotate/{name}/fields/{TILE}/excluded").json()
     core = admin.get("/api/cores/LIP-1_B-2/6E10/excluded").json()
     assert info["status"] == core["status"] == "done" and info["version"] == core["version"]
@@ -406,12 +407,19 @@ def test_brush_edits_resolve_into_one_layer_that_scoring_follows(rounds_project)
     x0, y0 = 300 - project.context_px, 300 - project.context_px
     r0, c0 = (y0 + info["y"]) // 8, (x0 + info["x"]) // 8
     assert (part == whole[r0:r0 + part.shape[0], c0:c0 + part.shape[1]]).all()
-    layer = exclusions.resolved(project, "LIP-1_B-2", "6E10")
+    auto = exclusions.automatic(project, "LIP-1_B-2", "6E10")
+    final = exclusions.final_say(project, "LIP-1_B-2", "6E10")
     cell = ((y0 + 228) // 8, (x0 + 228) // 8)
-    assert layer.codes[cell] == 4 and part[cell[0] - r0, cell[1] - c0, 3] > 0  # painted: drawn
+    assert auto.codes[cell] == 1 and final.codes[cell] == 4 and part[cell[0] - r0, cell[1] - c0, 3] > 0  # the fold stays excluded from analysis
     cleared_cell = ((y0 + 228) // 8, (x0 + 300) // 8)
-    assert layer.codes[cleared_cell] == 0 and part[cleared_cell[0] - r0, cleared_cell[1] - c0, 3] == 0  # the cleared fold: gone, not drawn as "cleared"
-    assert {k["id"] for k in core["kinds"]} >= {"fold", "focus"} and "cleared" not in {k["id"] for k in core["kinds"]}
+    assert auto.codes[cleared_cell] == 1 and final.codes[cleared_cell] == 0 and part[cleared_cell[0] - r0, cleared_cell[1] - c0, 3] > 0
+    assert {k["id"] for k in core["kinds"] if k["fraction"]} == {"fold"}  # people's "focus" area is not in the analysis layer
+    people = ann.get(f"/api/annotate/{name}/fields/{TILE}/annotated").json()
+    assert {r["kind"] for r in people["regions"]} == {"4", "include"} and people["agreement"]["cleared_auto_cells"] > 0
+    ring = people["regions"][0]["rings"][0]
+    assert all(-200 < x < 1000 and -200 < y < 1000 for x, y in ring)  # field-picture pixels
+    layer = admin.get("/api/cores/LIP-1_B-2/6E10/annotations").json()["areas"]
+    assert {r["kind"] for r in layer["regions"]} == {"4", "include"}  # the Cores view's Annotations layer: core pixels
 
 
 def test_a_fix_the_field_session_takes_every_remaining_field_by_default(rounds_project):

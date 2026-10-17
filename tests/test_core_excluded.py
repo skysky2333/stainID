@@ -99,6 +99,6 @@ def test_tissue_in_no_tile_is_drawn_as_not_analysed(client, synthetic_project, m
     monkeypatch.setattr(exclusions, "_tissue", lambda project, image, shape: tissue if shape in (None, (20, 20)) else None)
     shown = exclusions.view(project, CORE, "AT8")
     assert (shown.codes[:, 19] == exclusions.NOT_ANALYSED).all() and shown.codes[12, 18] == 0
-    assert exclusions.resolved(project, CORE, "AT8").codes[5, 19] == exclusions.OUTSIDE  # the analysis' layer is unchanged
+    assert exclusions.automatic(project, CORE, "AT8").codes[5, 19] == exclusions.OUTSIDE  # the analysis layer itself is unchanged
     info = client.get(f"/api/cores/{CORE}/AT8/excluded").json()
     assert {k["id"]: k["fraction"] for k in info["kinds"]}["not_analysed"] == round(20 / (20 * 19 + 20), 4)
