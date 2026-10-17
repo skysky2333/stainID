@@ -38,7 +38,7 @@ def steps():
     active: dict[str, list[dict]] = {}
     for job in sorted(state.jobs.jobs.values(), key=lambda j: j.created):
         latest[job.workflow] = info = state.jobs.describe(job)
-        if job.status in ACTIVE:
+        if job.status in (*ACTIVE, "paused"):
             active.setdefault(job.workflow, []).append(info)
     return [{**step, "job": latest.get(step["id"]), "active": active.get(step["id"], [])} for step in found]
 
@@ -61,7 +61,51 @@ def submit(request: JobRequest) -> dict:
 @router.delete("/jobs/{job_id}")
 def cancel(job_id: str) -> dict:
     jobs = get_state().jobs
-    return jobs.describe(jobs.cancel(job_id))
+    try:
+        return jobs.describe(jobs.cancel(job_id))
+    except KeyError:
+        raise HTTPException(404, "no such job")
+
+
+class JobAction(BaseModel):
+    where: str = "up"  # move: up, down or top
+    klass: str = ""  # class: the priority class
+
+
+@router.post("/jobs/{job_id}/{action}")
+def act(job_id: str, action: str, body: JobAction | None = None) -> dict:
+    """Pause (at the next unit boundary), resume, cancel, move (up / down / top within its class) or reclass a job of
+    any project in the shared queue."""
+    from stainid.jobs import queue
+
+    if action not in ("pause", "resume", "cancel", "move", "class"):
+        raise HTTPException(404, f"unknown action {action}")
+    scheduler = queue.shared()
+    if job_id not in scheduler.jobs:
+        raise HTTPException(404, "no such job")
+    body = body or JobAction()
+    scheduler.request(action, job_id, where=body.where, klass=body.klass)
+    return scheduler.describe(scheduler.jobs[job_id])
+
+
+@router.get("/queue")
+def queue_overview() -> dict:
+    """The shared queue of every project, by priority class, with the budget and what is in use."""
+    from stainid.jobs import queue
+
+    return queue.shared().overview()
+
+
+@router.post("/queue/{action}")
+def queue_action(action: str) -> dict:
+    """Pause all background work (each running job stops at its next unit boundary, nothing new starts) or resume it."""
+    from stainid.jobs import queue
+
+    if action not in ("pause-all", "resume-all"):
+        raise HTTPException(404, f"unknown action {action}")
+    scheduler = queue.shared()
+    scheduler.request(action.replace("-", "_"))
+    return scheduler.overview()
 
 
 @router.get("/jobs/{job_id}/log", response_class=PlainTextResponse)

@@ -154,6 +154,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("download-models", help="download the public model weights (Cellpose-SAM, SAM, Phikon)")
     p.add_argument("--which", action="append", choices=("cellpose", "sam", "huggingface_home"))
 
+    from stainid.jobs.cli import add_parser as add_jobs
+
+    add_jobs(sub)
     p = sub.add_parser("serve", help="start the web app")
     p.add_argument("--host", default="0.0.0.0", help="0.0.0.0 (default) lets other computers reach the annotation pages; 127.0.0.1 keeps it on this computer")
     p.add_argument("--port", type=int, default=8765)
@@ -191,6 +194,11 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "serve":
         serve(args)
         return
+    if args.command == "jobs":
+        from stainid.jobs.cli import run as jobs
+
+        jobs(args, args.project)
+        return
     if args.command == "package":
         from stainid.imageset.package import create_project
 
@@ -204,7 +212,9 @@ def main(argv: list[str] | None = None) -> None:
         run(args, project)
         return
     options = {o.key: o.default if getattr(args, o.key, None) is None else getattr(args, o.key) for o in step.options}
-    with command_line_job(JobStore(project.output("jobs")), step.id, options, words):
+    from stainid.jobs.queue import queue_dir
+
+    with command_line_job(JobStore(queue_dir()), step.id, options, words, project):
         run(args, project)
 
 

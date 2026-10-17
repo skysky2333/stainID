@@ -12,14 +12,17 @@ import yaml
 
 @pytest.fixture(autouse=True)
 def own_app_settings(tmp_path_factory, monkeypatch):
-    """Every test gets its own app settings (projects list, password, secret) and its own server-wide heavy-step slots,
+    """Every test gets its own app settings (projects list, password, secret) and its own job queue,
     so no test reads this computer's ~/.stainid or sees another test's jobs; open projects are closed afterwards."""
-    from stainid.api import jobs, registry
+    from stainid.api import registry
+    from stainid.jobs import queue
 
     monkeypatch.setattr(registry, "SETTINGS", tmp_path_factory.mktemp("home") / "app.json")
-    monkeypatch.setattr(jobs, "SLOTS", jobs.HeavySlots())
+    monkeypatch.setenv(queue.QUEUE_ENV, str(tmp_path_factory.mktemp("queue")))  # its own job queue, run as plain processes
+    monkeypatch.setenv(queue.LAUNCHER_ENV, "process")
     monkeypatch.delenv(registry.PROJECTS_DIR_ENV, raising=False)
     yield
+    queue.reset()
     try:
         from stainid.api import state
     except ImportError:  # pragma: no cover - without the app extra

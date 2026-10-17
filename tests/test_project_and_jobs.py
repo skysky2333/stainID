@@ -49,42 +49,46 @@ def test_save_project_writes_only_changes(tmp_path):
     assert project.tma_name("3") == "TMA-3"
 
 
-def test_queue_respects_step_order_and_heavy_slots(tmp_path, monkeypatch):
-    from stainid.api import jobs
+def _queue(tmp_path, monkeypatch, budget=None):
+    from stainid.jobs import queue
 
-    started = []
-    monkeypatch.setattr(jobs.JobManager, "_start", lambda self, job: (started.append(job.workflow), setattr(job, "status", "running")))
-    monkeypatch.setattr(jobs.JobManager, "_loop", lambda self: None)
-    monkeypatch.setattr(jobs.JobManager, "_missing", lambda self, step: "")
-    manager = jobs.JobManager(tmp_path, tmp_path / "jobs", max_heavy=2)
-    nuclei, neun, fields, masks = (manager.submit(step, {}) for step in ("nuclei", "neun", "fields", "masks"))
+    (tmp_path / "stainid.yaml").write_text("name: t\n")
+    monkeypatch.setattr(queue.Scheduler, "_start", lambda self, job, gpus: (setattr(job, "status", "running"), setattr(job, "gpus", gpus)))
+    scheduler = queue.Scheduler(tmp_path / "queue", budget=budget or queue.Budget(32, 2, 32))
+    return scheduler, load_project(tmp_path)
+
+
+def test_queue_respects_step_order_and_the_budget(tmp_path, monkeypatch):
+    from stainid.jobs import queue
+
+    scheduler, project = _queue(tmp_path, monkeypatch, queue.Budget(8, 1, 32))
+    monkeypatch.setattr(queue.Scheduler, "_missing", lambda self, job, step: "")
+    nuclei, neun, fields, masks = (scheduler.submit_step(project, step, {}) for step in ("nuclei", "neun", "fields", "masks"))
     for job, when in zip((nuclei, neun, fields, masks), range(4)):
-        job.created = when
-    manager._schedule()
-    assert started == ["nuclei"]
+        job.created = job.order = when
+    scheduler._schedule()
+    assert [j.status for j in (nuclei, neun, fields, masks)] == ["running", "queued", "queued", "queued"]
     assert "Find nuclei" in neun.waiting and "Find nuclei" in fields.waiting and "Nuclei" in fields.waiting
+    assert nuclei.gpus == [0]
     nuclei.status = "finished"
-    manager._schedule()
-    assert started == ["nuclei", "neun", "fields"] and masks.status == "queued" and "Detect NeuN" in masks.waiting
+    scheduler._schedule()  # NeuN takes all 8 processors: plaques and tau wait for room, the outlines for NeuN
+    assert neun.status == "running" and fields.status == "queued" and "processors" in fields.waiting
+    assert masks.status == "queued" and "Detect NeuN" in masks.waiting
 
 
 def test_failed_step_skips_what_waits_for_it_and_missing_inputs_are_reported(tmp_path, monkeypatch):
-    from stainid.api import jobs
-
-    monkeypatch.setattr(jobs.JobManager, "_start", lambda self, job: setattr(job, "status", "running"))
-    monkeypatch.setattr(jobs.JobManager, "_loop", lambda self: None)
-    manager = jobs.JobManager(tmp_path, tmp_path / "jobs")
-    export, qc, tiles, summarize = (manager.submit(step, {}) for step in ("export", "qc", "tiles", "summarize"))
+    scheduler, project = _queue(tmp_path, monkeypatch)
+    export, qc, tiles, summarize = (scheduler.submit_step(project, step, {}) for step in ("export", "qc", "tiles", "summarize"))
     for job, when in zip((export, qc, tiles, summarize), range(4)):
-        job.created = when
-    manager._schedule()
+        job.created = job.order = when
+    scheduler._schedule()
     assert export.status == "skipped" and "Core table" in export.outcome["error"] and "Find cores" in export.outcome["error"]
     assert qc.status == tiles.status == "skipped" and "Export cores" in qc.outcome["error"]
     assert summarize.status == "running"
 
-    calibrate, neun, nuclei = manager.submit("calibrate", {}), manager.submit("neun", {}), manager.submit("nuclei", {})
+    calibrate, neun, nuclei = (scheduler.submit_step(project, step, {}) for step in ("calibrate", "neun", "nuclei"))
     calibrate.created, neun.created, nuclei.created, calibrate.status = 10, 11, 12, "running"
-    manager._finish(calibrate, 1)
+    scheduler._ended(calibrate, 1)
     assert calibrate.status == "failed" and neun.status == "skipped" and "Calibrate stain thresholds” failed" in neun.outcome["error"]
     assert nuclei.status == "queued"
 

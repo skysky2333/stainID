@@ -85,7 +85,7 @@ def _steps():
 
 
 def _remaining(steps: list[dict]) -> list[dict]:
-    busy = {s["id"] for s in steps if s.get("job") and s["job"]["status"] in ("running", "queued")}
+    busy = {s["id"] for s in steps if s.get("job") and s["job"]["status"] in ("running", "queued", "paused")}
     return [s for s in steps if s["stage"] in MAIN and s["command"] and s["id"] not in busy
             and (s["progress"]["state"] != "done" or s["progress"].get("outdated"))]
 

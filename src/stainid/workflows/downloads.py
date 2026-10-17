@@ -5,6 +5,7 @@ import os
 import urllib.request
 from pathlib import Path
 
+from stainid.jobs import units
 from stainid.project import Project
 
 URLS = {
@@ -15,17 +16,32 @@ PUBLIC = ("cellpose", "sam", "huggingface_home")
 
 
 def _fetch(url: str, target: Path) -> None:
+    """Download `url` to `target` through `<target>.part`, which a new run continues (an HTTP range request) after a
+    pause, a restart or a broken connection; the file appears under its name only once it is whole."""
     target.parent.mkdir(parents=True, exist_ok=True)
     partial = target.with_name(target.name + ".part")
-    with urllib.request.urlopen(url) as response, partial.open("wb") as handle:
-        total, done, shown = int(response.headers.get("Content-Length", 0)), 0, -1
-        while chunk := response.read(1 << 20):
-            handle.write(chunk)
-            done += len(chunk)
-            percent = int(100 * done / total) if total else 0
-            if percent != shown and percent % 5 == 0:
-                print(f"[{percent}/100] {target.name}: {done / 1e6:.0f} MB", flush=True)
-                shown = percent
+    have = partial.stat().st_size if partial.exists() else 0
+    request = urllib.request.Request(url, headers={"Range": f"bytes={have}-"} if have else {})
+    with urllib.request.urlopen(request) as response:
+        resumed = have and response.status == 206
+        if have and not resumed:
+            print(f"{target.name}: the server cannot continue a partial download; starting again", flush=True)
+        done = have if resumed else 0
+        total = done + int(response.headers.get("Content-Length", 0))
+        if resumed:
+            print(f"{target.name}: continuing after {done / 1e6:.0f} MB", flush=True)
+        shown = -1
+        with partial.open("ab" if resumed else "wb") as handle:
+            while chunk := response.read(1 << 20):
+                handle.write(chunk)
+                done += len(chunk)
+                percent = int(100 * done / total) if total else 0
+                if percent != shown and percent % 5 == 0:
+                    print(f"[{percent}/100] {target.name}: {done / 1e6:.0f} MB", flush=True)
+                    shown = percent
+                if units.stopping():
+                    handle.flush()
+                    units.boundary(f"{target.name}: {done / 1e6:.0f} MB kept")
     partial.rename(target)
 
 

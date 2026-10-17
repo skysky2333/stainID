@@ -16,7 +16,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from stainid.api import jobs as job_queue
 from stainid.api import state
 from stainid.api.routes import analysis, annotate, cohort, images, imageset, jobs, models, project, projects, session, setup, slides
 from stainid.api.routes import cache as cache_routes
@@ -53,7 +52,10 @@ REQUEST_THREADS = 64  # requests answered at once (sync routes run on threads; s
 async def _lifespan(app: FastAPI):
     import anyio.to_thread  # noqa: PLC0415
 
+    from stainid.jobs import queue  # noqa: PLC0415
+
     anyio.to_thread.current_default_thread_limiter().total_tokens = REQUEST_THREADS
+    queue.shared().start_thread()  # the shared job queue runs here unless `stainid jobs serve` (or another app) runs it
     yield
 
 
@@ -61,7 +63,6 @@ def create_app() -> FastAPI:
     app = FastAPI(title="stainID", version="2.0", docs_url=None, redoc_url=None, openapi_url=None, lifespan=_lifespan)
     for module in (projects, project, slides, setup, imageset, cohort, images, jobs, analysis, models, session, annotate, cache_routes, label_classes, outline_routes, round_routes):
         app.include_router(module.router, prefix="/api")
-    job_queue.SLOTS.elsewhere = state.running_elsewhere  # heavy steps of known projects that are not open count too
 
     @app.exception_handler(state.UnknownProject)
     async def unknown_project(request: Request, error: state.UnknownProject) -> JSONResponse:

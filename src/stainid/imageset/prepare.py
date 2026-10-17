@@ -198,7 +198,10 @@ def prepare_images(project: Project, tile_size: int = 2048, log=print) -> list[P
     write_records(project.input("core_images"), cores)
     links = [project.root / c["image_path"] for c in cores if core_images.is_link(c["image_path"])]
     if settings.rescale_mode(project) == "on_import" and links:
+        from stainid.jobs import units
+
         for number, link in enumerate(links, start=1):
+            units.boundary(f"{number - 1} pictures made")  # a picture made is kept: a new run makes only the others
             core_images.prepare(link)
             if number % 25 == 0 or number == len(links):
                 log(f"[{number}/{len(links)}] pictures made at the analysis scale", flush=True)

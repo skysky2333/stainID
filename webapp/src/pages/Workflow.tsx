@@ -6,6 +6,7 @@ import { CommandLineTag, Empty, ErrorNote, FilePicker, HelpBox, Loaded, OptionFi
 import { useFetch } from '../hooks'
 import { LEGACY_STAGE, MAIN_STAGES, OPTIONAL, PipelineMap, STAGE, duration, groupState, isActive, runFacts, stepState, stopJobs } from '../pipeline'
 import { useProject } from '../project'
+import { QueuePanel } from '../queue/QueuePanel'
 import { Advanced } from '../setup/parts'
 import { SlideTable, slideProblems } from '../slides'
 
@@ -43,10 +44,11 @@ export default function Workflow() {
               </div>}
             </section>
             <RunSummary steps={list} setup={setup.data} onChanged={refresh} />
+            <QueuePanel />
             <HelpBox id="workflow">
               <ul>
                 <li><b>Run what’s left</b> starts every step that is not done yet, in the right order. Or open a step and press <b>Run</b> on it alone.</li>
-                <li>Steps can be stopped and run again: they continue where they stopped and skip what is finished.</li>
+                <li>Every job waits in one queue for the whole computer, highest priority first (annotation, this study, models, public datasets, downloads). Pause a job and it stops after the unit it is on; Resume continues from there.</li>
                 <li>Click a step in the flow chart, or open it below, to see what it needs and makes, its options and its log. Technical options are under <b>Advanced</b>.</li>
               </ul>
             </HelpBox>
@@ -466,7 +468,7 @@ const PAGE = 20
 function jobFacts(job: Job): string {
   const { done, total } = job.progress
   const took = job.started && job.ended ? ` · took ${duration(job.ended - job.started)}` : ''
-  if (job.status === 'queued') return queueText(job)
+  if (job.status === 'queued' || job.status === 'paused') return queueText(job)
   if (job.status === 'failed' || job.status === 'skipped') return job.progress.error || 'See the log'
   if (job.status === 'running') return total ? `${done.toLocaleString()} of ${total.toLocaleString()} done` : 'Starting…'
   return (total ? `${done.toLocaleString()} of ${total.toLocaleString()} done` : '') + took

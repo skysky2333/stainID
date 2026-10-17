@@ -10,6 +10,7 @@ from pathlib import Path
 from PIL import Image
 
 from stainid.imaging.core_images import open_image
+from stainid.jobs import units
 from stainid.nuclei import CELLPOSE_SETTINGS, cellpose_masks, load_cellpose
 from stainid.pipelines.cohort_v1 import context_crop
 from stainid.project import Project
@@ -50,7 +51,7 @@ def run_nuclei(project: Project, stains: list[str], device: str = "mps", batch_s
     images, finished = CoreImages(), itertools.count(1)
 
     def segment(row: dict) -> None:
-        if (output / f"{row['tile_id']}.npz").exists():  # another process (an overlapping shard) got there first
+        if units.stopping() or (output / f"{row['tile_id']}.npz").exists():  # asked to stop, or another process got there first
             return
         image = images.get(project.root / row["image_path"])
         rgb, _ = context_crop(image, int(row["x_px"]), int(row["y_px"]), int(row["width_px"]), int(row["height_px"]), project.context_px)
@@ -62,3 +63,4 @@ def run_nuclei(project: Project, stains: list[str], device: str = "mps", batch_s
     with ThreadPoolExecutor(max(1, workers)) as pool:
         for _ in pool.map(segment, pending):
             pass
+    units.boundary("tiles segmented so far")

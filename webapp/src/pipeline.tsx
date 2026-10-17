@@ -18,7 +18,7 @@ export const STAGE: Record<string, { name: string; about: string }> = {
 /** Steps the results do not need (they never count as “left to run”). */
 export const OPTIONAL = new Set<string>()
 
-export const isActive = (status: string | undefined) => status === 'running' || status === 'queued'
+export const isActive = (status: string | undefined) => status === 'running' || status === 'queued' || status === 'paused'
 
 /** One word for where a step stands: running, queued (waiting), failed, outdated (needs attention), done, partial, todo. */
 export function stepState(step: Step): string {

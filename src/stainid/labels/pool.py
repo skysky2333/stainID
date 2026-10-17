@@ -128,7 +128,10 @@ def prepare(project: Project, stain: str, tile_ids: list[str], redo: bool = Fals
     done = set() if redo else prepared(project, stain)
     todo = [t for t in tile_ids if t not in done]
     loader = candidates.FieldLoader(project)
+    from stainid.jobs import units
+
     for number, tile_id in enumerate(todo, start=1):
+        units.boundary(f"{number - 1} fields prepared")  # each field's pool is saved as it is built
         frame = build(project, tiles[tile_id], loader)
         print(f"[{number}/{len(todo)}] {tile_id}: {len(frame)} candidates", flush=True)
     print(f"{len(tile_ids) - len(todo)} of {len(tile_ids)} fields were already prepared", flush=True)
