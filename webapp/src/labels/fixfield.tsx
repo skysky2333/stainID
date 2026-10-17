@@ -3,9 +3,11 @@
    light grey when it is not active: rejected by detection, removed by a person, or just added and waiting for its class.
    Everything acts on the object under the cursor (it lights up, its name shows beside it and its facts at the side):
    1–9 (and the type keys) choose its class, 0 unsure, Delete removes it (it turns dotted grey and stays; a class key brings
-   it back), Tab / Shift+Tab a bigger or smaller Segment Anything mask at once, Space edits it precisely (everything else
-   locked: right-click a spot to add it, left-click one to leave it out, drag the dots; Z undoes a step; Space again keeps
-   it, Esc cancels), Z undoes. Clicking empty tissue outlines a missed object with one click: a new candidate, dotted, until
+   it back), Tab / Shift+Tab a bigger or smaller Segment Anything mask at once, a right-click on it edits it precisely
+   (everything else locked: right-click a spot to add it, left-click one to leave it out, drag the dots; Z undoes a step;
+   a click outside it keeps the edit, Esc leaves without keeping), Space hides and shows everything drawn over the
+   picture (a clean look at the tissue), E paints bad areas (the exclusion brush), Z undoes. Clicking empty tissue
+   outlines a missed object with one click: a new candidate, dotted, until
    a class key makes it solid. A change of call is recorded exactly like an answer in round 1. Every change stays on this
    page ("3 unsaved changes", with a draft in this browser in case of a reload; Z undoes) until Save (stays on the field)
    or Save and continue: the field is then finished, every call nobody has decided and every outline left as it is counts
@@ -62,6 +64,18 @@ function inside(polygon: number[][], x: number, y: number) {
     if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) hit = !hit
   }
   return hit
+}
+
+/** Whether a point is outside an outline and farther than `margin` from it (a left-click there ends precise editing). */
+function outside(polygon: number[][], x: number, y: number, margin: number) {
+  if (inside(polygon, x, y)) return false
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const [ax, ay] = polygon[j], [bx, by] = polygon[i]
+    const dx = bx - ax, dy = by - ay
+    const t = dx || dy ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy))) : 0
+    if (Math.hypot(x - (ax + t * dx), y - (ay + t * dy)) <= margin) return false
+  }
+  return true
 }
 
 function circle(x: number, y: number, r: number) {
@@ -172,6 +186,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   const [fresh, setFresh] = useState<Record<string, Fresh>>({})
   const [hovered, setHovered] = useState<string | null>(null)
   const [precise, setPrecise] = useState<Precise | null>(null)
+  const [hidden, setHidden] = useState(false)  // Space: nothing drawn over the picture, for a clean look at the tissue
   const [dragging, setDragging] = useState<number | null>(null)
   const [focus, setFocus] = useState<{ x: number; y: number; key: number; back?: boolean } | null>(null)  // where precise editing zooms in (and back)
   const [draft, setDraft] = useState<number[][]>([])  // drawing a missed object by hand (when one click cannot outline it)
@@ -350,24 +365,25 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     if (key) setHovered(key)
   }
 
-  /** Space: precise editing of the object under the cursor, in and (saving) out. */
-  const togglePrecise = useCallback(() => {
-    if (draft.length) return
-    if (!precise) {
-      const s = target
-      if (!s) return
-      const start = outlineOf(s) ?? circle(s.x, s.y, Math.max(6, s.r))
-      setPrecise({ key: s.key, points: simplifyPolygon(start.map((p) => [...p]), HANDLES), clicks: [], busy: false, history: [] })
-      setFocus({ x: s.x, y: s.y, key: Date.now() })  // zoom in on it
-      return
-    }
+  /** A right-click on an object: precise editing of it (zoomed in; the view before comes back on leaving). */
+  const enterPrecise = (s: Shown) => {
+    if (draft.length || precise) return
+    const start = outlineOf(s) ?? circle(s.x, s.y, Math.max(6, s.r))
+    setPrecise({ key: s.key, points: simplifyPolygon(start.map((p) => [...p]), HANDLES), clicks: [], busy: false, history: [] })
+    setFocus({ x: s.x, y: s.y, key: Date.now() })  // zoom in on it
+    setHidden(false)
+  }
+
+  /** A click outside the object: precise editing ends, keeping the edit. */
+  const finishPrecise = useCallback(() => {
+    if (!precise) return
     const s = byKey.get(precise.key)
     const points = precise.points.map((p) => p.map(Math.round))
     leavePrecise()
     if (!s || !precise.history.length) return  // nothing changed
     if (s.fresh) { const f = s.fresh; setFresh((all) => ({ ...all, [f.key]: { ...f, options: [...f.options.slice(0, f.chosen), points, ...f.options.slice(f.chosen + 1)] } })); return }
     save([s.candidate ? { task: 'outline', candidate: s.candidate.candidate_id, points, value: 'edited' } : { task: 'outline', x: s.x, y: s.y, points, value: 'edited' }], {})
-  }, [precise, target, draft, save])  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [precise, save])  // eslint-disable-line react-hooks/exhaustive-deps
 
   const undo = useCallback(() => {
     if (precise) {  // a step of the precise edit back (Esc leaves it without keeping anything)
@@ -392,7 +408,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     onUnsure: () => { if (target && unsure) { tell(target.fresh ? 'added' : 'unsure'); giveClass(target, { identity: unsure, subtype: null }) } },
     onRemove: () => { if (excluding) return; if (target) tell('remove'); removeTarget() },
     onMask: (bigger) => { if (excluding) return; if (target && !precise) tell('mask'); switchMask(bigger) },
-    onPrecise: () => { if (excluding) return; if (precise) tell('precise-out'); else if (target) tell('precise-in'); togglePrecise() },
+    onPrecise: () => { tell('overlays'); setHidden((h) => !h) },  // Space: hide and show everything drawn over the picture
     onUndo: () => { tell('undo'); undo() },
     onEnter: () => { if (draft.length >= 3) closeDraft() },
     onEscape: () => {
@@ -496,11 +512,16 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
 
   const click = (p: ImagePoint, event: React.MouseEvent) => {
     if (excluding) return  // painting: a click is a dab of the brush, nothing else
-    if (precise) {  // right-click: add this spot; left-click: leave it out
+    if (precise) {  // right-click: add this spot; left-click on or near it: leave it out; left-click well outside: done
+      if (event.button === 0 && outside(precise.points, p.x, p.y, 12 * p.unit)) { tell('precise-out'); finishPrecise(); return }
       if (!precise.busy && sam) { tell('precise-edit'); void refine([...precise.clicks, [p.x, p.y, event.button === 2 ? 1 : 0]]) }
       return
     }
-    if (event.button === 2) return
+    if (event.button === 2) {  // a right-click on an object: precise editing of it; on empty tissue nothing
+      const s = hit(p)
+      if (s && !draft.length) { tell('precise-in'); enterPrecise(s) }
+      return
+    }
     if (draft.length) {
       if (draft.length >= 3 && Math.hypot(draft[0][0] - p.x, draft[0][1] - p.y) < 10 * p.unit) closeDraft()
       else setDraft([...draft, [p.x, p.y]])
@@ -600,10 +621,10 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   const mayLeave = useLeaveGuard(unsaved + unclassed)
   const canFinish = !busy && !precise && !draft.length  // detection's calls stand unless changed: no object needs a class first
   useSaveKeys(() => { if (!precise) void saveAll(false) }, () => { if (canFinish) void saveAll(true) })
-  const finishTitle = precise ? 'Leave precise editing first (Space keeps the edit, Esc cancels it)'
+  const finishTitle = precise ? 'Leave precise editing first (click outside the object keeps the edit, Esc cancels it)'
     : unclassed ? `Save your changes and finish this field. ${unclassed} new candidate${unclassed === 1 ? '' : 's'} without a class ${unclassed === 1 ? 'is' : 'are'} left out (Ctrl+Enter)`
       : 'Save your changes and finish this field: every call and outline you left as it is counts as checked by you (Ctrl+Enter)'
-  const locked = precise ? 'Precise editing: only this object can change now. Space keeps the edit, Esc cancels it.' : undefined
+  const locked = precise ? 'Precise editing: only this object can change now. A click outside it keeps the edit, Esc cancels it.' : undefined
 
   return (
     <div className="annotate-page round-page fit-page">
@@ -636,16 +657,18 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
       <div className="annotate-workspace">
         <div className={`annotate-image${precise ? ' is-precise' : ''}`} onContextMenu={(e) => e.preventDefault()} onMouseLeave={() => { if (!precise) setHovered(null) }}>
           <ZoomViewer fit src={apiUrl(`/api/annotate/${name}/fields/${enc(tile)}/image.jpg`)}
-            layers={field.layers.filter((l) => layers[l]).map((l) => apiUrl(`/api/annotate/${name}/fields/${enc(tile)}/layer/${l}.png`))}
+            layers={hidden ? [] : field.layers.filter((l) => layers[l]).map((l) => apiUrl(`/api/annotate/${name}/fields/${enc(tile)}/layer/${l}.png`))}
             title={<span className="row"><span className="muted small">{tile}</span>{done && <span className="badge status-done">finished</span>}
-              {precise && <span className="badge status-running">precise editing — Space keeps, Esc cancels</span>}
+              {precise && <span className="badge status-running">precise editing — click outside to finish, Esc cancels</span>}
+              {hidden && <span className="badge">Overlays hidden · <span className="kbd">Space</span></span>}
               {pending && <span className="small muted">Outlining…</span>}</span>}
             focus={focus} cursor={excluding ? 'none' : precise ? 'crosshair' : target ? 'pointer' : 'copy'} onClick={click} onMove={move}
             onPress={press} onRelease={release} panLock={excluding} onWheelOver={wheelBrush} onSize={setFieldSize}
-            under={(_z, _s, rawUnit) => <ObjectLayer items={drawnItems} unit={Number.isFinite(rawUnit) && rawUnit > 0 ? rawUnit : 1}
+            under={(_z, _s, rawUnit) => hidden ? null : <ObjectLayer items={drawnItems} unit={Number.isFinite(rawUnit) && rawUnit > 0 ? rawUnit : 1}
               dim={precise ? 0.25 : excluding ? 0.55 : 1} />}>
             {(_zoom, size, rawUnit) => {
               const unit = Number.isFinite(rawUnit) && rawUnit > 0 ? rawUnit : 1
+              if (hidden) return null  // a clean look at the tissue
               const box = field.box
               const lit = target && !precise ? target : undefined
               const litPoly = lit ? outlineOf(lit) : null
@@ -771,8 +794,9 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
               <ol className="small secondary round-steps">
                 <li><b>Point at an object</b>: it lights up, its name shows beside it and its facts above. Press its class number, <span className="kbd">0</span> unsure,
                   {' '}<span className="kbd">Del</span> not an object (it turns dotted grey and stays; a class number brings it back).</li>
-                <li><b>Outline too big or small?</b> <span className="kbd">Tab</span> / <span className="kbd">⇧ Tab</span>. Still not right: <span className="kbd">Space</span>,
-                  then right-click spots to add, left-click spots to leave out, or drag the dots; <span className="kbd">Space</span> again keeps it.</li>
+                <li><b>Outline too big or small?</b> <span className="kbd">Tab</span> / <span className="kbd">⇧ Tab</span>. Still not right: right-click the object,
+                  then right-click spots to add, left-click spots on or near it to leave out, or drag the dots; a click outside it keeps it.</li>
+                <li><b>A clean look at the tissue?</b> <span className="kbd">Space</span> hides everything drawn over the picture; <span className="kbd">Space</span> again brings it back.</li>
                 <li><b>Missed object?</b> {sam ? 'Click it: its outline appears as a new candidate (dotted); then press its class number.' : 'Click its corners one by one, then the first corner (or Enter).'}</li>
                 <li><b>Nothing is saved until you press Save</b> (a small orange dot marks each object you changed). <b>Save and continue</b> when the field
                   looks right: what you left as it is counts as checked by you, and the next field opens.</li>
@@ -830,7 +854,7 @@ function Controls({ sam, precise, excluding }: { sam: boolean; precise: boolean;
         {sam && <li><span className="kbd">left-click</span> leave a spot out</li>}
         <li><span className="kbd">drag</span> a dot to move the outline</li>
         <li><span className="kbd">Z</span> one step back</li>
-        <li><span className="kbd">Space</span> keep the edit · <span className="kbd">Esc</span> cancel</li>
+        <li><span className="kbd">click outside</span> keep the edit · <span className="kbd">Esc</span> cancel</li>
       </ul>
     )
   }
@@ -839,7 +863,8 @@ function Controls({ sam, precise, excluding }: { sam: boolean; precise: boolean;
       <li><span className="kbd">Tab</span> <span className="kbd">⇧ Tab</span> bigger / smaller outline</li>
       <li><span className="kbd">Del</span> remove — it turns dotted grey</li>
       <li><span className="kbd">click</span> empty tissue: {sam ? 'a new candidate' : 'draw a new one by hand'}</li>
-      {sam && <li><span className="kbd">Space</span> precise edit: right-click add, left-click remove, drag dots, <span className="kbd">Space</span> done</li>}
+      <li><span className="kbd">right-click</span> an object: precise edit{sam ? ' (right-click add, left-click remove, drag dots, click outside done)' : ' (drag dots, click outside done)'}</li>
+      <li><span className="kbd">Space</span> hide / show the drawings</li>
       <li><span className="kbd">E</span> mark a bad area with a brush (folds, smudges): its objects are left out</li>
       <li><span className="kbd">Z</span> undo · <span className="kbd">Esc</span> cancel</li>
       <li><span className="kbd">Ctrl S</span> save · <span className="kbd">Ctrl ⏎</span> save and continue</li>
@@ -887,7 +912,7 @@ function TargetCard({ s, call, meta, precise, px, outline, choices, added, unsav
         {choices.list.length > 0 && !precise && <><dt>Outline</dt><dd>{maskName(choices.index, choices.list.length, choices.names)}</dd></>}
       </dl>
       {added && added !== 'proposed' && <p className={`small added-note${added === 'could_not_be_measured' ? ' warn' : ''}`}><b>Detection never proposed this object.</b> {ADDED_TEXT[added]}</p>}
-      {precise ? <p className="small precise-bar"><b>Precise editing.</b> {precise.busy ? 'Outlining…' : 'Right-click adds a spot, left-click leaves one out, drag the dots.'}</p>
+      {precise ? <p className="small precise-bar"><b>Precise editing.</b> {precise.busy ? 'Outlining…' : 'Right-click adds a spot, left-click on or near it leaves one out, drag the dots; click outside to finish.'}</p>
         : <MaskSwitch masks={choices.list} index={choices.index} onChange={onMask} names={choices.names} />}
     </div>
   )
