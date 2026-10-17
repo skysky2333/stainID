@@ -39,14 +39,14 @@ def intensities(stain: str, values: dict, threshold: float) -> dict:
 
 
 def neun_stained_area(field, region, legacy_um2: float) -> float:
-    """NeuN's stained area (tissue, DAB ≥ 0.35 × threshold, at least half chromogen) without the legacy
+    """NeuN's stained area (tissue, not excluded, DAB ≥ 0.35 × threshold, at least half chromogen) without the legacy
     0.012 OD floor: the legacy area times the share the relative level adds within the candidate (the same value where
     the floor does not bind, i.e. thresholds above 0.034 OD)."""
     floor = max(0.012, 0.35 * field.threshold)
     if 0.35 * field.threshold >= floor or not np.isfinite(legacy_um2):
         return float(legacy_um2)
     box, mask = region.box, region.mask
-    keep = field.tissue[box] & (field.chromogen_fraction[box] >= 0.50) & mask
+    keep = field.tissue[box] & ~field.neun_exclusion[box] & (field.chromogen_fraction[box] >= 0.50) & mask
     dab = field.dab[box]
     absolute, relative = int((keep & (dab >= floor)).sum()), int((keep & (dab >= 0.35 * field.threshold)).sum())
     if absolute:

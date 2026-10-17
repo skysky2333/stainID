@@ -8,7 +8,7 @@ change to a model, a threshold or a rule re-runs only the cheap stages after it.
 | Stage | Command | Reads | Writes | Cost |
 |---|---|---|---|---|
 | 1 Nuclei | `stainid nuclei` (unchanged) | core images | `tile_nuclei/<tile>.npz` | GPU, run once |
-| 2 Proposals | `stainid v2 proposals` | core images, nuclei, slide thresholds | `proposals/`, `tiles/`, `threads/`, `unproposed/`, `masks/` | CPU, the expensive stage |
+| 2 Proposals | `stainid v2 proposals` | core images, nuclei, slide thresholds, exclusions | `proposals/`, `tiles/`, `threads/`, `unproposed/`, `masks/` | CPU, the expensive stage |
 | 4 Calls | `stainid v2 calls` | `proposals/`, the stain models, `v2.rules` | `calls/`, `candidates/` | minutes for the cohort, no image read |
 | 3 Outlines | `stainid v2 outlines` | `proposals/`, `calls/` (which to outline), core images, SAM | `outlines/`, `candidates/` | GPU, optional |
 | 5 Measures | `stainid v2 measures` | `candidates/`, `tiles/`, `threads/` | `measures/` | minutes, no image read |
@@ -30,18 +30,12 @@ pictures (about 1 GB); `--workers 0` picks as many as the free memory and the pr
 
 Each stage writes `manifests/<stage>/<stain>/<core_id>.json` after its outputs: the stage's code version
 (`stainid.v2.manifest.VERSIONS`), its parameters (`stainid.v2.params`, overridable under `v2:` in stainid.yaml) and a
-fingerprint of every input — the core image file, the number of tiles with nuclei, the slide threshold, the tiles, the model bundle (folder name and sha256) and its cut-off, and the digest of each upstream
+fingerprint of every input — the core image file, the number of tiles with nuclei, the slide threshold, the hand-drawn
+exclusions, the tiles, the model bundle (folder name and sha256) and its cut-off, and the digest of each upstream
 stage's manifest. A core image is out of date when any of these differs from what it would be made from now. Changing
 `v2.rules` makes only stage 4 (and the store) out of date; changing `v2.proposals` stage 2 and everything after it.
 
 ## Stage 2: proposals
-
-Stage 2 proposes on all tissue. Excluded areas (folds, linear artifacts, drawn or painted exclusions) get their
-candidates like any other tissue, each with `excluded_fraction` (its share on the automatic fold / linear masks), so an
-area an annotator clears later has its candidates already and needs no new proposals; the exclusions are applied
-downstream (calls, measures, training). The excluded pixels stay out of the background statistics only (the 6E10 seed
-and extent levels, the AT8 60 µm background and soma surroundings), so a dark fold does not raise the levels for the
-rest of the core. The hand-drawn exclusions are not a stage 2 input: editing them does not make stage 2 out of date.
 
 Per tile (the tile with its 128 px context margin) and stain; a tile keeps the candidates whose centroid lies in it or
 within 64 px of it. An object across a tile edge is segmented from each side's crop, cut at that crop, with slightly
@@ -53,7 +47,7 @@ cut by its crop, then centroid in its own tile, then the largest — and it belo
 merged.
 
 - **NeuN**: the legacy DAB profiles and the legacy Cellpose cells, with the legacy filters recorded instead of applied
-  (`flag_legacy_kept`, `flag_legacy_drop` = shape / near_profile / pale_nucleus); the legacy cells come before
+  (`flag_legacy_kept`, `flag_legacy_drop` = shape / excluded / near_profile / pale_nucleus); the legacy cells come before
   the profiles the legacy shape filter dropped, so where the old pipeline counted a cell the same cell is the candidate;
   the DAB component tree at 0.5, 0.75, 1 and 1.5 × the slide threshold (`dab@<level>`, best-fitting node per object: the
   one with the strongest DAB edge; merges split at their children, so merged neurons above 650 µm² that the legacy
@@ -96,8 +90,8 @@ Per core image also: `tiles/<stain>/<core>.csv.gz` (per tile: tissue and analysi
 DAB-positive area at 0.5–2 × the threshold, nucleus count, AT8 burden / thread / edge-guard measures, the v1 AT8
 network measures, the NeuN 100 µm density windows), `threads/<core>.csv.gz` (the AT8 skeleton as segments, each with
 its pixel count, width sum and the candidate it lies in), `unproposed/<stain>/<core>.csv.gz` and a 1/8-scale mask
-picture `masks/<stain>/<core>.png` (bits: 1 tissue, 2 linear artifact, 4 fold, 8 manual exclusion — no longer set, 16 AT8
-edge guard, 32 analysed tile).
+picture `masks/<stain>/<core>.png` (bits: 1 tissue, 2 linear artifact, 4 fold, 8 manual exclusion, 16 AT8 edge guard,
+32 analysed tile).
 
 Stained regions no candidate proposes (`unproposed/`, per stain `proposals.<stain>.unproposed`): NeuN and AT8 as
 before (smoothed DAB ≥ the threshold, ≥ 15 / 20 µm², touching no candidate); 6E10 the DAB smoothed over 4 µm at
@@ -134,9 +128,9 @@ The stain model scores every candidate from `m_` columns (`stainid.candidates.mo
 
 | Stain | Before the model | After the model |
 |---|---|---|
-| NeuN | `rule:excluded` (≥ 50 % excluded), `rule:near_profile`, `rule:pale_nucleus` (legacy Cellpose filters), `rule:shape` (legacy profile size / shape filter); for the new sources only: `rule:edge` (≥ 50 % within 5 µm of an edge or hole), `rule:fold` (≥ 50 % on a fold band with a weak edge, DAB gradient < 1 threshold per px: patches of the band; neurons on a band keep a sharp edge — the legacy NeuN detection never masked folds), `rule:irregular` (solidity < 0.6) | — |
+| NeuN | `rule:excluded` (≥ 50 % excluded, or a Cellpose cell in a hand-drawn exclusion), `rule:near_profile`, `rule:pale_nucleus` (legacy Cellpose filters), `rule:shape` (legacy profile size / shape filter); for the new sources only: `rule:edge` (≥ 50 % within 5 µm of an edge or hole), `rule:fold` (≥ 50 % on a fold band with a weak edge, DAB gradient < 1 threshold per px: patches of the band; neurons on a band keep a sharp edge — the legacy NeuN detection never masked folds), `rule:irregular` (solidity < 0.6) | — |
 | 6E10 | `rule:excluded`; `rule:artifact_shape` off by default (the legacy shape rule; the classifier now decides) | `rule:speck` (≤ 10 µm), `rule:vascular_or_edge` (outer boundary ≥ 25 % on a lumen or tissue edge); subtype compact / diffuse / small by the model's morphotype threshold |
-| AT8 | `rule:excluded` (also a centre off the tissue or on a guarded edge), `rule:low_contrast` (< 0.3, the legacy bar), `rule:small` (new-source bodies < 40 µm²), `rule:edge`, `rule:irregular` (new-source bodies less compact than legacy bodies: solidity < 0.7 or circularity < 0.35) | `rule:duplicate` (12 µm suppression, now over the whole core); subtype mature tangle / pretangle by the model's p90 threshold |
+| AT8 | `rule:excluded` (also a centre outside valid tissue), `rule:low_contrast` (< 0.3, the legacy bar), `rule:small` (new-source bodies < 40 µm²), `rule:edge`, `rule:irregular` (new-source bodies less compact than legacy bodies: solidity < 0.7 or circularity < 0.35) | `rule:duplicate` (12 µm suppression, now over the whole core); subtype mature tangle / pretangle by the model's p90 threshold |
 
 `class` and `subtype` are label-vocabulary ids (`stainid.labels.vocabulary`); `threshold` is the cut-off the call used.
 

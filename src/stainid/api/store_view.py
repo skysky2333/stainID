@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from stainid import candidates
+from stainid import exclusions as excluded_areas
 
 COLUMNS = ["candidate_id", "x_core", "y_core", "radius_px", "area_um2", "probability", "decision", "reason", "class", "subtype",
            "m_from_ring", "outline", "sam_outline", "sam_status", "outline_default"]
@@ -130,177 +131,125 @@ def unproposed_count(project, core_id: str, stain: str) -> int | None:
 # ---------------------------------------------------------------- excluded areas
 
 class ExcludedKind:
-    """One kind of area left out of the analysis, as the "Excluded areas" layer draws it: which pixels are of this kind
-    (`pick(mask, marks)`: the stage-2 mask, `stainid.v2.proposals.BITS`, one byte per 8 × 8 core-image px, and the
-    annotators' marks on the same grid, `MARK_*`), its colour (by exclusion type, `labels.exclusions.KINDS`) and its
-    hatching ("\\\\", "/", "|", "-", or "" for none)."""
+    """One type of area left out of the analysis as the "Excluded areas" layer draws it: its code in the resolved layer
+    (`stainid.exclusions.CODES`), colour, hatching (a backslash, "/", "|", "-", or "" for none) and the brush type it is
+    (`labels.exclusions.KINDS`; "" for the AT8 edge guard, which only detection makes)."""
 
-    def __init__(self, id: str, label: str, color: tuple[int, int, int], hatch: str, pick, type: str = ""):
-        self.id, self.label, self.color, self.hatch, self.pick, self.type = id, label, color, hatch, pick, type
+    def __init__(self, id: str, code: int, color: tuple[int, int, int], hatch: str, type: str = ""):
+        self.id, self.code, self.color, self.hatch, self.type = id, code, color, hatch, type
+        self.label = excluded_areas.CODES[code]
 
 
-TISSUE, LINEAR, FOLD, MANUAL, EDGE_GUARD, TILE = 1, 2, 4, 8, 16, 32  # stainid.v2.proposals.BITS
-MARK_INCLUDE = 5  # the annotators' marks on the mask grid: 1–4 the exclusion types, 5 a part they cleared ("include")
-TYPE_COLOR = {"1": (255, 176, 0), "2": (168, 85, 247), "3": (156, 163, 175), "4": (0, 229, 255)}  # by `labels.exclusions.KINDS`
-# Drawn in this order, each pixel as the first kind it is: what a person drew comes first. Detection's own kinds take the
-# colour of the exclusion type they are (folds 1, linear artifacts 2, no tissue 3); the edge guard and hand-drawn
-# exclusions keep their own.
-EXCLUDED_KINDS = (
-    ExcludedKind("cleared", "cleared by annotators (fine after all)", (34, 197, 94), "-", lambda m, a: a == MARK_INCLUDE, "include"),
-    *(ExcludedKind(f"marked_{t}", f"marked by annotators: {name}", TYPE_COLOR[t], "\\", lambda m, a, t=int(t): a == t, t)
-      for t, name in (("1", "fold or tissue damage"), ("2", "artifact"), ("3", "no tissue / empty"), ("4", "out of focus or bad staining"))),
-    ExcludedKind("manual", "drawn by hand (manual exclusion)", (255, 59, 59), "\\", lambda m, a: (m & MANUAL) > 0),
-    ExcludedKind("fold", "fold or tissue damage (found by detection)", TYPE_COLOR["1"], "/", lambda m, a: (m & FOLD) > 0, "1"),
-    ExcludedKind("linear", "artifact: linear (scratch, tear, edge line; found by detection)", TYPE_COLOR["2"], "|", lambda m, a: (m & LINEAR) > 0, "2"),
-    ExcludedKind("edge_guard", "AT8 edge guard (brown rim along an edge)", (20, 184, 166), "-", lambda m, a: (m & EDGE_GUARD) > 0),
-    ExcludedKind("no_tissue", "no tissue / empty (found by detection)", TYPE_COLOR["3"], "", lambda m, a: ((m & TILE) > 0) & ((m & TISSUE) == 0), "3"),
+EXCLUDED_KINDS = (  # the colours are the brush's (webapp labels/brush.ts EXCLUDE_TYPES)
+    ExcludedKind("fold", 1, (255, 176, 0), "/", "1"),
+    ExcludedKind("artifact", 2, (168, 85, 247), "\\", "2"),
+    ExcludedKind("no_tissue", 3, (156, 163, 175), "", "3"),
+    ExcludedKind("focus", 4, (0, 229, 255), "|", "4"),
+    ExcludedKind("edge_guard", 5, (20, 184, 166), "-"),
+    ExcludedKind("not_analysed", 6, (100, 116, 139), "/"),
 )
-EXCLUDED_SCALE = 8  # stainid.v2.proposals.MASK_SCALE: core-image px per mask px
-HATCH_PX = 4  # mask px between hatching lines (32 core-image px)
+EXCLUDED_SCALE = excluded_areas.SCALE  # core-image px per layer px
+HATCH_PX = 4  # layer px between hatching lines (32 core-image px)
 
 
 def excluded_path(project, core_id: str, stain: str):
-    return candidates.root(project) / "masks" / stain / f"{core_id}.png"
-
-
-def _marks(project, core_id: str, stain: str, shape: tuple[int, int], but: str | None = None) -> tuple[np.ndarray, np.ndarray]:
-    """The areas annotators marked on this core image's fields (`labels.exclusions`), on the mask's grid: each pixel's
-    type (1–4, 5 cleared; the latest drawn wins), and the parts `but` (one person, whose own marks the page draws itself)
-    cleared (left transparent)."""
-    import cv2  # noqa: PLC0415
-
-    from stainid.api.state import get_state  # noqa: PLC0415
-    from stainid.labels import exclusions, store  # noqa: PLC0415
-
-    marks = np.zeros(shape, np.uint8)
-    own_clear = np.zeros(shape, np.uint8)
-    for area in exclusions.in_core(store.current(project.output("reviews")), get_state().tiles, project.context_px, core_id, stain):
-        mine = but is not None and area["source"] == but
-        for kind in dict.fromkeys(area["kinds"]):
-            layer = np.zeros(shape, np.uint8)
-            for ring, hole, k in zip(area["rings"], area["holes"], area["kinds"]):
-                if k == kind:
-                    cv2.fillPoly(layer, [np.round(np.asarray(ring) / EXCLUDED_SCALE).astype(np.int32)], 0 if hole else 1)
-            if mine:
-                if kind == exclusions.INCLUDE:
-                    own_clear |= layer
-                continue
-            marks[layer > 0] = MARK_INCLUDE if kind == exclusions.INCLUDE else int(kind) if kind.isdigit() else 1
-    return marks, own_clear > 0
-
-
-def _deps(project, path) -> list:
-    """What the layer of a core image is made from: its stage-2 mask and the label log (the annotators' areas)."""
-    from stainid.labels import store  # noqa: PLC0415
-
-    return [path, store.log_path(project.output("reviews"))]
-
-
-def _version(project, path) -> int:
-    return sum(p.stat().st_mtime_ns for p in _deps(project, path) if p.exists())  # changes with the mask and the labels
-
-
-def _excluded(path, project=None, core_id: str = "", stain: str = "", but: str | None = None) -> dict:
-    """The excluded areas of one mask (with the annotators' marks when `project` is given; `but` one person's own marks
-    left out but their cleared parts made transparent): each kind's pixels (a pixel counts as the first kind it is) and
-    the analysed area."""
-    import cv2  # noqa: PLC0415
-
-    mask = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
-    if mask is None:
-        raise FileNotFoundError(path)
-    mask = mask if mask.ndim == 2 else mask[..., 0]
-    marks, own_clear = _marks(project, core_id, stain, mask.shape, but) if project is not None else (np.zeros(mask.shape, np.uint8),
-                                                                                                    np.zeros(mask.shape, bool))
-    left = ~own_clear
-    kinds = []
-    for kind in EXCLUDED_KINDS:
-        pixels = kind.pick(mask, marks) & left
-        left &= ~pixels
-        kinds.append((kind, pixels))
-    return {"shape": mask.shape, "kinds": kinds, "analysed": int(((mask & TILE) > 0).sum())}
+    return excluded_areas.mask_path(project, core_id, stain)
 
 
 def kind_info(kind: ExcludedKind, fraction: float | None) -> dict:
     return {"id": kind.id, "label": kind.label, "color": "#%02x%02x%02x" % kind.color, "hatch": kind.hatch, "type": kind.type, "fraction": fraction}
 
 
+def _shares(codes: np.ndarray) -> list[dict]:
+    """Each type's share of the core's area (every cell but those outside the image's tissue and tiles)."""
+    analysed = max(1, int((codes != excluded_areas.OUTSIDE).sum()))
+    counts = np.bincount(codes.ravel(), minlength=256)
+    return [kind_info(kind, round(float(counts[kind.code]) / analysed, 4)) for kind in EXCLUDED_KINDS]
+
+
 def excluded_info(project, core_id: str, stain: str) -> dict:
-    """The "Excluded areas" layer of one core image: status ("done", or "not_made" before the v2 proposals), the mask's
-    size in mask px and its scale (core-image px per mask px), and each kind with its colour, hatching, exclusion type
-    and share of the analysed area."""
-    from stainid import cache  # noqa: PLC0415
-
-    path = excluded_path(project, core_id, stain)
-    if not path.exists():
+    """The "Excluded areas" layer of one core image, the resolved layer as the views draw it (`stainid.exclusions.view`:
+    detection's areas with every edit applied, and the tissue in no analysed tile): status ("done", or "not_made" before
+    the v2 proposals), its size in layer px and scale (core-image px per layer px), `version` (changes with the layer)
+    and each type with its colour, hatching and share of the core's area."""
+    layer = excluded_areas.view(project, core_id, stain)
+    if layer is None:
         return {"status": "not_made", "kinds": [kind_info(k, None) for k in EXCLUDED_KINDS]}
-    found = cache.memo(("excluded", str(path)), _deps(project, path), lambda: _excluded(path, project, core_id, stain))
-    height, width = found["shape"]
-    analysed = max(1, found["analysed"])
-    return {"status": "done", "scale": EXCLUDED_SCALE, "width": int(width), "height": int(height), "version": _version(project, path),
-            "kinds": [kind_info(kind, round(float(pixels.sum()) / analysed, 4)) for kind, pixels in found["kinds"]]}
+    height, width = layer.codes.shape
+    return {"status": "done", "scale": layer.scale, "width": int(width), "height": int(height), "version": layer.version,
+            "kinds": _shares(layer.codes)}
 
 
-def _rgba(found: dict, window: tuple[slice, slice] | None = None) -> bytes:
-    """The layer as an RGBA PNG: each kind a translucent fill in its colour with stronger hatching lines (none for "no
-    tissue"), the rest transparent; `window` a part of it (rows, columns of the mask)."""
+def _rgba(codes: np.ndarray, rows: int = 0, columns: int = 0) -> bytes:
+    """Codes of the layer as an RGBA PNG: each type a translucent fill in its colour with stronger hatching lines (none
+    for "no tissue"), the rest transparent; (`rows`, `columns`) where `codes` start in the core's layer (so a field's
+    hatching lines up with its core's)."""
     import cv2  # noqa: PLC0415
 
-    height, width = found["shape"]
-    yy, xx = np.mgrid[0:height, 0:width]
+    height, width = codes.shape
+    yy, xx = np.mgrid[rows:rows + height, columns:columns + width]
     lines = {"\\": (xx - yy) % HATCH_PX == 0, "/": (xx + yy) % HATCH_PX == 0, "|": xx % HATCH_PX == 0, "-": yy % HATCH_PX == 0}
     out = np.zeros((height, width, 4), np.uint8)  # cv2 writes BGRA
-    for kind, pixels in found["kinds"]:
+    for kind in EXCLUDED_KINDS:
+        pixels = codes == kind.code
+        if not pixels.any():
+            continue
         r, g, b = kind.color
         out[pixels] = (b, g, r, 70)
         if kind.hatch:
             out[pixels & lines[kind.hatch]] = (b, g, r, 210)
-    if window is not None:
-        out = out[window]
     ok, encoded = cv2.imencode(".png", out)
     if not ok:
         raise RuntimeError("could not encode the excluded areas")
     return encoded.tobytes()
 
 
+_PICTURES: dict[tuple, bytes] = {}  # (project, core, stain, layer digest, window) -> PNG; a few hundred at most
+
+
+def _picture(project, core_id: str, stain: str, layer, window: tuple[slice, slice] | None = None) -> bytes:
+    where = None if window is None else (window[0].start, window[0].stop, window[1].start, window[1].stop)
+    key = (str(project.root), core_id, stain, layer.version, where)
+    found = _PICTURES.get(key)
+    if found is None:
+        codes = layer.codes if window is None else layer.codes[window]
+        found = _rgba(codes, *((0, 0) if window is None else (window[0].start, window[1].start)))
+        if len(_PICTURES) >= 512:
+            _PICTURES.pop(next(iter(_PICTURES)))
+        _PICTURES[key] = found
+    return found
+
+
+def _cells(layer, x0: float, y0: float, x1: float, y1: float) -> tuple[slice, slice]:
+    """The rows and columns of the layer under a core-pixel box (clipped to it)."""
+    h, w = layer.codes.shape
+    c0, r0 = max(0, int(x0) // layer.scale), max(0, int(y0) // layer.scale)
+    c1, r1 = min(w, -(-int(x1) // layer.scale)), min(h, -(-int(y1) // layer.scale))
+    return slice(r0, max(r0, r1)), slice(c0, max(c0, c1))
+
+
 def excluded_png(project, core_id: str, stain: str) -> bytes | None:
-    """The layer as an RGBA PNG at the mask's resolution (`_rgba`), kept until the mask or the labels change; None without
-    a mask."""
-    from stainid import cache  # noqa: PLC0415
-
-    path = excluded_path(project, core_id, stain)
-    if not path.exists():
-        return None
-
-    def make() -> bytes:
-        return _rgba(cache.memo(("excluded", str(path)), _deps(project, path), lambda: _excluded(path, project, core_id, stain)))
-
-    return cache.memo(("excluded png", str(path)), _deps(project, path), make)
+    """The resolved layer as an RGBA PNG at its own resolution (`_rgba`); None before the v2 proposals."""
+    layer = excluded_areas.view(project, core_id, stain)
+    return None if layer is None else _picture(project, core_id, stain, layer)
 
 
-def field_excluded(project, tile: dict, person: str | None) -> tuple[dict, bytes | None]:
-    """The excluded areas of one field for the annotation pages: where the part of the core's layer lies in the field
-    picture (`x`, `y`, `width`, `height` in field px, `scale` field px per pixel of the picture), its kinds, and the PNG.
-    The person's own marks are left out (their page draws them, and can change them); the parts they cleared show no
-    automatic exclusion."""
-    from stainid import cache  # noqa: PLC0415
+def field_excluded(project, tile: dict) -> tuple[dict, bytes | None]:
+    """The excluded areas of one field for the annotation pages: its part of the core's resolved layer (the same pixels
+    as the Cores view), where that part lies in the field picture (`x`, `y`, `width`, `height` in field px, `scale` field
+    px per pixel of the picture), the types present in it, and the PNG."""
     from stainid.labels import frames  # noqa: PLC0415
 
     core_id, stain = str(tile["core_id"]), str(tile["stain"])
-    path = excluded_path(project, core_id, stain)
-    if not path.exists():
+    layer = excluded_areas.view(project, core_id, stain)
+    if layer is None:
         return {"status": "not_made", "kinds": [kind_info(k, None) for k in EXCLUDED_KINDS]}, None
-    found = cache.memo(("excluded field", str(path), person), _deps(project, path), lambda: _excluded(path, project, core_id, stain, but=person or ""))
     x0, y0 = frames.field_origin(tile, project.context_px)
     x1, y1 = int(tile["x_px"]) + int(tile["width_px"]) + project.context_px, int(tile["y_px"]) + int(tile["height_px"]) + project.context_px
-    height, width = found["shape"]
-    c0, r0 = x0 // EXCLUDED_SCALE, y0 // EXCLUDED_SCALE
-    c1, r1 = min(width, -(-x1 // EXCLUDED_SCALE)), min(height, -(-y1 // EXCLUDED_SCALE))
-    window = (slice(r0, max(r0, r1)), slice(c0, max(c0, c1)))
-    present = [(kind, pixels[window]) for kind, pixels in found["kinds"]]
-    area = max(1, (r1 - r0) * (c1 - c0))
-    info = {"status": "done", "scale": EXCLUDED_SCALE, "x": c0 * EXCLUDED_SCALE - x0, "y": r0 * EXCLUDED_SCALE - y0,
-            "width": (c1 - c0) * EXCLUDED_SCALE, "height": (r1 - r0) * EXCLUDED_SCALE, "version": _version(project, path),
-            "kinds": [kind_info(kind, round(float(p.sum()) / area, 4)) for kind, p in present if p.any()]}
-    png = cache.memo(("excluded field png", str(path), person, str(tile["tile_id"])), _deps(project, path), lambda: _rgba(found, window))
-    return info, png
+    window = _cells(layer, x0, y0, x1, y1)
+    codes = layer.codes[window]
+    scale = layer.scale
+    info = {"status": "done", "scale": scale, "x": window[1].start * scale - x0, "y": window[0].start * scale - y0,
+            "width": codes.shape[1] * scale, "height": codes.shape[0] * scale, "version": layer.version,
+            "kinds": [k for k in _shares(codes) if k["fraction"]]}
+    return info, _picture(project, core_id, stain, layer, window)

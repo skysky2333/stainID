@@ -334,81 +334,84 @@ def test_finishing_a_field_records_every_candidate_as_checked_by_the_person(roun
     assert len(same) == 48 and hers.confirmed.sum() == 48  # her 48 untouched answers are detection's calls
 
 
-def test_an_area_marked_as_bad_saves_reloads_and_keeps_its_objects_out_of_scoring(rounds_project):
+def _png(*boxes):
+    """A painted mask at a quarter of the field picture (200 × 200), painted in these (row, row, column, column) boxes."""
     import base64
 
     import cv2
 
-    admin, (ann, _), rows = rounds_project
-    name = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "open": True, "tile_ids": [TILE]}).json()["name"]
-    field = ann.get(f"/api/annotate/{name}/fields/{TILE}").json()
-    inside_id = next(o["candidate_id"] for o in field["objects"] if o["own"] and abs(o["x"] - 228) < 1 and abs(o["y"] - 228) < 1)  # (400, 400) on the core
     painted = np.zeros((200, 200, 4), np.uint8)
-    painted[50:65, 50:65] = 255  # field pixels 200–260 at a quarter of the field picture's size
-    png = "data:image/png;base64," + base64.b64encode(cv2.imencode(".png", painted)[1].tobytes()).decode()
-    saved = _save(ann, name, TILE, [{"task": "exclude", "png": png, "scale": 4}], submit=True)
-    assert saved.status_code == 200, saved.text
-    again = ann.get(f"/api/annotate/{name}/fields/{TILE}").json()
-    marked = next(m for m in again["mine"] if m["task"] == "exclude")
-    xs = [p[0] for p in marked["points"][0]]
-    assert 195 <= min(xs) <= 205 and 255 <= max(xs) <= 265 and marked["value"] == "kinds:1;holes:0"  # it comes back as it was painted (type 1)
-    decided = decisions.state(state.get_state().project, "6E10", state.get_state().tiles)
-    hers = set(decided.rows.candidate[decided.rows.source == "Ann"])
-    assert inside_id not in hers and len(hers) == len([o for o in field["objects"] if o["own"]]) - 1  # left out of scoring
-    from dataclasses import replace
-
-    from stainid.labels import exclusions, store
-
-    project, tiles = state.get_state().project, state.get_state().tiles
-    labels = store.current(project.output("reviews"))
-    assert exclusions.for_analysis(project, labels, tiles) == {}  # the analyses ignore it by default
-    on = replace(project, config={**project.config, "labels": {**project.config["labels"], "apply_exclusions": True}})
-    marked = exclusions.for_analysis(on, labels, tiles)
-    (image, polygons), = marked.items()
-    assert polygons[0]["source"] == "annotator Ann" and min(p[0] for p in polygons[0]["polygon_core_px"]) >= 360  # core pixels
-    cleared = _save(ann, name, TILE, [{"task": "exclude", "png": "", "scale": 4}])  # an empty area: the mark goes
-    assert cleared.status_code == 200 and not [m for m in ann.get(f"/api/annotate/{name}/fields/{TILE}").json()["mine"] if m["task"] == "exclude"]
+    for r0, r1, c0, c1 in boxes:
+        painted[r0:r1, c0:c1] = 255
+    return "data:image/png;base64," + base64.b64encode(cv2.imencode(".png", painted)[1].tobytes()).decode()
 
 
-def test_typed_areas_and_cleared_parts_save_reload_and_steer_scoring(rounds_project):
-    import base64
-
+def _plain_mask(project):
+    """A stage-2 mask of the 6E10 core: analysed tissue everywhere, a fold over core rows 360-439 (cells 45-54)."""
     import cv2
 
-    from stainid.labels import exclusions
+    from stainid import exclusions
+    from stainid.v2.proposals import BITS
 
-    def png(*boxes):
-        painted = np.zeros((200, 200, 4), np.uint8)
-        for r0, r1, c0, c1 in boxes:
-            painted[r0:r1, c0:c1] = 255
-        return "data:image/png;base64," + base64.b64encode(cv2.imencode(".png", painted)[1].tobytes()).decode()
+    bits = np.full((150, 150), BITS["tile"] | BITS["tissue"], np.uint8)
+    bits[45:55, :] |= BITS["fold"]
+    target = exclusions.mask_path(project, "LIP-1_B-2", "6E10")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(target), bits)
 
-    admin, (ann, _), _ = rounds_project
+
+def test_brush_edits_resolve_into_one_layer_that_scoring_follows(rounds_project):
+    """Each Save of the brush is one edit of the core's resolved layer: painting keeps the objects there out of everyone's
+    scoring, a later clear (also over detection's fold) counts them again, and both views draw the same pixels."""
+    import cv2
+
+    from stainid import exclusions
+
+    admin, (ann, ben), _ = rounds_project
+    project = state.get_state().project
+    _plain_mask(project)
     name = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "open": True, "tile_ids": [TILE]}).json()["name"]
     field = ann.get(f"/api/annotate/{name}/fields/{TILE}").json()
     own = {(round(o["x"]), round(o["y"])): o["candidate_id"] for o in field["objects"] if o["own"]}
-    in_fold, in_cleared = own[(228, 228)], own[(288, 228)]  # (400, 400) and (460, 400) on the core
-    # a fold (type 1) over the first; a part marked as fine (Shift-drag: include) over the second, e.g. over a detected fold
-    pngs = {"1": png((50, 65, 50, 65)), "2": "", "3": "", "4": "", "include": png((50, 65, 65, 80))}
-    assert _save(ann, name, TILE, [{"task": "exclude", "pngs": pngs, "scale": 4}], submit=True).status_code == 200
-    mark = next(m for m in ann.get(f"/api/annotate/{name}/fields/{TILE}").json()["mine"] if m["task"] == "exclude")
-    rings, holes, kinds = exclusions.parts_of(mark)
-    assert sorted(kinds) == ["1", "include"] and mark["value"].startswith("kinds:")  # each ring keeps its type
-    assert exclusions.inside(rings, holes, kinds, 228, 228) and not exclusions.inside(rings, holes, kinds, 288, 228)  # cleared: not excluded
-    decided = decisions.state(state.get_state().project, "6E10", state.get_state().tiles)
-    hers = set(decided.rows.candidate[decided.rows.source == "Ann"])
-    assert in_fold not in hers and in_cleared in hers  # the fold keeps its object out of scoring; the cleared part does not
-    from dataclasses import replace
+    painted_on, folded = own[(228, 228)], own[(288, 228)]  # (400, 400) and (460, 400) on the core, both in the fold rows
+    assert _save(ben, name, TILE, [{"task": "class", "candidate": c, "value": "CAA"} for c in (painted_on, folded)]).status_code == 200
 
-    from stainid.labels import store
+    def scored():
+        decisions.forget()
+        rows = decisions.state(project, "6E10", state.get_state().tiles).rows
+        return set(rows.candidate)
 
-    project, tiles = state.get_state().project, state.get_state().tiles
-    on = replace(project, config={**project.config, "labels": {**project.config["labels"], "apply_exclusions": True}})
-    carried = next(iter(exclusions.for_analysis(on, store.current(project.output("reviews")), tiles).values()))
-    assert {(p["kind"], p["include"]) for p in carried} == {("1", False), ("include", True)}  # types and overrides go along
-    bad = _save(ann, name, TILE, [{"task": "exclude", "pngs": {"9": png((1, 2, 1, 2))}, "scale": 4}])
-    assert bad.status_code == 400  # an unknown type
-    assert ann.get(f"/api/annotate/{name}/fields/{TILE}/excluded").json()["status"] == "not_made"  # no stage-2 mask in this project
+    assert painted_on not in scored() and folded not in scored()  # detection's fold: out of scoring from the start
+    # Ann clears the fold over both, then paints "out of focus" over the first: two edits, the latest wins
+    clear = {"1": "", "2": "", "3": "", "4": "", "include": _png((50, 65, 50, 80))}
+    assert _save(ann, name, TILE, [{"task": "exclude", "pngs": clear, "scale": 4}]).status_code == 200
+    assert {painted_on, folded} <= scored()
+    paint = {"4": _png((52, 62, 52, 62))}
+    assert _save(ann, name, TILE, [{"task": "exclude", "pngs": paint, "scale": 4}]).status_code == 200
+    now = scored()
+    assert painted_on not in now and folded in now  # Ben's answer on it is left out too: the area is excluded for everyone
+    edits = exclusions.edits(project, "LIP-1_B-2", "6E10")
+    assert [(e.source, sorted(set(e.kinds))) for e in edits] == [("Ann", ["include"]), ("Ann", ["4"])]  # the history: one edit per Save
+    # nothing painted: no edit at all
+    assert _save(ann, name, TILE, [{"task": "exclude", "pngs": {"1": ""}, "scale": 4}]).status_code == 200
+    assert len(exclusions.edits(project, "LIP-1_B-2", "6E10")) == 2
+    assert _save(ann, name, TILE, [{"task": "exclude", "pngs": {"9": _png((1, 2, 1, 2))}, "scale": 4}]).status_code == 400  # an unknown type
+
+    # the annotation view and the Cores view draw the same resolved pixels
+    info = ann.get(f"/api/annotate/{name}/fields/{TILE}/excluded").json()
+    core = admin.get("/api/cores/LIP-1_B-2/6E10/excluded").json()
+    assert info["status"] == core["status"] == "done" and info["version"] == core["version"]
+    whole = cv2.imdecode(np.frombuffer(admin.get("/api/cores/LIP-1_B-2/6E10/excluded.png").content, np.uint8), cv2.IMREAD_UNCHANGED)
+    part = cv2.imdecode(np.frombuffer(ann.get(f"/api/annotate/{name}/fields/{TILE}/excluded.png").content, np.uint8), cv2.IMREAD_UNCHANGED)
+    x0, y0 = 300 - project.context_px, 300 - project.context_px
+    r0, c0 = (y0 + info["y"]) // 8, (x0 + info["x"]) // 8
+    assert (part == whole[r0:r0 + part.shape[0], c0:c0 + part.shape[1]]).all()
+    layer = exclusions.resolved(project, "LIP-1_B-2", "6E10")
+    cell = ((y0 + 228) // 8, (x0 + 228) // 8)
+    assert layer.codes[cell] == 4 and part[cell[0] - r0, cell[1] - c0, 3] > 0  # painted: drawn
+    cleared_cell = ((y0 + 228) // 8, (x0 + 300) // 8)
+    assert layer.codes[cleared_cell] == 0 and part[cleared_cell[0] - r0, cleared_cell[1] - c0, 3] == 0  # the cleared fold: gone, not drawn as "cleared"
+    assert {k["id"] for k in core["kinds"]} >= {"fold", "focus"} and "cleared" not in {k["id"] for k in core["kinds"]}
 
 
 def test_a_fix_the_field_session_takes_every_remaining_field_by_default(rounds_project):

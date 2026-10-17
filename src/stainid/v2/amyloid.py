@@ -76,9 +76,8 @@ def deposit_row(field, region: Region) -> dict:
 
 
 def propose(field, settings: dict, shared: dict) -> list[Region]:
-    # proposed on all tissue (exclusions are applied downstream); the excluded pixels stay out of the background statistics
     _, objects, labels, _, _ = segment_amyloid_candidates(field.rgb, field.threshold, field.pixel_width_um, field.pixel_height_um,
-                                                          None, split_touching=True, background_exclusion=field.exclusion)
+                                                          field.exclusion, split_touching=True)
     regions = label_regions(labels, "legacy", style="amyloid")
     occupancy = Occupancy(field.shape)
     for row in objects:
@@ -89,7 +88,7 @@ def propose(field, settings: dict, shared: dict) -> list[Region]:
         region.flags["artifact_shape"] = row["candidate_class"] == "artifact"
         occupancy.add(region)
     pixel_area = field.pixel_size_um ** 2
-    allowed = field.tissue
+    allowed = field.tissue & ~field.exclusion
 
     def keep(region: Region) -> bool:
         how, index = same_object(region, occupancy, shared["same_iou"], shared["same_inside"], shared["covered"],

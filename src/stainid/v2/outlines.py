@@ -229,14 +229,17 @@ def selected(frame: pd.DataFrame, calls: pd.DataFrame, settings: dict) -> pd.Dat
     return frame[keep.to_numpy()]
 
 
-def expected(project, stain: str, core_id: str) -> dict | None:
-    upstream = manifest.read(project, "proposals", stain, core_id)
+def expected(project, stain: str, core_id: str, settings: dict | None = None, upstream=manifest.READ, calls=manifest.READ,
+             sam: str | None = None) -> dict | None:
+    """What stage 3's manifest of this core would be now (`settings`, `upstream`, `calls`, `sam`: the stain's
+    `stage_params`, the core's proposals and calls manifests and the weights' signature, when known already)."""
+    upstream = manifest.read(project, "proposals", stain, core_id) if upstream is manifest.READ else upstream
     if upstream is None:
         return None
-    calls = manifest.read(project, "calls", stain, core_id)
-    settings = stage_params(project, "outlines", stain)
+    calls = manifest.read(project, "calls", stain, core_id) if calls is manifest.READ else calls
+    settings = stage_params(project, "outlines", stain) if settings is None else settings
     return manifest.make("outlines", settings, {"proposals": upstream["digest"], "calls": calls["digest"] if calls and settings["select"] != "all" else "",
-                                                "sam": manifest.file_signature(project.model("sam"))})
+                                                "sam": manifest.file_signature(project.model("sam")) if sam is None else sam})
 
 
 def outline_core(project, stain: str, core_id: str, tiles: list[dict], outliner: BatchOutliner, threshold: float, redo: bool = False) -> dict:

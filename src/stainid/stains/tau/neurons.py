@@ -135,15 +135,13 @@ def tau_neuron_candidates(
     ring_um: float = 5.0,
     minimum_contrast: float = 0.3,
     rings: list[dict] | None = None,
-    background_exclusion: np.ndarray | None = None,
 ) -> tuple[list[dict[str, object]], np.ndarray]:
     """Tau+ neuron candidates: stained rings around nuclei (`nucleus_rings` with a contrast of at least
     `minimum_contrast`; `rings` made from the same pictures can be passed in) and dense bodies above the 60 µm
-    background. `background_exclusion` leaves pixels out of the background measures only (somata may lie there)."""
+    background."""
     tissue = field_tissue_mask(rgb)
     if exclusion is not None:
         tissue = tissue & ~exclusion
-    background = tissue & ~background_exclusion if background_exclusion is not None else tissue
     hed = rgb_to_hed(rgb)
     hematoxylin = np.maximum(hed[..., 0], 0).astype(np.float32)
     dab = np.maximum(hed[..., 2], 0).astype(np.float32)
@@ -159,8 +157,8 @@ def tau_neuron_candidates(
     taken = np.zeros(dab.shape, dtype=bool)
     for _, _, soma, (x0, y0) in candidates:
         taken[y0 : y0 + soma.shape[0], x0 : x0 + soma.shape[1]] |= soma
-    local_background = cv2.blur(np.where(background, smooth, 0), (round(60 / pixel_size_um),) * 2) / np.maximum(
-        cv2.blur(background.astype(np.float32), (round(60 / pixel_size_um),) * 2), 1e-3
+    local_background = cv2.blur(np.where(tissue, smooth, 0), (round(60 / pixel_size_um),) * 2) / np.maximum(
+        cv2.blur(tissue.astype(np.float32), (round(60 / pixel_size_um),) * 2), 1e-3
     )
     strong = ((smooth - local_background) >= max(1.0 * dab_threshold, 0.03)) & tissue
     thick = cv2.distanceTransform(strong.astype(np.uint8), cv2.DIST_L2, 5) * pixel_size_um >= 2.5
@@ -182,9 +180,7 @@ def tau_neuron_candidates(
     objects: list[dict[str, object]] = []
     labels = np.zeros(dab.shape, dtype=np.int32)
     for kind, (cx, cy), soma, (x0, y0) in candidates:
-        features = _local_features(dab, hematoxylin, background, nuclei, (cx, cy), soma, (x0, y0), dab_threshold, pixel_size_um)
-        if background is not tissue and np.isnan(features["background_dab_median"]):  # wholly inside the left-out pixels
-            features = _local_features(dab, hematoxylin, tissue, nuclei, (cx, cy), soma, (x0, y0), dab_threshold, pixel_size_um)
+        features = _local_features(dab, hematoxylin, tissue, nuclei, (cx, cy), soma, (x0, y0), dab_threshold, pixel_size_um)
         if features["normalized_contrast"] < minimum_contrast:
             continue
         features["edge_fraction"] = float(edge_band[y0 : y0 + soma.shape[0], x0 : x0 + soma.shape[1]][soma].mean())

@@ -375,8 +375,10 @@ def inputs_of(project, stain: str, core_id: str, tiles: list[dict], threshold: f
     }
 
 
-def expected(project, stain: str, core_id: str, tiles: list[dict], threshold: float, nuclei_names: frozenset) -> dict:
-    return manifest.make("proposals", stage_params(project, "proposals", stain),
+def expected(project, stain: str, core_id: str, tiles: list[dict], threshold: float, nuclei_names: frozenset,
+             settings: dict | None = None) -> dict:
+    """What stage 2's manifest of this core would be now (`settings`: the stain's `stage_params`, when known already)."""
+    return manifest.make("proposals", stage_params(project, "proposals", stain) if settings is None else settings,
                          inputs_of(project, stain, core_id, tiles, threshold, nuclei_names))
 
 

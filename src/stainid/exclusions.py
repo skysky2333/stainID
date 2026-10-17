@@ -14,12 +14,14 @@ The layer is made from
 The label log keeps every edit (who, when, which type) as history; only the resolved layer is ever drawn or used.
 
 Codes (`CODES`): 0 counted, 1 fold or tissue damage, 2 artifact, 3 no tissue / empty, 4 out of focus or bad staining,
-5 AT8 edge guard, `OUTSIDE` (255) outside every tile (not analysed; edits do not change it).
+5 AT8 edge guard, `OUTSIDE` (255) outside every tile (not analysed; edits do not change it). The views draw `view`: the
+same codes with the tissue outside every tile as 6, "not analysed" (from the core image's tissue at 1/8, as the tiling
+finds it), so what is drawn matches what the analysis counts; an image without tiles is all "not analysed".
 
 Read API: `resolved(project, core_id, stain) -> Layer | None` (None before stage 2 made the core's mask), `digest` (changes
-exactly when the layer can change: for manifests), `candidate_fractions` (each candidate's excluded share),
-`drop_excluded` (labels on excluded objects left out of scoring, agreement and training) and `signature` (for caches of
-results made from the layer).
+exactly when the layer can change: for manifests), `shares` / `candidate_fractions` (candidates' excluded shares),
+`codes_at`, `drop_excluded` (labels on excluded objects left out of scoring, agreement and training) and `signature`
+(for caches of results made from the layer).
 """
 from __future__ import annotations
 
@@ -40,7 +42,9 @@ SCALE = 8  # core-image px per layer px (stainid.v2.proposals.MASK_SCALE)
 TISSUE, LINEAR, FOLD, MANUAL, EDGE_GUARD, TILE = 1, 2, 4, 8, 16, 32  # stainid.v2.proposals.BITS
 COUNTED, OUTSIDE = 0, 255
 CODES = {1: "fold or tissue damage", 2: "artifact (scratch, bubble, debris, linear artifact)", 3: "no tissue / empty",
-         4: "out of focus or bad staining", 5: "AT8 edge guard (brown rim along an edge)"}
+         4: "out of focus or bad staining", 5: "AT8 edge guard (brown rim along an edge)",
+         6: "not analysed: tissue in no analysed tile (an image QC calls empty, a square with too little tissue)"}
+NOT_ANALYSED = 6  # only in the views' codes (`view`): the analysis counts nothing outside the tiles anyway
 EXCLUDED_AT = 0.5  # an object with at least this share of its outline in excluded areas is excluded
 REVIEWER = "AI reviewer"  # the source of the hand-drawn areas of the earlier AI-review rounds
 TASK, INCLUDE = "exclude", "include"  # labels.exclusions.TASK / INCLUDE
@@ -280,7 +284,7 @@ def digests(project, stain: str, core_ids) -> dict[str, str | None]:
 
 _LAYERS: OrderedDict[tuple, Layer] = OrderedDict()
 _LAYERS_LIMIT = 24
-_SHARES: OrderedDict[tuple, tuple[tuple, pd.Series]] = OrderedDict()  # (project, stain, core) -> (made from, shares)
+_SHARES: OrderedDict[tuple, tuple[tuple, dict]] = OrderedDict()  # (project, stain, core) -> (made from, what was worked out)
 _LOCK = threading.Lock()
 
 
@@ -314,6 +318,79 @@ def resolved(project, core_id: str, stain: str) -> Layer | None:
     return layer
 
 
+_TISSUE: OrderedDict[tuple, np.ndarray] = OrderedDict()  # (image, its signature, shape) -> tissue cells
+
+
+def _tissue(project, image_path: str, shape: tuple[int, int] | None) -> np.ndarray | None:
+    """The core image's tissue at 1/`SCALE` as the tiling finds it (`qc.core_qc.tissue_mask` of the 1/8 picture),
+    on a grid of `shape` (else its own); None when the image cannot be read."""
+    from stainid.imaging.core_images import read_bgr  # noqa: PLC0415
+    from stainid.qc.core_qc import tissue_mask  # noqa: PLC0415
+
+    path = project.root / image_path
+    key = (str(path), cache.signature(path), shape)
+    with _LOCK:
+        kept = _TISSUE.get(key)
+    if kept is not None:
+        return kept
+    bgr = read_bgr(path, cv2.IMREAD_REDUCED_COLOR_8)
+    if bgr is None:
+        return None
+    tissue = tissue_mask(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))[0].astype(np.uint8)
+    if shape is not None and tissue.shape != shape:
+        tissue = cv2.resize(tissue, (shape[1], shape[0]), interpolation=cv2.INTER_NEAREST)
+    found = tissue > 0
+    with _LOCK:
+        _TISSUE[key] = found
+        while len(_TISSUE) > 64:
+            _TISSUE.popitem(last=False)
+    return found
+
+
+def _image_of(project, core_id: str, stain: str) -> tuple[str | None, bool]:
+    """The core image's path and whether it has analysed tiles (from the tile table, else the core image table)."""
+    tiles = _tiles(project)
+    mine = tiles[(tiles.core_id.astype(str) == str(core_id)) & (tiles.stain.astype(str) == stain)] if "core_id" in tiles else tiles.iloc[:0]
+    if len(mine):
+        return str(mine.image_path.iloc[0]), True
+    from stainid.tables import read_csv  # noqa: PLC0415
+
+    table = project.input("core_images")
+    for row in read_csv(table) if table.exists() else []:
+        if str(row.get("core_id")) == str(core_id) and row.get("stain") == stain:
+            return str(row["image_path"]), False
+    return None, False
+
+
+@dataclass
+class View:
+    """What the views draw of one core image and stain: the resolved codes with tissue outside every tile as
+    `NOT_ANALYSED`, the scale and a version (changes with the layer)."""
+    codes: np.ndarray
+    scale: int
+    version: str
+
+
+def view(project, core_id: str, stain: str) -> View | None:
+    """The layer as the Cores view and the annotation pages draw it (`resolved`, plus "not analysed" tissue); an image
+    without any analysed tile is all "not analysed"; None before stage 2 made the mask of an image with tiles."""
+    image, tiled = _image_of(project, core_id, stain)
+    layer = resolved(project, core_id, stain)
+    if layer is None and (tiled or image is None):
+        return None
+    if layer is not None:
+        codes = layer.codes.copy()
+        tissue = _tissue(project, image, codes.shape) if image else None
+        if tissue is not None:
+            codes[(codes == OUTSIDE) & tissue] = NOT_ANALYSED
+        return View(codes, layer.scale, layer.digest)
+    tissue = _tissue(project, image, None)
+    if tissue is None:
+        return None
+    codes = np.where(tissue, NOT_ANALYSED, OUTSIDE).astype(np.uint8)
+    return View(codes, SCALE, "untiled-" + hashlib.sha1(repr(cache.signature(project.root / image)).encode()).hexdigest()[:12])
+
+
 def signature(project, stain: str | None = None) -> tuple:
     """Changes whenever an edit is saved or stage 2 rewrites a mask (of `stain`, else of any stain): for caches of
     results made from the layers."""
@@ -326,53 +403,103 @@ def signature(project, stain: str | None = None) -> tuple:
 def forget() -> None:
     with _LOCK:
         _LAYERS.clear()
+        _TISSUE.clear()
         _SHARES.clear()
 
 
 # ---------------------------------------------------------------- objects in excluded areas
 
+def _known(project, stain: str, core_id: str) -> dict | None:
+    """What was worked out about one core's objects (candidate shares, codes at positions), kept until its layer or its
+    candidate table changes; None before stage 2."""
+    from stainid import candidates  # noqa: PLC0415
+
+    made_from = digest(project, core_id, stain)
+    if made_from is None:
+        return None
+    path = candidates.path(project, stain, core_id, "candidates")
+    stamp = (made_from, cache.signature(path))
+    key = (str(project.root), stain, str(core_id))
+    with _LOCK:
+        kept = _SHARES.get(key)
+        if kept is None or kept[0] != stamp:
+            kept = (stamp, {})
+            _SHARES[key] = kept
+        _SHARES.move_to_end(key)
+        while len(_SHARES) > 4096:
+            _SHARES.popitem(last=False)
+    return kept[1]
+
+
+def shares(project, stain: str, core_id: str, ids) -> dict[str, float]:
+    """The excluded share of these candidates of one core by the resolved layer (`Layer.fractions` of their stain
+    outlines; a candidate the store no longer has by the cell at the position in its id); empty before stage 2. Only
+    the candidates asked about are worked out (and kept until the layer or the store changes)."""
+    from stainid import candidates  # noqa: PLC0415
+
+    known = _known(project, stain, core_id)
+    if known is None:
+        return {}
+    ids = [str(c) for c in dict.fromkeys(ids)]
+    missing = [c for c in ids if ("share", c) not in known]
+    if missing:
+        layer = resolved(project, core_id, stain)
+        rows = candidates.read_core(project, stain, core_id, ["candidate_id", "x_core", "y_core", "outline"])
+        rows = rows[rows.candidate_id.isin(missing)].drop_duplicates("candidate_id") if len(rows) else rows
+        found = dict(zip(rows.candidate_id, layer.fractions(rows.outline.tolist(), rows.x_core, rows.y_core))) if len(rows) else {}
+        gone = [c for c in missing if c not in found]
+        if gone:
+            xy = np.array([candidates.parse_id(c)[2:] for c in gone], np.float64)
+            codes = layer.at(xy[:, 0], xy[:, 1])
+            found |= {c: float(code not in (COUNTED, OUTSIDE)) for c, code in zip(gone, codes)}
+        with _LOCK:
+            known.update({("share", c): float(v) for c, v in found.items()})
+    return {c: known[("share", c)] for c in ids if ("share", c) in known}
+
+
+def codes_at(project, stain: str, core_id: str, xs, ys) -> np.ndarray:
+    """The layer's code at core-pixel positions (rounded to the pixel; `OUTSIDE` before stage 2)."""
+    known = _known(project, stain, core_id)
+    points = [(round(float(x)), round(float(y))) for x, y in zip(xs, ys)]
+    if known is None:
+        return np.full(len(points), OUTSIDE, np.uint8)
+    missing = [p for p in dict.fromkeys(points) if ("at",) + p not in known]
+    if missing:
+        layer = resolved(project, core_id, stain)
+        xy = np.array(missing, np.float64)
+        codes = layer.at(xy[:, 0], xy[:, 1])
+        with _LOCK:
+            known.update({("at",) + p: int(c) for p, c in zip(missing, codes)})
+    return np.array([known[("at",) + p] for p in points], np.uint8)
+
+
 def candidate_fractions(project, stain: str, core_id: str, frame: pd.DataFrame | None = None) -> pd.Series:
-    """Each candidate's excluded share by the resolved layer (`Layer.fractions` of its stain outline), by candidate id;
-    empty before stage 2. `frame`: the candidates (candidate_id, x_core, y_core, outline), else the store's."""
-    layer = resolved(project, core_id, stain)
-    if layer is None:
-        return pd.Series(dtype=float)
+    """Each candidate's excluded share by the resolved layer, by candidate id: of `frame` (candidate_id, x_core,
+    y_core, outline: stage 4 before the store is written), else of every candidate in the store; empty before stage 2."""
     if frame is None:
         from stainid import candidates  # noqa: PLC0415
 
-        path = candidates.path(project, stain, core_id, "candidates")
-        stamp = cache.signature(path) if path.exists() else None
-
-        def make() -> pd.Series:
-            rows = candidates.read_core(project, stain, core_id, ["candidate_id", "x_core", "y_core", "outline"])
-            return pd.Series(layer.fractions(rows.outline.tolist(), rows.x_core, rows.y_core), index=rows.candidate_id.to_numpy(object))
-
-        key = (str(project.root), stain, str(core_id))
-        with _LOCK:
-            kept = _SHARES.get(key)
-        if kept is not None and kept[0] == (layer.digest, stamp):
-            return kept[1]
-        made = make()
-        with _LOCK:
-            _SHARES[key] = ((layer.digest, stamp), made)
-            _SHARES.move_to_end(key)
-            while len(_SHARES) > 256:
-                _SHARES.popitem(last=False)
-        return made
+        rows = candidates.read_core(project, stain, core_id, ["candidate_id"])
+        found = shares(project, stain, core_id, rows.candidate_id.tolist()) if len(rows) else {}
+        return pd.Series(found, dtype=float)
+    layer = resolved(project, core_id, stain)
+    if layer is None:
+        return pd.Series(dtype=float)
     outline = frame["outline"].tolist() if "outline" in frame else [None] * len(frame)
     return pd.Series(layer.fractions(outline, frame.x_core, frame.y_core), index=frame.candidate_id.to_numpy(object))
 
 
 def drop_excluded(project, labels: pd.DataFrame, tasks=("class", "outline")) -> pd.DataFrame:
-    """The labels without those about objects in excluded areas (what scoring, agreement and training read): a label
-    naming a candidate goes when the candidate's excluded share is at least `EXCLUDED_AT`; one without (an object a
-    person added, an older label) when the cell at its position is excluded."""
+    """The labels (as the log stores them) without those about objects in excluded areas, what scoring, agreement and
+    training read: a label naming a candidate goes when the candidate's excluded share is at least `EXCLUDED_AT`; one
+    without (an object a person added, an older label) when the cell at its position is excluded."""
     if labels.empty or "task" not in labels:
         return labels
     about = labels.task.isin(list(tasks)).to_numpy()
     if not about.any():
         return labels
     from stainid import candidates  # noqa: PLC0415
+    from stainid.labels import frames  # noqa: PLC0415
 
     rows = labels[about]
     named = rows.candidate.fillna("").astype(str) if "candidate" in rows else pd.Series("", index=rows.index)
@@ -385,33 +512,18 @@ def drop_excluded(project, labels: pd.DataFrame, tasks=("class", "outline")) -> 
             continue
         by_core.setdefault((stain, core_id), []).append((index, cid))
     for (stain, core_id), items in by_core.items():
-        if resolved(project, core_id, stain) is None:
-            continue
-        shares = candidate_fractions(project, stain, core_id)
-        missing = []
-        for index, cid in items:
-            share = shares.get(cid)
-            if share is None:
-                missing.append((index, cid))
-            elif share >= EXCLUDED_AT:
-                drop.append(index)
-        if missing:  # ids the store no longer has: by the position in the id
-            layer = resolved(project, core_id, stain)
-            xy = np.array([candidates.parse_id(c)[2:] for _, c in missing], np.float64)
-            codes = layer.at(xy[:, 0], xy[:, 1])
-            drop += [i for (i, _), code in zip(missing, codes) if code not in (COUNTED, OUTSIDE)]
+        found = shares(project, stain, core_id, [c for _, c in items])
+        drop += [i for i, c in items if found.get(c, 0.0) >= EXCLUDED_AT]
     rest = rows[(named.str.len() == 0).to_numpy() & rows.x.notna().to_numpy()]
     if len(rest):
         tiles = _tiles(project)
         boxes = tiles.drop_duplicates("tile_id").set_index("tile_id") if not tiles.empty else pd.DataFrame()
         known = rest[rest.tile_id.isin(set(boxes.index))] if len(boxes) else rest.iloc[:0]
+        known = frames.in_field_frame(known, tiles, project.context_px)  # every position in field-picture pixels
         for tile_id, group in known.groupby("tile_id", sort=False):
             tile = boxes.loc[tile_id]
-            layer = resolved(project, str(tile["core_id"]), str(tile["stain"]))
-            if layer is None:
-                continue
             x0, y0 = max(0, int(tile["x_px"]) - project.context_px), max(0, int(tile["y_px"]) - project.context_px)
-            codes = layer.at(group.x.astype(float) + x0, group.y.astype(float) + y0)
+            codes = codes_at(project, str(tile["stain"]), str(tile["core_id"]), group.x.astype(float) + x0, group.y.astype(float) + y0)
             drop += list(group.index[(codes != COUNTED) & (codes != OUTSIDE)])
     return labels.drop(index=drop) if drop else labels
 

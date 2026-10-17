@@ -12,7 +12,8 @@ from pathlib import Path
 import pandas as pd
 
 from stainid import cache
-from stainid.labels import added, candidate_store, exclusions, frames, pool, store
+from stainid import exclusions as excluded_areas
+from stainid.labels import added, candidate_store, frames, pool, store
 from stainid.labels import vocabulary as vocab
 from stainid.labels.tasks import positive
 from stainid.project import Project
@@ -133,7 +134,7 @@ def cached_stain_overview(project: Project, stain: str, root: Path, tiles: pd.Da
     """`stain_overview`, worked out again only when a label is saved or a pool field is (re)built."""
     key = (str(project.root), stain)
     stamp = (store.signature(root), pool.signature(project, stain), added.signature(project, stain), len(tiles), vocab.of(project, stain),
-             cache.signature(candidate_store.folder(project, stain)))
+             cache.signature(candidate_store.folder(project, stain)), excluded_areas.signature(project, stain))
     if key not in _CACHE or _CACHE[key][0] != stamp:
-        _CACHE[key] = (stamp, stain_overview(project, stain, frames.in_field_frame(exclusions.counted(store.current(root)), tiles, project.context_px), tiles))
+        _CACHE[key] = (stamp, stain_overview(project, stain, frames.in_field_frame(excluded_areas.drop_excluded(project, store.current(root)), tiles, project.context_px), tiles))
     return _CACHE[key][1]

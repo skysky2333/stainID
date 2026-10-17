@@ -165,7 +165,6 @@ def segment_amyloid_candidates(
     exclusion_mask: np.ndarray | None = None,
     split_touching: bool = False,
     split_prominence: float = 1.0,
-    background_exclusion: np.ndarray | None = None,
 ) -> tuple[
     dict[str, float | int],
     list[dict[str, float | int | bool | str]],
@@ -182,14 +181,10 @@ def segment_amyloid_candidates(
     valid = tissue & ~excluded
     if valid.sum() < 100:
         raise ValueError("6E10 candidate detection requires at least 100 tissue pixels")
-    # `background_exclusion`: pixels left out of the background statistics only (deposits may still be found there)
-    background = valid & ~background_exclusion if background_exclusion is not None else valid
-    if background.sum() < 100:
-        background = valid
 
     dab = np.maximum(rgb_to_hed(rgb)[..., 2], 0.0).astype(np.float32)
-    background_median = float(np.median(dab[background]))
-    background_mad = float(np.median(np.abs(dab[background] - background_median)))
+    background_median = float(np.median(dab[valid]))
+    background_mad = float(np.median(np.abs(dab[valid] - background_median)))
     background_sigma = max(1.4826 * background_mad, 0.001)
     seed_threshold = max(
         0.035,
