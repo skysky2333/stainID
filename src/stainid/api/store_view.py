@@ -261,21 +261,28 @@ PAINTED_TYPES = ("1", "2", "3", "4")  # the types the brush paints (labels.exclu
 
 
 def field_areas(project, tile: dict) -> dict:
-    """Each brush type's current area over a field, as the brush starts from it: detection's area of that type with
-    every edit people saved merged in (`exclusions.final_say`, one region set per type), a white-on-transparent PNG per
-    type (data URL, one pixel per layer cell) and where it lies in the field picture (`x`, `y`, `width`, `height` in
-    field px). The brush adds to and takes from these areas; nothing here is an analysis input."""
+    """Each brush type's current area over a field (`current_areas`), placed in the field picture's pixels."""
+    from stainid.labels import frames  # noqa: PLC0415
+
+    x0, y0 = frames.field_origin(tile, project.context_px)
+    x1, y1 = int(tile["x_px"]) + int(tile["width_px"]) + project.context_px, int(tile["y_px"]) + int(tile["height_px"]) + project.context_px
+    return current_areas(project, str(tile["core_id"]), str(tile["stain"]), (x0, y0, x1, y1))
+
+
+def current_areas(project, core_id: str, stain: str, box: tuple[int, int, int, int] | None = None) -> dict:
+    """Each brush type's current area, as the one brush (field tool and "Mark bad areas") starts from it: detection's
+    area of that type with every edit people saved merged in (`exclusions.final_say`, one region set per type), a
+    white-on-transparent PNG per type (data URL, one pixel per layer cell) and where it lies (`x`, `y`, `width`,
+    `height`, in px from the box's corner: the whole core image without a box). The brush adds to and takes from these
+    areas; nothing here is an analysis input."""
     import base64  # noqa: PLC0415
 
     import cv2  # noqa: PLC0415
 
-    from stainid.labels import frames  # noqa: PLC0415
-
-    layer = excluded_areas.final_say(project, str(tile["core_id"]), str(tile["stain"]))
+    layer = excluded_areas.final_say(project, core_id, stain)
     if layer is None:
         return {"status": "not_made", "kinds": {}}
-    x0, y0 = frames.field_origin(tile, project.context_px)
-    x1, y1 = int(tile["x_px"]) + int(tile["width_px"]) + project.context_px, int(tile["y_px"]) + int(tile["height_px"]) + project.context_px
+    x0, y0, x1, y1 = box if box is not None else (0, 0, layer.codes.shape[1] * layer.scale, layer.codes.shape[0] * layer.scale)
     window = _cells(layer, x0, y0, x1, y1)
     codes = layer.codes[window]
     kinds = {}

@@ -71,15 +71,15 @@ const FAQ: [string, ReactNode][] = [
   ['What happens to the bad areas people mark?', <>Like every label, they only teach and test models: they train and score the bad-area detection
     (<Link to="/models">Models</Link> → Bad-area detector: detection’s areas against people’s, per TMA and donor), and objects inside them are left out of
     training and scoring. The analysis always uses detection’s own areas (hatched, “Excluded from analysis” on the Cores view), so marking an area never
-    changes a result or makes a step out of date. People’s areas are outlined on top: painted ones in their type’s colour, the parts marked fine dashed
-    green. <b>Mark bad areas</b> (a kind of session) goes core by core with all its stains; a sample of cores is enough.</>],
+    changes a result or makes a step out of date. The brush (the same in <b>Fix the field</b> and <b>Mark bad areas</b>) changes each type’s area as it
+    stands: a drag adds to the chosen type, Shift-drag takes out of it (detection’s part too: that is how a part is marked fine). <b>Mark bad areas</b> (a kind of session) goes core by core with all its stains; a sample of cores is enough.</>],
   ['Which keys work on the Cores view and in Mark bad areas?', <>
     <b>Cores view</b>: <b>Space</b> hides or shows everything drawn (the minimap stays), <b>←</b> / <b>→</b> the previous or next core with the same stain and
     layers, <b>↑</b> / <b>↓</b> move the picture, scroll zooms, drag moves, click an object for its details; on the minimap a click or drag moves there and a
-    double-click opens that tile for annotation. <b>Mark bad areas</b>: the brush is always on — <b>1</b>–<b>4</b> the area type, drag paints, Shift-drag
-    marks fine, the wheel changes the brush (Ctrl/⌘+wheel or <b>+</b> / <b>−</b> zooms), the middle button pans, <b>Z</b> undoes a stroke, <b>Space</b> hides
-    the drawings, <b>Tab</b> / <b>Shift+Tab</b> or <b>]</b> / <b>[</b> the next or previous stain, <b>Enter</b> says this stain is fine and moves on (on the last
-    stain it saves and opens the next core).</>],
+    double-click opens that tile for annotation. <b>Mark bad areas</b>: the brush of <b>Fix the field</b>, always on — <b>1</b>–<b>4</b> the area type, a drag
+    adds to that type’s area, Shift-drag takes out of it, <b>Tab</b> / <b>Shift+Tab</b> (or <b>+</b> / <b>−</b>) a smaller or bigger brush, the wheel zooms, the
+    middle button pans, <b>Z</b> undoes a stroke, <b>Space</b> hides the drawings, <b>]</b> / <b>[</b> the next or previous stain, <b>Enter</b> says this stain
+    is fine and moves on (on the last stain it saves and opens the next core).</>],
   ['A labelling session says no core has detection’s candidates.', <>The annotation rounds show the candidates of the staged detection. Run the
     <b>Detect</b> steps on the <Link to="/workflow">Run</Link> page for that stain first (at least <b>Find candidates</b> and <b>Decide</b>; <b>Run what’s left</b> runs them).</>],
   ['A Detect step says some cores are out of date.', <>Something those cores were made from changed after they ran: a setting, a model or an earlier

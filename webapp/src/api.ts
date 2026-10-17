@@ -558,7 +558,7 @@ export interface ExcludedInfo {
 export type PictureState = (Pyramid & { ready: true }) | { ready: false; state?: string; ahead?: number; error?: string; thumb_size?: number | null }
 export interface AreaImage { stain: string; picture: PictureState | null; excluded: ExcludedInfo; checked_by: string[]; checked_by_me: boolean; edits: number }
 /** One core of a "Mark bad areas" session: all its stain images. */
-export interface AreaCore { core_id: string; images: AreaImage[]; second_check: boolean; open_by: string[]; progress: RoundProgress }
+export interface AreaCore { core_id: string; images: AreaImage[]; second_check: boolean; open_by: string[]; progress: RoundProgress; pixel_size_um?: number }
 export interface AreaNext { core_id: string | null; after: string | null; taken: number; progress: RoundProgress }
 /** People's areas of a core image so far (core px; the first ring outer, later ones holes; kind '1'–'4' or 'include'). */
 export interface PeopleAreas { regions: { kind: string; rings: number[][][] }[]; agreement: unknown; edits: { person: string; time: number; kinds: string[] }[] }

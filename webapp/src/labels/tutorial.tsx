@@ -168,11 +168,11 @@ function Coached({ practice, preview, next }: { practice: NonNullable<TutorialIn
 
 interface AreaStep { title: string; text: string; done: AreaEvent[] }
 const AREA_STEPS: AreaStep[] = [
-  { title: 'One core, all its stains', text: 'You see one core at a time with each of its stains (the tabs above the picture). Hatched parts are what detection itself leaves out of the analysis; they do not change here. Press Tab or ] (or click a tab) to look at the next stain, Shift+Tab or [ to go back.', done: ['stain'] },
-  { title: 'Choose a type', text: 'Press 1–4 to choose what is wrong: 1 fold or tissue damage, 2 artifact (scratch, bubble, debris), 3 no tissue, 4 out of focus or bad staining. The brush on the picture takes its colour.', done: ['type'] },
-  { title: 'Paint a bad area', text: 'Drag over a part that should not be counted. It is hatched in the type’s colour. The middle mouse button moves the picture; Ctrl+wheel or + and − zoom.', done: ['paint'] },
-  { title: 'Brush size', text: 'Turn the mouse wheel over the picture to make the brush bigger or smaller.', done: ['size'] },
-  { title: 'Marked fine', text: 'Hold Shift and drag over a part that is fine after all, for example part of an area detection hatched. It shows faint green.', done: ['clear'] },
+  { title: 'One core, all its stains', text: 'You see one core at a time with each of its stains (the tabs above the picture). Hatched parts are each type’s area as it stands: what detection leaves out, with everyone’s edits (detection’s own areas, what the analysis uses, do not change here). Press ] (or click a tab) to look at the next stain, [ to go back.', done: ['stain'] },
+  { title: 'Choose a type', text: 'Press 1–4 to choose what is wrong: 1 fold or tissue damage, 2 artifact (scratch, bubble, debris), 3 no tissue, 4 out of focus or bad staining. The brush takes its colour, and that type’s area shows strongly as one region: detection’s with everyone’s edits.', done: ['type'] },
+  { title: 'Paint a bad area', text: 'Drag over a part that should not be counted: it is added to the type’s area (a stroke touching an area of that type extends it). The wheel zooms; the middle mouse button moves the picture.', done: ['paint'] },
+  { title: 'Brush size', text: 'Press Tab for a smaller brush, Shift+Tab for a bigger one — the same keys as in Fix the field. The ring under the mouse shows its size.', done: ['size'] },
+  { title: 'Take a part out', text: 'Hold Shift and drag over a part of the chosen type’s area that is fine after all, also an area detection found: it is taken out of that type.', done: ['clear'] },
   { title: 'Undo', text: 'Press Z to take back your last stroke.', done: ['undo'] },
   { title: 'A clean look', text: 'Press Space to hide everything drawn over the tissue, and Space again to bring it back.', done: ['overlays'] },
   { title: 'This stain is done', text: 'When a stain looks right — painted, or fine as it is — press Enter. It gets a tick and the next stain opens.', done: ['fine'] },

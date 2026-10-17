@@ -151,7 +151,7 @@ def core_payload(meta: dict, core_id: str, person: str) -> dict:
                        "edits": len(exclusions.edits(state.project, core_id, stain))})
     others = sorted(held().get(core_id, set()) - {person})
     return {"core_id": core_id, "images": images, "second_check": core_id in set(meta.get("second") or []), "open_by": others,
-            "progress": progress(meta)}
+            "progress": progress(meta), "pixel_size_um": state.project.pixel_size_um}
 
 
 @router.get("/annotate/{name}/areas/next")
@@ -249,6 +249,16 @@ def core_annotated(name: str, core_id: str, stain: str, request: Request, person
     if stain not in _core(meta, core_id):
         raise HTTPException(404, f"{core_id} has no {stain} image in this session")
     return store_view.people_areas(get_state().project, core_id, stain)
+
+
+@router.get("/annotate/{name}/cores/{core_id}/{stain}/areas")
+def core_areas(name: str, core_id: str, stain: str, request: Request, person: str = Depends(annotator)) -> dict:
+    """Each brush type's current area over the core image (`store_view.current_areas`, core px): what the brush starts
+    from, as on a field."""
+    meta = areas_meta(name, request)
+    if stain not in _core(meta, core_id):
+        raise HTTPException(404, f"{core_id} has no {stain} image in this session")
+    return store_view.current_areas(get_state().project, core_id, stain)
 
 
 @router.get("/annotate/{name}/cores/{core_id}/{stain}/objects")

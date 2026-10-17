@@ -107,8 +107,8 @@ page:
 1. **Choose a stain and what people should do.**
    - **Fix the field** (start here): the whole field with every object detection considered. People point at an
      object and press a key to change its call, fix its outline, or click to add what detection missed.
-   - **Mark bad areas**: one core at a time with all its stains, brush only: paint folds, artifacts, empty glass and
-     blur, or press Enter when a stain looks fine. A sample of cores is enough.
+   - **Mark bad areas**: one core at a time with all its stains, brush only (the field tool's brush and keys): add to or
+     take out of the areas of folds, artifacts, empty glass and blur, or press Enter when a stain looks fine. A sample of cores is enough.
 2. **Choose where the fields come from**: every ready core, some TMAs, or squares you click on the cores. The same
    works for slides and images.
 3. **Copy the link and send it.** People open it in their browser and type their name. No account or password is

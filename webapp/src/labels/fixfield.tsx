@@ -1133,7 +1133,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
                     {theirs.map((kind) => {
                       const t = kind === INCLUDE ? CLEARED : EXCLUDE_TYPES.find((e) => e.key === kind)
                       return <li key={`theirs-${kind}`}><span className={`look-swatch${kind === INCLUDE ? ' look-removed' : ''}`} style={{ borderColor: t?.colour, background: 'transparent' }} />
-                        {kind === INCLUDE ? 'marked fine' : t?.name ?? kind} (outlined)</li>
+                        {kind === INCLUDE ? 'taken out' : t?.name ?? kind} (outlined)</li>
                     })}
                     {mine.map((t) => <li key={`mine-${t.key}`}><span className="look-swatch hatched" style={{ borderColor: t.colour, color: t.colour }} />
                       {t.name} with your strokes (not saved yet)</li>)}

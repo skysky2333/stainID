@@ -222,8 +222,12 @@ studies, image sets and whole-slide projects.
    - **Fix the field** (objects). Whole fields with every object detection considered: point at an object and
      press a key to change its call or its outline, click to add what it missed. *How many fields*: fields nobody has
      checked, spread over TMAs and groups.
-   - **Mark bad areas** (brush only). One core at a time with all its stains: paint folds, artifacts, empty glass and
-     blur, or say a stain looks fine. A sample of cores is enough.
+   - **Mark bad areas** (brush only). One core at a time with all its stains: change the areas of folds, artifacts,
+     empty glass and blur, or say a stain looks fine. A sample of cores is enough. The brush is the field tool's
+     (`BrushMasks`, labels/brush.ts), always on and with the same keys: each type's current area over the whole core
+     image (GET `…/cores/{core}/{stain}/areas`), a drag adds to the chosen type, Shift-drag takes out of it
+     (detection's part too: marking a part fine is no more than that), Tab / Shift+Tab (or + / −) the brush size in µm,
+     the wheel zooms, Z undoes a stroke, [ / ] the other stain, Enter this stain is done.
    - "Check detection's calls" (one object at a time) is no longer made. Its old sessions stay listed as history and
      their labels stay valid object labels for training and evaluation.
 3. **Which cores**: every ready core, some TMAs (batches, for slides and images), or fields clicked on the cores. Each

@@ -124,7 +124,7 @@ const REASON_TEXT: Record<string, string> = {
 const reasonText = (code: string) => REASON_TEXT[code] ?? code.replace(/^rule:/, '').replace(/_/g, ' ')
 /** The colours of people's areas (the brush's, labels/brush.ts EXCLUDE_TYPES), and of a part they marked as fine. */
 const AREA_COLOURS: Record<string, string> = { '1': '#ffb000', '2': '#a855f7', '3': '#9ca3af', '4': '#00e5ff', include: '#22c55e' }
-const AREA_NAMES: Record<string, string> = { '1': 'fold or tissue damage', '2': 'artifact', '3': 'no tissue', '4': 'out of focus or bad staining', include: 'marked fine' }
+const AREA_NAMES: Record<string, string> = { '1': 'fold or tissue damage', '2': 'artifact', '3': 'no tissue', '4': 'out of focus or bad staining', include: 'taken out of a type (marked fine)' }
 /** The tile states of the minimap, with their fills. */
 const TILE_STATES: { id: TileState | 'not_analysed'; label: string; fill: string }[] = [
   { id: 'reviewed', label: 'reviewed', fill: 'rgb(34 197 94 / 45%)' },

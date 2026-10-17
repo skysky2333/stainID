@@ -94,14 +94,24 @@ def table(project: Project, stain: str, labels: pd.DataFrame, tiles: pd.DataFram
     return keyed[COLUMNS].reset_index(drop=True)
 
 
+def matched(project: Project, stain: str, rows: pd.DataFrame, tiles: pd.DataFrame) -> pd.Series | None:
+    """The candidate each label of `rows` naming none is about, found by position (None when every label names one):
+    the `matched` of `store.object_keys`. `rows` in field-picture pixels (`frames.in_field_frame`)."""
+    old = _unnamed(rows) if len(rows) else rows
+    return _legacy(project, stain, old, tiles, in_field=True) if len(old) else None
+
+
+def keys(project: Project, stain: str, rows: pd.DataFrame, tiles: pd.DataFrame) -> pd.Series:
+    """What each label (field-picture pixels) is about, as every reader keys objects (`store.object_keys`)."""
+    return store.object_keys(rows, matched(project, stain, rows, tiles))
+
+
 def consensus(project: Project, stain: str, labels: pd.DataFrame, tiles: pd.DataFrame) -> pd.DataFrame:
     """One row per labelled object of this stain (`store.consensus`): old labels matched onto candidates first, so a
     candidate's labels count together whatever field or position they were made at. `labels` in field-picture pixels
     (`frames.in_field_frame`), as training and the Labels page read them."""
     rows = labels[(labels.stain == stain) & (labels.task == "class")] if len(labels) else labels
-    old = _unnamed(rows) if len(rows) else rows
-    matched = _legacy(project, stain, old, tiles, in_field=True) if len(old) else None
-    return store.consensus(rows, stain, vocab.of(project, stain), matched)
+    return store.consensus(rows, stain, vocab.of(project, stain), matched(project, stain, rows, tiles))
 
 
 @dataclass

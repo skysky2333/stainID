@@ -430,3 +430,33 @@ def test_the_admin_can_preview_the_tutorial_without_a_name(rounds_project):
     made = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "open": True, "tile_ids": [TILE]}).json()
     assert admin.get(f"/api/annotate/{made['name']}/fields/{TILE}").status_code == 401
     assert ann.get(f"/api/annotate/{made['name']}/fields/{TILE}").status_code == 200
+
+
+def test_the_labels_page_keys_objects_as_training_and_the_rounds_do(rounds_project):
+    """The Labels page's objects (`labels.objects`) use `store.object_keys` with the old labels matched onto candidates:
+    a label naming a candidate and an old label a few pixels off it are one object, and one person's two labels count
+    once (their latest), as in `decisions.consensus`."""
+    from stainid.labels import frames, objects, store
+
+    _, _, rows = rounds_project
+    project, tiles = state.get_state().project, state.get_state().tiles
+    target = rows[0]
+    tile = tiles[tiles.tile_id == TILE].iloc[0]
+    x0, y0 = frames.field_origin(tile, project.context_px)
+    x, y = float(target["x_core"]) - x0, float(target["y_core"]) - y0
+    store.append(project.output("reviews"), [
+        {"id": "a1", "source": "Ann", "stain": "6E10", "task": "class", "tile_id": TILE, "x": x, "y": y,
+         "candidate": target["candidate_id"], "value": "not a plaque", "time": 1.0},
+        {"id": "a2", "source": "Ann", "stain": "6E10", "task": "class", "tile_id": TILE, "x": x, "y": y,
+         "candidate": target["candidate_id"], "value": "plaque", "subtype": "compact", "time": 2.0},
+        {"id": "b1", "source": "Ben", "stain": "6E10", "task": "class", "tile_id": TILE, "x": x + 3, "y": y - 2,
+         "value": "plaque", "subtype": "compact", "time": 3.0}])
+    decisions.forget()
+    labels = store.current(project.output("reviews"))
+    found = objects.labelled(project, tiles, labels, "6E10")
+    assert len(found) == 1
+    one = found.iloc[0]
+    assert one.object == target["candidate_id"] and one.n == 2 and one.identity == "plaque" and one.subtype == "compact"
+    assert len(one.labels) == 3  # the history keeps every label
+    counted = decisions.consensus(project, "6E10", frames.in_field_frame(labels, tiles, project.context_px), tiles)
+    assert counted.object.tolist() == [one.object] and int(counted.n.iloc[0]) == one.n
