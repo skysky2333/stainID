@@ -334,6 +334,44 @@ def test_finishing_a_field_records_every_candidate_as_checked_by_the_person(roun
     assert len(same) == 48 and hers.confirmed.sum() == 48  # her 48 untouched answers are detection's calls
 
 
+def test_an_area_marked_as_bad_saves_reloads_and_keeps_its_objects_out_of_scoring(rounds_project):
+    import base64
+
+    import cv2
+
+    admin, (ann, _), rows = rounds_project
+    name = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "open": True, "tile_ids": [TILE]}).json()["name"]
+    field = ann.get(f"/api/annotate/{name}/fields/{TILE}").json()
+    inside_id = next(o["candidate_id"] for o in field["objects"] if o["own"] and abs(o["x"] - 228) < 1 and abs(o["y"] - 228) < 1)  # (400, 400) on the core
+    painted = np.zeros((200, 200, 4), np.uint8)
+    painted[50:65, 50:65] = 255  # field pixels 200–260 at a quarter of the field picture's size
+    png = "data:image/png;base64," + base64.b64encode(cv2.imencode(".png", painted)[1].tobytes()).decode()
+    saved = _save(ann, name, TILE, [{"task": "exclude", "png": png, "scale": 4}], submit=True)
+    assert saved.status_code == 200, saved.text
+    again = ann.get(f"/api/annotate/{name}/fields/{TILE}").json()
+    marked = next(m for m in again["mine"] if m["task"] == "exclude")
+    xs = [p[0] for p in marked["points"][0]]
+    assert 195 <= min(xs) <= 205 and 255 <= max(xs) <= 265 and marked["value"] == "holes:0"  # it comes back as it was painted
+    decided = decisions.state(state.get_state().project, "6E10", state.get_state().tiles)
+    hers = set(decided.rows.candidate[decided.rows.source == "Ann"])
+    assert inside_id not in hers and len(hers) == len([o for o in field["objects"] if o["own"]]) - 1  # left out of scoring
+    from dataclasses import replace
+
+    from stainid.labels import exclusions, store
+    from stainid.v2.run import annotator_exclusions
+
+    project, tiles = state.get_state().project, state.get_state().tiles
+    labels = store.current(project.output("reviews"))
+    assert exclusions.for_analysis(project, labels, tiles) == {}  # the analyses ignore it by default
+    on = replace(project, config={**project.config, "labels": {**project.config["labels"], "apply_exclusions": True}})
+    marked = exclusions.for_analysis(on, labels, tiles)
+    (image, polygons), = marked.items()
+    assert polygons[0]["source"] == "annotator Ann" and min(p[0] for p in polygons[0]["polygon_core_px"]) >= 360  # core pixels
+    assert annotator_exclusions(on, {})[image] == polygons  # what the v2 proposals take as hand-drawn exclusions when it is on
+    cleared = _save(ann, name, TILE, [{"task": "exclude", "png": "", "scale": 4}])  # an empty area: the mark goes
+    assert cleared.status_code == 200 and not [m for m in ann.get(f"/api/annotate/{name}/fields/{TILE}").json()["mine"] if m["task"] == "exclude"]
+
+
 def test_a_fix_the_field_session_takes_every_remaining_field_by_default(rounds_project):
     admin, _, _ = rounds_project
     scope = admin.get("/api/labels/rounds/scope", params={"stain": "6E10"}).json()

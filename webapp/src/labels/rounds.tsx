@@ -19,7 +19,7 @@ export const ROUND_TEXT: Record<1 | 2, string> = {
 }
 /** What someone does on a round page, as the tutorial follows it. */
 export type RoundEvent = 'hover' | 'class' | 'subtype' | 'unsure' | 'remove' | 'undo' | 'mask' | 'add' | 'added' | 'precise-in' | 'precise-edit'
-  | 'precise-out' | 'save' | 'finish' | 'keep'
+  | 'precise-out' | 'save' | 'finish' | 'keep' | 'exclude'
 export const LIVE_MS = 3000  // how often a round page renews its hold on the field and asks for the progress
 export const TIER_TEXT: Record<number, string> = {
   0: 'Shown because detection is unsure about it (its score is near the cut-off).',

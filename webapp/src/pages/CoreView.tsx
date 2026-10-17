@@ -26,6 +26,10 @@ interface CoreObjects {
   source?: 'v2' | 'current'; unproposed?: number | null
 }
 /** Stained regions no v2 candidate covers: rows of [x, y, area µm², DAB / threshold, rings] in core-image pixels. */
+/** The areas left out of the analysis (v2 proposals' mask, `scale` core px per mask px): each kind with its colour,
+ *  hatching and share of the analysed area; the picture is excluded.png. */
+interface ExcludedKind { id: string; label: string; color: string; hatch: string; fraction: number | null }
+interface CoreExcluded { status: 'done' | 'not_made'; scale?: number; width?: number; height?: number; version?: number; kinds: ExcludedKind[] }
 interface CoreUnproposed { status: 'done' | 'not_run'; columns: string[]; rows: [number, number, number, number, number[][]][] }
 /** Segment Anything outlines: per detection (its exact x, y) the outlined area and polygons, in core-image pixels. */
 interface CoreOutlines { status: 'done' | 'not_made'; columns: string[]; rows: [number, number, number | null, number[][]][]; outline?: OutlineChoice }
@@ -55,7 +59,7 @@ interface Found { index: number; x: number; y: number; r: number; cls: string; c
 
 // exact outlines are drawn instead of circles wherever the Outline objects step has made them; every candidate is shown,
 // rejected ones dotted grey (stored under a new key, so the choice of hiding them made before applies no more)
-const LAYER_DEFAULTS = { objects: true, rejected: true, outlines: true, threads: false, unproposed: false, dab: false, tiles: false }
+const LAYER_DEFAULTS = { objects: true, rejected: true, outlines: true, threads: false, unproposed: false, excluded: false, dab: false, tiles: false }
 type Layers = typeof LAYER_DEFAULTS
 /* The colours of the objects on the core picture: saturated, and clear of DAB brown and haematoxylin blue, each drawn
    over a thin dark halo (deepzoom.tsx). Rejected candidates are dotted light grey. The names stay those of CLASS_STYLE. */
@@ -177,6 +181,11 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
   const tracing = TRACING.includes(traced.data?.status ?? 'waiting')
   const unproposedCount = found.data?.unproposed ?? null
   const stainedOnly = useFetch<CoreUnproposed>(layers.unproposed && unproposedCount !== null ? `${base}/unproposed` : null)
+  const excluded = useFetch<CoreExcluded>(layers.excluded ? `${base}/excluded` : null)
+  const excludedData = excluded.data
+  const overlays = useMemo(() => (layers.excluded && excludedData?.status === 'done' && excludedData.width && excludedData.height && excludedData.scale
+    ? [{ src: apiUrl(`${base}/excluded.png?v=${excludedData.version ?? 0}`), width: excludedData.width * excludedData.scale,
+      height: excludedData.height * excludedData.scale }] : []), [layers.excluded, excludedData, base])
   useEffect(() => { setThreadPoll(tracing) }, [tracing])
   const [selected, setSelected] = useState<number | null>(null)
   const [target, setTarget] = useState<ViewTarget | null>(start ? { ...start, scale: 0.5, key: 0 } : null)
@@ -230,7 +239,7 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
       <div className="card core-picture">
         {ready && tileUrl ? (
           <DeepZoom pyramid={ready} tileUrl={tileUrl} layers={layers.dab ? ['dab'] : []} marks={shown} lines={lines} lineColor={THREAD_COLOR}
-            boxes={boxes} pixelUm={image?.pixel_width_um} height="auto"
+            boxes={boxes} overlays={overlays} pixelUm={image?.pixel_width_um} height="auto"
             selected={pick ? drawn.indexOf(pick) : null} describe={describe} target={target}
             onPick={(i) => setSelected(i === null || i >= drawn.length ? null : drawn[i].index)} onTileError={() => setPoll(true)}
             toolbar={<span className="row dz-toolbar-info"><span className="small muted">Scroll to zoom · drag to move · click an object for details</span>
@@ -272,6 +281,7 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
               {unproposedCount !== null && <UnproposedToggle count={unproposedCount} on={layers.unproposed} onToggle={() => toggle('unproposed')} state={stainedOnly} />}
             </>
           )}
+          <ExcludedToggle on={layers.excluded} onToggle={() => toggle('excluded')} state={excluded} />
           <label className="layer-toggle"><input type="checkbox" checked={layers.dab} onChange={() => toggle('dab')} />
             <span className="swatch" style={{ background: RASTER_LAYERS.dab.color }} />Stained area (brown above this slide’s threshold)</label>
           {(found.data?.tiles.length ?? 0) > 0 && <label className="layer-toggle"><input type="checkbox" checked={layers.tiles} onChange={() => toggle('tiles')} />
@@ -390,6 +400,38 @@ function UnproposedToggle({ count, on, onToggle, state }: {
         <span className="muted">{count.toLocaleString()}</span>
       </label>
       {on && !state.data && !state.error && <div className="layer-toggle indent"><Loading inline label="Loading the stained areas…" /></div>}
+      {on && state.error && <div className="layer-toggle indent wrap"><ErrorNote error={state.error} />
+        <button className="btn small" onClick={state.reload}>Try again</button></div>}
+    </>
+  )
+}
+
+/** A legend swatch hatched like the excluded-areas picture (\ / | - or a plain translucent fill). */
+function hatchSwatch(kind: ExcludedKind) {
+  const angle: Record<string, string> = { '\\': '135deg', '/': '45deg', '|': '90deg', '-': '0deg' }
+  const fill = `${kind.color}55`
+  return { background: kind.hatch ? `repeating-linear-gradient(${angle[kind.hatch] ?? '45deg'}, ${kind.color} 0 1.5px, ${fill} 1.5px 4px)` : fill,
+    boxShadow: '0 0 0 1px rgb(0 0 0 / 35%)' }
+}
+
+/** The "Excluded areas" layer: folds, hand-drawn exclusions, linear artifacts, the AT8 edge guard and empty areas,
+ *  hatched over the picture (from the v2 proposals), with a legend per kind and its share of the analysed area. */
+function ExcludedToggle({ on, onToggle, state }: { on: boolean; onToggle: () => void; state: { data: CoreExcluded | null; error: string | null; reload: () => void } }) {
+  const data = state.data
+  return (
+    <>
+      <label className="layer-toggle" title="The areas the analysis leaves out of this core: folds, areas drawn by hand, linear artifacts and empty glass">
+        <input type="checkbox" checked={on} onChange={onToggle} />
+        <span className="swatch" style={hatchSwatch({ id: '', label: '', color: '#ff3b3b', hatch: '\\', fraction: null })} />Excluded areas</label>
+      {on && !data && !state.error && <div className="layer-toggle indent"><Loading inline label="Loading the excluded areas…" /></div>}
+      {on && data?.status === 'not_made' && <p className="layer-note small">Not made for this core yet: the new detection’s “Find candidates”
+        step maps them (<Link to="/workflow">Run</Link>).</p>}
+      {on && data?.status === 'done' && data.kinds.filter((k) => k.fraction !== 0).map((k) => (
+        <div key={k.id} className="layer-toggle indent" title={k.label}>
+          <span className="swatch" style={hatchSwatch(k)} />{k.label}<span className="spacer" />
+          <span className="muted">{k.fraction == null ? '' : k.fraction > 0 && k.fraction < 0.001 ? '<0.1%' : `${(k.fraction * 100).toFixed(1)}%`}</span>
+        </div>
+      ))}
       {on && state.error && <div className="layer-toggle indent wrap"><ErrorNote error={state.error} />
         <button className="btn small" onClick={state.reload}>Try again</button></div>}
     </>

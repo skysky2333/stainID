@@ -51,7 +51,7 @@ from stainid.api.routes.annotate import (
 )
 from stainid.api.session import PREVIEW, annotator, require_admin
 from stainid.api.state import get_state
-from stainid.labels import added, candidate_store, decisions, readiness, rounds, sessions, store
+from stainid.labels import added, candidate_store, decisions, exclusions, readiness, rounds, sessions, store
 from stainid.labels import vocabulary as vocab
 from stainid.labels.tasks import STAINS
 from stainid.tables import write_text_atomic
@@ -668,12 +668,17 @@ def clean(meta: dict, mark, person: str) -> dict:
     object people added."""
     stain = meta["stain"]
     second = rounds.round_of(meta) == 2
-    allowed = {"class", "outline"} | ({"tag", "note", "done"} if second else set())
+    allowed = {"class", "outline"} | ({"tag", "note", "done", exclusions.TASK} if second else set())
     if mark.task not in allowed:
         raise HTTPException(400, f"{mark.task} labels are not part of this session")
     record = {"source": person, "stain": stain, "task": mark.task, "session": meta["name"], "deleted": mark.deleted, "value": mark.value,
               "subtype": None, "points": mark.points, "tile_id": mark.tile_id, "x": mark.x, "y": mark.y, "candidate": mark.candidate or None}
     words = vocabulary(stain)
+    if mark.task == exclusions.TASK:  # the area marked as bad on this field (the exclusion brush): rings in field pixels
+        field_tile(meta, mark.tile_id)
+        rings, holes = ([], []) if mark.deleted or not mark.png else exclusions.from_png(mark.png, mark.scale)
+        return record | {"id": exclusions.label_id(mark.tile_id), "x": None, "y": None, "points": rings or None,
+                         "value": exclusions.holes_text(holes), "deleted": mark.deleted or not rings}
     if mark.candidate:
         row = candidate_row(stain, mark.candidate)
         record |= {"tile_id": str(row.tile_id), "x": round(float(row.x), 1), "y": round(float(row.y), 1)}
@@ -757,11 +762,15 @@ def _confirmations(meta: dict, tile: dict, person: str, mine: pd.DataFrame) -> l
     words = vocabulary(meta["stain"])
     classes = mine[mine.task == "class"]
     said = {k: words.positive(v, s) for k, v, s in zip(classes.id, classes.value, classes.subtype)}
+    marked = mine[mine.task == exclusions.TASK]
+    area = exclusions.rings_of(marked.iloc[-1].to_dict()) if len(marked) else ([], [])  # the area this person marked as bad
     outlined = set(mine.id[mine.task == "outline"])
     records = []
     stamp = {"source": person, "stain": meta["stain"], "tile_id": tile_id, "session": meta["name"], "confirmed": True}
     for r in own.rename(columns={"class": "klass"}).itertuples():
         x, y = round(float(r.x), 1), round(float(r.y), 1)
+        if area[0] and exclusions.inside(*area, x, y):
+            continue  # excluded by the annotator: not checked, left out of scoring and training
         key = store.object_id("class", tile_id, x, y)
         identity, subtype = candidate_store.ai_call(words, r.decision, r.klass, r.subtype)
         if key in said:

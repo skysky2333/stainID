@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 
 from stainid import cache
-from stainid.labels import candidate_store, frames, store
+from stainid.labels import candidate_store, exclusions, frames, store
 from stainid.labels import vocabulary as vocab
 from stainid.project import Project
 
@@ -162,7 +162,7 @@ def state(project: Project, stain: str, tiles: pd.DataFrame, stale_ok: bool = Fa
         signature = _signature(project, stain)
         if kept is not None and kept[0] == signature:
             return kept[1]
-        made = _state_of(table(project, stain, store.current(root), tiles))
+        made = _state_of(table(project, stain, exclusions.counted(store.current(root)), tiles))  # not what annotators marked as bad
         with _LOCK:
             _STATE[key] = (signature, made)
         return made

@@ -130,6 +130,7 @@ What annotators see:
   | **Delete** | not an object (it turns dotted grey and stays visible; a class key brings it back) |
   | **Tab** / **Shift+Tab** | a bigger or smaller outline: each object has three Segment Anything outlines ready |
   | **Space** | precise editing of that object only: right-click a spot to add it, left-click one to leave it out, drag the dots (Z one step back); Space again keeps it, Esc cancels |
+  | **E** | the exclusion brush: paint bad areas (folds, smudges); their objects are left out of scoring and training |
   | **Z** | undo |
   | **Enter** | keep detection's call (round 1) |
   | **Ctrl+S** / **Ctrl+Enter** | save / save and continue |

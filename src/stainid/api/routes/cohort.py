@@ -266,6 +266,25 @@ def core_unproposed(core_id: str, stain: str, request: Request) -> Response:
     return _json(store_view.unproposed(get_state().project, core_id, stain), request)
 
 
+@router.get("/cores/{core_id}/{stain}/excluded")
+def core_excluded(core_id: str, stain: str) -> dict:
+    """The "Excluded areas" layer of one core image: `status` ("not_made" before the v2 proposals), the mask's `width` and
+    `height` (mask px) and `scale` (core-image px per mask px), and per kind its `id`, `label`, `color`, `hatch` and the
+    `fraction` of the analysed area it covers (`store_view.EXCLUDED_KINDS`), and `version` (changes with the mask). The
+    picture is `excluded.png?v=<version>`."""
+    return store_view.excluded_info(get_state().project, core_id, stain)
+
+
+@router.get("/cores/{core_id}/{stain}/excluded.png")
+def core_excluded_png(core_id: str, stain: str) -> Response:
+    """The excluded areas as a translucent, hatched RGBA picture at the mask's resolution (`core_excluded`); 404 before
+    the v2 proposals made the mask."""
+    png = store_view.excluded_png(get_state().project, core_id, stain)
+    if png is None:
+        raise HTTPException(404, f"the excluded areas of {core_id} {stain} are not made yet (the v2 proposals make them)")
+    return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
+
+
 def _json(content: dict, request: Request) -> Response:
     """JSON, gzip-compressed when it is worth it and the browser accepts it (a busy core's outlines are ~1.5 MB)."""
     body = json.dumps(content, separators=(",", ":")).encode()
