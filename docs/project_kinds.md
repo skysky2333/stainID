@@ -187,10 +187,14 @@ Recall ("Found") is the share of marks the AI found; precision ("Of the AI's, ma
 objects in the annotated images that someone marked; F1 combines them. When a rater marked only some types (e.g. only
 cored plaques, as in the amyloid-YOLO set), precision counts only the AI's objects of those types, and `same_type` gives
 how often the AI's type agreed with the mark's. The AUC (where the AI gives probabilities) says how well its
-probability ranks marked objects above negative marks, or positive images above negative ones. *How much the raters
+probability ranks marked objects above negative marks, or positive images above negative ones; `candidate_auc` how
+well it ranks the candidates a rater marked (the most probable one in each mark) above every other candidate, accepted
+or not, in the images the rater read, which also works when there are no negative marks. *How much the raters
 agree* gives every pair of raters' F1 (objects, matched the same way) and Cohen's kappa (image labels), so the AI's
 figures can be read against human agreement. Precision assumes the raters marked every object of their types on the
-images they annotated; only images some rater annotated count.
+images they read: a rater who marked something on at least half of the annotated images is taken to have read them all
+(sets where every rater reads every image); otherwise only the images they marked count (sets that give each rater
+their own images).
 
 ## Dependencies
 

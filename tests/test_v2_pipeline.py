@@ -105,6 +105,20 @@ def test_neun_proposals_split_merged_neurons_and_merge_nuclei_into_their_profile
     assert thin.source == "cellpose" and "profile" in thin.sources  # the legacy candidate there was the Cellpose cell
 
 
+def test_at8_tile_with_almost_no_tissue_is_proposed_without_failing():
+    from stainid.v2.params import DEFAULTS
+
+    rgb = np.full((300, 300, 3), 245, np.uint8)  # glass, and a speck of tissue too small for the AT8 network analysis
+    rgb[10:16, 10:16] = PALE
+    settings = DEFAULTS["proposals"]
+    shared = {k: v for k, v in settings.items() if k not in ("NeuN", "6E10", "AT8")}
+    field = field_of(rgb)
+    result = proposals.process_tile(field, "AT8", settings["AT8"], shared)
+    assert result["rows"] == [] and result["threads"] == []
+    assert result["summary"]["at8_valid_area_mm2"] == 0.0 and result["summary"]["thread_skeleton_px"] == 0
+    assert proposals.mask_piece(field, "AT8").shape[0] > 0
+
+
 def test_same_object_rules():
     occupancy = Occupancy((100, 100))
     kept = Region(10, 10, np.ones((20, 20), bool), "profile")

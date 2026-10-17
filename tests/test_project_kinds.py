@@ -112,6 +112,15 @@ def test_scoring_reads_the_v2_calls_where_the_v2_detection_has_run(tmp_path):
     assert consensus["marks"] == 12 and consensus["found"] == 9 and consensus["ai_objects"] == 12 and consensus["precision"] == 0.75
     assert "of the 12 compact plaques the consensus" in result["summary"][0]
     assert consensus["recall"] == 0.75  # the candidate on the fourth plaque was rejected: not found
+    # ranking every candidate: the marked ones (9 at 0.9, 3 rejected at 0.3) against the unmarked false alarms (0.8)
+    assert consensus["candidate_auc"] == pytest.approx(27 / 36)
+
+
+def test_precision_counts_the_images_each_rater_read():
+    marks = pd.DataFrame({"rater": ["a"] * 6 + ["b"] * 2 + ["c"], "core_id": ["i0", "i1", "i2", "i3", "i4", "i5", "i6", "i7", "i0"]})
+    assert scoring.reviewed_images(marks, "a") == {f"i{n}" for n in range(8)}  # marked on most images: read them all
+    assert scoring.reviewed_images(marks, "b") == {"i6", "i7"}  # their own images (and a shared one) only
+    assert scoring.reviewed_images(marks, "c") == {"i0"}
 
 
 def test_regions_with_boxes_are_read_where_they_lie_and_recoloured(tmp_path):

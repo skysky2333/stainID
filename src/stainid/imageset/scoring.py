@@ -37,7 +37,8 @@ from stainid.sampling.tiles import table
 from stainid.tables import write_records, write_text_atomic
 
 COLUMNS = ["stain", "rater", "kind", "class", "images", "marks", "found", "missed", "ai_objects", "ai_unmarked", "precision", "recall", "f1",
-           "auc", "iou_recall", "same_type", "scope"]
+           "auc", "candidate_auc", "iou_recall", "same_type", "scope"]
+WHOLE_SET = 0.5  # a rater who marked something on at least this share of the annotated images read all of them
 GENERIC = {"plaque", "tau+ neuron", "NeuN+ neuron"}
 
 
@@ -198,6 +199,41 @@ def _iou_recall(marks: pd.DataFrame, found: pd.DataFrame) -> float | None:
     return round(hits / len(boxes), 4)
 
 
+def _candidate_auc(project: Project, marks: pd.DataFrame, found: pd.DataFrame, stain: str, reviewed: set[str], is_object: list[bool]) -> float | None:
+    """How well the model's probability ranks the candidates a rater marked above those they did not, over every
+    candidate (accepted or not) in the images the rater read: a marked candidate is the most probable one whose centre
+    lies in the mark's box, or within the match distance of its point. Works with marks of objects only (no negative
+    marks), where the mark AUC cannot be made."""
+    pool = found[found.core_id.isin(reviewed)]
+    if pool.empty or pool.probability.isna().all():
+        return None
+    near = MATCH_UM[stain] / project.pixel_size_um
+    probability = pool.probability.fillna(0.0)
+    by_core = {core: group for core, group in pool.groupby("core_id")}
+    marked: set[int] = set()
+    for mark, wanted in zip(marks.itertuples(), is_object):
+        same = by_core.get(mark.core_id)
+        if not wanted or same is None:
+            continue
+        if mark.kind == "box" and pd.notna(mark.x0):
+            inside = same[(same.cx >= mark.x0) & (same.cx <= mark.x1) & (same.cy >= mark.y0) & (same.cy <= mark.y1)]
+        else:
+            inside = same[np.hypot(same.cx - mark.core_x, same.cy - mark.core_y) <= np.maximum(near, same.radius_px.fillna(0))]
+        if len(inside):
+            marked.add(int(probability.loc[inside.index].idxmax()))
+    return _auc(probability.to_list(), [i in marked for i in pool.index])
+
+
+def reviewed_images(mine: pd.DataFrame, rater: str) -> set[str]:
+    """The core images a rater read, as far as the labels tell: those they marked anything on, or every annotated one
+    when they marked at least `WHOLE_SET` of them (sets where every rater reads every image and an image with nothing
+    marked means "nothing here"). Sets that give each rater their own images (and a few shared ones) count only the
+    rater's own for precision."""
+    every = set(mine.core_id)
+    own = set(mine.core_id[mine.rater == rater])
+    return every if len(own) >= WHOLE_SET * len(every) else own
+
+
 def score_objects(project: Project, marks: pd.DataFrame, found: pd.DataFrame, stain: str, reviewed: set[str] | None = None) -> dict:
     """Recall, precision, F1 and AUC of the AI's objects against one rater's point / box / polygon marks."""
     marks = marks.reset_index(drop=True)
@@ -220,7 +256,8 @@ def score_objects(project: Project, marks: pd.DataFrame, found: pd.DataFrame, st
              if o and h is not None and _typed(stain, c)]
     return {"images": int(marks.image_id.nunique()), "marks": targets, "found": found_n, "missed": targets - found_n, "ai_objects": int(len(in_scope)),
             "ai_unmarked": int(len(in_scope) - marked), "precision": precision, "recall": recall, "f1": _f1(precision, recall),
-            "auc": None if found.probability.isna().all() else _auc(scores, is_object), "iou_recall": _iou_recall(marks, found),
+            "auc": None if found.probability.isna().all() else _auc(scores, is_object),
+            "candidate_auc": _candidate_auc(project, marks, found, stain, reviewed, is_object), "iou_recall": _iou_recall(marks, found),
             "same_type": _ratio(sum(c == v for c, v in typed), len(typed)), "scope": "all accepted" if untyped or not types else ", ".join(sorted(types))}
 
 
@@ -344,8 +381,8 @@ def score(project: Project) -> dict:
         found = detections(project, stain, set(mine.core_id))
         if found.empty:
             continue
-        reviewed = set(mine.core_id)  # the images some rater annotated: the AI's objects there count for precision
         for rater, theirs in mine.groupby("rater"):
+            reviewed = reviewed_images(mine, rater)  # the images this rater read: the AI's objects there count for precision
             marks = theirs[theirs.kind != "image_label"]
             if len(marks) and any(positive(stain, c) or c in GENERIC for c in marks["class"]):
                 rows.append({"stain": stain, "rater": rater, "kind": "objects", "class": "all", **score_objects(project, marks, found, stain, reviewed)})
