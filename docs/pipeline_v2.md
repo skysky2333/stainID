@@ -56,8 +56,13 @@ merged.
   local background (`localbg`). A Cellpose nucleus inside a stained profile becomes a source of that candidate, not a
   candidate of its own.
 - **6E10**: every deposit of the legacy segmentation (touching plaques split at h-maxima), including those the legacy
-  shape rule called artifacts and never showed the classifier (`flag_artifact_shape`); faint deposits of the tree at
-  0.5 and 0.75 × the threshold (roots: a dense core inside a diffuse halo is one deposit). Each deposit also gets the
+  shape rule called artifacts and never showed the classifier (`flag_artifact_shape`); pale diffuse plaques as one
+  region each (`coarse`: the DAB smoothed over 4 µm at max(0.75 × threshold, tissue median + 0.25 × threshold),
+  ≥ 100 µm² — at the pixel scale such a plaque is a cloud of specks below the legacy seed level); faint deposits of the
+  tree at 0.5, 0.75, 1 and 1.5 × the threshold (roots: a dense core inside a diffuse halo is one deposit). A tree node
+  that merges deposits already kept, or is mostly covered by them, gives way to its children (`descend`): on a
+  dark-background core (LIP-1 E-3: background median 0.06 OD, legacy seed level 0.26 OD, 2.5 × the threshold) the faint
+  field at 0.5 × joined unseeded plaques to seeded ones, and the plaques were never proposed. Each deposit also gets the
   slide-scaled model inputs `s_<name>`: the 14 DAB intensities of the identity model in slide thresholds (max, p90,
   inner and outer mean, centre, annulus, context, contrasts), and the seed and dense core measured at levels relative to
   the threshold (seed above max(1 × threshold, median + 6 σ), core above max(1.25 × threshold, 1.2 × seed, the 85th

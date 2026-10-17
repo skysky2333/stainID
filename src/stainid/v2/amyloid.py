@@ -11,7 +11,7 @@ from stainid.stains.amyloid.classifier import MORPHOLOGY_FEATURES
 from stainid.stains.amyloid.model import identity_features, outer_boundary_contact
 from stainid.stains.amyloid.segmentation import _radial_features, _remove_small_components, _shape_features, segment_amyloid_candidates
 from stainid.v2.geometry import Occupancy, Region, label_regions, same_object
-from stainid.v2.tree import tree_regions
+from stainid.v2.tree import coarse_regions, tree_regions, walk_roots
 
 CORE_QUANTILES = np.linspace(0, 1, 21)
 
@@ -88,8 +88,8 @@ def propose(field, settings: dict, shared: dict) -> list[Region]:
         occupancy.add(region)
     pixel_area = field.pixel_size_um ** 2
     allowed = field.tissue & ~field.exclusion
-    for region in tree_regions(field, settings["levels"], allowed, settings["min_um2"], settings["max_um2"], settings["significant_um2"],
-                               settings["split_max_um2"], settings["mode"]):
+
+    def keep(region: Region) -> bool:
         how, index = same_object(region, occupancy, shared["same_iou"], shared["same_inside"], shared["covered"],
                                  round(settings["significant_um2"] / pixel_area))
         if how == "same":
@@ -99,6 +99,22 @@ def propose(field, settings: dict, shared: dict) -> list[Region]:
             region.legacy = deposit_row(field, region)
             region.flags["artifact_shape"] = False
             occupancy.add(region)
+        # a faint node joining kept deposits (a merge) or mostly covered by them: its children may be deposits of their
+        # own (on a dark-background core the legacy seed level is far above the slide threshold, and the faint field at
+        # 0.5 × joins its plaques to the seeded ones)
+        return how in ("same", "new") or not settings.get("descend", True)
+
+    coarse = settings.get("coarse")
+    if coarse:  # pale diffuse plaques as one region each (the legacy seed misses them, the tree sees specks), before the tree
+        for region in coarse_regions(field, coarse["smooth_um"], coarse["level"], coarse["contrast"], allowed, coarse["min_um2"],
+                                     settings["max_um2"]):
+            keep(region)
+    if settings["mode"] == "roots":
+        walk_roots(field, settings["levels"], allowed, settings["min_um2"], settings["max_um2"], settings["significant_um2"], keep)
+    else:
+        for region in tree_regions(field, settings["levels"], allowed, settings["min_um2"], settings["max_um2"], settings["significant_um2"],
+                                   settings["split_max_um2"], settings["mode"]):
+            keep(region)
     return occupancy.regions
 
 

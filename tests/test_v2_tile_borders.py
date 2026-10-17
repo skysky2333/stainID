@@ -164,3 +164,36 @@ def test_segment_anything_output_shrunk_onto_a_speck_is_not_the_default():
     # small candidates are not checked: a 60 µm² deposit may well be outlined by a quarter of its area
     assert choose([out(round(10 / PS ** 2)), out(round(14 / PS ** 2) + 50), out(round(20 / PS ** 2))], 60 / PS ** 2, "6E10", PS, dab,
                   5.0, 0.25, 100.0) == (1, "ok")
+
+
+def test_pale_diffuse_plaque_is_proposed_whole(tmp_path):
+    """A pale halo below the threshold with dark specks in it: the specks are proposed, and so is the plaque, as one."""
+    rng = np.random.default_rng(1)
+
+    def draw(rgb):
+        cv2.circle(rgb, (200, 200), 90, (195, 170, 150), -1)  # DAB 0.046 against a 0.05 threshold
+        for x, y in rng.integers(150, 250, size=(5, 2)):
+            cv2.circle(rgb, (int(x), int(y)), 4, BROWN, -1)
+    frame, _, unproposed = propose(border_project(tmp_path, draw))
+    whole = frame[(frame.area_um2 > 0.6 * np.pi * 90 ** 2 * PS ** 2)]
+    assert len(covering(whole, 200, 200)) == 1 and "coarse" in whole.sources.iloc[0]
+    assert len(unproposed) == 0
+
+
+def test_a_faint_node_that_merges_kept_deposits_gives_way_to_its_children():
+    from stainid.v2.tree import walk_roots
+
+    rgb = np.full((300, 300, 3), 225, np.uint8)
+    cv2.rectangle(rgb, (40, 120), (260, 180), (205, 190, 175), -1)  # a faint band (0.031) joining three deposits
+    for x in (70, 150, 230):
+        cv2.circle(rgb, (x, 150), 20, (190, 150, 120), -1)  # 0.069: above the threshold
+    field = Field({"tile_id": "T", "x_px": 0, "y_px": 0, "width_px": 300, "height_px": 300, "pixel_width_um": PS, "pixel_height_um": PS},
+                  rgb, (slice(0, 300), slice(0, 300)), (0, 0), 0.05, PS, np.zeros((300, 300), bool), None)
+    offered = []
+
+    def keep(region):
+        offered.append(region)
+        return region.level > 0.5  # the band (level 0.5) is a merge of kept deposits: it gives way
+
+    walk_roots(field, [0.5, 1.0], np.ones((300, 300), bool), 20.0, 50000.0, 20.0, keep)
+    assert [r.level for r in offered] == [0.5, 1.0, 1.0, 1.0]

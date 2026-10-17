@@ -22,8 +22,14 @@ DEFAULTS: dict = {
                  "split": {"max_edge_fraction": 0.3, "max_aspect": 4.0, "min_radius_um": 3.0},
                  "unproposed": {"min_um2": 15.0}},
         # 6E10: the legacy segmentation finds almost every deposit; the faint levels add deposits below its seed level
-        "6E10": {"levels": [0.5, 0.75], "local_contrast": None, "min_um2": 20.0, "max_um2": 50000.0, "significant_um2": 20.0,
+        "6E10": {"levels": [0.5, 0.75, 1.0, 1.5], "local_contrast": None, "min_um2": 20.0, "max_um2": 50000.0, "significant_um2": 20.0,
                  "split_max_um2": None, "mode": "roots",
+                 # a faint node that merges deposits already kept (or is mostly covered by them) gives way to its
+                 # children: on a dark-background core the faint field joins plaques the legacy seed level misses
+                 "descend": True,
+                 # pale diffuse plaques as one region: DAB smoothed over 4 µm at max(0.75 × threshold, tissue median + 0.25 ×
+                 # threshold), ≥ 100 µm² (source `coarse`), offered after the legacy deposits and before the tree
+                 "coarse": {"smooth_um": 4.0, "level": 0.75, "contrast": 0.25, "min_um2": 100.0},
                  # stained regions no candidate proposes: DAB smoothed over 4 µm (a pale diffuse plaque is one region, not
                  # specks) at 0.75 × the threshold or the tissue median + 0.25 × the threshold, ≥ 100 µm², that no single
                  # candidate covers a quarter of

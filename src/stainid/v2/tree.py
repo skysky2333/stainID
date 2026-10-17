@@ -156,6 +156,43 @@ def tree_regions(field_, levels: list[float], allowed: np.ndarray, minimum_um2: 
                   None if not split_max_um2 else round(split_max_um2 / pixel_area), mode, split_rules)
 
 
+def stained_level(field_, smooth: np.ndarray, level: float, contrast: float, valid: np.ndarray) -> float:
+    """`level` × the slide threshold, raised to the median of `smooth` over `valid` tissue + `contrast` × the threshold
+    where the background is darker (a pale halo stands out from its tissue, not from glass)."""
+    out = float(level) * field_.threshold
+    if float(contrast) > 0 and valid.sum() >= 100:
+        out = max(out, float(np.median(smooth[valid])) + float(contrast) * field_.threshold)
+    return out
+
+
+def coarse_regions(field_, smooth_um: float, level: float, contrast: float, allowed: np.ndarray, minimum_um2: float,
+                   maximum_um2: float, source: str = "coarse") -> list[Region]:
+    """Components of the DAB smoothed over `smooth_um` at `stained_level`: a pale diffuse plaque as one region, where at the
+    pixel scale it is a cloud of specks below the threshold."""
+    pixel_area = field_.pixel_size_um ** 2
+    smooth = cv2.GaussianBlur(field_.dab, (0, 0), float(smooth_um) / field_.pixel_size_um)
+    at = stained_level(field_, smooth, level, contrast, allowed)
+    mask = cv2.morphologyEx(((smooth >= at) & allowed).astype(np.uint8), cv2.MORPH_CLOSE, disk(1)).astype(bool) & allowed
+    lo, hi = max(1, round(minimum_um2 / pixel_area)), round(maximum_um2 / pixel_area)
+    return [Region(box[0].start, box[1].start, local, source, level=None) for box, local, area in components(mask) if lo <= area <= hi]
+
+
+def walk_roots(field_, levels: list[float], allowed: np.ndarray, minimum_um2: float, maximum_um2: float, significant_um2: float,
+               keep) -> None:
+    """`roots` mode with a say for the caller: the lowest node of allowed size is offered to `keep(region)`; when it
+    returns False (the node merges objects already kept, or is mostly covered by them) its children are offered in its
+    place, so a faint deposit inside a large faint field that joins it to other deposits is still proposed."""
+    pixel_area = field_.pixel_size_um ** 2
+    minimum_px = max(1, round(minimum_um2 / pixel_area))
+    maximum_px = round(maximum_um2 / pixel_area)
+    roots = build_tree(field_, levels, allowed, min(minimum_px, max(1, round(significant_um2 / pixel_area))))
+    stack = list(reversed(roots))
+    while stack:
+        node = stack.pop()
+        if node.area > maximum_px or (node.area >= minimum_px and not keep(node.region(f"dab@{node.level:g}"))):
+            stack.extend(reversed(node.children))
+
+
 def local_background_regions(field_, contrast: float, allowed: np.ndarray, minimum_um2: float, maximum_um2: float) -> list[Region]:
     """Components standing `contrast` × threshold above the 60 µm local background (and above half the threshold)."""
     pixel_area = field_.pixel_size_um ** 2
@@ -165,4 +202,5 @@ def local_background_regions(field_, contrast: float, allowed: np.ndarray, minim
     return [Region(box[0].start, box[1].start, local, "localbg", level=None) for box, local, area in components(mask) if lo <= area <= hi]
 
 
-__all__ = ["CELL_SPLIT", "build_tree", "cell_pieces", "edge_score", "local_background_regions", "select", "tree_regions", "watershed_pieces"]
+__all__ = ["CELL_SPLIT", "build_tree", "cell_pieces", "coarse_regions", "edge_score", "local_background_regions", "select", "stained_level",
+           "tree_regions", "walk_roots", "watershed_pieces"]

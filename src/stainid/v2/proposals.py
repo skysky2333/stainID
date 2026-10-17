@@ -32,6 +32,7 @@ from stainid.v2.field import Field
 from stainid.v2.geometry import Region, components, disk, outline
 from stainid.v2.measure import generic_features
 from stainid.v2.params import digest, params, stage_params
+from stainid.v2.tree import stained_level
 from stainid.v2.threads import segments
 
 Image.MAX_IMAGE_PIXELS = None
@@ -84,17 +85,6 @@ def _legacy_columns(stain: str, region: Region) -> dict:
 UNPROPOSED = {"smooth_um": 0.0, "level": 1.0, "contrast": 0.0, "min_um2": 20.0, "min_cover": 0.0}
 
 
-def stained_level(field: Field, smooth: np.ndarray, rule: dict, exclusion: np.ndarray) -> float:
-    """The DAB level of the unproposed search: `level` × the slide threshold, raised to the tissue's median + `contrast` ×
-    the threshold where the background is darker (a pale halo stands out from its tissue, not from glass)."""
-    level = float(rule["level"]) * field.threshold
-    if float(rule["contrast"]) > 0:
-        valid = field.tissue & ~exclusion
-        if valid.sum() >= 100:
-            level = max(level, float(np.median(smooth[valid])) + float(rule["contrast"]) * field.threshold)
-    return level
-
-
 def unproposed_regions(field: Field, stain: str, owner: np.ndarray, rule: dict | float, thread_line: np.ndarray | None,
                        exclusion: np.ndarray) -> list[dict]:
     """Stained components no candidate proposes: the DAB smoothed over `smooth_um` (0: the field's own smoothing) at or
@@ -104,7 +94,7 @@ def unproposed_regions(field: Field, stain: str, owner: np.ndarray, rule: dict |
     rule = {**UNPROPOSED, **({"min_um2": rule} if isinstance(rule, (int, float)) else rule)}
     ps = field.pixel_size_um
     smooth = field.smooth if not float(rule["smooth_um"]) else cv2.GaussianBlur(field.dab, (0, 0), float(rule["smooth_um"]) / ps)
-    level = stained_level(field, smooth, rule, exclusion)
+    level = stained_level(field, smooth, float(rule["level"]), float(rule["contrast"]), field.tissue & ~exclusion)
     positive = cv2.morphologyEx(((smooth >= level) & field.tissue).astype(np.uint8), cv2.MORPH_CLOSE, disk(1))
     min_cover = float(rule["min_cover"])
     covered = cv2.dilate((owner > 0).astype(np.uint8), disk(max(1, round(1.0 / ps)))).astype(bool) if not min_cover else None
