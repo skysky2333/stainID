@@ -492,13 +492,15 @@ export interface RoundSaved { saved: (Label & { candidate?: string | null })[]; 
 /** Who decided a candidate already, and the class most of them gave. */
 export interface RoundCheck { by: string[]; identity: string; subtype: string; time: number | null }
 /** One candidate on a round-2 field: field-picture pixels, `own` false for a neighbouring field's candidate in the margin. */
-export interface RoundObject {
+/** `Shape`: an outline as [x, y] corners on the page; the server sends them flat (number[]), see labels/fixfield.tsx. */
+export interface RoundObject<Shape = number[][]> {
   candidate_id: string; x: number; y: number; own: boolean; radius_px: number; ai_value: string; ai_subtype: string
-  /** as RoundItem's: SAM small, medium, large, then the stain outline when there are four; `mask` shown first */
-  ai_probability: number | null; decision: string; reason: string; masks: (number[][] | null)[]; mask: number
+  /** as RoundItem's: SAM small, medium, large, then the stain outline when there are four; `mask` shown first (the
+   *  field sends only that one: the others, `more_masks` of them, come from /masks) */
+  ai_probability: number | null; decision: string; reason: string; masks: (Shape | null)[]; mask: number; more_masks?: number
 }
-export interface RoundField {
-  tile_id: string; box: { x: number; y: number; width: number; height: number }; objects: RoundObject[]; checked: Record<string, RoundCheck>
+export interface RoundField<Shape = number[][]> {
+  tile_id: string; box: { x: number; y: number; width: number; height: number }; objects: RoundObject<Shape>[]; checked: Record<string, RoundCheck>
   layers: string[]; mine: (Label & { candidate?: string | null })[]; added: AddedState[]; segment_anything: boolean; segment_ready: boolean
   open_by: string[]; done_by: string[]; pixel_size_um: number
 }

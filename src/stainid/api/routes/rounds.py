@@ -51,6 +51,7 @@ from stainid.api.routes.annotate import (
 )
 from stainid.api.session import PREVIEW, annotator, require_admin
 from stainid.api.state import get_state
+from stainid.api.util import fast_json
 from stainid.labels import added, candidate_store, decisions, exclusions, readiness, rounds, sessions, store
 from stainid.labels import vocabulary as vocab
 from stainid.labels.tasks import STAINS
@@ -60,6 +61,7 @@ router = APIRouter(tags=["annotation rounds"])
 admin = [Depends(require_admin)]
 _TILES_HELD = sessions.Reservations(rounds.TILE_HOLD_SECONDS)  # tiles on someone's screen, per round and stain
 OUTLINE_SIMPLIFY_PX = 1.5
+SHAPE_POINTS = 96  # at most this many corners per outline sent to the field page
 
 
 def tile_hold(meta: dict) -> tuple:
@@ -450,9 +452,25 @@ def _objects_key(meta: dict, tile: dict) -> tuple:
     return candidate_store.field_key(state.project, meta["stain"], tile, state.project.context_px, rounds.level(meta))
 
 
-def field_objects(meta: dict, tile: dict) -> list[dict]:
-    """The candidates of a field as the round-2 page shows them (the AI's call, simplified outlines), kept per field
-    until the store file or the label classes change. Callers must not change them."""
+def _shape(points) -> list[int] | None:
+    """An outline as the field page draws it: simplified (Douglas–Peucker, `OUTLINE_SIMPLIFY_PX`, coarser until it has at
+    most `SHAPE_POINTS` corners), whole pixels, flat [x0, y0, x1, y1, …]."""
+    if not points:
+        return None
+    ring = np.asarray(points, np.float32).reshape(-1, 1, 2)
+    tolerance = OUTLINE_SIMPLIFY_PX
+    simple = cv2.approxPolyDP(ring, tolerance, True)
+    while len(simple) > SHAPE_POINTS:
+        tolerance *= 1.5
+        simple = cv2.approxPolyDP(ring, tolerance, True)
+    simple = np.rint(simple[:, 0, :]).astype(np.int64)
+    return simple.reshape(-1).tolist() if len(simple) >= 3 else None
+
+
+def _field_shapes(meta: dict, tile: dict) -> tuple[list[dict], dict[str, list]]:
+    """The candidates of a field as the round-2 page shows them (the AI's call, the default outline) and every outline
+    of each (`field_masks`), kept per field until the store file or the label classes change. Callers must not change
+    them."""
     state = get_state()
     words = vocabulary(meta["stain"])
     key = _objects_key(meta, tile)
@@ -460,21 +478,35 @@ def field_objects(meta: dict, tile: dict) -> list[dict]:
         kept = _OBJECTS.get(key)
         if kept is not None and kept[0] is words:
             _OBJECTS.move_to_end(key)
-            return kept[1]
-    objects = []
+            return kept[1], kept[2]
+    objects, masks = [], {}
     for r in _field_candidates(meta, tile).rename(columns={"class": "klass"}).itertuples():
         identity, subtype = candidate_store.ai_call(words, r.decision, r.klass, r.subtype)
         found_masks, default = candidate_store.masks(r)
+        shapes = [_shape(m) for m in found_masks]
+        masks[r.candidate_id] = shapes
         objects.append({"candidate_id": r.candidate_id, "x": round(float(r.x), 1), "y": round(float(r.y), 1), "own": bool(r.own),
                         "radius_px": round(candidate_store.radius(r, state.project.pixel_size_um), 1), "ai_value": identity, "ai_subtype": subtype,
                         "ai_probability": None if pd.isna(r.probability) else round(float(r.probability), 3), "decision": r.decision, "reason": r.reason,
-                        "masks": [_simplified(m) for m in found_masks], "mask": default})
+                        "masks": [m if i == default else None for i, m in enumerate(shapes)], "mask": default,
+                        "more_masks": sum(m is not None for i, m in enumerate(shapes) if i != default)})
     with _OBJECTS_LOCK:
-        _OBJECTS[key] = (words, objects)
+        _OBJECTS[key] = (words, objects, masks)
         _OBJECTS.move_to_end(key)
         while len(_OBJECTS) > _OBJECTS_LIMIT:
             _OBJECTS.popitem(last=False)
-    return objects
+    return objects, masks
+
+
+def field_objects(meta: dict, tile: dict) -> list[dict]:
+    """The field's candidates with only their default outline (flat whole pixels; the others: `field_masks`)."""
+    return _field_shapes(meta, tile)[0]
+
+
+def field_masks(meta: dict, tile: dict) -> dict[str, list]:
+    """Every outline of every candidate of the field (SAM small, medium, large, then the stain outline), flat whole pixels:
+    what the page loads after it has drawn the field, for switching outlines."""
+    return _field_shapes(meta, tile)[1]
 
 
 def field_prepared(meta: dict, tile: dict) -> bool:
@@ -501,7 +533,7 @@ def prepare_field(meta: dict, tile_id: str, task: work.Task | None = None) -> bo
     tile = state.tile(tile_id)
     step = task.step if task else (lambda *a: None)
     step(0, 3)
-    render.field_jpegs(state, [tile_id, *_same_core_fields(meta, tile)])
+    render.field_jpegs(state, [tile_id, *_same_core_fields(meta, tile)], urgent=task is None or task.priority <= work.NOW)
     step(1, 3)
     field_objects(meta, tile)
     step(2, 3)
@@ -613,6 +645,14 @@ def live(meta: dict, body: Live, person: str) -> dict:
         if rounds.round_of(meta) == 2:
             out["checked"] = checks(_field_candidates(meta, tile), decided_now(meta["stain"], stale_ok=True))
     return out | {"progress": progress(meta)}
+
+
+@router.get("/annotate/{name}/fields/{tile_id}/masks")
+def masks_route(name: str, tile_id: str, request: Request, person: str = Depends(annotator)):
+    """Every outline of the field's candidates, by candidate id (the field itself sends only the default one)."""
+    meta = _round_meta(name, request)
+    tile = field_tile(meta, tile_id)
+    return fast_json(request, field_masks(meta, tile))
 
 
 @router.post("/annotate/{name}/live")

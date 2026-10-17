@@ -9,7 +9,7 @@ from the pyramid or from the ~2000 px picture Check core quality kept (a fractio
 decode of the whole image. Both are rebuilt when the image file changes (the pyramid stores its modification time and
 size, a thumbnail must be newer than it); the source images are only ever read.
 
-Decoding is the memory-hungry part, so it runs on one background thread, at most two images at a time (`DECODE` also guards
+Decoding is the memory-hungry part, so it runs on one background thread, one image at a time (`DECODE` also guards
 the few decodes made while a request waits). Pages ask for a picture, get "waiting"/"preparing", and ask again; work
 that nobody has asked about for a while (the page was closed) is dropped from the queue.
 """
@@ -38,7 +38,7 @@ from stainid.qc.core_qc import overlay_path
 TILE = 512
 JPEG_QUALITY = 85
 STALE_SECONDS = 45  # queued work nobody asked about for this long is dropped
-DECODE = threading.Semaphore(2)  # whole core images decoded at once, across all projects (one is ~750 MB): two, so a field picture someone waits for need not wait for a whole pyramid
+DECODE = threading.Semaphore(1)  # whole core images decoded at once, across all projects (one is ~750 MB)
 
 
 # ---------------------------------------------------------------- the background queue

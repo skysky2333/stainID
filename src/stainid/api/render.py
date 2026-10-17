@@ -22,6 +22,7 @@ from stainid.tables import read_csv
 Image.MAX_IMAGE_PIXELS = None
 FIELD_JPEG_QUALITY = 88
 _IMAGE_LOCKS: dict[str, threading.Lock] = {}
+URGENT_DECODE = threading.Semaphore(1)  # a field someone waits for: decoded besides the background's (`pyramid.DECODE`)
 
 
 def crop_origin(tile: dict, context_px: int) -> tuple[int, int]:
@@ -79,10 +80,11 @@ def fields_made(state: ProjectState) -> frozenset[str]:
     return frozenset(name[:-4] for name in cache.names(state.cache_dir("fields")) if name.endswith(".jpg"))
 
 
-def field_jpegs(state: ProjectState, tile_ids, step=None) -> int:
+def field_jpegs(state: ProjectState, tile_ids, step=None, urgent: bool = False) -> int:
     """Make the field pictures of these tiles that are not made yet, decoding each core image once for all its fields
     (a whole core is decoded to cut even one field). `step(done, total)` hears the progress in core images. Returns
-    how many pictures were made."""
+    how many pictures were made. `urgent` (someone waits for the field): decoded on its own slot (`URGENT_DECODE`),
+    never behind pictures made ahead or a core pyramid."""
     wanted: dict[str, list[dict]] = {}
     for tile_id in dict.fromkeys(tile_ids):
         if not field_path(state, tile_id).exists():
@@ -95,7 +97,7 @@ def field_jpegs(state: ProjectState, tile_ids, step=None) -> int:
         with _IMAGE_LOCKS.setdefault(image_path, threading.Lock()):
             missing = [t for t in tiles if not field_path(state, t["tile_id"]).exists()]
             if missing:
-                with pyramid.DECODE, open_image(state.root / image_path) as image:
+                with URGENT_DECODE if urgent else pyramid.DECODE, open_image(state.root / image_path) as image:
                     for tile in missing:
                         _cut(state, image, tile, field_path(state, tile["tile_id"]))
                         made += 1
