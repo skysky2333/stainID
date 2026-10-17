@@ -16,7 +16,6 @@ from stainid.imaging.core_images import open_image
 from stainid.imaging.tissue import fold_mask, linear_artifact_mask
 from stainid.pipelines.cohort_v1 import context_crop
 from stainid.project import Project
-from stainid.qc.exclusions import rasterize_core_exclusions, read_manual_exclusions
 from stainid.tables import save_npz_atomic
 from stainid.workflows import calibration_table
 
@@ -45,14 +44,13 @@ class FieldLoader:
     def __init__(self, project: Project):
         self.project = project
         self.calibration = calibration_table(project.input("calibration"))
-        self.manual = read_manual_exclusions(project.input("manual_exclusions"))
         self._cellpose = None
 
     def load(self, tile: dict[str, str]) -> Field:
         x, y = int(tile["x_px"]), int(tile["y_px"])
         with open_image(self.project.root / tile["image_path"]) as image:
             rgb, inner = context_crop(image, x, y, int(tile["width_px"]), int(tile["height_px"]), self.project.context_px)
-        manual = rasterize_core_exclusions(self.manual.get(tile["image_path"], []), x - inner[1].start, y - inner[0].start, rgb.shape[:2])
+        manual = np.zeros(rgb.shape[:2], bool)  # detection's own areas only, as stage 2 (people's areas leave labels out instead)
         pixel_size = float(np.sqrt(float(tile["pixel_width_um"]) * float(tile["pixel_height_um"])))
         return Field(tile, rgb, inner, pixel_size, self.calibration[(tile["tma"], tile["stain"])], manual)
 

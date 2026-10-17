@@ -438,7 +438,7 @@ def _flat(value) -> list[int]:
 
 def outline_options(row) -> tuple[list, int]:
     """The outlines one can switch between for a candidate and the index of the one drawn by default: the one rule every
-    view and page follows. With Segment Anything's three outputs: those (small → large, so "mask 0–2" keep their
+    view and page follows (`shows_sam` decides stain outline or Segment Anything, as the measures' `shown_area_um2`). With Segment Anything's three outputs: those (small → large, so "mask 0–2" keep their
     meaning, None where SAM gave nothing) and then the candidate's stain outline ("mask 3"); drawn by default is the
     stain outline where `outline_default` is "stain" or Segment Anything fell back (`sam_default` -1), else the stored
     default output (the best-scored usable one when none is stored). Without them: its one outline (`sam_outline`, or
@@ -451,11 +451,12 @@ def outline_options(row) -> tuple[list, int]:
     found = get("sam_masks")
     found = (str(found).split("|") if isinstance(found, str) else list(found)) if _given(found) else []
     found = [m if _given(m) else None for m in found]
-    prefer_own = get("outline_default") == "stain"
+    status = get("sam_status") if _given(get("sam_status")) else "ok"  # a store without a status: what it holds
+    default = _number(get("sam_default"))
+    use_sam = shows_sam(get("outline_default"), "fell back" if default is not None and default < 0 else status, own is not None)
     if any(m is not None for m in found):
         found = found + ([own] if own is not None else [])
-        default = _number(get("sam_default"))
-        if own is not None and (prefer_own or (default is not None and default < 0)):
+        if own is not None and not use_sam:
             return found, len(found) - 1
         if default is None or not 0 <= int(default) < min(3, len(found)) or found[int(default)] is None:
             kept = _flat(get("sam_outline")) if _given(get("sam_outline")) else None
@@ -467,9 +468,16 @@ def outline_options(row) -> tuple[list, int]:
             usable = [i for i, m in enumerate(found[:3]) if m is not None]
             default = max(usable, key=lambda i: scores[i] if i < len(scores) and scores[i] == scores[i] else 0.0)
         return found, int(default)
-    sam = get("sam_outline") if _given(get("sam_outline")) and get("sam_status") in ("ok", "", None) else None
-    one = (own if own is not None else sam) if prefer_own else (sam if sam is not None else own)
+    sam = get("sam_outline") if _given(get("sam_outline")) and status == "ok" else None
+    one = (sam if sam is not None else own) if use_sam else (own if own is not None else sam)
     return ([one] if one is not None else []), 0
+
+
+def shows_sam(outline_default, sam_status, has_outline: bool = True) -> bool:
+    """Whether a candidate's own outline (what the views draw and the measures measure) is its Segment Anything output:
+    where the stain's `outline_default` is not "stain" (or it has no stain outline) and a Segment Anything output was
+    kept; else its stain outline."""
+    return (outline_default != "stain" or not has_outline) and sam_status == "ok"
 
 
 def outline_rings(row) -> list[list[int]]:
@@ -482,6 +490,18 @@ def outline_rings(row) -> list[list[int]]:
         return rings(chosen)
     flat = np.asarray(chosen, dtype=float).reshape(-1)
     return [np.rint(flat).astype(np.int64).tolist()] if len(flat) else []
+
+
+def shown_area_um2(frame: pd.DataFrame) -> pd.Series:
+    """Each candidate's area as its own outline (`shows_sam`) has it: the Segment Anything area where that outline is
+    the default one, else the stain outline's (`area_um2`). The measures use it, so what is drawn is what is measured."""
+    stain_area = pd.to_numeric(frame.get("area_um2", pd.Series(np.nan, index=frame.index)), errors="coerce")
+    if "sam_area_um2" not in frame or "sam_status" not in frame:
+        return stain_area
+    sam_area = pd.to_numeric(frame["sam_area_um2"], errors="coerce")
+    default = frame["outline_default"] if "outline_default" in frame else pd.Series("", index=frame.index)
+    use = np.array([shows_sam(d, st) for d, st in zip(default, frame["sam_status"])], bool) & sam_area.notna().to_numpy()
+    return stain_area.where(~use, sam_area)
 
 
 def outlines(project, stain: str, core_id: str, decision: str | None = None) -> list[dict]:

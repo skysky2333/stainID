@@ -16,13 +16,16 @@ DEFAULTS: dict = {
         # component tree: smoothed DAB at these multiples of the slide threshold (per stain; the legacy sources run as well)
         "smooth_px": 1.0,
         "local_background_um": 60.0,
-        "NeuN": {"levels": [0.5, 0.75, 1.0, 1.5], "local_contrast": 0.5, "min_um2": 15.0, "max_um2": 650.0,
+        # context_px: how far beyond its tile (core px) each tile's detection window reaches, so the tile owning an
+        # object's centre sees all of it: the largest object's reach from its centre (accepted, whole objects of the cohort:
+        # NeuN 221 px, AT8 168 px, 6E10 926 px = 253 µm) with a margin
+        "NeuN": {"context_px": 256, "levels": [0.5, 0.75, 1.0, 1.5], "local_contrast": 0.5, "min_um2": 15.0, "max_um2": 650.0,
                  "significant_um2": 25.0, "split_max_um2": 6000.0, "mode": "split",
                  # merged components are cut into cells only when they look like touching cells, not a rim or band
                  "split": {"max_edge_fraction": 0.3, "max_aspect": 4.0, "min_radius_um": 3.0},
                  "unproposed": {"min_um2": 15.0}},
         # 6E10: the legacy segmentation finds almost every deposit; the faint levels add deposits below its seed level
-        "6E10": {"levels": [0.5, 0.75, 1.0, 1.5], "local_contrast": None, "min_um2": 20.0, "max_um2": 50000.0, "significant_um2": 20.0,
+        "6E10": {"context_px": 1024, "levels": [0.5, 0.75, 1.0, 1.5], "local_contrast": None, "min_um2": 20.0, "max_um2": 50000.0, "significant_um2": 20.0,
                  "split_max_um2": None, "mode": "roots",
                  # a faint node that merges deposits already kept (or is mostly covered by them) gives way to its
                  # children: on a dark-background core the faint field joins plaques the legacy seed level misses
@@ -35,7 +38,7 @@ DEFAULTS: dict = {
                  # candidate covers a quarter of
                  "unproposed": {"smooth_um": 4.0, "level": 0.75, "contrast": 0.25, "min_um2": 100.0, "min_cover": 0.25}},
         # AT8: bodies off the nucleus rings and the legacy dense bodies (pretangle-like, threads' swellings)
-        "AT8": {"levels": [1.0, 1.5, 2.0], "local_contrast": 1.0, "min_um2": 20.0, "max_um2": 1500.0, "significant_um2": 15.0,
+        "AT8": {"context_px": 256, "levels": [1.0, 1.5, 2.0], "local_contrast": 1.0, "min_um2": 20.0, "max_um2": 1500.0, "significant_um2": 15.0,
                 "split_max_um2": 4000.0, "mode": "split", "ring_contrast": 0.15,
                 "split": {"max_edge_fraction": 0.3, "max_aspect": 4.0, "min_radius_um": 2.5},
                 "unproposed": {"min_um2": 20.0}},

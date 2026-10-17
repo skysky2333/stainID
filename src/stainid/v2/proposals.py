@@ -125,20 +125,32 @@ def unproposed_regions(field: Field, stain: str, owner: np.ndarray, rule: dict |
 
 
 def tile_summary(field: Field, stain: str, kept: list[dict], unproposed: int) -> dict:
+    """The tile's measures. Areas are counts of the tile's cells on the excluded-areas grid (`counted_cells`), and every
+    stain or nucleus count is taken inside the counted cells (and outside the excluded pixels)."""
+    from stainid import exclusions  # noqa: PLC0415
+
     ps = field.pixel_size_um
     mm2 = ps * ps / 1e6
+    cell_mm2 = MASK_SCALE * MASK_SCALE * mm2
     inner = field.inner
     exclusion = field.neun_exclusion if stain == "NeuN" else field.exclusion
+    codes, counted = counted_cells(field, stain)
     valid = field.tissue & ~exclusion
+    valid[inner] &= counted
+    valid[: inner[0].start] = False
+    valid[inner[0].stop:] = False
+    valid[:, : inner[1].start] = False
+    valid[:, inner[1].stop:] = False
+    area = float((codes == exclusions.COUNTED).sum() * cell_mm2)
     out = {k: field.tile.get(k, "") for k in TILE_KEYS}
     out |= {
         "threshold_dab_od": field.threshold, "glass_darkness": field.glass, "nuclei_available": field.raw_nuclei is not None,
-        "tissue_area_mm2": float(field.tissue_area[inner].sum() * mm2),
-        "analysis_area_mm2": float((field.tissue_area & ~exclusion)[inner].sum() * mm2),
-        "valid_area_mm2": float(valid[inner].sum() * mm2),
+        "tissue_area_mm2": float(((codes != 3) & (codes != exclusions.OUTSIDE)).sum() * cell_mm2),
+        "analysis_area_mm2": area,
+        "valid_area_mm2": area,  # the same counted cells (the far-area measure's denominator)
         "linear_artifact_fraction": float(field.linear[inner].mean()), "fold_fraction": float(field.fold[inner].mean()),
         "manual_exclusion_fraction": float(field.manual[inner].mean()),
-        "exclusion_fraction": float(exclusion[inner].mean()),
+        "exclusion_fraction": float(np.isin(codes, (1, 2, 4, 5)).mean()),  # of the tile's cells
         "candidate_count": len(kept), "unproposed_count": unproposed,
     }
     for level in LEVELS:
@@ -148,7 +160,8 @@ def tile_summary(field: Field, stain: str, kept: list[dict], unproposed: int) ->
         inside = [(x, y) for x, y in points if field.inside(x, y)]
         out["nucleus_count"] = len(inside)
     if stain == "NeuN":
-        tissue = field.tissue_area & ~field.neun_exclusion
+        tissue = np.zeros(field.shape, bool)
+        tissue[inner] = counted  # the counted cells, as every area
         size = max(1, round(100.0 / field.pixel_width_um)), max(1, round(100.0 / field.pixel_height_um))
         windows = []
         for y0 in range(inner[0].start, inner[0].stop - size[1] + 1, size[1]):
@@ -167,7 +180,7 @@ def tile_summary(field: Field, stain: str, kept: list[dict], unproposed: int) ->
     if stain == "AT8":
         found = tau.maps(field)
         maps_, threads = found["maps"], found["threads"]
-        inner_valid = maps_["valid"][inner]
+        inner_valid = maps_["valid"][inner] & counted
         skeleton = threads["skeleton"][inner] & inner_valid
         summary = found["summary"]
         out |= {
@@ -268,6 +281,87 @@ def own_margin(field: Field) -> int:
     return int(field.tile.get("context_px", 128)) // 2
 
 
+# ---------------------------------------------------------------- the detection window
+
+def detection_context(project, settings: dict) -> int:
+    """How far (core px) beyond its tile a tile's detection window reaches (`proposals.<stain>.context_px`, at least the
+    project's context margin): as far as the largest object reaches from its centre, so that the tile owning an object's
+    centre sees all of it."""
+    return max(int(project.context_px), int(settings.get("context_px") or project.context_px))
+
+
+def _crop_box(tile: dict, context: int, size: tuple[int, int]) -> tuple[int, int, int, int]:
+    """The crop `context_crop` cuts for a tile with this context margin, as (x0, y0, x1, y1) core px."""
+    x, y, w, h = int(tile["x_px"]), int(tile["y_px"]), int(tile["width_px"]), int(tile["height_px"])
+    return max(0, x - context), max(0, y - context), min(size[1], x + w + context), min(size[0], y + h + context)
+
+
+def _overlap(a: tuple, b: tuple) -> tuple[int, int, int, int] | None:
+    x0, y0, x1, y1 = max(a[0], b[0]), max(a[1], b[1]), min(a[2], b[2]), min(a[3], b[3])
+    return (x0, y0, x1, y1) if x1 > x0 and y1 > y0 else None
+
+
+def automatic_masks(image, tiles: list[dict], context: int, pixel_size: dict, size: tuple[int, int], workers: int = 1) -> tuple[np.ndarray, np.ndarray]:
+    """Detection's linear-artifact and fold masks of the whole core image, each tile's own area from its standard crop
+    (the tile and the project's context margin; the masks the calibration and the tile measures use): a wider detection
+    window cuts them from here, so they do not depend on the window."""
+    linear, fold = np.zeros(size, bool), np.zeros(size, bool)
+    cutting = threading.Lock()
+
+    def one(tile: dict) -> None:
+        x, y = int(tile["x_px"]), int(tile["y_px"])
+        with cutting:
+            rgb, inner = context_crop(image, x, y, int(tile["width_px"]), int(tile["height_px"]), context)
+        field = Field({**tile, "context_px": context}, rgb, inner, (x - inner[1].start, y - inner[0].start), float("nan"),
+                      pixel_size[tile["tile_id"]], np.zeros(rgb.shape[:2], bool), None)
+        with shared_pictures(rgb):
+            h, w = inner[0].stop - inner[0].start, inner[1].stop - inner[1].start
+            linear[y: y + h, x: x + w] = field.linear[inner]
+            fold[y: y + h, x: x + w] = field.fold[inner]
+        field.release()
+
+    if workers > 1 and len(tiles) > 1:
+        with ThreadPoolExecutor(min(workers, len(tiles)), thread_name_prefix="stainid-masks") as pool:
+            list(pool.map(one, tiles))
+    else:
+        for tile in tiles:
+            one(tile)
+    return linear, fold
+
+
+def window_nuclei(tile: dict, tiles: list[dict], window: tuple[int, int, int, int], context: int, size: tuple[int, int],
+                  load) -> np.ndarray | None:
+    """Cellpose labels over a detection window wider than the tile's nuclei crop: the tile's own nuclei (its standard
+    crop, as Find nuclei made them) and beyond that the other tiles' nuclei of their own areas (relabelled); None when the
+    tile has none. A nucleus across the seam of the tile's crop keeps the part on each side."""
+    own = load(tile)
+    if own is None:
+        return None
+    x0, y0, x1, y1 = window
+    out = np.zeros((y1 - y0, x1 - x0), np.uint32)
+    standard = _crop_box(tile, context, size)
+    next_label = int(own.max()) + 1
+    for other in tiles:
+        if other["tile_id"] == tile["tile_id"]:
+            continue
+        mine = (int(other["x_px"]), int(other["y_px"]), int(other["x_px"]) + int(other["width_px"]), int(other["y_px"]) + int(other["height_px"]))
+        part = _overlap(mine, window)
+        if part is None:
+            continue
+        labels = load(other)
+        if labels is None:
+            continue
+        ox0, oy0 = _crop_box(other, context, size)[:2]
+        piece = labels[part[1] - oy0: part[3] - oy0, part[0] - ox0: part[2] - ox0].astype(np.uint32)
+        piece = np.where(piece > 0, piece + next_label, 0).astype(np.uint32)
+        next_label += int(labels.max()) + 1
+        out[part[1] - y0: part[3] - y0, part[0] - x0: part[2] - x0] = piece
+    sx0, sy0, sx1, sy1 = standard
+    out[sy0 - y0: sy1 - y0, sx0 - x0: sx1 - x0] = own[: sy1 - sy0, : sx1 - sx0]
+    return out
+
+
+
 # ---------------------------------------------------------------- one copy per object across tiles
 
 def _raster(row: dict, box: tuple[int, int, int, int]) -> np.ndarray:
@@ -351,14 +445,41 @@ def owned_once(rows: list[dict], tiles: list[dict], context: int = 128, cell: in
 
 
 def mask_piece(field: Field, stain: str) -> np.ndarray:
-    """The tile's own area at 1/MASK_SCALE as bit flags (BITS)."""
+    """The tile's own area at 1/MASK_SCALE as bit flags (BITS), each cell flagged by the majority of its pixels: the grid
+    the excluded-areas layer, the views and every area measure share (`counted_cells`)."""
+    if "mask_piece" in field.memo:
+        return field.memo["mask_piece"]
     inner = field.inner
-    bits = (field.tissue_area[inner] * BITS["tissue"] | field.linear[inner] * BITS["linear"] | field.fold[inner] * BITS["fold"]
-            | field.manual[inner] * BITS["manual"]).astype(np.uint8) | BITS["tile"]
+    planes = [(field.tissue_area[inner], BITS["tissue"]), (field.linear[inner], BITS["linear"]), (field.fold[inner], BITS["fold"]),
+              (field.manual[inner], BITS["manual"])]
     if stain == "AT8":
-        bits |= (tau.maps(field)["maps"]["edge_excluded"][inner] * BITS["edge_guard"]).astype(np.uint8)
-    height, width = bits.shape
-    return cv2.resize(bits, (max(1, width // MASK_SCALE), max(1, height // MASK_SCALE)), interpolation=cv2.INTER_NEAREST)
+        planes.append((tau.maps(field)["maps"]["edge_excluded"][inner], BITS["edge_guard"]))
+    height, width = planes[0][0].shape
+    size = (max(1, width // MASK_SCALE), max(1, height // MASK_SCALE))
+    bits = np.full((size[1], size[0]), BITS["tile"], np.uint8)
+    for plane, bit in planes:
+        if plane.any():
+            share = cv2.resize(plane[: size[1] * MASK_SCALE, : size[0] * MASK_SCALE].astype(np.float32), size, interpolation=cv2.INTER_AREA) \
+                if height >= MASK_SCALE and width >= MASK_SCALE else np.full((size[1], size[0]), float(plane.mean()), np.float32)
+            bits[share >= 0.5] |= bit
+    field.memo["mask_piece"] = bits
+    return bits
+
+
+def counted_cells(field: Field, stain: str) -> tuple[np.ndarray, np.ndarray]:
+    """The tile's counted cells (`stainid.exclusions.codes_of` of its mask piece: tissue, not excluded) and the same at
+    the pixels of the tile's own area (cells past the last whole one are not counted, as the mask has none there). Every
+    area of the tile is a count of these cells, and every stain or nucleus count is taken inside them, so each density
+    and burden divides by exactly the area the views show as counted."""
+    from stainid import exclusions  # noqa: PLC0415
+
+    codes = exclusions.codes_of(mask_piece(field, stain), stain)
+    cells = codes == exclusions.COUNTED
+    height, width = field.inner[0].stop - field.inner[0].start, field.inner[1].stop - field.inner[1].start
+    pixels = np.zeros((height, width), bool)
+    up = np.repeat(np.repeat(cells, MASK_SCALE, axis=0), MASK_SCALE, axis=1)
+    pixels[: up.shape[0], : up.shape[1]] = up[:height, :width]
+    return codes, pixels
 
 
 # ---------------------------------------------------------------- one core image
@@ -391,29 +512,40 @@ def propose_core(project, stain: str, core_id: str, tiles: list[dict], threshold
     p = params(project)["proposals"]
     settings, shared = p[stain], {k: v for k, v in p.items() if k not in ("NeuN", "6E10", "AT8")}
     nuclei_dir = project.output("nuclei")
-    context = project.context_px
+    context = project.context_px  # the tiles' nuclei crops and field pictures
+    window = detection_context(project, settings)  # how far each tile's detection reaches (the largest object)
+    pixel_size = {t["tile_id"]: float(np.sqrt(float(t["pixel_width_um"]) * float(t["pixel_height_um"]))) for t in tiles}
     rows, summaries, unproposed, thread_rows = [], [], [], []
+
+    def load_nuclei(tile: dict) -> np.ndarray | None:
+        nuclei_path = nuclei_dir / f"{tile['tile_id']}.npz"
+        if f"{tile['tile_id']}.npz" in nuclei_names or nuclei_path.exists():
+            with np.load(nuclei_path) as loaded:
+                return loaded["masks"]
+        return None
+
     with open_image(project.root / tiles[0]["image_path"]) as image:
         image.load()
         glass = core_glass_darkness(image)
         size = (image.height, image.width)
         mask = np.zeros(((size[0] + MASK_SCALE - 1) // MASK_SCALE, (size[1] + MASK_SCALE - 1) // MASK_SCALE), np.uint8)
+        wide = window > context
+        automatic = automatic_masks(image, tiles, context, pixel_size, size, tiles_at_once) if wide else None
         cutting = threading.Lock()
 
         def one(tile: dict) -> tuple[dict, np.ndarray]:
             x, y = int(tile["x_px"]), int(tile["y_px"])
             with cutting:
-                rgb, inner = context_crop(image, x, y, int(tile["width_px"]), int(tile["height_px"]), context)
+                rgb, inner = context_crop(image, x, y, int(tile["width_px"]), int(tile["height_px"]), window)
             origin = (x - inner[1].start, y - inner[0].start)
-            nuclei_path = nuclei_dir / f"{tile['tile_id']}.npz"
-            raw = None
-            if f"{tile['tile_id']}.npz" in nuclei_names or nuclei_path.exists():
-                with np.load(nuclei_path) as loaded:
-                    raw = loaded["masks"]
-            field = Field({**tile, "context_px": context}, rgb, inner, origin, threshold,
-                          float(np.sqrt(float(tile["pixel_width_um"]) * float(tile["pixel_height_um"]))),
+            box = (origin[0], origin[1], origin[0] + rgb.shape[1], origin[1] + rgb.shape[0])
+            raw = window_nuclei(tile, tiles, box, context, size, load_nuclei) if wide else load_nuclei(tile)
+            field = Field({**tile, "context_px": context}, rgb, inner, origin, threshold, pixel_size[tile["tile_id"]],
                           np.zeros(rgb.shape[:2], bool), raw, glass,
                           smooth_px=float(p["smooth_px"]), background_um=float(p["local_background_um"]))
+            if automatic is not None:  # detection's masks as the standard crops make them (calibration, tile measures)
+                field.__dict__["linear"] = automatic[0][box[1]: box[3], box[0]: box[2]]
+                field.__dict__["fold"] = automatic[1][box[1]: box[3], box[0]: box[2]]
             with shared_pictures(rgb):  # the stain separation and tissue mask of the field, made once for every step
                 result = process_tile(field, stain, settings, shared)
                 piece = mask_piece(field, stain)

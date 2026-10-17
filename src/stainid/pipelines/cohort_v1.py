@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import csv
-import json
 from collections import defaultdict
 from pathlib import Path
 
@@ -10,7 +9,6 @@ from joblib import load
 from PIL import Image
 
 from stainid.imaging.tissue import core_glass_darkness, field_tissue_mask, linear_artifact_mask, tissue_area_mask
-from stainid.qc.exclusions import rasterize_core_exclusions
 from stainid.stains.amyloid.model import classify_amyloid_objects
 from stainid.stains.amyloid.segmentation import segment_amyloid_candidates, write_amyloid_overlay
 from stainid.stains.neun.candidates import segment_neun_candidates, write_candidate_overlay
@@ -330,7 +328,6 @@ def run_cohort_inference(
     limit_images: int | None = None,
     context_px: int = 128,
     overlay_dir: Path | None = None,
-    manual_exclusions_path: Path | None = None,
     amyloid_bundle_path: Path | None = None,
     stains: set[str] | None = None,
     shard_index: int = 0,
@@ -356,10 +353,6 @@ def run_cohort_inference(
         (row["tma"], row["stain"]): float(row["threshold_dab_od"])
         for row in read_csv(calibration_path)
     }
-    manual_exclusions: dict[str, list[dict[str, object]]] = {}
-    if manual_exclusions_path is not None:
-        with manual_exclusions_path.open(encoding="utf-8") as handle:
-            manual_exclusions = json.load(handle)
     parts_dir = feature_output.with_name(f"{feature_output.stem}_parts")
     parts_dir.mkdir(parents=True, exist_ok=True)
     for image_index, ((image_path, core_id, stain), image_rows) in enumerate(
@@ -382,14 +375,7 @@ def run_cohort_inference(
                 width = int(row["width_px"])
                 height = int(row["height_px"])
                 rgb, inner = context_crop(image, x, y, width, height, context_px)
-                crop_x = x - inner[1].start
-                crop_y = y - inner[0].start
-                manual_mask = rasterize_core_exclusions(
-                    manual_exclusions.get(image_path, []),
-                    crop_x,
-                    crop_y,
-                    rgb.shape[:2],
-                )
+                manual_mask = np.zeros(rgb.shape[:2], bool)  # detection's own areas only
                 threshold = calibrations[(row["tma"], stain)]
                 overlay_path = (
                     overlay_dir / stain / f"{row['tile_id']}.jpg"

@@ -15,7 +15,7 @@ def run_neun(project: Project, device: str = "cpu", threads: int = 8, batch_size
     os.environ.setdefault("MPLCONFIGDIR", "/tmp/stainid_mpl_cache")
     accept = project.config["acceptance"].get("neun")
     run_neun_cohort(project.analysis_tiles(), project.input("calibration"), project.model("neun"), project.model("cellpose"),
-                    project.output("neun"), project.output("nuclei"), project.input("manual_exclusions"), tile_ids, None, shard_index, shard_count, threads,
+                    project.output("neun"), project.output("nuclei"), tile_ids, None, shard_index, shard_count, threads,
                     device=device, batch_size=batch_size, precision=project.precision("cellpose"),
                     accept_threshold=None if accept is None else float(accept))
 
