@@ -55,9 +55,6 @@ async def _lifespan(app: FastAPI):
     import anyio.to_thread  # noqa: PLC0415
 
     anyio.to_thread.current_default_thread_limiter().total_tokens = REQUEST_THREADS
-    from stainid.api import area_batch  # noqa: PLC0415
-
-    area_batch.start()  # "Apply area edits" by itself, at most every 10 minutes (`api.area_batch`)
     yield
 
 

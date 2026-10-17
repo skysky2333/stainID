@@ -1,3 +1,4 @@
+# ruff: noqa: F811  (the rounds fixture is shared from test_annotation_rounds)
 """The "Mark bad areas" round (labels/areas.py, api/routes/areas.py): a core with all its stain images is the unit people
 claim; saving checks every stain image (also with no edits) and puts the edits into the resolved layer; the object
 rounds draw fields from cores whose areas were checked first; and the Cores view's review layers (the minimap's tile
@@ -50,7 +51,7 @@ def test_a_session_claims_whole_cores_and_a_save_checks_every_stain_image(rounds
     assert ann.get(f"/api/annotate/{name}/areas/next").json()["core_id"] is None  # done
 
 
-def test_area_edits_change_the_layer_and_its_digest_at_once(rounds_project):
+def test_area_edits_are_people_s_areas_and_leave_the_analysis_layer_alone(rounds_project):
     admin, (ann, _), _ = rounds_project
     project = state.get_state().project
     _plain_mask(project)
@@ -60,12 +61,17 @@ def test_area_edits_change_the_layer_and_its_digest_at_once(rounds_project):
     edits = {"6E10": {"pngs": {"include": _square(150, (45, 55, 0, 40)), "2": _square(150, (100, 110, 0, 40))}, "scale": 8}}
     saved = ann.post(f"/api/annotate/{name}/cores/{CORE}/save", json={"checked": ["6E10", "AT8", "NeuN"], "edits": edits})
     assert saved.status_code == 200, saved.text
-    layer = exclusions.resolved(project, CORE, "6E10")
-    assert layer.digest != before  # the stage 4/5 manifests made with the old digest are outdated now
-    assert layer.codes[50, 10] == 0 and layer.codes[50, 100] == 1 and layer.codes[105, 10] == 2
+    assert exclusions.digest(project, CORE, "6E10") == before  # the analysis' input (and every stage digest) is untouched
+    people = exclusions.annotated(project, CORE, "6E10")
+    assert people.codes[50, 10] == exclusions.CLEARED and people.codes[50, 100] == 0 and people.codes[105, 10] == 2
+    final = exclusions.final_say(project, CORE, "6E10")
+    assert final.codes[50, 10] == 0 and final.codes[50, 100] == 1 and final.codes[105, 10] == 2
+    assert exclusions.automatic(project, CORE, "6E10").codes[50, 10] == 1
+    page = ann.get(f"/api/annotate/{name}/cores/{CORE}/6E10/annotated").json()
+    assert {r["kind"] for r in page["regions"]} == {"include", "2"} and page["edits"][0]["person"] == "Ann"
     (edit,) = exclusions.edits(project, CORE, "6E10")
     assert edit.source == "Ann" and set(edit.kinds) == {"include", "2"}
-    assert exclusions.digest(project, CORE, "AT8") is None  # no AT8 mask in this project; nothing was edited there anyway
+    assert exclusions.digest(project, CORE, "AT8") is None  # no AT8 mask in this project
 
 
 def _square(size: int, box) -> str:
@@ -170,9 +176,11 @@ def test_agreement_and_detections_areas_against_peoples(rounds_project):
     assert ben.get(f"/api/annotate/{name}/areas/next").json()["core_id"] == CORE  # a second check is someone else
     assert ben.post(f"/api/annotate/{name}/cores/{CORE}/save", json={"checked": ["6E10", "AT8", "NeuN"], "edits": b}).status_code == 200
     overview = admin.get("/api/labels/areas").json()
+    detector = admin.get("/api/models/bad-areas").json()
     assert overview["cores_checked"] == 1 and {s["stain"]: s["double_checked"] for s in overview["stains"]}["6E10"] == 1
     agreement = overview["agreement"]
-    assert agreement["pairs"] == 1 and [d["stain"] for d in agreement["disagreements"]] == ["6E10"]  # AT8, NeuN have no layer here
-    folds = [r for r in overview["evaluation"] if r["stain"] == "6E10" and r["tma"] == "all" and r["type"] == 1]
+    assert agreement["pairs"] == 3 and [d["stain"] for d in agreement["disagreements"]] == ["6E10"]  # AT8, NeuN: nobody changed anything
+    folds = [r for r in detector["by_tma"] if r["stain"] == "6E10" and r["tma"] == "all" and r["type"] == 1]
     assert folds and folds[0]["cleared_mm2"] > 0 and folds[0]["added_mm2"] > 0 and 0 < folds[0]["f1"] < 1
+    assert len({r["donor_id"] for r in detector["by_donor"]}) == 2 and detector["model"] is None  # one donor and "all"; the hook for a trained model
     assert areas.needed({"second": [CORE]}, CORE) == 2
