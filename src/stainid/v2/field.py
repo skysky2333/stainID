@@ -40,8 +40,9 @@ class Field:
     def pixel_height_um(self) -> float:
         return float(self.tile["pixel_height_um"])
 
-    def inside(self, x: float, y: float) -> bool:
-        return self.inner[1].start <= x < self.inner[1].stop and self.inner[0].start <= y < self.inner[0].stop
+    def inside(self, x: float, y: float, margin: float = 0) -> bool:
+        """Whether a point (field pixels) lies in the tile's own area, grown by `margin` pixels on every side."""
+        return self.inner[1].start - margin <= x < self.inner[1].stop + margin and self.inner[0].start - margin <= y < self.inner[0].stop + margin
 
     @cached_property
     def hed(self) -> np.ndarray:

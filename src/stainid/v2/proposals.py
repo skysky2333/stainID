@@ -2,8 +2,9 @@
 per-tile summaries, the AT8 thread skeleton, the stained regions no candidate covers and a low-resolution mask picture.
 
 The core image is read once; each tile is cut out with its context margin (objects at a tile edge are segmented whole)
-and a candidate belongs to the tile whose own area holds its centroid. Cellpose nuclei come from Find nuclei (never
-re-run here). Nothing here applies a model: stage 4 decides from the stored features.
+and keeps the candidates whose centroid lies in it or within half the margin of it; an object segmented by two or more
+tiles is then kept once (`owned_once`, the most complete copy) and belongs to the tile holding its centroid. Cellpose
+nuclei come from Find nuclei (never re-run here). Nothing here applies a model: stage 4 decides from the stored features.
 """
 from __future__ import annotations
 
@@ -80,17 +81,46 @@ def _legacy_columns(stain: str, region: Region) -> dict:
     return {"legacy_class": row.get("candidate_source", ""), **flags}
 
 
-def unproposed_regions(field: Field, stain: str, footprint: np.ndarray, minimum_um2: float, thread_line: np.ndarray | None,
+UNPROPOSED = {"smooth_um": 0.0, "level": 1.0, "contrast": 0.0, "min_um2": 20.0, "min_cover": 0.0}
+
+
+def stained_level(field: Field, smooth: np.ndarray, rule: dict, exclusion: np.ndarray) -> float:
+    """The DAB level of the unproposed search: `level` × the slide threshold, raised to the tissue's median + `contrast` ×
+    the threshold where the background is darker (a pale halo stands out from its tissue, not from glass)."""
+    level = float(rule["level"]) * field.threshold
+    if float(rule["contrast"]) > 0:
+        valid = field.tissue & ~exclusion
+        if valid.sum() >= 100:
+            level = max(level, float(np.median(smooth[valid])) + float(rule["contrast"]) * field.threshold)
+    return level
+
+
+def unproposed_regions(field: Field, stain: str, owner: np.ndarray, rule: dict | float, thread_line: np.ndarray | None,
                        exclusion: np.ndarray) -> list[dict]:
-    """Stained components (smoothed DAB ≥ threshold, at least `minimum_um2`, centroid in the tile) touching no candidate."""
+    """Stained components no candidate proposes: the DAB smoothed over `smooth_um` (0: the field's own smoothing) at or
+    above `stained_level`, in tissue, at least `min_um2`, centroid in the tile, that no candidate touches (`min_cover` 0)
+    or that no single candidate covers `min_cover` of (6E10: a pale diffuse plaque that only small pieces touch counts).
+    `owner` labels each pixel with the candidate (1, 2, …) painted there first; `rule` may be just the minimum area."""
+    rule = {**UNPROPOSED, **({"min_um2": rule} if isinstance(rule, (int, float)) else rule)}
     ps = field.pixel_size_um
-    positive = cv2.morphologyEx(((field.smooth >= field.threshold) & field.tissue).astype(np.uint8), cv2.MORPH_CLOSE, disk(1))
-    covered = cv2.dilate(footprint.astype(np.uint8), disk(max(1, round(1.0 / ps)))).astype(bool)
+    smooth = field.smooth if not float(rule["smooth_um"]) else cv2.GaussianBlur(field.dab, (0, 0), float(rule["smooth_um"]) / ps)
+    level = stained_level(field, smooth, rule, exclusion)
+    positive = cv2.morphologyEx(((smooth >= level) & field.tissue).astype(np.uint8), cv2.MORPH_CLOSE, disk(1))
+    min_cover = float(rule["min_cover"])
+    covered = cv2.dilate((owner > 0).astype(np.uint8), disk(max(1, round(1.0 / ps)))).astype(bool) if not min_cover else None
     out = []
-    minimum_px = max(1, round(minimum_um2 / ps ** 2))
+    minimum_px = max(1, round(float(rule["min_um2"]) / ps ** 2))
     for box, local, area in components(positive.astype(bool)):
-        if area < minimum_px or covered[box][local].any():
+        if area < minimum_px:
             continue
+        if covered is not None:
+            if covered[box][local].any():
+                continue
+        else:
+            held = owner[box][local]
+            held = held[held > 0]
+            if held.size and np.bincount(held).max() >= min_cover * area:
+                continue
         ys, xs = np.nonzero(local)
         cx, cy = box[1].start + xs.mean(), box[0].start + ys.mean()
         if not field.inside(cx, cy):
@@ -180,7 +210,10 @@ def process_tile(field: Field, stain: str, settings: dict, shared: dict) -> dict
             if region.source == "legacy":
                 extent[region.box] |= region.mask
         field.memo["amyloid_extent"] = extent
-    kept = [r for r in regions if field.inside(*_centroid(r))]
+    # an object across the tile's edge is segmented from each side's crop, with slightly different centroids: keep it
+    # here when its centroid lies within half the context margin of the tile (`owned_once` keeps one copy per core)
+    margin = own_margin(field)
+    kept = [r for r in regions if field.inside(*_centroid(r), margin)]
     exclusion = field.neun_exclusion if stain == "NeuN" else field.exclusion
     rows = []
     inputs = _model_inputs(stain, field, kept)
@@ -201,12 +234,14 @@ def process_tile(field: Field, stain: str, settings: dict, shared: dict) -> dict
             "outline": store.encode_points(outline(region, field.origin)),
             "excluded_fraction": float(exclusion[region.box][region.mask].mean()),
             **generic, **_legacy_columns(stain, region), **extra, **model_values,
+            "_own": field.inside(cx, cy), "_area_px": region.area_px,
         })
-    footprint = np.zeros(field.shape, bool)
-    for region in regions:
-        footprint[region.box] |= region.mask
+    owner = np.zeros(field.shape, np.int32)
+    for index, region in enumerate(regions, start=1):
+        view = owner[region.box]
+        view[region.mask & (view == 0)] = index
     line = tau.maps(field)["threads"]["line"] if stain == "AT8" else None
-    unproposed = unproposed_regions(field, stain, footprint, params_minimum(shared, stain), line, exclusion)
+    unproposed = unproposed_regions(field, stain, owner, unproposed_rule(settings, shared, stain), line, exclusion)
     for row in unproposed:
         row |= {"tile_id": field.tile["tile_id"], "x_core": row.pop("x_field") + ox, "y_core": row.pop("y_field") + oy}
     thread_rows = []
@@ -230,8 +265,100 @@ def process_tile(field: Field, stain: str, settings: dict, shared: dict) -> dict
     return {"rows": rows, "summary": tile_summary(field, stain, rows, len(unproposed)), "unproposed": unproposed, "threads": thread_rows}
 
 
-def params_minimum(shared: dict, stain: str) -> float:
-    return float(shared["unproposed_min_um2"][stain])
+def unproposed_rule(settings: dict, shared: dict, stain: str) -> dict:
+    """The stain's unproposed search (`unproposed` in its proposal settings; an older `unproposed_min_um2` sets the area)."""
+    rule = dict(settings.get("unproposed") or {})
+    if "min_um2" not in rule and "unproposed_min_um2" in shared:
+        rule["min_um2"] = float(shared["unproposed_min_um2"][stain])
+    return {**UNPROPOSED, **rule}
+
+
+def own_margin(field: Field) -> int:
+    """How far beyond its tile (pixels) a candidate's centroid may lie and still be measured in that tile: half the
+    context margin, so the object reaches at least that far into the crop on the far side."""
+    return int(field.tile.get("context_px", 128)) // 2
+
+
+# ---------------------------------------------------------------- one copy per object across tiles
+
+def _raster(row: dict, box: tuple[int, int, int, int]) -> np.ndarray:
+    x0, y0, x1, y1 = box
+    mask = np.zeros((y1 - y0, x1 - x0), np.uint8)
+    flat = store.points(row["outline"])
+    if len(flat) >= 6:
+        cv2.fillPoly(mask, [np.asarray(flat, np.int32).reshape(-1, 2) - np.array([x0, y0])], 1)
+    return mask.astype(bool)
+
+
+def _box(row: dict) -> tuple[int, int, int, int]:
+    x0, y0, x1, y1 = (int(v) for v in str(row["bbox"]).split())
+    return x0, y0, x1, y1
+
+
+def same_copy(a: dict, b: dict, same_iou: float = 0.3, same_inside: float = 0.5) -> bool:
+    """Whether two candidate rows (from different tiles) are one object: their outlines overlap with IoU ≥ `same_iou`, or
+    one lies `same_inside` inside the other."""
+    ax0, ay0, ax1, ay1 = _box(a)
+    bx0, by0, bx1, by1 = _box(b)
+    if ax1 <= bx0 or bx1 <= ax0 or ay1 <= by0 or by1 <= ay0:
+        return False
+    box = (min(ax0, bx0), min(ay0, by0), max(ax1, bx1) + 1, max(ay1, by1) + 1)
+    ma, mb = _raster(a, box), _raster(b, box)
+    inter = int((ma & mb).sum())
+    if not inter:
+        return False
+    sa, sb = int(ma.sum()), int(mb.sum())
+    return inter / (sa + sb - inter) >= same_iou or inter >= same_inside * min(sa, sb)
+
+
+def owned_once(rows: list[dict], tiles: list[dict], context: int = 128, cell: int = 512) -> list[dict]:
+    """Each object of the core image once. A tile keeps the candidates whose centroid lies in it or within its margin
+    (`own_margin`), so an object across a tile edge is kept by every tile that segmented it, each copy cut at that tile's
+    crop. Of the copies (rows of different tiles whose outlines are the same object, `same_copy`) the most complete stays:
+    not cut by its crop, then centroid in its own tile, then the largest, then the first tile, then position. Two
+    complete copies whose centroids both lie in their own tiles are distinct objects. A copy whose centroid lies in no
+    tile of the image is dropped. The kept row moves to the tile holding its centroid (`tile_id`, `x_tile`, `x_field`…)."""
+    order = {t["tile_id"]: i for i, t in enumerate(tiles)}
+
+    def home(x: float, y: float) -> dict | None:
+        for t in tiles:
+            if int(t["x_px"]) <= x < int(t["x_px"]) + int(t["width_px"]) and int(t["y_px"]) <= y < int(t["y_px"]) + int(t["height_px"]):
+                return t
+        return None
+
+    rank = sorted(range(len(rows)), key=lambda i: (bool(rows[i].get("touches_crop_edge")), not rows[i]["_own"], -rows[i]["_area_px"],
+                                                   order.get(rows[i]["tile_id"], len(order)), rows[i]["y_core"], rows[i]["x_core"]))
+    grid: dict[tuple[int, int], list[int]] = {}
+    keep: list[int] = []
+    for i in rank:
+        row = rows[i]
+        x0, y0, x1, y1 = _box(row)
+        cells = [(cx, cy) for cx in range(x0 // cell, x1 // cell + 1) for cy in range(y0 // cell, y1 // cell + 1)]
+        near = {j for c in cells for j in grid.get(c, ())}
+        copy = False
+        for j in near:
+            other = rows[j]
+            if other["tile_id"] == row["tile_id"]:
+                continue
+            both_whole = row["_own"] and other["_own"] and not row.get("touches_crop_edge") and not other.get("touches_crop_edge")
+            if not both_whole and same_copy(row, other):
+                copy = True
+                break
+        if copy or (not row["_own"] and home(row["x_core"], row["y_core"]) is None):
+            continue
+        keep.append(i)
+        for c in cells:
+            grid.setdefault(c, []).append(i)
+    out = []
+    for i in sorted(keep):
+        row = rows[i]
+        if not row["_own"]:
+            tile = home(row["x_core"], row["y_core"])
+            tx, ty = int(tile["x_px"]), int(tile["y_px"])
+            row = {**row, "tile_id": tile["tile_id"], "x_tile": row["x_core"] - tx, "y_tile": row["y_core"] - ty,
+                   "x_field": row["x_core"] - max(0, tx - context), "y_field": row["y_core"] - max(0, ty - context)}
+        out.append({k: v for k, v in row.items() if k not in ("_own", "_area_px")})
+    return out
 
 
 def mask_piece(field: Field, stain: str) -> np.ndarray:
@@ -316,6 +443,10 @@ def propose_core(project, stain: str, core_id: str, tiles: list[dict], threshold
             my, mx = int(tile["y_px"]) // MASK_SCALE, int(tile["x_px"]) // MASK_SCALE
             h, w = min(piece.shape[0], mask.shape[0] - my), min(piece.shape[1], mask.shape[1] - mx)
             mask[my: my + h, mx: mx + w] = piece[:h, :w]
+    rows = owned_once(rows, tiles, context)
+    counts = pd.Series([r["tile_id"] for r in rows], dtype=object).value_counts()
+    for summary in summaries:
+        summary["candidate_count"] = int(counts.get(summary["tile_id"], 0))
     write_core(project, stain, core_id, tiles, rows, summaries, unproposed, thread_rows, mask)
     manifest.write(project, "proposals", stain, core_id, expected(project, stain, core_id, tiles, threshold, manual_polygons, nuclei_names),
                    candidates=len(rows), unproposed=len(unproposed), seconds=round(time.time() - started, 1), tiles=len(tiles))

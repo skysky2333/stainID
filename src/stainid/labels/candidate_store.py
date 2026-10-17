@@ -165,7 +165,8 @@ def _read_file(target: Path, columns: list[str] | None = None) -> pd.DataFrame:
 
 def _normalised(frame: pd.DataFrame, stain: str, core_id: str) -> pd.DataFrame:
     frame = frame.copy()
-    for column, default in (("decision", ""), ("reason", ""), ("class", ""), ("subtype", ""), ("sources", ""), ("sam_status", ""), ("model_id", "")):
+    for column, default in (("decision", ""), ("reason", ""), ("class", ""), ("subtype", ""), ("sources", ""), ("sam_status", ""), ("model_id", ""),
+                            ("outline_default", "")):
         frame[column] = frame[column].fillna(default).astype(str) if column in frame else default
     for column in ("probability", "proposal_threshold", "area_um2", "radius_px"):
         frame[column] = pd.to_numeric(frame[column], errors="coerce") if column in frame else np.nan
@@ -274,18 +275,25 @@ def _get(row, name: str):
 
 
 def masks(row) -> tuple[list[list[list[float]] | None], int]:
-    """The outlines one can switch between for a candidate, small to large, and the one shown first: its three
-    Segment Anything masks and their default when the store has them, else its one outline (Segment Anything's, else
-    the candidate's own)."""
+    """The outlines one can switch between for a candidate and the one shown first. With Segment Anything's three masks
+    in the store: those (small to large, so "mask 0–2" keep their meaning) and then the candidate's stain outline
+    ("mask 3"); shown first is the stain outline where the stain's `outline_default` is "stain" or Segment Anything fell
+    back (`sam_default` -1), else the default mask. Without them: its one outline (by `outline_default`, else Segment
+    Anything's, else the candidate's own)."""
     found = _get(row, "sam_masks")
+    own = _get(row, "outline")
+    prefer_own = _get(row, "outline_default") == "stain"
     if found and any(found):
+        found = list(found) + ([own] if own else [])
         default = _get(row, "sam_default")
+        if own and (prefer_own or default is None or pd.isna(default) or int(default) < 0):
+            return found, len(found) - 1
         scores = _get(row, "sam_scores") or []
-        if default is None or pd.isna(default) or not 0 <= int(default) < len(found) or not found[int(default)]:
-            usable = [i for i, m in enumerate(found) if m]
+        if default is None or pd.isna(default) or not 0 <= int(default) < 3 or not found[int(default)]:
+            usable = [i for i, m in enumerate(found[:3]) if m]
             default = max(usable, key=lambda i: scores[i] if i < len(scores) else 0.0)
-        return list(found), int(default)
-    one = _get(row, "sam_outline") or _get(row, "outline")
+        return found, int(default)
+    one = (own or _get(row, "sam_outline")) if prefer_own else (_get(row, "sam_outline") or own)
     return ([one] if one else []), 0
 
 
@@ -512,6 +520,7 @@ def training_rows(project: Project, stain: str, objects: pd.DataFrame, tiles: pd
         rows = found.drop_duplicates("candidate_id").set_index("candidate_id")
         for index, cid in group.items():
             row = rows.loc[cid]
-            out[index] = {**{n: row[c] for n, c in columns.items()}, **{k: row[k] for k in EXTRA if k in row and k not in columns},
+            scaled = {k: row[k] for k in row.index if str(k).startswith("s_") and k not in columns}  # slide-scaled 6E10 inputs
+            out[index] = {**{n: row[c] for n, c in columns.items()}, **{k: row[k] for k in EXTRA if k in row and k not in columns}, **scaled,
                           "x": float(objects.x[index]), "y": float(objects.y[index]), "tma": tma.get(objects.tile_id[index], ""), "candidate_id": cid}
     return out, names

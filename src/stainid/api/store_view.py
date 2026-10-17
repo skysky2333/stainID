@@ -13,7 +13,7 @@ import pandas as pd
 from stainid import candidates
 
 COLUMNS = ["candidate_id", "x_core", "y_core", "radius_px", "area_um2", "probability", "decision", "reason", "class", "subtype",
-           "m_from_ring", "outline", "sam_outline", "sam_status"]
+           "m_from_ring", "outline", "sam_outline", "sam_status", "outline_default"]
 
 
 def setting(project) -> str:
@@ -53,8 +53,7 @@ def found(project, core_id: str, stain: str) -> pd.DataFrame:
 
 
 def outline_rows(project, core_id: str, stain: str) -> list[list]:
-    """Each candidate's outline: [x, y, area µm², rings] (the default Segment Anything outline where one was kept, else the
-    candidate's own outline)."""
+    """Each candidate's outline: [x, y, area µm², rings] (the stain's display outline, `candidates.outline_rings`)."""
     frame = candidates.read_core(project, stain, core_id, COLUMNS)
     rows = []
     for row in frame.to_dict("records"):

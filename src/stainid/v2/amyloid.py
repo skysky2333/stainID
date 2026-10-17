@@ -133,13 +133,67 @@ def extras(field, regions: list[Region], ring_um: float = 15.0) -> list[dict]:
     return out
 
 
+# Slide-scaled inputs (`s_<name>`, for models trained with `slide_scaled`): the DAB intensities in slide thresholds, and the
+# dense core and seed measured at levels relative to the slide threshold. The legacy inputs use absolute OD (a core above
+# max(0.10 OD, …), seeds above max(0.035 OD, …)), so on a pale slide such as LIP-6 (threshold 0.026 OD against 0.07–0.11
+# elsewhere) plaques have no dense core and low intensities, and the current model rejects them.
+SCALED_INTENSITY = ("mean_dab_od", "median_dab_od", "p90_dab_od", "max_dab_od", "inner_mean_dab_od", "outer_mean_dab_od",
+                    "radial_dab_contrast", "context_dab_mean", "context_dab_p90", "context_dab_std", "center_dab_mean", "center_dab_p90",
+                    "annulus_dab_mean", "center_annulus_dab_contrast")
+SCALED_CORE = ("seed_area_um2", "core_area_um2", "core_fraction", "normalized_core_offset")
+CORE_FLOOR = 1.25  # × the slide threshold: the legacy 0.10 OD at the cohort's typical threshold (0.08 OD)
+SEED_FLOOR = 1.0  # × the slide threshold (the legacy floor 0.035 OD binds only below a 0.035 OD threshold)
+
+
+def scaled_names(names: list[str]) -> list[str]:
+    """A model's input names with each one that has a slide-scaled version replaced by it (`s_<name>`)."""
+    return [f"s_{n}" if n in SCALED_INTENSITY or n in SCALED_CORE else n for n in names]
+
+
+def scaled_core(field, region: Region) -> dict:
+    """Seed and dense-core measures of a deposit at levels relative to the slide threshold: seed above max(SEED_FLOOR ×
+    threshold, background median + 6 σ), core above max(CORE_FLOOR × threshold, 1.2 × that seed level, the deposit's 85th
+    percentile), as `deposit_row` measures them at the absolute levels."""
+    levels = _levels(field)
+    if "scaled_seed" not in field.memo:
+        seed_level = max(SEED_FLOOR * field.threshold, levels["background_median"] + 6.0 * levels["background_sigma"])
+        pixel_area = field.pixel_width_um * field.pixel_height_um
+        field.memo["scaled_seed"] = (seed_level, _remove_small_components(levels["valid"] & (levels["local_dab"] >= seed_level),
+                                                                          max(1, round(3.0 / pixel_area))))
+    seed_level, seed = field.memo["scaled_seed"]
+    pixel_area = field.pixel_width_um * field.pixel_height_um
+    box, mask = region.box, region.mask
+    values = field.dab[box][mask]
+    area = int(mask.sum()) * pixel_area
+    core_level = max(CORE_FLOOR * field.threshold, 1.2 * seed_level, float(np.quantile(values, 0.85)))
+    core = _remove_small_components(mask & (levels["local_dab"][box] >= core_level), max(1, round(4.0 / pixel_area)))
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(core.astype(np.uint8), 8)
+    largest = labels == 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA])) if count > 1 else np.zeros(core.shape, bool)
+    radius = np.sqrt(area / np.pi)
+    offset = float("nan")
+    if largest.any():
+        ys, xs = np.nonzero(mask)
+        cy, cx = np.nonzero(largest)
+        offset = float(np.hypot(cx.mean() - xs.mean(), cy.mean() - ys.mean()) * np.sqrt(pixel_area) / radius) if radius else float("nan")
+    core_area = int(largest.sum()) * pixel_area
+    return {"s_seed_area_um2": int((mask & seed[box]).sum()) * pixel_area, "s_core_area_um2": core_area,
+            "s_core_fraction": core_area / area if area else float("nan"), "s_normalized_core_offset": offset}
+
+
 def model_inputs(field, regions: list[Region]) -> list[dict]:
-    """The 6E10 identity model's inputs (morphology and the 140 µm review-patch context), as m_ columns."""
+    """The 6E10 identity model's inputs (morphology and the 140 µm review-patch context), as m_ columns, and their
+    slide-scaled versions (`s_` columns, `scaled_names`)."""
     if not regions:
         return []
     rows = [r.legacy for r in regions]
     matrix, names = identity_features(field.rgb, rows, field.pixel_size_um)
-    return [{f"m_{n}": float(v) for n, v in zip(names, values)} for values in matrix]
+    out = []
+    for region, values in zip(regions, matrix):
+        row = {f"m_{n}": float(v) for n, v in zip(names, values)}
+        row |= {f"s_{n}": row[f"m_{n}"] / field.threshold for n in SCALED_INTENSITY if f"m_{n}" in row}
+        out.append(row | scaled_core(field, region))
+    return out
 
 
-__all__ = ["MORPHOLOGY_FEATURES", "deposit_row", "extras", "model_inputs", "propose"]
+__all__ = ["MORPHOLOGY_FEATURES", "SCALED_CORE", "SCALED_INTENSITY", "deposit_row", "extras", "model_inputs", "propose", "scaled_core",
+           "scaled_names"]
