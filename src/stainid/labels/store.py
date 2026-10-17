@@ -24,7 +24,8 @@ import pandas as pd
 from stainid.labels import vocabulary as vocab
 from stainid.labels.vocabulary import Vocabulary
 
-COLUMNS = ["id", "source", "stain", "task", "tile_id", "x", "y", "value", "points", "session", "confirmed", "time", "deleted", "subtype", "candidate"]
+COLUMNS = ["id", "source", "stain", "task", "tile_id", "x", "y", "value", "points", "session", "confirmed", "time", "deleted", "subtype", "candidate",
+           "meta"]  # meta: where a label comes from (a split or merge, `labels.objectedit`), else None
 _CACHE: dict[Path, tuple[tuple[int, int], pd.DataFrame]] = {}
 
 

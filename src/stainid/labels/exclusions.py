@@ -4,9 +4,11 @@ layer every view, the analysis, training and scoring read).
 One edit is one `exclude` label: what a person painted and cleared on a field with the brush (key E) in one save, with
 id `exclude:<tile_id>:<token>` (a new one per save, so each save is its own edit and the log is the history), its rings
 in field-picture pixels (`points`: a list of rings), and each ring's type and whether it is a hole in the area of its
-type (`value`, e.g. "kinds:1,1,include;holes:0,1,0"; older labels "holes:0,1", all of type 1). The types are `KINDS`:
-1 fold or tissue damage, 2 artifact, 3 no tissue, 4 out of focus or bad staining, and "include": cleared, counted
-whatever detection or anyone earlier said (Shift-drag). Edits of the hand-drawn areas of the earlier AI-review rounds
+type (`value`, e.g. "kinds:1,1,-2;holes:0,1,0"; older labels "holes:0,1", all of type 1). The types are `KINDS`:
+1 fold or tissue damage, 2 artifact, 3 no tissue, 4 out of focus or bad staining (painted: added to that type's area,
+taking the pixels from any other type), "-1"–"-4" (removed from that type's area, detection's included: Shift-drag in
+the field tool), and "include": cleared, counted whatever detection or anyone earlier said (Shift-drag in "Mark bad
+areas"). An edit is resolved per type into masks by `stainid.exclusions` (removals first, then the rest). Edits of the hand-drawn areas of the earlier AI-review rounds
 (source "AI reviewer") have the core id as `tile_id` and rings in core pixels (`stainid.exclusions.import_reviewer`).
 
 The page paints a mask per type and sends them as PNGs (at 1/`scale` of the field picture); `from_pngs` turns them into
@@ -24,7 +26,9 @@ import numpy as np
 TASK = "exclude"
 INCLUDE = "include"
 KINDS = {"1": "fold or tissue damage", "2": "artifact (scratch, bubble, debris, linear artifact)", "3": "no tissue / empty",
-         "4": "out of focus or bad staining", INCLUDE: "cleared: counted, whatever was said before"}
+         "4": "out of focus or bad staining", INCLUDE: "cleared: counted, whatever was said before",
+         "-1": "taken out of the fold area", "-2": "taken out of the artifact area", "-3": "taken out of the no-tissue area",
+         "-4": "taken out of the out-of-focus area"}
 
 
 def label_id(tile_id: str) -> str:

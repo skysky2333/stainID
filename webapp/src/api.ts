@@ -199,8 +199,10 @@ export interface SessionDetail {
   fields: SessionField[]; annotator: string | null
 }
 export interface Label {
-  id: string; source: string; stain: string; task: 'class' | 'outline' | 'tag' | 'note' | 'done' | 'exclude'; tile_id: string  // exclude: an area marked as bad (points: its rings)
+  id: string; source: string; stain: string; task: 'class' | 'outline' | 'tag' | 'note' | 'done' | 'exclude' | 'threshold' | 'replaced'; tile_id: string  // exclude: an area marked as bad (points: its rings)
   x: number | null; y: number | null; value: string; subtype?: string | null; points: number[][] | null; session: string; confirmed: boolean; time: number; deleted?: boolean
+  /** where the label comes from: a piece of a split or a merged object ({edit, group}), an object replaced by one ({group, into}) */
+  meta?: { edit?: 'split' | 'merge'; group?: string; into?: number[][] } | null
 }
 export interface FieldObjectLite { x: number; y: number; radius_px: number; ai_value?: string; ai_probability?: number }
 export interface FieldWork {
@@ -516,12 +518,21 @@ export interface RoundObject<Shape = number[][]> {
   ai_probability: number | null; decision: string; reason: string; masks: (Shape | null)[]; mask: number; more_masks?: number
   /** in an excluded area (people's final say): drawn faint, not asked about */
   excluded?: boolean
+  /** its call (identity, subtype) if the acceptance threshold let it pass (labels/starting.py); null when a rule decides it */
+  if_accepted?: [string, string] | null
+  /** detection's threshold for it (the model's cut-off) */
+  threshold?: number | null
 }
 export interface RoundField<Shape = number[][]> {
   tile_id: string; box: { x: number; y: number; width: number; height: number }; objects: RoundObject<Shape>[]; checked: Record<string, RoundCheck>
   layers: string[]; mine: (Label & { candidate?: string | null })[]; added: AddedState[]; segment_anything: boolean; segment_ready: boolean
   open_by: string[]; done_by: string[]; pixel_size_um: number
+  /** detection's acceptance threshold on this field, and the one this person locked (saved), if any */
+  detection_threshold?: number | null; threshold?: number | null
 }
+/** Each brush type's current area over a field (GET …/fields/{tile}/areas): detection's with people's saved edits
+ *  merged in, a PNG per type (one pixel per `scale` field px) placed at x, y in the field picture. */
+export interface FieldAreas { status: string; scale?: number; x?: number; y?: number; width?: number; height?: number; version?: string; kinds: Record<string, string> }
 export interface RoundSessionField extends SessionField { open_by?: string[]; done?: boolean; done_by?: string[] }
 /** What a new round session can draw from, per TMA. */
 export interface RoundScope {

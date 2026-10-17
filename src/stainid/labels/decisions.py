@@ -68,7 +68,11 @@ def _legacy(project: Project, stain: str, rows: pd.DataFrame, tiles: pd.DataFram
 
 
 def _unnamed(rows: pd.DataFrame) -> pd.DataFrame:
-    return rows[~_has_candidate(rows) & rows.x.notna()]
+    """Labels to match onto candidates by position: those naming none, made where an object is, and not pieces of a
+    split or merge (their own objects, `labels.objectedit`)."""
+    from stainid.labels import objectedit  # noqa: PLC0415
+
+    return rows[~_has_candidate(rows) & rows.x.notna() & ~objectedit.pieces_mask(rows)]
 
 
 def table(project: Project, stain: str, labels: pd.DataFrame, tiles: pd.DataFrame) -> pd.DataFrame:

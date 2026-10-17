@@ -53,7 +53,7 @@ from stainid.api.routes.annotate import (
 from stainid.api.session import PREVIEW, annotator, require_admin
 from stainid.api.state import get_state
 from stainid.api.util import fast_json
-from stainid.labels import added, candidate_store, decisions, exclusions, readiness, rounds, sessions, status, store
+from stainid.labels import added, candidate_store, decisions, exclusions, objectedit, readiness, rounds, sessions, starting, status, store
 from stainid.labels import vocabulary as vocab
 from stainid.labels.tasks import STAINS
 from stainid.tables import write_text_atomic
@@ -426,8 +426,11 @@ def _field_shapes(meta: dict, tile: dict) -> tuple[list[dict], dict[str, list]]:
             _OBJECTS.move_to_end(key)
             return kept[1], kept[2]
     objects, masks = [], {}
+    passing = starting.if_accepted(state.project, meta["stain"], str(tile["core_id"]))
     for r in _field_candidates(meta, tile).rename(columns={"class": "klass"}).itertuples():
         identity, subtype = candidate_store.ai_call(words, r.decision, r.klass, r.subtype)
+        would = passing.get(r.candidate_id)
+        if_accepted = list(candidate_store.ai_call(words, "accepted", *would)) if would is not None else None
         found_masks, default = candidate_store.masks(r)
         shapes = [_shape(m) for m in found_masks]
         masks[r.candidate_id] = shapes
@@ -435,7 +438,9 @@ def _field_shapes(meta: dict, tile: dict) -> tuple[list[dict], dict[str, list]]:
                         "radius_px": round(candidate_store.radius(r, state.project.pixel_size_um), 1), "ai_value": identity, "ai_subtype": subtype,
                         "ai_probability": None if pd.isna(r.probability) else round(float(r.probability), 3), "decision": r.decision, "reason": r.reason,
                         "masks": [m if i == default else None for i, m in enumerate(shapes)], "mask": default,
-                        "more_masks": sum(m is not None for i, m in enumerate(shapes) if i != default)})
+                        "more_masks": sum(m is not None for i, m in enumerate(shapes) if i != default),
+                        "if_accepted": if_accepted if r.reason in starting.SCORED else None,
+                        "threshold": None if pd.isna(getattr(r, "threshold", np.nan)) else round(float(r.threshold), 3)})
     with _OBJECTS_LOCK:
         _OBJECTS[key] = (words, objects, masks)
         _OBJECTS.move_to_end(key)
@@ -558,11 +563,23 @@ def open_field(meta: dict, tile_id: str, person: str):
     finished = finished_tiles(meta, labels)
     sam = sam_embeddings.prepare_field(state, meta, tile_id, {t for t, people in finished.items() if person in people})
     prefetch(meta, tile_id, person)
+    thresholds = [o["threshold"] for o in objects if o.get("threshold") is not None]
+    chosen = mine[mine.task == starting.TASK] if "task" in mine else mine.iloc[:0]
     return {"tile_id": tile_id, "box": box, "objects": objects, "checked": checks(found, decided), "layers": LAYERS.get(meta["stain"], []),
+            "detection_threshold": float(np.median(thresholds)) if thresholds else None,
+            "threshold": _number(chosen.value.iloc[-1]) if len(chosen) else None,
             "mine": mine.replace({np.nan: None}).to_dict(orient="records"), "added": added_states(meta, tile, mine, found),
             "segment_anything": sam["state"] != "unavailable", "segment_ready": bool(sam.get("ready")),
             "open_by": sorted(tiles_held(meta).get(tile_id, set()) - {person}), "done_by": sorted(finished.get(tile_id, set()) - {person}),
             "pixel_size_um": state.project.pixel_size_um}
+
+
+def _number(value) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if number != number else number
 
 
 def added_states(meta: dict, tile: dict, mine: pd.DataFrame, found: pd.DataFrame | None = None) -> list[dict]:
@@ -675,11 +692,12 @@ def clean(meta: dict, mark, person: str) -> dict | None:
     object people added or an edit of the excluded areas (None when the brush painted nothing)."""
     stain = meta["stain"]
     second = rounds.round_of(meta) == 2
-    allowed = {"class", "outline"} | ({"tag", "note", "done", exclusions.TASK} if second else set())
+    allowed = {"class", "outline"} | ({"tag", "note", "done", exclusions.TASK, starting.TASK, objectedit.TASK} if second else set())
     if mark.task not in allowed:
         raise HTTPException(400, f"{mark.task} labels are not part of this session")
     record = {"source": person, "stain": stain, "task": mark.task, "session": meta["name"], "deleted": mark.deleted, "value": mark.value,
-              "subtype": None, "points": mark.points, "tile_id": mark.tile_id, "x": mark.x, "y": mark.y, "candidate": mark.candidate or None}
+              "subtype": None, "points": mark.points, "tile_id": mark.tile_id, "x": mark.x, "y": mark.y, "candidate": mark.candidate or None,
+              "meta": dict(mark.meta) if mark.meta else None}
     words = vocabulary(stain)
     if mark.task == exclusions.TASK:  # an edit of the excluded areas (the brush): what was painted and cleared this time
         field_tile(meta, mark.tile_id)
@@ -692,6 +710,14 @@ def clean(meta: dict, mark, person: str) -> dict | None:
             return None
         return record | {"id": exclusions.label_id(mark.tile_id), "x": None, "y": None, "points": rings,
                          "value": exclusions.value_text(holes, kinds), "deleted": False}
+    if mark.task == starting.TASK:  # the field's acceptance threshold, locked before the first edit
+        field_tile(meta, mark.tile_id)
+        value = _number(mark.value)
+        if value is None or not 0 <= value <= 1:
+            raise HTTPException(400, "the acceptance threshold is a number from 0 to 1")
+        return record | {"id": starting.label_id(mark.tile_id), "value": f"{value:.3f}", "x": None, "y": None, "points": None, "candidate": None}
+    if mark.task == objectedit.TASK and not mark.deleted and mark.value not in objectedit.EDITS:
+        raise HTTPException(400, f"an object is replaced by a {' or a '.join(objectedit.EDITS)}")
     if mark.candidate:
         row = candidate_row(stain, mark.candidate)
         record |= {"tile_id": str(row.tile_id), "x": round(float(row.x), 1), "y": round(float(row.y), 1)}
@@ -701,7 +727,7 @@ def clean(meta: dict, mark, person: str) -> dict | None:
             identity, subtype = candidate_store.ai_call(words, row.decision, row["class"], row.subtype)
             record |= {"value": identity, "subtype": (subtype or None) if asks_subtypes(meta) else None, "confirmed": True}
             return record | {"id": store.object_id("class", record["tile_id"], record["x"], record["y"])}
-    elif not second or mark.task in ("class", "outline"):
+    elif not second or mark.task in ("class", "outline", objectedit.TASK):
         if not second:
             raise HTTPException(400, "a label of this round names its candidate")
         if mark.x is None or mark.y is None:
@@ -720,7 +746,8 @@ def clean(meta: dict, mark, person: str) -> dict | None:
             raise HTTPException(400, f"unknown tag {mark.value!r}")
     ids = {"class": lambda: store.object_id("class", record["tile_id"], record["x"], record["y"]),
            "outline": lambda: store.object_id("outline", record["tile_id"], record["x"], record["y"]),
-           "tag": lambda: f"tag:{mark.tile_id}:{mark.value}", "note": lambda: f"note:{mark.tile_id}", "done": lambda: f"done:{mark.tile_id}"}
+           "tag": lambda: f"tag:{mark.tile_id}:{mark.value}", "note": lambda: f"note:{mark.tile_id}", "done": lambda: f"done:{mark.tile_id}",
+           objectedit.TASK: lambda: store.object_id(objectedit.TASK, record["tile_id"], record["x"], record["y"])}
     return record | {"id": ids[mark.task]()}
 
 
@@ -770,22 +797,33 @@ def _confirmations(meta: dict, tile: dict, person: str, mine: pd.DataFrame) -> l
     classes = mine[mine.task == "class"]
     said = {k: words.positive(v, s) for k, v, s in zip(classes.id, classes.value, classes.subtype)}
     outlined = set(mine.id[mine.task == "outline"])
+    replaced = set(mine.candidate[(mine.task == objectedit.TASK)].dropna().astype(str)) if "candidate" in mine else set()
+    chosen = mine[mine.task == starting.TASK]
+    threshold = _number(chosen.value.iloc[-1]) if len(chosen) else None
+    starts = {o["candidate_id"]: o for o in field_objects(meta, tile)} if threshold is not None else {}
+    reject = (candidate_store.negative_class(words), "")
     records = []
-    stamp = {"source": person, "stain": meta["stain"], "tile_id": tile_id, "session": meta["name"], "confirmed": True}
+    stamp = {"source": person, "stain": meta["stain"], "tile_id": tile_id, "session": meta["name"]}
     for r in own.rename(columns={"class": "klass"}).itertuples():
+        if r.candidate_id in replaced:  # split or merged: its pieces are this person's answer
+            continue
         x, y = round(float(r.x), 1), round(float(r.y), 1)
         key = store.object_id("class", tile_id, x, y)
-        identity, subtype = candidate_store.ai_call(words, r.decision, r.klass, r.subtype)
+        detected = candidate_store.ai_call(words, r.decision, r.klass, r.subtype)
+        identity, subtype = detected
+        start = starts.get(r.candidate_id)
+        if start is not None and start.get("threshold") is not None and abs(threshold - start["threshold"]) > 1e-9:
+            identity, subtype = starting.start_call(start.get("ai_probability"), start.get("if_accepted"), threshold, detected, reject)
         if key in said:
             positive = said[key]
-        else:  # left as detection called it: that is this person's answer (also where others decided it)
-            records.append({**stamp, "id": key, "task": "class", "x": x, "y": y, "value": identity,
+        else:  # left as it started (detection's call, at the threshold they set): that is this person's answer
+            records.append({**stamp, "id": key, "task": "class", "x": x, "y": y, "value": identity, "confirmed": (identity, subtype) == detected,
                             "subtype": (subtype or None) if asks_subtypes(meta) else None, "candidate": r.candidate_id})
             positive = words.positive(identity, subtype)
         outline = _simplified(candidate_store.ai_outline(r))  # the default mask
         outline_key = store.object_id("outline", tile_id, x, y)
         if positive and outline and outline_key not in outlined:
-            records.append({**stamp, "id": outline_key, "task": "outline", "x": x, "y": y, "points": outline, "candidate": r.candidate_id})
+            records.append({**stamp, "id": outline_key, "task": "outline", "x": x, "y": y, "points": outline, "candidate": r.candidate_id, "confirmed": True})
     return records
 
 
@@ -882,6 +920,61 @@ def field_annotated(name: str, tile_id: str, request: Request, person: str = Dep
     x1 = int(tile["x_px"]) + int(tile["width_px"]) + get_state().project.context_px
     y1 = int(tile["y_px"]) + int(tile["height_px"]) + get_state().project.context_px
     return store_view.people_areas(get_state().project, str(tile["core_id"]), str(tile["stain"]), (x0, y0), (x0, y0, x1, y1))
+
+
+@router.get("/annotate/{name}/fields/{tile_id}/areas")
+def field_areas(name: str, tile_id: str, request: Request, person: str = Depends(annotator)) -> dict:
+    """Each brush type's current area over a field (`store_view.field_areas`: detection's area of the type with
+    people's saved edits merged in), what the brush adds to and takes from."""
+    from stainid.api import store_view  # noqa: PLC0415
+
+    meta = _round_meta(name, request)
+    return store_view.field_areas(get_state().project, field_tile(meta, tile_id))
+
+
+class Split(BaseModel):
+    points: list[list[float]] = []  # the object's outline (field px)
+    seed: list[float] | None = None  # a click on the object: the split keeps it apart from the far side
+    line: list[list[float]] | None = None  # a drawn line: the object is cut along it
+    outlines: list[list[list[float]]] = []  # with `line`: every object to try (the page sends those it crosses)
+
+
+def _field_picture(tile_id: str) -> np.ndarray | None:
+    path = render.field_path(get_state(), tile_id)
+    picture = cv2.imread(str(path), cv2.IMREAD_COLOR) if path.exists() else None
+    return None if picture is None else cv2.cvtColor(picture, cv2.COLOR_BGR2RGB)
+
+
+@router.post("/annotate/{name}/fields/{tile_id}/split")
+def split_route(name: str, tile_id: str, body: Split, request: Request, person: str = Depends(annotator)) -> dict:
+    """Split mode (S): an object split in two, as a preview the page shows until Enter (`labels.objectedit`): a click,
+    a watershed of it (`seed`: a second click moves the split); a line, every object it crosses right through cut along
+    it (`pieces`: per outline sent, its two pieces or null). Nothing is stored here: the page saves the pieces."""
+    meta = _round_meta(name, request)
+    field_tile(meta, tile_id)
+    if body.line is not None:
+        return {"pieces": [objectedit.split_line(o, body.line) if len(o) >= 3 else None for o in body.outlines]}
+    if len(body.points) < 3:
+        raise HTTPException(400, "an object to split needs its outline")
+    pieces = objectedit.split_auto(body.points, _field_picture(tile_id), body.seed)
+    if pieces is None:
+        raise HTTPException(400, "this object does not fall in two here: click elsewhere on it, or draw a line across it")
+    return {"pieces": pieces}
+
+
+class Merge(BaseModel):
+    outlines: list[list[list[float]]]
+
+
+@router.post("/annotate/{name}/fields/{tile_id}/merge")
+def merge_route(name: str, tile_id: str, body: Merge, request: Request, person: str = Depends(annotator)) -> dict:
+    """Merge mode (M): one outline for the objects chosen (their union, bridged where they do not touch)."""
+    meta = _round_meta(name, request)
+    field_tile(meta, tile_id)
+    outline = objectedit.merge(body.outlines)
+    if outline is None:
+        raise HTTPException(400, "choose two or more objects close to each other to merge")
+    return {"outline": outline}
 
 
 @router.get("/annotate/{name}/fields/{tile_id}/segment")

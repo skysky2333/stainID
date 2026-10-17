@@ -763,6 +763,7 @@ class Mark(BaseModel):
     png: str = ""  # round 2, task "exclude": the area marked as bad, painted (a PNG data URL at 1/`scale` of the field picture)
     pngs: dict[str, str] = {}  # … one painted mask per type (labels.exclusions.KINDS: "1"–"4", "include" for a cleared part)
     scale: float = 1.0
+    meta: dict | None = None  # where a label comes from: a split or merge (`labels.objectedit`)
 
 
 class Marks(BaseModel):

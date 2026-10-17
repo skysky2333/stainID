@@ -173,11 +173,8 @@ def _person_area(edits: list, person: str, shape: tuple[int, int]) -> np.ndarray
     for edit in edits:
         if edit.source != person:
             continue
-        for kind in dict.fromkeys(edit.kinds):
-            rings = [r for r, k in zip(edit.rings, edit.kinds) if k == kind]
-            holes = [h for h, k in zip(edit.holes, edit.kinds) if k == kind]
-            area = exclusions.rasterize(rings, holes, shape)
-            out[area] = 9 if kind == exclusions.INCLUDE else int(kind) if str(kind).isdigit() else 1
+        for kind, area in exclusions.edit_areas(edit, shape):
+            out[area] = 9 if kind == exclusions.INCLUDE or exclusions.removal(kind) is not None else int(kind) if str(kind).isdigit() else 1
     return out
 
 

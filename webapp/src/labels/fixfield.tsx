@@ -1,4 +1,7 @@
-/* Round 2, "Fix the field": the whole field with every object detection considered and its outline, always shown, one
+/* Round 2, "Fix the field". Step 1 of every field is the acceptance threshold (fieldStart.ts): a slider starting at
+   detection's own threshold re-decides, live, which objects start solid and which dotted grey; it locks on "Start
+   editing" (Enter) or by itself on the first edit, and only "Reset field" unlocks it (discarding the field's unsaved
+   edits). Then the whole field with every object detection considered and its outline, always shown, one
    shape per object: solid in its type's colour (each counted type and each named look-alike its own colour), dotted
    light grey when it is not active: rejected by detection or by a person (Del), or just added and waiting for its type;
    dotted amber with a "?" when someone is unsure. Objects in an excluded area are drawn faint.
@@ -7,8 +10,10 @@
    Delete rejects it (it turns dotted grey and stays; a number key makes it solid again), Tab / Shift+Tab a bigger or smaller Segment Anything mask at once, a click on it edits it precisely
    (everything else locked: a click adds a spot to it, Shift+click leaves one out, drag the dots; Z undoes a step; a
    click outside its neighbourhood, drawn faintly, or Enter keeps the edit, Esc leaves without keeping), Space hides and shows everything drawn over the
-   picture (a clean look at the tissue), B paints bad areas (the brush: people's areas, which teach and test bad-area
-   detection; the analysis keeps detection's own, drawn hatched as "Excluded from analysis"), Z undoes. Clicking empty tissue
+   picture (a clean look at the tissue), B changes the bad areas (the brush, brush.ts: a drag adds to the chosen type's
+   area, Shift-drag takes out of it, Tab / Shift+Tab the brush size; people's areas teach and test bad-area detection,
+   the analysis keeps detection's own, drawn hatched as "Excluded from analysis"), S splits an object in two (a click:
+   a preview, Enter keeps it; or a line drawn across objects), M merges objects (click or stroke them, Enter), Z undoes. Clicking empty tissue
    outlines a missed object with one click: a new candidate, dotted, until
    a class key makes it solid. A change of call is recorded exactly like an answer in round 1. Every change stays on this
    page ("3 unsaved changes", with a draft in this browser in case of a reload; Z undoes) until Save (stays on the field)
@@ -19,16 +24,19 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import type { AddedState, Label, PeopleAreas, RoundCheck, RoundDetail, RoundField, RoundObject, RoundProgress, RoundSamOptions, RoundSaved, SessionDetail } from '../api'
+import type { AddedState, FieldAreas, Label, PeopleAreas, RoundCheck, RoundDetail, RoundField, RoundObject, RoundProgress, RoundSamOptions, RoundSaved, SessionDetail } from '../api'
 import { api, apiUrl, enc, pendingText } from '../api'
 import { ErrorNote, Loading, fmt } from '../components'
 import { useFetch, useStored } from '../hooks'
 import type { ImagePoint } from '../viewer'
 import { RASTER_LAYERS, ZoomViewer } from '../viewer'
 import type { ClassPick } from './classKeys'
-import { resolveClass } from './classKeys'
+import { resolveClass, roleOf } from './classKeys'
 import type { RoundEvent } from './rounds'
-import { BRUSH_SCALE, BRUSH_UM, CLEARED, EXCLUDE_TYPES, INCLUDE, useBrush } from './brush'
+import { BRUSH_SCALE, BRUSH_UM, CLEARED, EXCLUDE_TYPES, INCLUDE, brushStep, useBrush } from './brush'
+import type { Slider } from './fieldStart'
+import { SLIDER_STEP, acceptedAt, lock, moveTo, slider, sliderText, startPick, unlock } from './fieldStart'
+import { LockIcon, ThresholdSlider } from './threshold'
 import { ClassLegend, LookLegend, MaskSwitch, ROUND_TITLE, RoundProgressLine, SaveButtons, SaveState, callText, changesText, draftKey, lookOf, maskName,
   polygonArea, polygonPoints, readDraft, simplifyPolygon, stepMask, unsureClass, useCandidateKeys, useFitScreen, useLeaveGuard, useLive, useSaveKeys,
   writeDraft } from './rounds'
@@ -82,6 +90,31 @@ function neighbourhood(polygon: number[][], least: number) {
   const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys)
   const gx = Math.max(least, (x1 - x0) / 2), gy = Math.max(least, (y1 - y0) / 2)
   return { x: x0 - gx, y: y0 - gy, w: x1 - x0 + 2 * gx, h: y1 - y0 + 2 * gy }
+}
+
+/** The length of a drawn line (field px). */
+function lineLength(line: number[][]) {
+  let n = 0
+  for (let i = 1; i < line.length; i++) n += Math.hypot(line[i][0] - line[i - 1][0], line[i][1] - line[i - 1][1])
+  return n
+}
+
+/** A polygon's centre (its area-weighted centroid; the corners' mean for a degenerate one), rounded to 0.1 px. */
+function centroid(points: number[][]): number[] {
+  let a = 0, cx = 0, cy = 0
+  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+    const f = points[j][0] * points[i][1] - points[i][0] * points[j][1]
+    a += f; cx += (points[j][0] + points[i][0]) * f; cy += (points[j][1] + points[i][1]) * f
+  }
+  if (Math.abs(a) < 1e-9) return [points.reduce((t, q) => t + q[0], 0) / points.length, points.reduce((t, q) => t + q[1], 0) / points.length].map((v) => Math.round(v * 10) / 10)
+  return [cx / (3 * a), cy / (3 * a)].map((v) => Math.round(v * 10) / 10)
+}
+
+/** Whether the boxes around an outline and a line meet (the objects a split line may cut; the server checks it crosses). */
+function boxesMeet(polygon: number[][], line: number[][]) {
+  const box = (q: number[][]) => [Math.min(...q.map((v) => v[0])), Math.min(...q.map((v) => v[1])), Math.max(...q.map((v) => v[0])), Math.max(...q.map((v) => v[1]))]
+  const [a0, b0, a1, b1] = box(polygon), [c0, d0, c1, d1] = box(line)
+  return a0 <= c1 && c0 <= a1 && b0 <= d1 && d0 <= b1
 }
 
 function circle(x: number, y: number, r: number) {
@@ -155,7 +188,7 @@ function lighter(field: RoundField): RoundField {
 /** One object as the field draws it when it is not under the mouse (the layer of all of them is drawn once, not on
  *  every mouse move). */
 interface Drawn { key: string; x: number; y: number; r: number; points: string | null; colour: string; look: string; dash: boolean; diamond: boolean
-  others: boolean; unsaved: boolean; fresh: boolean; faded: boolean }
+  others: boolean; unsaved: boolean; fresh: boolean; faded: boolean; piece?: string }
 
 /** People's areas as SVG paths (rings in field px: an outer ring, then its holes). */
 const ringsPath = (rings: number[][][]) => rings.map((r) => `M${r.map((p) => p.join(',')).join('L')}Z`).join('')
@@ -190,6 +223,8 @@ const ObjectLayer = memo(function ObjectLayer({ items, unit, dim }: { items: Dra
           {d.look === 'unsure' && <text className="unsure-mark" x={d.x} y={d.y + 4.5 * unit} fontSize={13 * unit} textAnchor="middle" fill={d.colour}
             stroke="#000" strokeWidth={2.5 * unit} paintOrder="stroke">?</text>}
           {d.others && <circle cx={d.x} cy={d.y} r={2.4 * unit} fill="#4ade80" stroke="#000" strokeWidth={0.6 * unit} />}
+          {d.piece && <text className="piece-mark" x={d.x} y={d.y + 3.5 * unit} fontSize={9 * unit} textAnchor="middle" fill="#fff" stroke="#000"
+            strokeWidth={2.2 * unit} paintOrder="stroke">{d.piece === 'split' ? '½' : '∪'}</text>}
           {d.unsaved && !d.fresh && <circle className="unsaved-mark" cx={d.x + Math.max(6, d.r) * 0.75} cy={d.y - Math.max(6, d.r) * 0.75} r={2.6 * unit}
             strokeWidth={0.8 * unit} />}
         </g>
@@ -209,6 +244,18 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   const draftAt = draftKey(detail.annotator, name, tile)
   const [saved, setSaved] = useState<Record<string, Mine>>(() => Object.fromEntries(field.mine.map((m) => [m.id, m])))  // as the server has them
   const [changes, setChanges] = useState<Record<string, Change>>(() => readDraft<{ changes: Record<string, Change> }>(draftAt)?.changes ?? {})  // not saved yet
+  // step 1, the acceptance threshold: where the objects start (fieldStart.ts); locked before the first edit
+  const [start, setStart] = useState<Slider | null>(() => {
+    const detection = field.detection_threshold
+    if (detection == null) return null
+    const kept = readDraft<{ slider?: Slider }>(draftAt)?.slider
+    return field.threshold == null && kept ? { ...kept, detection } : slider(detection, field.threshold)
+  })
+  const lockStart = useCallback(() => setStart((s) => (s && !s.locked ? lock(s) : s)), [])
+  const [mode, setMode] = useState<'split' | 'merge' | null>(null)  // S and M
+  const [split, setSplit] = useState<{ key: string; pieces: number[][][]; busy: boolean } | null>(null)  // the preview of a split
+  const [chosenForMerge, setChosenForMerge] = useState<string[]>([])
+  const [stroke, setStroke] = useState<number[][] | null>(null)  // a line drawn across objects (split) or over them (merge)
   const [restored, setRestored] = useState(() => changedThings(changes))
   const mine = useMemo(() => {  // this person's labels as the page shows them: the saved ones with the unsaved changes on top
     const out = { ...saved }
@@ -219,8 +266,9 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   const [openBy, setOpenBy] = useState<string[]>(field.open_by)
   const [doneBy, setDoneBy] = useState<string[]>(field.done_by)
   const [progress, setProgress] = useState<RoundProgress | null>(meta.progress)
-  const [masks, setMasks] = useState<Record<string, number>>(() => Object.fromEntries(Object.values(mine)  // the mask chosen per candidate
-    .filter((m) => m.task === 'outline' && m.candidate && /^mask \d+$/.test(m.value ?? '')).map((m) => [m.candidate!, Number(m.value.slice(5))])))
+  const chosenMasks = (labels: Record<string, Mine>) => Object.fromEntries(Object.values(labels)  // the mask chosen per candidate
+    .filter((m) => m.task === 'outline' && m.candidate && /^mask \d+$/.test(m.value ?? '')).map((m) => [m.candidate!, Number(m.value.slice(5))]))
+  const [masks, setMasks] = useState<Record<string, number>>(() => chosenMasks(mine))
   const [prompts, setPrompts] = useState<Record<string, { options: number[][][]; chosen: number }>>({})  // masks of objects added in this visit
   const [fresh, setFresh] = useState<Record<string, Fresh>>({})
   const [hovered, setHovered] = useState<string | null>(null)
@@ -249,6 +297,8 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   const excluded = useFetch<FieldExcluded>(`/api/annotate/${name}/fields/${enc(tile)}/excluded`)
   // people's areas over the field (painted and marked fine), outlined; they never change the layer above
   const people = useFetch<PeopleAreas>(`/api/annotate/${name}/fields/${enc(tile)}/annotated`)
+  // each brush type's current area (detection's with people's saved edits merged in): what the brush adds to and takes from
+  const areas = useFetch<FieldAreas>(`/api/annotate/${name}/fields/${enc(tile)}/areas`)
   const brushType = EXCLUDE_TYPES.find((t) => t.key === brushKind) ?? EXCLUDE_TYPES[0]
   const [shiftDown, setShiftDown] = useState(false)  // Shift held while the brush is on: it erases (the cursor shows it)
   useEffect(() => {
@@ -258,14 +308,13 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     return () => { window.removeEventListener('keydown', on); window.removeEventListener('keyup', on) }
   }, [])
   const [fieldSize, setFieldSize] = useState<{ w: number; h: number } | null>(null)
-  const [brushDirty, setBrushDirty] = useState(false)
-  const brush = useBrush(fieldSize)  // the strokes since the last Save (an edit of people's areas, drawn over the pictures)
-  const resetAfter = useRef<PeopleAreas | null | undefined>(undefined)  // after Save: people's areas before it
-  useEffect(() => {  // the server has the saved edit: the strokes are in people's areas now
-    if (resetAfter.current === undefined || people.data === resetAfter.current) return
+  const brush = useBrush(fieldSize, areas.data)  // the strokes since the last Save over each type's current area
+  const resetAfter = useRef<FieldAreas | null | undefined>(undefined)  // after Save: the current areas before it
+  useEffect(() => {  // the server has the saved edit: the strokes are in the current areas now
+    if (resetAfter.current === undefined || areas.data === resetAfter.current) return
     resetAfter.current = undefined
     brush.reset()
-  }, [people.data, brush.reset])
+  }, [areas.data, brush.reset])
 
   useLive(name, { tile_id: tile }, (live) => {
     if (live.checked) setChecked(live.checked)
@@ -273,8 +322,8 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     if (live.done_by) setDoneBy(live.done_by)
     if (live.progress) setProgress(live.progress)
   })
-  const unsaved = changedThings(changes) + (brushDirty ? 1 : 0)
-  useEffect(() => { writeDraft(draftAt, unsaved ? { changes } : null) }, [draftAt, changes, unsaved])
+  const unsaved = changedThings(changes) + (brush.dirty ? 1 : 0)
+  useEffect(() => { writeDraft(draftAt, unsaved ? { changes, slider: start } : null) }, [draftAt, changes, unsaved, start])
   useEffect(() => {  // Segment Anything still preparing this field: look again until clicks answer at once
     if (samReady || !sam) return
     const timer = setInterval(() => {
@@ -287,16 +336,20 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   const outlineId = (x: number, y: number) => `outline:${tile}:${rkey(x, y)}`
   const own = useMemo(() => field.objects.filter((o) => o.own), [field.objects])
   const ownKeys = useMemo(() => new Set(own.map((o) => rkey(o.x, o.y))), [own])
+  const replaced = new Set(Object.values(mine).filter((m) => m.task === 'replaced' && m.candidate).map((m) => m.candidate!))  // split or merged
   const added = Object.values(mine).filter((m) => m.task === 'class' && !m.candidate && m.x != null && !ownKeys.has(rkey(m.x, m.y!)))
   const shown: Shown[] = [
-    ...own.map((o) => ({ key: o.candidate_id, x: o.x, y: o.y, r: o.radius_px, candidate: o })),
+    ...own.filter((o) => !replaced.has(o.candidate_id)).map((o) => ({ key: o.candidate_id, x: o.x, y: o.y, r: o.radius_px, candidate: o })),
     ...added.map((m) => ({ key: `add:${rkey(m.x!, m.y!)}`, x: m.x!, y: m.y!, r: 8, added: m })),
     ...Object.values(fresh).map((f) => ({ key: f.key, x: f.x, y: f.y, r: 8, fresh: f })),
   ]
   const byKey = new Map(shown.map((s) => [s.key, s]))
   const target = precise ? byKey.get(precise.key) : hovered ? byKey.get(hovered) : undefined
 
-  /** Where an object's call stands: this person's, else what others decided, else detection's (none for a new object). */
+  /** Where a candidate starts: detection's call, at the acceptance threshold of step 1. */
+  const startOf = (o: RoundObject): ClassPick => (start ? startPick(o, start.value, start.detection, meta.remove_class)
+    : { identity: o.ai_value, subtype: o.ai_subtype || null })
+  /** Where an object's call stands: this person's, else what others decided, else where it starts (none for a new object). */
   const callOf = (s: Shown): { pick: ClassPick; by: 'me' | 'others' | 'ai' | 'new'; who?: string[] } => {
     if (s.fresh) return { pick: { identity: s.fresh.removed ? meta.remove_class : '', subtype: null }, by: 'new' }
     const my = mine[classId(s.x, s.y)]
@@ -305,7 +358,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
       const c = checked[s.candidate.candidate_id]
       return { pick: { identity: c.identity, subtype: c.subtype || null }, by: 'others', who: c.by }
     }
-    return { pick: { identity: s.candidate?.ai_value ?? '', subtype: s.candidate?.ai_subtype || null }, by: 'ai' }
+    return { pick: s.candidate ? startOf(s.candidate) : { identity: '', subtype: null }, by: 'ai' }
   }
   const samNames = (n: number) => Array.from({ length: n }, (_, i) => `SAM ${i + 1}/${n}`)  // one click: Segment Anything's own three
   const choicesOf = (s: Shown | undefined): { list: (number[][] | null)[]; index: number; names?: string[] } => {
@@ -327,6 +380,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
 
   /** Puts changes on the page (nothing is sent before Save); each call is one step Z takes back. */
   const save = useCallback((records: Rec[], undo?: { local?: () => void }) => {
+    lockStart()  // the first edit of any kind locks the acceptance threshold
     const next: Record<string, Change> = {}
     const label = (id: string, task: Mine['task'], x: number, y: number, more: Partial<Mine>): Mine => ({
       id, source: detail.annotator ?? '', stain: meta.stain, task, tile_id: tile, x, y, value: '', subtype: null, points: null, session: name, confirmed: false,
@@ -338,7 +392,8 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
       const id = r.task === 'tag' ? `tag:${tile}:${r.value}` : r.task === 'note' || r.task === 'done' ? `${r.task}:${tile}` : `${r.task}:${tile}:${rkey(x, y)}`
       const candidate = (r.candidate as string | undefined) ?? null
       if (r.deleted) { next[id] = { mark: saved[id] ? r : null, label: null }; continue }
-      next[id] = { mark: r, label: label(id, r.task as Mine['task'], x, y, { value: String(r.value ?? ''), subtype: (r.subtype as string) || null, points: (r.points as number[][]) ?? null, candidate }) }
+      next[id] = { mark: r, label: label(id, r.task as Mine['task'], x, y, { value: String(r.value ?? ''), subtype: (r.subtype as string) || null, points: (r.points as number[][]) ?? null, candidate,
+        meta: (r.meta as Mine['meta']) ?? null }) }
       if (r.task === 'class' && at && r.mask != null && !noObject(r.value)) {  // the mask chosen with the call is saved with it
         const mask = Number(r.mask)
         next[outlineId(x, y)] = { mark: null, label: label(outlineId(x, y), 'outline', x, y, { value: `mask ${mask}`, points: at.masks[mask] ?? null, candidate }) }
@@ -350,7 +405,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     const out = { ...changes, ...next }
     for (const [id, c] of Object.entries(next)) if (!c.mark && !c.label) delete out[id]  // taken away before it was ever saved
     setChanges(out)
-  }, [name, tile, own, saved, changes, meta.stain, meta.remove_class, unsure, detail.annotator])  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [name, tile, own, saved, changes, meta.stain, meta.remove_class, unsure, detail.annotator, lockStart])  // eslint-disable-line react-hooks/exhaustive-deps
 
   /** The object under the cursor gets this class (a new one is saved with its outline then). */
   const giveClass = useCallback((s: Shown, pick: ClassPick) => {
@@ -422,6 +477,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   /** A click on an object: precise editing of it (zoomed in; the view before comes back on leaving). */
   const enterPrecise = (s: Shown) => {
     if (draft.length || precise) return
+    lockStart()
     const start = outlineOf(s) ?? circle(s.x, s.y, Math.max(6, s.r))
     setPrecise({ key: s.key, points: simplifyPolygon(start.map((p) => [...p]), HANDLES), clicks: [], busy: false, history: [] })
     setFocus({ x: s.x, y: s.y, key: Date.now() })  // zoom in on it
@@ -458,6 +514,12 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
 
   useCandidateKeys(keys, {
     answering: !!target && !draft.length && !excluding,
+    onSize: (bigger) => {  // the brush: Tab smaller, Shift+Tab bigger (the outline keys rest while it is on)
+      if (!excluding) return false
+      setBrushUm(brushStep(brushUm, bigger))
+      tell('brush-size')
+      return true
+    },
     onClass: (pick) => {
       if (!target) return
       const before = callOf(target).pick
@@ -466,11 +528,19 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     },
     onUnsure: () => { if (target && unsure) { tell(target.fresh ? 'added' : 'unsure'); giveClass(target, { identity: unsure, subtype: null }) } },
     onRemove: () => { if (excluding) return; if (target) tell('remove'); removeTarget() },
-    onMask: (bigger) => { if (excluding) return; if (target && !precise) tell('mask'); switchMask(bigger) },
+    onMask: (bigger) => { if (excluding || mode) return; if (target && !precise) tell('mask'); switchMask(bigger) },
     onPrecise: () => { tell('overlays'); setHidden((h) => !h) },  // Space: hide and show everything drawn over the picture
     onUndo: () => { tell('undo'); undo() },
-    onEnter: () => { if (precise) { tell('precise-out'); finishPrecise(); return } if (draft.length >= 3) closeDraft() },
+    onEnter: () => {
+      if (start && !start.locked) { lockStart(); tell('start'); return }  // step 1 done: "Start editing"
+      if (mode === 'split') { if (split && !split.busy) acceptSplit(); return }
+      if (mode === 'merge') { void mergeChosen(); return }
+      if (precise) { tell('precise-out'); finishPrecise(); return }
+      if (draft.length >= 3) closeDraft()
+    },
     onEscape: () => {
+      if (split) { setSplit(null); return }  // the preview goes; a second Esc leaves split mode
+      if (mode) { leaveMode(); return }
       if (excluding) { setExcluding(false); return }
       if (precise) { leavePrecise(); return }
       if (draft.length || byHand) { setDraft([]); setByHand(false); return }
@@ -478,36 +548,151 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     },
   })
 
-  useEffect(() => {  // B: the brush on and off
+  const leaveMode = () => { setMode(null); setSplit(null); setChosenForMerge([]); setStroke(null) }
+  useEffect(() => {  // B the brush, S split, M merge on and off; [ ] the acceptance threshold in fine steps
     const onKey = (e: KeyboardEvent) => {
-      if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement).tagName) || e.metaKey || e.ctrlKey || e.altKey || e.repeat) return
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement).tagName) || e.metaKey || e.ctrlKey || e.altKey) return
+      if (e.key === '[' || e.key === ']') {
+        if (start && !start.locked) { e.preventDefault(); setStart((s) => (s ? moveTo(s, s.value + (e.key === ']' ? SLIDER_STEP : -SLIDER_STEP)) : s)); tell('threshold') }
+        return
+      }
+      if (e.repeat) return
       if (excluding && ['1', '2', '3', '4'].includes(e.key)) { e.preventDefault(); setBrushKind(e.key); return }  // the type of area painted
-      if (e.key.toLowerCase() !== 'b' || precise || draft.length) return
+      const key = e.key.toLowerCase()
+      if (!['b', 's', 'm'].includes(key) || precise || draft.length || e.shiftKey) return
       e.preventDefault()
-      setExcluding((on) => !on)
       setHovered(null)
+      if (key === 'b') { leaveMode(); setExcluding((on) => !on); return }
+      setExcluding(false)
+      const next = key === 's' ? 'split' : 'merge'
+      setSplit(null); setChosenForMerge([]); setStroke(null)
+      setMode((m) => (m === next ? null : next))
+      tell(next === 'split' ? 'split-mode' : 'merge-mode')
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [precise, draft.length, excluding])  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [precise, draft.length, excluding, start])  // eslint-disable-line react-hooks/exhaustive-deps
   const brushPx = brushUm / (field.pixel_size_um || 0.27) / 2  // the brush's radius in field pixels
   const press = (p: ImagePoint, event: React.MouseEvent) => {
+    if (event.button !== 0) return  // the left button paints (Shift: takes out) or draws a line; the middle one pans
+    if (mode) { setStroke([[p.x, p.y]]); return }
     if (!excluding) return
-    if (event.button !== 0) return  // the left button paints (Shift: erases); the middle one pans
-    brush.begin(p.x, p.y, brushPx, brushKind, event.shiftKey)  // Shift: erase, the part marked as fine
+    lockStart()
+    brush.begin(p.x, p.y, brushPx, brushKind, event.shiftKey)  // Shift: out of the chosen type's area
   }
   const release = () => {
+    if (mode) {
+      const line = stroke
+      setStroke(null)
+      if (line && line.length > 1 && lineLength(line) > 8) { if (mode === 'split') void splitAlong(line); else pickAlong(line) }
+      return
+    }
     if (!excluding) return
     const before = brush.end()
     if (!before) return
-    setBrushDirty(true)
-    save([], { local: () => { brush.restore(before); setBrushDirty(true) } })  // one stroke is one step of Z
+    save([], { local: () => brush.restore(before) })  // one stroke is one step of Z
     tell('exclude')
   }
-  const wheelBrush = (deltaY: number) => {
-    if (!excluding) return false
-    setBrushUm(Math.round(Math.min(BRUSH_UM.max, Math.max(BRUSH_UM.min, brushUm * (deltaY < 0 ? 1.15 : 1 / 1.15)))))
-    return true
+
+  /* ---------- split (S) and merge (M): object edits, saved like the others (labels/objectedit.py) ---------- */
+  const editable = (s: Shown | undefined | null): s is Shown => !!s && !s.fresh && !!outlineOf(s)
+  /** These objects are replaced by `pieces` (outlines, each with its type): the pieces are objects of their own (class
+   *  and outline labels, `meta.edit`), each original gets a `replaced` label. One step of Z. */
+  const replaceBy = (originals: Shown[], pieces: { points: number[][]; pick: ClassPick }[], kind: 'split' | 'merge') => {
+    const group = Math.random().toString(16).slice(2, 10)
+    const into = pieces.map((piece) => centroid(piece.points))
+    const records: Rec[] = []
+    for (const o of originals) {  // first the originals (a piece may land where an added original was)
+      if (o.candidate) {
+        records.push({ task: 'replaced', candidate: o.candidate.candidate_id, value: kind, meta: { group, into } })
+        if (mine[classId(o.x, o.y)]) records.push({ task: 'class', candidate: o.candidate.candidate_id, deleted: true })
+        if (mine[outlineId(o.x, o.y)]) records.push({ task: 'outline', candidate: o.candidate.candidate_id, deleted: true })
+      } else {
+        records.push({ task: 'replaced', x: o.x, y: o.y, value: kind, meta: { group, into } })
+        records.push({ task: 'class', x: o.x, y: o.y, deleted: true }, { task: 'outline', x: o.x, y: o.y, deleted: true })
+      }
+    }
+    pieces.forEach((piece, i) => {
+      const [x, y] = into[i]
+      const points = piece.points.map((q) => q.map(Math.round))
+      records.push({ task: 'class', x, y, value: piece.pick.identity, subtype: typesAsked ? piece.pick.subtype ?? '' : '', meta: { edit: kind, group } },
+        { task: 'outline', x, y, points, meta: { edit: kind, group } })
+      setPrompts((all) => ({ ...all, [`add:${rkey(x, y)}`]: { options: [points], chosen: 0 } }))
+    })
+    save(records, {})
+    tell(kind)
+  }
+  const splitAt = async (s: Shown, seed?: number[]) => {
+    const points = outlineOf(s)
+    if (!points) return
+    lockStart()
+    setSplit({ key: s.key, pieces: split?.key === s.key ? split.pieces : [], busy: true })
+    try {
+      const found = await api.post<{ pieces: number[][][] }>(`/api/annotate/${name}/fields/${enc(tile)}/split`, { points, seed: seed ?? null })
+      setSplit({ key: s.key, pieces: found.pieces, busy: false })
+      setError(null)
+      tell('split-preview')
+    } catch (e) {
+      setSplit(null)
+      setError((e as Error).message.replace(/^\d{3}: /, ''))
+    }
+  }
+  const acceptSplit = () => {
+    const s = split ? byKey.get(split.key) : undefined
+    if (!split || !s || split.pieces.length !== 2) return
+    const pick = callOf(s).pick
+    replaceBy([s], split.pieces.map((points) => ({ points, pick })), 'split')
+    setSplit(null)
+  }
+  /** A line drawn in split mode: every object it crosses right through is cut along it (the server checks). */
+  const splitAlong = async (line: number[][]) => {
+    const near = shown.filter((s) => editable(s) && boxesMeet(outlineOf(s)!, line))
+    if (!near.length) return
+    try {
+      const found = await api.post<{ pieces: (number[][][] | null)[] }>(`/api/annotate/${name}/fields/${enc(tile)}/split`,
+        { line, outlines: near.map((s) => outlineOf(s)) })
+      const cut = near.map((s, i) => ({ s, pieces: found.pieces[i] })).filter((c) => c.pieces && c.pieces.length === 2)
+      if (!cut.length) { setError('The line crosses no object right through: draw it from outside an object, across it, to outside again.'); return }
+      setError(null)
+      for (const c of cut) replaceBy([c.s], c.pieces!.map((points) => ({ points, pick: callOf(c.s).pick })), 'split')
+    } catch (e) {
+      setError((e as Error).message.replace(/^\d{3}: /, ''))
+    }
+  }
+  const toggleMerge = (s: Shown) => {
+    setChosenForMerge((all) => (all.includes(s.key) ? all.filter((k) => k !== s.key) : [...all, s.key]))
+    lockStart()
+    tell('merge-pick')
+  }
+  const pickAlong = (line: number[][]) => {
+    const touched = shown.filter((s) => editable(s) && line.some(([x, y]) => inside(outlineOf(s)!, x, y))).map((s) => s.key)
+    if (!touched.length) return
+    lockStart()
+    setChosenForMerge((all) => [...all, ...touched.filter((k) => !all.includes(k))])
+    tell('merge-pick')
+  }
+  const mergeChosen = async () => {
+    const chosen = chosenForMerge.map((k) => byKey.get(k)).filter(editable)
+    if (chosen.length < 2) { setError('Choose two or more objects to merge (click them, or drag over them).'); return }
+    try {
+      const found = await api.post<{ outline: number[][] }>(`/api/annotate/${name}/fields/${enc(tile)}/merge`, { outlines: chosen.map((s) => outlineOf(s)) })
+      const largest = [...chosen].sort((a, b) => polygonArea(outlineOf(b)!) - polygonArea(outlineOf(a)!))[0]
+      replaceBy(chosen, [{ points: found.outline, pick: callOf(largest).pick }], 'merge')
+      setChosenForMerge([])
+      setError(null)
+    } catch (e) {
+      setError((e as Error).message.replace(/^\d{3}: /, ''))
+    }
+  }
+
+  /** "Reset field" (after a confirmation): this field's unsaved edits discarded and the acceptance threshold free again. */
+  const resetField = () => {
+    if (!window.confirm('Reset this field? Your unsaved changes on it are discarded and you can set the acceptance threshold again.')) return
+    setChanges({}); setUndos([]); setRestored(0); setFresh({}); setPrompts({}); setPrecise(null); setDraft([]); setByHand(false)
+    setMasks(chosenMasks(saved)); leaveMode(); brush.reset(); setError(null)
+    setStart((s) => (s ? unlock(s) : s))
+    writeDraft(draftAt, null)
+    tell('reset')
   }
 
   /** One click on empty tissue: Segment Anything outlines it (three sizes) as a new candidate without a class. */
@@ -574,6 +759,14 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   const click = (p: ImagePoint, event: React.MouseEvent) => {
     if (excluding) return  // painting: a click is a dab of the brush, nothing else
     if (event.button !== 0) return  // only the left button edits (the middle one pans; a right-click means nothing)
+    if (mode) {
+      const on = hit(p)
+      if (!editable(on)) return
+      if (mode === 'merge') { toggleMerge(on); return }
+      if (split?.key === on.key && !split.busy) void splitAt(on, [p.x, p.y])  // a second click on it: the split moves
+      else if (!split?.busy) void splitAt(on)
+      return
+    }
     if (precise) {  // a click adds this spot, Shift+click leaves it out; beyond the object's neighbourhood: done
       const n = neighbourhood(precise.points, 24 * p.unit)
       if (p.x < n.x || p.x > n.x + n.w || p.y < n.y || p.y > n.y + n.h) { tell('precise-out'); finishPrecise(); return }
@@ -593,6 +786,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   const move = (p: ImagePoint) => {
     setCursor([p.x, p.y])
     if (excluding) { brush.extend(p.x, p.y); return }
+    if (mode && stroke) { setStroke([...stroke, [p.x, p.y]]); return }
     if (dragging !== null && precise) { setPrecise({ ...precise, points: precise.points.map((q, i) => (i === dragging ? [p.x, p.y] : q)) }); return }
     if (!precise && !draft.length) {
       const now = hit(p)?.key ?? null
@@ -638,13 +832,17 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     if (saving || (!finish && !unsaved)) return
     const marks = Object.values(changes).flatMap((c) => (c.mark ? [c.mark] : []))
       .sort((a, b) => (SEND_ORDER[String(a.task)] ?? 2) - (SEND_ORDER[String(b.task)] ?? 2))
-    if (brushDirty) marks.push({ task: 'exclude', pngs: brush.pngs(), scale: BRUSH_SCALE })  // the painted areas, one picture per type
+    const painted = brush.dirty
+    if (painted) marks.push({ task: 'exclude', pngs: brush.pngs(), scale: BRUSH_SCALE })  // added to and taken out of each type's area
+    if (start) marks.push({ task: 'threshold', value: start.value.toFixed(3) })  // the acceptance threshold of step 1, locked now
+    setStart((s) => (s ? lock(s) : s))
     if (!(await send(marks, finish))) return
-    if (brushDirty && !(meta as { practice?: boolean }).practice) {  // the edit is saved: people's areas have it now
-      resetAfter.current = people.data ?? null
+    if (painted && !(meta as { practice?: boolean }).practice) {  // the edit is saved: the current areas have it now
+      resetAfter.current = areas.data ?? null
+      areas.reload()
       people.reload()
-    }
-    setChanges({}); setUndos([]); setRestored(0); setBrushDirty(false)
+    } else if (painted) brush.reset()
+    setChanges({}); setUndos([]); setRestored(0)
     writeDraft(draftAt, null)
     tell(finish ? 'finish' : 'save')
     if (!finish) return
@@ -669,14 +867,17 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     const look = lookOf(vocabulary, meta.remove_class, call.pick.identity, call.pick.subtype)
     const poly = outlineOf(s)
     return { key: s.key, x: s.x, y: s.y, r: s.r, points: poly ? polygonPoints(poly) : null, colour: look.colour, look: look.look, dash: look.dash,
-      diamond: !!(s.added || s.fresh), others: call.by === 'others', unsaved: isUnsaved(s), fresh: !!s.fresh, faded: !!s.candidate?.excluded }
-  }), [own, mine, fresh, checked, masks, prompts, precise?.key, precise?.points, changes, vocabulary, meta.remove_class])  // eslint-disable-line react-hooks/exhaustive-deps
+      diamond: !!((s.added && !s.added.meta?.edit) || s.fresh), others: call.by === 'others', unsaved: isUnsaved(s), fresh: !!s.fresh,
+      faded: !!s.candidate?.excluded, piece: s.added?.meta?.edit }
+  }), [own, mine, fresh, checked, masks, prompts, precise?.key, precise?.points, changes, vocabulary, meta.remove_class, start])  // eslint-disable-line react-hooks/exhaustive-deps
 
   const fields = detail.fields
   const position = fields.findIndex((f) => f.tile_id === tile)
   const later = [...fields.slice(position + 1), ...fields.slice(0, position)].find((f) => !f.done_by_me && f.prepared && !f.open_by_others && f.tile_id !== tile)
   const changed = Object.values(mine).filter((m) => (m.task === 'class' || m.task === 'outline') && !m.confirmed).length
   const checkedNow = own.filter((o) => mine[classId(o.x, o.y)] || checked[o.candidate_id]).length
+  const startable = own.filter((o) => !o.excluded)  // what step 1 counts: the field's own objects, not those in excluded areas
+  const positive = (identity: string) => roleOf(vocabulary, identity) === 'positive'
   const unclassed = Object.values(fresh).filter((f) => !f.removed).length
   const toggle = (k: string) => setLayers({ ...layers, [k]: !layers[k] })
   const busy = saving || !!pending
@@ -724,16 +925,19 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
             title={<span className="row"><span className="muted small">{tile}</span>{done && <span className="badge status-done">finished</span>}
               {precise && <span className="badge status-running">precise editing — click beyond the frame or Enter to finish, Esc cancels</span>}
               {hidden && <span className="badge">Overlays hidden · <span className="kbd">Space</span></span>}
-              {pending && <span className="small muted">Outlining…</span>}</span>}
-            focus={focus} cursor={excluding ? 'none' : precise ? 'crosshair' : target ? 'pointer' : 'copy'} onClick={click} onMove={move}
-            onPress={press} onRelease={release} panLock={excluding} onWheelOver={wheelBrush} onSize={setFieldSize}
+              {pending && <span className="small muted">Outlining…</span>}
+              {mode === 'split' && <span className="badge status-running">split — click an object, or draw a line across · Esc leaves</span>}
+              {mode === 'merge' && <span className="badge status-running">merge — {chosenForMerge.length} selected · Enter to merge · Esc leaves</span>}
+              {start && !start.locked && <span className="badge">Step 1: set the acceptance threshold</span>}</span>}
+            focus={focus} cursor={excluding ? 'none' : mode ? 'crosshair' : precise ? 'crosshair' : target ? 'pointer' : 'copy'} onClick={click} onMove={move}
+            onPress={press} onRelease={release} panLock={excluding || !!mode} onSize={setFieldSize}
             under={(_z, _s, rawUnit) => hidden ? null : <>
-              {layers.excluded !== false && excluded.data?.status === 'done' && excluded.data.width && excluded.data.height ? (  // excluded from analysis
+              {layers.excluded !== false && !excluding && excluded.data?.status === 'done' && excluded.data.width && excluded.data.height ? (  // excluded from analysis
                 <image href={apiUrl(`/api/annotate/${name}/fields/${enc(tile)}/excluded.png?v=${excluded.data.version ?? 0}`)} x={excluded.data.x} y={excluded.data.y}
                   width={excluded.data.width} height={excluded.data.height} preserveAspectRatio="none" style={{ imageRendering: 'pixelated' }} />
               ) : null}
-              {layers.excluded !== false && people.data && <PeopleAreaLines areas={people.data} unit={Number.isFinite(rawUnit) && rawUnit > 0 ? rawUnit : 1} />}
-              <ObjectLayer items={drawnItems} unit={Number.isFinite(rawUnit) && rawUnit > 0 ? rawUnit : 1} dim={precise ? 0.25 : excluding ? 0.55 : 1} />
+              {layers.excluded !== false && !excluding && people.data && <PeopleAreaLines areas={people.data} unit={Number.isFinite(rawUnit) && rawUnit > 0 ? rawUnit : 1} />}
+              <ObjectLayer items={drawnItems} unit={Number.isFinite(rawUnit) && rawUnit > 0 ? rawUnit : 1} dim={precise ? 0.25 : excluding ? 0.55 : split ? 0.6 : 1} />
             </>}>
             {(_zoom, size, rawUnit) => {
               const unit = Number.isFinite(rawUnit) && rawUnit > 0 ? rawUnit : 1
@@ -788,21 +992,33 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
                   ))}
                   {precise.clicks.map((c, i) => <circle key={`c${i}`} cx={c[0]} cy={c[1]} r={3.8 * unit} fill={c[2] ? '#4ade80' : '#f87171'} stroke="#000" strokeWidth={unit} />)}
                 </>}
-                {[...EXCLUDE_TYPES, CLEARED].filter((t) => brush.urls[t.key]).map((t) => (  // painted since Save, a hatch per type (marked fine: faint green)
-                  <g key={t.key} pointerEvents="none">
+                {(excluding || brush.dirty) && EXCLUDE_TYPES.filter((t) => brush.current[t.key]).map((t) => {  // each type's area now: one merged region
+                  const strength = !excluding ? 0.55 : t.key === brushKind ? 1 : 0.3  // the chosen type strong, the others faint
+                  return <g key={t.key} pointerEvents="none">
                     <defs>
                       <pattern id={`exclude-hatch-${t.key}`} width={9 * unit} height={9 * unit} patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-                        <rect width={9 * unit} height={9 * unit} fill={t.colour} fillOpacity={0.22} />
-                        <line x1={0} y1={0} x2={0} y2={9 * unit} stroke={t.colour} strokeOpacity={0.9} strokeWidth={2.4 * unit} />
+                        <rect width={9 * unit} height={9 * unit} fill={t.colour} fillOpacity={0.28 * strength} />
+                        <line x1={0} y1={0} x2={0} y2={9 * unit} stroke={t.colour} strokeOpacity={0.95 * strength} strokeWidth={2.4 * unit} />
                       </pattern>
                       <mask id={`exclude-mask-${t.key}`} maskUnits="userSpaceOnUse" x={0} y={0} width={size.w} height={size.h}>
-                        <image href={brush.urls[t.key]} x={0} y={0} width={Math.ceil(size.w / BRUSH_SCALE) * BRUSH_SCALE} height={Math.ceil(size.h / BRUSH_SCALE) * BRUSH_SCALE}
-                          preserveAspectRatio="none" />
+                        <image href={brush.current[t.key]} x={0} y={0} width={Math.ceil(size.w / BRUSH_SCALE) * BRUSH_SCALE} height={Math.ceil(size.h / BRUSH_SCALE) * BRUSH_SCALE}
+                          preserveAspectRatio="none" style={{ imageRendering: 'pixelated' }} />
                       </mask>
                     </defs>
                     <rect className="exclude-painted" x={0} y={0} width={size.w} height={size.h} fill={`url(#exclude-hatch-${t.key})`} mask={`url(#exclude-mask-${t.key})`} />
                   </g>
+                })}
+                {mode === 'merge' && chosenForMerge.map((k) => {  // chosen to merge
+                  const s = byKey.get(k)
+                  const poly = s ? outlineOf(s) : null
+                  return poly ? <polygon key={`m-${k}`} points={polygonPoints(poly)} fill="#38bdf8" fillOpacity={0.18} stroke="#38bdf8" strokeWidth={3 * unit} pointerEvents="none" /> : null
+                })}
+                {split && split.pieces.map((piece, i) => (  // the preview of a split: Enter keeps it
+                  <polygon key={`s-${i}`} points={polygonPoints(piece)} fill={i ? '#f472b6' : '#38bdf8'} fillOpacity={0.22} stroke={i ? '#f472b6' : '#38bdf8'}
+                    strokeWidth={2.4 * unit} pointerEvents="none" />
                 ))}
+                {stroke && stroke.length > 1 && <polyline points={polygonPoints(stroke)} fill="none" stroke={mode === 'split' ? '#f472b6' : '#38bdf8'}
+                  strokeWidth={2.4 * unit} strokeDasharray={`${6 * unit} ${4 * unit}`} pointerEvents="none" />}
                 {excluding && cursor && <circle cx={cursor[0]} cy={cursor[1]} r={brushPx} fill={shiftDown ? CLEARED.colour : brushType.colour} fillOpacity={0.15}
                   stroke="#ffffff" strokeWidth={1.6 * unit} strokeDasharray={`${4 * unit} ${3 * unit}`} pointerEvents="none" />}
                 {pending && <circle className="sam-pending" cx={pending[0]} cy={pending[1]} r={10 * unit} fill="none" stroke="#fff" strokeWidth={2 * unit} />}
@@ -816,31 +1032,68 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
         </div>
         <aside className="annotate-side round-side" aria-label="The object, the keys and this field">
           {coach}
+          {start && (!start.locked ? (
+            <div className="card side-block start-card" role="group" aria-label="Step 1: the acceptance threshold">
+              <h3>Step 1: set the acceptance threshold</h3>
+              <ThresholdSlider value={start.value} detection={start.detection} onChange={(v) => { setStart((s) => (s ? moveTo(s, v) : s)); tell('threshold') }} />
+              <p className="small" style={{ margin: '4px 0' }}>{sliderText(acceptedAt(startable, start.value, start.detection, meta.remove_class, positive), start.value,
+                acceptedAt(startable, start.detection, start.detection, meta.remove_class, positive), start.detection)}</p>
+              <p className="small muted" style={{ margin: '0 0 6px' }}>Objects scoring at or above it start solid in detection’s type, those below dotted grey.
+                It only sets where this field starts (it is saved with the field to tune thresholds later); the analysis keeps detection’s threshold.</p>
+              <div className="row"><button className="btn primary" onClick={() => { lockStart(); tell('start') }}>Start editing</button>
+                <span className="small muted"><span className="kbd">Enter</span> · <span className="kbd">[</span> <span className="kbd">]</span> fine steps</span></div>
+            </div>
+          ) : (
+            <div className="card side-block start-card locked small row">
+              <LockIcon /><span>Acceptance threshold <b>{start.value.toFixed(2)}</b>{Math.abs(start.value - start.detection) > 1e-9 ? ` (detection ${start.detection.toFixed(2)})` : ' (detection’s)'}</span>
+              <span className="spacer" /><button className="link-btn small" onClick={resetField} disabled={saving}
+                title="Discard this field’s unsaved changes and set the threshold again">Reset field</button>
+            </div>
+          ))}
+          {mode === 'split' && <div className="card side-block exclude-bar" role="status">
+            <b>Split</b> — <span className="kbd">S</span> or <span className="kbd">Esc</span> to leave
+            <ul className="key-list small" style={{ marginTop: 6 }}>
+              <li><span className="kbd">click</span> an object: it is split in two (a preview)</li>
+              <li><span className="kbd">click</span> elsewhere on it: the split moves · <span className="kbd">Enter</span> keeps it · <span className="kbd">Esc</span> drops it</li>
+              <li><span className="kbd">drag</span> a line across objects: each one it crosses right through is cut along it</li>
+            </ul>
+            <p className="small secondary" style={{ margin: '4px 0 0' }}>The pieces keep the object’s type (the keys retype them); <span className="kbd">Z</span> undoes.
+              They are your labels: detection’s objects stay what the analysis counts.</p>
+          </div>}
+          {mode === 'merge' && <div className="card side-block exclude-bar" role="status">
+            <b>Merge</b> — <b>{chosenForMerge.length}</b> selected{chosenForMerge.length >= 2 ? ' · Enter to merge' : ''} · <span className="kbd">M</span> or <span className="kbd">Esc</span> to leave
+            <ul className="key-list small" style={{ marginTop: 6 }}>
+              <li><span className="kbd">click</span> objects to add or take them out · <span className="kbd">drag</span> over objects adds every one it touches</li>
+              <li><span className="kbd">Enter</span> merges them into one: the type of the largest (the keys retype it)</li>
+            </ul>
+          </div>}
           {excluding && <div className="card side-block exclude-bar" role="status">
-            <b>Excluding</b> · <span className="look-swatch" style={{ borderColor: brushType.colour, background: brushType.colour }} /> {brushType.name} · brush {brushUm} µm
+            <b>Excluding</b> · <span className="look-swatch" style={{ borderColor: brushType.colour, background: brushType.colour }} /> {brushType.name} · brush <b>{brushUm} µm</b>
             {' '}· <span className="kbd">B</span> to exit
             <ul className="class-legend small" style={{ marginTop: 6 }}>{EXCLUDE_TYPES.map((t) => (
               <li key={t.key} className={t.key === brushKind ? 'waiting' : ''}><span className="kbd key-slot">{t.key}</span>
                 <span className="look-swatch" style={{ borderColor: t.colour, background: t.colour }} />{t.name}</li>
             ))}
               <li><span className="kbd key-slot">⇧</span><span className="look-swatch" style={{ borderColor: CLEARED.colour, background: CLEARED.colour }} />Shift-drag:
-                this area is fine, also where detection excluded it</li></ul>
-            <p className="small secondary" style={{ margin: '4px 0 0' }}>While the brush is on, 1–4 are area types and the class keys rest. Drag paints,
-              scroll changes the brush, the middle button moves the picture, <span className="kbd">Z</span> takes back a stroke. Saved with Save as your
-              areas: they teach and test bad-area detection, and objects in them are left out of training and scoring. The analysis keeps detection’s
-              own areas (hatched).</p>
+                take it out of the {brushType.name} area, detection’s part too</li></ul>
+            <p className="small secondary" style={{ margin: '4px 0 0' }}>The hatched region is the {brushType.name} area as it stands: detection’s with everyone’s
+              edits. A drag adds to it (one region, however many strokes; another type’s pixels become this type), Shift-drag takes out of it.
+              While the brush is on, 1–4 choose the type and the class keys rest; <span className="kbd">Tab</span> smaller, <span className="kbd">⇧ Tab</span> bigger
+              brush; the wheel zooms, the middle button moves the picture, <span className="kbd">Z</span> takes back a stroke. Saved with Save: people’s
+              areas teach and test bad-area detection, and objects in them are left out of training and scoring. The analysis keeps detection’s own.</p>
           </div>}
           <TargetCard s={target} call={target ? callOf(target) : null} meta={meta} precise={precise} px={px} outline={target ? outlineOf(target) : null}
-            choices={choicesOf(target)} added={target?.added && saved[target.added.id] ? addedState(target) : null} unsaved={!!target && isUnsaved(target)}
+            choices={choicesOf(target)} added={target?.added && !target.added.meta?.edit && saved[target.added.id] ? addedState(target) : null} unsaved={!!target && isUnsaved(target)}
             onMask={(i) => { if (target) chooseMask(target, i) }} />
           <div className="card side-block">
             <h3>Classes</h3>
             <ClassLegend vocabulary={vocabulary} keys={keys} removeClass={meta.remove_class} active={target ? callOf(target).pick : null} />
-            <p className="small muted" style={{ margin: '4px 0 0' }}><span className="kbd">B</span> brush for bad areas (then 1–4 are area types)</p>
+            <p className="small muted" style={{ margin: '4px 0 0' }}><span className="kbd">B</span> brush for bad areas (then 1–4 are area types) ·
+              {' '}<span className="kbd">S</span> split · <span className="kbd">M</span> merge</p>
           </div>
           <div className="card side-block">
             <h3>Keys</h3>
-            <Controls sam={sam} precise={!!precise} excluding={excluding} />
+            <Controls sam={sam} precise={!!precise} excluding={excluding} mode={mode} />
             <LookLegend />
           </div>
           <div className="card side-block">
@@ -866,7 +1119,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
             const shown = layers.excluded !== false
             const found = shown && excluded.data?.status === 'done' ? excluded.data.kinds.filter((k) => k.fraction == null || k.fraction > 0) : []
             const theirs = shown ? [...new Set((people.data?.regions ?? []).map((r) => r.kind))] : []
-            const mine = [...EXCLUDE_TYPES, CLEARED].filter((t) => brush.urls[t.key])
+            const mine = brush.dirty ? EXCLUDE_TYPES.filter((t) => brush.current[t.key]) : []
             if (!found.length && !theirs.length && !mine.length) return null
             return (
               <div className="card side-block">
@@ -883,10 +1136,10 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
                         {kind === INCLUDE ? 'marked fine' : t?.name ?? kind} (outlined)</li>
                     })}
                     {mine.map((t) => <li key={`mine-${t.key}`}><span className="look-swatch hatched" style={{ borderColor: t.colour, color: t.colour }} />
-                      {t.key === INCLUDE ? 'marked fine' : t.name} (not saved yet)</li>)}
+                      {t.name} with your strokes (not saved yet)</li>)}
                   </ul>
                   <p className="small muted" style={{ margin: '4px 0 0' }}>They teach and test bad-area detection, and objects in them are left out of training
-                    and scoring; the analysis keeps detection’s areas. <span className="kbd">B</span> paints (keys 1–4 the type), Shift-drag marks fine.</p></>}
+                    and scoring; the analysis keeps detection’s areas. <span className="kbd">B</span> changes them (keys 1–4 the type), Shift-drag takes out.</p></>}
               </div>
             )
           })()}
@@ -912,6 +1165,8 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
                 <li><b>Outline too big or small?</b> <span className="kbd">Tab</span> / <span className="kbd">⇧ Tab</span>. Still not right: click the object,
                   then click spots to add, Shift+click spots to leave out, or drag the dots; a click beyond the faint frame (or Enter) keeps it.</li>
                 <li><b>A clean look at the tissue?</b> <span className="kbd">Space</span> hides everything drawn over the picture; <span className="kbd">Space</span> again brings it back.</li>
+                <li><b>Two objects outlined as one?</b> <span className="kbd">S</span>, then click it: a split shows (click elsewhere on it to move it), <span className="kbd">Enter</span> keeps it.
+                  Or draw a line across it. <b>One object in pieces?</b> <span className="kbd">M</span>, click or drag over the pieces, <span className="kbd">Enter</span>.</li>
                 <li><b>Missed object?</b> {sam ? 'Click it: its outline appears as a new candidate (dotted); then press its type’s key.' : 'Click its corners one by one, then the first corner (or Enter).'}</li>
                 <li><b>Nothing is saved until you press Save</b> (a small orange dot marks each object you changed). <b>Save and continue</b> when the field
                   looks right: what you left as it is counts as checked by you, and the next field opens.</li>
@@ -951,16 +1206,28 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
 }
 
 /** The keys of the field, one per line, with what they do; while precise editing, only its own. */
-function Controls({ sam, precise, excluding }: { sam: boolean; precise: boolean; excluding: boolean }) {
+function Controls({ sam, precise, excluding, mode }: { sam: boolean; precise: boolean; excluding: boolean; mode: 'split' | 'merge' | null }) {
   if (excluding) {
     return (
       <ul className="key-list small">
         <li className="key-now"><b>Excluding</b> — outlines are locked</li>
         <li><span className="kbd">1</span>–<span className="kbd">4</span> the type: fold, artifact, no tissue, out of focus</li>
-        <li><span className="kbd">drag</span> paint a bad area of that type</li>
-        <li><span className="kbd">⇧ drag</span> this area is fine (also over detection’s areas)</li>
-        <li><span className="kbd">scroll</span> brush size · <span className="kbd">middle</span> move the picture</li>
+        <li><span className="kbd">drag</span> add to that type’s area</li>
+        <li><span className="kbd">⇧ drag</span> take out of it (detection’s part too)</li>
+        <li><span className="kbd">Tab</span> smaller · <span className="kbd">⇧ Tab</span> bigger brush · <span className="kbd">scroll</span> zoom · <span className="kbd">middle</span> move</li>
         <li><span className="kbd">Z</span> one stroke back · <span className="kbd">B</span> or <span className="kbd">Esc</span> done</li>
+      </ul>
+    )
+  }
+  if (mode) {
+    return (
+      <ul className="key-list small">
+        <li className="key-now"><b>{mode === 'split' ? 'Split' : 'Merge'}</b> — the class keys still retype the object under the mouse</li>
+        {mode === 'split' ? <>
+          <li><span className="kbd">click</span> split an object · <span className="kbd">click</span> again on it to move the split</li>
+          <li><span className="kbd">drag</span> a line: cut every object it crosses</li>
+        </> : <li><span className="kbd">click</span> / <span className="kbd">drag</span> choose objects</li>}
+        <li><span className="kbd">Enter</span> keep · <span className="kbd">Esc</span> drop / leave · <span className="kbd">Z</span> undo</li>
       </ul>
     )
   }
@@ -983,7 +1250,8 @@ function Controls({ sam, precise, excluding }: { sam: boolean; precise: boolean;
       <li><span className="kbd">click</span> empty tissue: {sam ? 'a new candidate' : 'draw a new one by hand'}</li>
       <li><span className="kbd">click</span> an object: precise edit{sam ? ' (click add, ⇧ click remove, drag dots, click beyond the frame done)' : ' (drag dots, click beyond the frame done)'}</li>
       <li><span className="kbd">Space</span> hide / show the drawings</li>
-      <li><span className="kbd">B</span> brush for bad areas (1–4 the type; ⇧ drag marks fine): their objects are left out of training</li>
+      <li><span className="kbd">S</span> split an object · <span className="kbd">M</span> merge objects</li>
+      <li><span className="kbd">B</span> brush for bad areas (1–4 the type; ⇧ drag takes out): their objects are left out of training</li>
       <li><span className="kbd">Z</span> undo · <span className="kbd">Esc</span> cancel</li>
       <li><span className="kbd">Ctrl S</span> save · <span className="kbd">Ctrl ⏎</span> save and continue</li>
     </ul>

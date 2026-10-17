@@ -7,7 +7,10 @@
 - `annotated(project, core_id, stain)`: people's areas. These are the `exclude` labels in the label log (written by
   `labels.exclusions`: the brush of "Mark bad areas" and of the object rounds, and "AI reviewer" for the hand-drawn
   polygons of the earlier AI-review rounds, `import_reviewer`), applied in time order with the latest edit winning. A
-  painted part has its type (1–4); a cleared part says "this area is fine". Like every human annotation they only train
+  painted part has its type (1–4) and joins that type's area (painting over another type gives the pixels to the
+  painted one); a removed part ("-1"–"-4", Shift-drag in the field tool) leaves that type's area, detection's included;
+  a cleared part ("include", "Mark bad areas") says "this area is fine" whatever the type. Each type's area is one
+  merged region set (`regions`). Like every human annotation they only train
   and evaluate models (the object models, and the bad-area detector: `automatic` against people's areas). The analysis
   never reads them.
 
@@ -181,14 +184,37 @@ def rasterize(rings, holes, shape: tuple[int, int], scale: int = SCALE, offset: 
     return out > 0
 
 
-def apply(codes: np.ndarray, edit: Edit) -> None:
-    """One edit onto the codes, in place: each type's area set to that type, a cleared area to counted."""
-    analysed = codes != OUTSIDE
-    for kind in dict.fromkeys(edit.kinds):
+def removal(kind: str) -> int | None:
+    """The type a removal kind ("-1"–"-4") takes pixels out of; None for any other kind."""
+    text = str(kind)
+    return int(text[1:]) if text.startswith("-") and text[1:].isdigit() else None
+
+
+def edit_areas(edit: Edit, shape: tuple[int, int]):
+    """An edit's parts as (kind, cells) in the order they apply: removals first (out of one type's area), then what was
+    cleared and painted. Within one save a pixel is painted one type at most (painting a type takes it off the others)."""
+    order = sorted(dict.fromkeys(edit.kinds), key=lambda k: 0 if removal(k) is not None else 1)
+    for kind in order:
         rings = [r for r, k in zip(edit.rings, edit.kinds) if k == kind]
         holes = [h for h, k in zip(edit.holes, edit.kinds) if k == kind]
-        area = rasterize(rings, holes, codes.shape) & analysed
-        codes[area] = COUNTED if kind == INCLUDE else int(kind) if str(kind).isdigit() else 1
+        yield kind, rasterize(rings, holes, shape)
+
+
+def _painted_code(kind: str) -> int:
+    return int(kind) if str(kind).isdigit() else 1
+
+
+def apply(codes: np.ndarray, edit: Edit) -> None:
+    """One edit onto the codes, in place: a removed part leaves its type's area (counted), a cleared part is counted,
+    a painted part takes the painted type (also over another type's pixels: the merge of `annotated`)."""
+    analysed = codes != OUTSIDE
+    for kind, area in edit_areas(edit, codes.shape):
+        area &= analysed
+        out_of = removal(kind)
+        if out_of is not None:
+            codes[area & (codes == out_of)] = COUNTED
+        else:
+            codes[area] = COUNTED if kind == INCLUDE else _painted_code(kind)
 
 
 @dataclass
@@ -210,6 +236,14 @@ class Layer:
 
     def analysed(self) -> np.ndarray:
         return self.codes != OUTSIDE
+
+    def regions(self, simplify_px: float = 0.6) -> list[dict]:
+        """Each excluded type's area (1–5) as merged polygons in core pixels (`regions_of`)."""
+        return regions_of(self.codes, self.scale, {code: str(code) for code in range(1, 6)}, simplify_px)
+
+    def of_type(self, code: int) -> np.ndarray:
+        """One type's area (cells): detection's and, in `final_say`, people's edits merged into it."""
+        return self.codes == code
 
     def cells(self, x0: float, y0: float, x1: float, y1: float) -> tuple[slice, slice]:
         """The rows and columns of the layer under a core-pixel box (clipped to the layer)."""
@@ -307,31 +341,37 @@ class Annotated:
         return self.codes == CLEARED
 
     def regions(self, simplify_px: float = 0.6) -> list[dict]:
-        """The areas as polygons in core pixels: [{kind: "1"–"4" or "include", rings: [outer, hole, …]}], one entry per
-        connected area."""
-        out = []
-        for code in sorted(set(np.unique(self.codes).tolist()) - {0}):
-            mask = (self.codes == code).astype(np.uint8)
-            contours, hierarchy = cv2.findContours(mask, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
-            if hierarchy is None:
-                continue
-            kind = INCLUDE if code == CLEARED else str(code)
-            for i, contour in enumerate(contours):
-                if hierarchy[0][i][3] >= 0:
-                    continue  # a hole: with its outer ring
-                rings = [contour]
-                child = hierarchy[0][i][2]
-                while child >= 0:
-                    rings.append(contours[child])
-                    child = hierarchy[0][child][0]
-                shaped = []
-                for ring in rings:
-                    simple = cv2.approxPolyDP(ring, simplify_px, True)[:, 0, :] if len(ring) > 4 else ring[:, 0, :]
-                    if len(simple) >= 3:
-                        shaped.append([[round((float(x) + 0.5) * self.scale, 1), round((float(y) + 0.5) * self.scale, 1)] for x, y in simple])
-                if shaped:
-                    out.append({"kind": kind, "rings": shaped})
-        return out
+        """The areas as polygons in core pixels: [{kind: "1"–"4" or "include", rings: [outer, hole, …]}], each type's
+        area merged (one entry per connected part of it)."""
+        return regions_of(self.codes, self.scale, {code: str(code) for code in range(1, 5)} | {CLEARED: INCLUDE}, simplify_px)
+
+
+def regions_of(codes: np.ndarray, scale: int, kinds: dict[int, str], simplify_px: float = 0.6) -> list[dict]:
+    """The cells of each code in `kinds` as polygons in core pixels ({kind, rings: [outer, hole, …]}), one entry per
+    connected part: each type's area as one merged region set."""
+    out = []
+    for code in sorted(set(np.unique(codes).tolist()) & set(kinds)):
+        mask = (codes == code).astype(np.uint8)
+        contours, hierarchy = cv2.findContours(mask, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+        if hierarchy is None:
+            continue
+        kind = kinds[code]
+        for i, contour in enumerate(contours):
+            if hierarchy[0][i][3] >= 0:
+                continue  # a hole: with its outer ring
+            rings = [contour]
+            child = hierarchy[0][i][2]
+            while child >= 0:
+                rings.append(contours[child])
+                child = hierarchy[0][child][0]
+            shaped = []
+            for ring in rings:
+                simple = cv2.approxPolyDP(ring, simplify_px, True)[:, 0, :] if len(ring) > 4 else ring[:, 0, :]
+                if len(simple) >= 3:
+                    shaped.append([[round((float(x) + 0.5) * scale, 1), round((float(y) + 0.5) * scale, 1)] for x, y in simple])
+            if shaped:
+                out.append({"kind": kind, "rings": shaped})
+    return out
 
 
 def _grid_shape(project, core_id: str, stain: str) -> tuple[int, int] | None:
@@ -358,11 +398,18 @@ def annotated(project, core_id: str, stain: str) -> Annotated | None:
         return None
     found = edits(project, core_id, stain)
     codes = np.zeros(shape, np.uint8)
+    auto = automatic(project, core_id, stain) if found else None
+    final = auto.codes.copy() if auto is not None and auto.codes.shape == shape else np.zeros(shape, np.uint8)  # people's say so far
     for edit in found:
-        for kind in dict.fromkeys(edit.kinds):
-            rings = [r for r, k in zip(edit.rings, edit.kinds) if k == kind]
-            holes = [h for h, k in zip(edit.holes, edit.kinds) if k == kind]
-            codes[rasterize(rings, holes, shape)] = CLEARED if kind == INCLUDE else int(kind) if str(kind).isdigit() else 1
+        for kind, area in edit_areas(edit, shape):
+            out_of = removal(kind)
+            if out_of is not None:  # taken out of that type's area (detection's or people's): marked fine there
+                hit = area & (final == out_of)
+                codes[hit], final[hit] = CLEARED, COUNTED
+            elif kind == INCLUDE:
+                codes[area], final[area] = CLEARED, COUNTED
+            else:
+                codes[area] = final[area] = _painted_code(kind)
     return Annotated(codes, found, edits_digest(project, core_id, stain))
 
 
