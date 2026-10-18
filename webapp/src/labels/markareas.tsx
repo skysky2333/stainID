@@ -1,23 +1,24 @@
 /* "Mark bad areas" (sessions of kind "areas", routes/areas.py): one core at a time with all its stain images. The
-   picture shows detection's automatic excluded areas (hatched; what the analysis uses, and they never change here),
-   the areas people marked so far (outlines in the type colours; "marked fine" dashed green) and detection's objects
-   faintly, for context. The brush is always on: 1–4 choose the type, a drag paints it, Shift-drag marks a part fine,
-   the wheel sets the brush size (Ctrl+wheel zooms), the middle button pans, Z takes back a stroke, Space hides everything
-   drawn over the tissue. Enter says "this stain is done" and goes to the next stain; after the last one the core is
+   picture shows each type's area as it stands (GET …/areas: detection's with everyone's saved edits, hatched, the
+   chosen type strong; detection's own areas, what the analysis uses, never change here) and detection's objects
+   faintly, for context. The brush is always on and is the field tool's (`BrushMasks`, labels/brush.ts): 1–4 choose
+   the type, whose current area (detection's with everyone's saved edits) is drawn as one merged region; a drag adds to
+   it, Shift-drag takes out of it (detection's part too); Tab / Shift+Tab (or + / −) the brush size, the wheel zooms, the
+   middle button pans, Z takes back a stroke, Space hides everything drawn over the tissue, [ / ] the other stain.
+   Enter says "this stain is done" and goes to the next stain; after the last one the core is
    saved (every stain looked at, an edit for each stain painted on) and the next core opens. People's areas teach and
    test the bad-area detection; the analysis keeps detection's own. The page is blinded: the core and its stains, never
    a group or a diagnosis. */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import type { AreaCore, AreaImage, AreaNext, PeopleAreas, PictureState, RoundProgress, SessionDetail } from '../api'
+import type { AreaCore, AreaImage, AreaNext, FieldAreas, PictureState, RoundProgress, SessionDetail } from '../api'
 import { api, apiUrl, enc } from '../api'
 import { ErrorNote, Loading, Progress, withError } from '../components'
 import { DeepZoom } from '../deepzoom'
 import type { Mark, PaintPoint, Pyramid } from '../deepzoom'
 import { useFetch, useStored } from '../hooks'
-import { AREA_BRUSH_PX, AreaMasks } from './areabrush'
-import { CLEARED, EXCLUDE_TYPES, INCLUDE } from './brush'
+import { AREA_SCALE, BRUSH_UM, BrushMasks, CLEARED, EXCLUDE_TYPES, brushStep, colourOfType } from './brush'
 import { useFitScreen, useLeaveGuard } from './rounds'
 
 export const AREAS_TITLE = 'Mark bad areas'
@@ -32,7 +33,6 @@ const typing = (e: KeyboardEvent) => {
   const t = e.target as HTMLElement | null
   return !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)
 }
-const colourOf = (kind: string) => (kind === INCLUDE ? CLEARED.colour : EXCLUDE_TYPES.find((t) => t.key === kind)?.colour ?? '#fff')
 
 /** The core-by-core progress: cores done by anyone, in progress, and the people. */
 export function AreaProgressLine({ progress, me }: { progress: RoundProgress | null; me?: string | null }) {
@@ -118,14 +118,14 @@ function CoreTask({ name, core, after, afterStains, practice, onEvent, coach, on
   const [at, setAt] = useState(0)
   const [looked, setLooked] = useState<Set<string>>(() => new Set())
   const [kind, setKind] = useState('1')
-  const [brushPx, setBrushPx] = useStored('stainid.areas.brush', AREA_BRUSH_PX.start)
+  const [brushUm, setBrushUm] = useStored<number>('stainid.round2.brush', BRUSH_UM.start)  // the field tool's brush size too
   const [hidden, setHidden] = useState(false)
   const [objectsOn, setObjectsOn] = useStored('stainid.areas.objects', true)
   const [tick, setTick] = useState(0)  // the strokes changed (undo, a stroke ended)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [openBy, setOpenBy] = useState<string[]>([])
-  const masks = useRef(new Map<string, AreaMasks>())
+  const masks = useRef(new Map<string, BrushMasks>())
   const images = useMemo(() => task.data?.images ?? [], [task.data])
   const image: AreaImage | null = images[at] ?? null
   const tell = useCallback((e: AreaEvent) => onEvent?.(e), [onEvent])
@@ -161,7 +161,7 @@ function CoreTask({ name, core, after, afterStains, practice, onEvent, coach, on
     const edits: Record<string, { pngs: Record<string, string>; scale: number }> = {}
     for (const i of images) {
       const pngs = masks.current.get(i.stain)?.pngs()
-      if (pngs) edits[i.stain] = { pngs, scale: 8 }
+      if (pngs) edits[i.stain] = { pngs, scale: AREA_SCALE }
     }
     setSaving(true)
     const done = await withError(() => api.post<{ progress: RoundProgress }>(`${base}/save`, { edits, checked: images.map((i) => i.stain) }), setError)
@@ -185,8 +185,9 @@ function CoreTask({ name, core, after, afterStains, practice, onEvent, coach, on
     setTick((t) => t + 1)
     tell('undo')
   }
-  const latest = useRef({ fine, undo, go, at, hidden })
-  latest.current = { fine, undo, go, at, hidden }
+  const size = (bigger: boolean) => { setBrushUm(brushStep(brushUm, bigger)); tell('size') }
+  const latest = useRef({ fine, undo, go, at, hidden, size })
+  latest.current = { fine, undo, go, at, hidden, size }
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -196,14 +197,16 @@ function CoreTask({ name, core, after, afterStains, practice, onEvent, coach, on
       if (e.ctrlKey || e.metaKey) return
       const type = EXCLUDE_TYPES.find((t) => t.key === e.key)
       if (type) { setKind(type.key); tell('type'); return }
-      if (e.key === '[' || (e.key === 'Tab' && e.shiftKey)) { e.preventDefault(); l.go(l.at - 1) }
-      else if (e.key === ']' || e.key === 'Tab') { e.preventDefault(); l.go(l.at + 1) }
+      if (e.key === 'Tab') { e.preventDefault(); l.size(e.shiftKey) }  // the brush size, as in the field tool
+      else if (e.key === '+' || e.key === '=' || e.key === '-' || e.key === '−') { e.preventDefault(); e.stopPropagation(); l.size(e.key !== '-' && e.key !== '−') }
+      else if (e.key === '[') { e.preventDefault(); l.go(l.at - 1) }
+      else if (e.key === ']') { e.preventDefault(); l.go(l.at + 1) }
       else if (e.key.toLowerCase() === 'z') l.undo()
       else if (e.key === 'Enter') { e.preventDefault(); l.fine() }
       else if (e.key === ' ') { e.preventDefault(); setHidden(!l.hidden); tell('overlays') }
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    window.addEventListener('keydown', onKey, true)  // first, so + / − size the brush rather than zoom the picture
+    return () => window.removeEventListener('keydown', onKey, true)
   }, [tell])
 
   if (!task.data) return <><ErrorNote error={task.error} />{!task.error && <Loading label="Opening the core…" />}</>
@@ -229,12 +232,11 @@ function CoreTask({ name, core, after, afterStains, practice, onEvent, coach, on
                   {masks.current.get(i.stain)?.dirty ? <span className="area-dot" title="painted, not saved yet" /> : null}</span>
               </button>
             ))}
-            <span className="small muted area-tabs-keys"><span className="kbd">Tab</span> / <span className="kbd">Shift</span>+<span className="kbd">Tab</span> or <span className="kbd">[</span> <span className="kbd">]</span> switch stains</span>
+            <span className="small muted area-tabs-keys"><span className="kbd">[</span> <span className="kbd">]</span> switch stains</span>
           </div>
-          {image && <StainView key={image.stain} base={`${base}/${enc(image.stain)}`} image={image} masks={masks.current} kind={kind} brushPx={brushPx} hidden={hidden}
-            objectsOn={objectsOn} tick={tick}
-            onBrush={(px) => { setBrushPx(px); tell('size') }}
-            onStroke={(clear) => { setTick((t) => t + 1); tell(clear ? 'clear' : 'paint') }} />}
+          {image && <StainView key={image.stain} base={`${base}/${enc(image.stain)}`} image={image} masks={masks.current} kind={kind}
+            brushRadius={brushUm / (task.data.pixel_size_um || 0.27) / 2} hidden={hidden} objectsOn={objectsOn} tick={tick}
+            onStroke={(erase) => { setTick((t) => t + 1); tell(erase ? 'clear' : 'paint') }} />}
         </div>
         <aside className="annotate-side round-side" aria-label="The brush, the keys and this core">
           {coach}
@@ -245,11 +247,13 @@ function CoreTask({ name, core, after, afterStains, practice, onEvent, coach, on
                 <button key={t.key} className={`area-type${kind === t.key ? ' chosen' : ''}`} onMouseDown={(e) => e.preventDefault()} onClick={() => { setKind(t.key); tell('type') }} aria-pressed={kind === t.key}>
                   <span className="kbd">{t.key}</span><span className="swatch" style={{ background: t.colour }} />{t.name}</button>
               ))}
-              <div className="area-type is-clear"><span className="kbd">Shift</span><span className="swatch" style={{ background: CLEARED.colour }} />drag: marked fine (counted after all)</div>
+              <div className="area-type is-clear"><span className="kbd">Shift</span><span className="swatch" style={{ background: CLEARED.colour }} />drag: take it out of the
+                {' '}{EXCLUDE_TYPES.find((t) => t.key === kind)?.name} area, detection’s part too</div>
             </div>
-            <label className="small secondary area-size">Brush size
-              <input type="range" min={AREA_BRUSH_PX.min} max={AREA_BRUSH_PX.max} value={brushPx} onChange={(e) => setBrushPx(Number(e.target.value))} />
-              <span className="muted">wheel</span></label>
+            <p className="small secondary area-size" style={{ margin: '6px 0 0' }}>Brush <b>{brushUm} µm</b> · <span className="kbd">Tab</span> smaller,
+              {' '}<span className="kbd">Shift</span>+<span className="kbd">Tab</span> bigger</p>
+            <p className="small muted" style={{ margin: '4px 0 0' }}>The hatched region is the type’s area as it stands: detection’s with everyone’s edits. A drag adds to
+              it (one region, however many strokes; another type’s pixels become this type), Shift-drag takes out of it.</p>
           </div>
           <div className="card side-block">
             <h3>This core</h3>
@@ -262,10 +266,10 @@ function CoreTask({ name, core, after, afterStains, practice, onEvent, coach, on
           </div>
           <div className="card side-block key-help small">
             <h3>Keys</h3>
-            <div><span className="kbd">1</span>–<span className="kbd">4</span> type · drag paints · <span className="kbd">Shift</span>-drag marks fine</div>
-            <div>wheel: brush size · <span className="kbd">Ctrl</span>+wheel, <span className="kbd">+</span> <span className="kbd">−</span>: zoom · middle button: move</div>
+            <div><span className="kbd">1</span>–<span className="kbd">4</span> type · drag adds to it · <span className="kbd">Shift</span>-drag takes out of it</div>
+            <div><span className="kbd">Tab</span> / <span className="kbd">Shift</span>+<span className="kbd">Tab</span> (or <span className="kbd">+</span> <span className="kbd">−</span>) brush size · wheel: zoom · middle button: move</div>
             <div><span className="kbd">Z</span> undo a stroke · <span className="kbd">Space</span> hide the overlays</div>
-            <div><span className="kbd">Enter</span> this stain is done · <span className="kbd">Tab</span> or <span className="kbd">[</span> <span className="kbd">]</span> other stain</div>
+            <div><span className="kbd">Enter</span> this stain is done · <span className="kbd">[</span> <span className="kbd">]</span> other stain</div>
             <label className="layer-toggle" style={{ marginTop: 6 }}><input type="checkbox" checked={objectsOn} onChange={(e) => setObjectsOn(e.target.checked)} />Show detection’s objects (faint)</label>
             <p className="muted" style={{ margin: '6px 0 0' }}>The areas you mark teach and test the bad-area detection; the analysis uses detection’s own areas (hatched).</p>
           </div>
@@ -289,46 +293,49 @@ function prefetchTiles(where: string, p: Pyramid) {
   }
 }
 
-function ringsPath(rings: number[][][]) {
-  return rings.map((ring) => `M${ring.map((p) => `${p[0]} ${p[1]}`).join('L')}Z`).join('')
-}
-
-/** One stain image of the core: detection's areas, people's areas so far, the pending strokes and the brush. */
-function StainView({ base, image, masks, kind, brushPx, hidden, objectsOn, tick, onBrush, onStroke }: {
-  base: string; image: AreaImage; masks: Map<string, AreaMasks>; kind: string; brushPx: number; hidden: boolean; objectsOn: boolean; tick: number
-  onBrush: (px: number) => void; onStroke: (clear: boolean) => void
+/** One stain image of the core: each type's area now (detection's with everyone's saved edits and the strokes since
+ *  Save; the chosen type strong), detection's objects faintly, and the brush (`brushRadius` in core px). */
+function StainView({ base, image, masks, kind, brushRadius, hidden, objectsOn, tick, onStroke }: {
+  base: string; image: AreaImage; masks: Map<string, BrushMasks>; kind: string; brushRadius: number; hidden: boolean; objectsOn: boolean; tick: number
+  onStroke: (erase: boolean) => void
 }) {
   const [poll, setPoll] = useState(!image.picture?.ready)
   const picture = useFetch<PictureState>(image.picture?.ready ? null : `${base}/picture`, poll ? 1500 : undefined)
   const state = image.picture?.ready ? image.picture : picture.data
   const pyramid = state?.ready ? state : null
   useEffect(() => { if (pyramid || (state && !state.ready && state.state === 'failed')) setPoll(false) }, [pyramid, state])
-  const people = useFetch<PeopleAreas>(`${base}/annotated`)
+  const current = useFetch<FieldAreas>(`${base}/areas`)
   const objects = useFetch<{ columns: string[]; rows: [number, number, boolean, number[][] | null][] }>(objectsOn ? `${base}/objects` : null)
   const marks = useMemo<Mark[]>(() => (objectsOn && !hidden ? (objects.data?.rows ?? []).map(([x, y, accepted, rings]) => ({
     x, y, r: 6, color: OBJECT_COLOUR, dashed: !accepted, rings: rings ?? undefined, circle: rings?.length ? false : undefined,
   })) : []), [objects.data, objectsOn, hidden])
   const ex = image.excluded
-  const overlays = useMemo(() => (!hidden && pyramid && ex.status === 'done' && ex.width && ex.height ? [{
-    src: apiUrl(`${base}/excluded.png?v=${enc(ex.version ?? '')}`), width: ex.width * (ex.scale ?? 8), height: ex.height * (ex.scale ?? 8), opacity: 0.9,
-  }] : []), [hidden, pyramid, ex, base])
 
-  const masksFor = (): AreaMasks | null => {
+  const masksFor = (): BrushMasks | null => {
     if (!pyramid) return null
     let m = masks.get(image.stain)
-    if (!m) { m = new AreaMasks(pyramid.width, pyramid.height); masks.set(image.stain, m) }
+    if (!m) { m = new BrushMasks(pyramid.width, pyramid.height, AREA_SCALE); masks.set(image.stain, m) }
     return m
   }
   const canvas = useRef<HTMLCanvasElement | null>(null)
   const cursor = useRef<SVGCircleElement | null>(null)
   const frame = useRef(0)
+  const latestKind = useRef(kind)
+  latestKind.current = kind
   const redraw = () => {
     if (frame.current) return
-    frame.current = requestAnimationFrame(() => { frame.current = 0; const m = masks.get(image.stain); if (m && canvas.current) m.draw(canvas.current) })
+    frame.current = requestAnimationFrame(() => { frame.current = 0; const m = masks.get(image.stain); if (m && canvas.current) m.draw(canvas.current, latestKind.current) })
   }
   useEffect(() => () => cancelAnimationFrame(frame.current), [])
-  useEffect(redraw, [tick, pyramid])  // eslint-disable-line react-hooks/exhaustive-deps
-  const setCanvas = useCallback((c: HTMLCanvasElement | null) => { canvas.current = c; if (c) { const m = masks.get(image.stain); if (m) m.draw(c) } }, [masks, image.stain])
+  useEffect(redraw, [tick, pyramid, kind])  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {  // each type's current area from the server, under the strokes
+    const m = masksFor()
+    if (!m || !current.data) return
+    let live = true
+    void m.setBase(current.data).then(() => { if (live) redraw() })
+    return () => { live = false }
+  }, [current.data, pyramid])  // eslint-disable-line react-hooks/exhaustive-deps
+  const setCanvas = useCallback((c: HTMLCanvasElement | null) => { canvas.current = c; if (c) { const m = masks.get(image.stain); if (m) m.draw(c, latestKind.current) } }, [masks, image.stain])
   const clearing = useRef(false)
   const last = useRef<PaintPoint | null>(null)
   const showCursor = (p: PaintPoint | null) => {
@@ -339,13 +346,13 @@ function StainView({ base, image, masks, kind, brushPx, hidden, objectsOn, tick,
     c.style.display = ''
     c.setAttribute('cx', String(p.x))
     c.setAttribute('cy', String(p.y))
-    c.setAttribute('r', String(brushPx / 2 / p.s))
+    c.setAttribute('r', String(brushRadius))
     c.setAttribute('stroke-width', String(1.6 / p.s))
-    c.setAttribute('stroke', p.shift || clearing.current ? CLEARED.colour : colourOf(kind))
+    c.setAttribute('stroke', p.shift || clearing.current ? CLEARED.colour : colourOfType(kind))
   }
   useEffect(() => { if (last.current) showCursor(last.current) })  // the brush size or type changed
-  const latestBrush = useRef(brushPx)
-  latestBrush.current = brushPx
+  const latestBrush = useRef(brushRadius)
+  latestBrush.current = brushRadius
 
   if (!pyramid) {
     const failed = state && !state.ready && state.state === 'failed' ? state.error ?? 'unknown error' : null
@@ -362,27 +369,20 @@ function StainView({ base, image, masks, kind, brushPx, hidden, objectsOn, tick,
   return (
     <DeepZoom pyramid={pyramid} height="calc(100vh - 260px)" panLock cursor="none"
       tileUrl={(level, col, row) => apiUrl(`${base}/tiles/${level}/${col}_${row}.jpg?v=${pyramid.version}`)}
-      overlays={overlays} marks={marks}
+      marks={marks}
       onTileError={() => { setPoll(true); picture.reload() }}
       toolbar={<span className="row small">
         {hidden ? <span className="badge">Overlays hidden · <span className="kbd">Space</span></span>
           : ex.status !== 'done' ? <span className="muted">Detection has not marked bad areas on this image yet.</span>
             : <span className="muted" title="What the analysis leaves out: detection's automatic areas. They do not change from what you mark here.">
               Excluded from analysis (detection){types.length ? ': ' + types.map((k) => `${k.label} ${Math.round(100 * (k.fraction ?? 0))}%`).join(', ') : ': nothing'}</span>}
-        {(people.data?.regions.length ?? 0) > 0 && !hidden && <span className="muted"> · outlines: areas people marked</span>}
+        {!hidden && <span className="muted"> · hatched: each type’s area as it stands (detection’s with people’s edits)</span>}
       </span>}
-      onWheelOver={(delta, e) => {
-        if (e.ctrlKey || e.metaKey) return false
-        const next = Math.round(Math.min(AREA_BRUSH_PX.max, Math.max(AREA_BRUSH_PX.min, latestBrush.current * (delta < 0 ? 1.12 : 1 / 1.12))))
-        latestBrush.current = next
-        onBrush(next)
-        return true
-      }}
       onPress={(p) => {
         const m = masksFor()
         if (!m) return
         clearing.current = p.shift
-        m.begin(p.x, p.y, latestBrush.current / 2 / p.s, kind, p.shift)
+        m.begin(p.x, p.y, latestBrush.current, kind, p.shift)
         redraw()
       }}
       onMove={(p) => {
@@ -392,16 +392,13 @@ function StainView({ base, image, masks, kind, brushPx, hidden, objectsOn, tick,
       }}
       onRelease={() => {
         const m = masks.get(image.stain)
-        if (m?.end()) { redraw(); onStroke(clearing.current) }
+        if (m?.end()) { redraw(); onStroke(clearing.current) }  // one step for Z
         clearing.current = false
       }}
       over={(unit) => (
         <>
           <canvas ref={setCanvas} className="area-pending" style={{ width: pyramid.width, height: pyramid.height, display: hidden ? 'none' : undefined }} />
-          <svg className="area-svg" width={pyramid.width} height={pyramid.height} viewBox={`0 0 ${pyramid.width} ${pyramid.height}`}>
-            {!hidden && (people.data?.regions ?? []).map((r, k) => r.kind === INCLUDE
-              ? <path key={k} d={ringsPath(r.rings)} fill="rgb(34 197 94 / 10%)" fillRule="evenodd" stroke={CLEARED.colour} strokeWidth={2 * unit} strokeDasharray={`${7 * unit} ${5 * unit}`} />
-              : <path key={k} d={ringsPath(r.rings)} fill="none" fillRule="evenodd" stroke={colourOf(r.kind)} strokeWidth={2.2 * unit} />)}
+          <svg className="area-svg" width={pyramid.width} height={pyramid.height} viewBox={`0 0 ${pyramid.width} ${pyramid.height}`} data-unit={unit}>
             <circle ref={cursor} r={0} fill="none" style={{ display: 'none' }} />
           </svg>
         </>

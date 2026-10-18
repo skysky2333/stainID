@@ -34,7 +34,7 @@ class JobManager:
                 if job.status == "queued" and project is not None:  # waiting under the old queue: the shared queue runs it now
                     try:
                         self.scheduler.submit_step(project, job.workflow, job.options)
-                    except KeyError:
+                    except (KeyError, ValueError):
                         pass
                     old.path(job.id).unlink(missing_ok=True)
                     continue

@@ -222,6 +222,39 @@ def test_old_labels_count_by_position_and_training_reads_the_store(rounds_projec
     assert names == ["context_dab_mean"] and features[0]["context_dab_mean"] == pytest.approx(0.65) and features[0]["tma"] == "1"
 
 
+def test_one_key_and_one_count_for_training_and_the_rounds(rounds_project):
+    """A candidate's labels count together whatever field or position they were made at (`store.object_keys`: the
+    candidate id, the position only where none is named; old labels matched onto it), one per person (the latest), and
+    training's truth (`decisions.consensus`) and the rounds' call (`decisions.state`) come from the one count."""
+    from stainid.labels import frames, store
+    from stainid.sampling.tiles import known_tiles
+
+    _, _, rows = rounds_project
+    project = state.get_state().project
+    tiles = known_tiles(project)
+    cid = rows[0]["candidate_id"]  # at (400, 400): (228, 228) in the first field's picture
+    label = {"stain": "6E10", "task": "class", "session": ""}
+    store.append(project.output("reviews"), [
+        {**label, "id": "class:a", "source": "Ann", "tile_id": TILE, "x": 228.0, "y": 228.0, "value": "plaque", "subtype": "diffuse",
+         "candidate": cid, "time": 1.0},
+        {**label, "id": "class:b", "source": "Ben", "tile_id": OTHER, "x": 5.0, "y": 5.0, "value": "plaque", "subtype": "diffuse",
+         "candidate": cid, "time": 2.0},  # seen from the other field: another position, the same candidate
+        {**label, "id": "class:c", "source": "import: old", "tile_id": TILE, "x": 229.5, "y": 227.0, "value": "CAA", "time": 3.0},  # no id: by position
+        {**label, "id": "class:d", "source": "Ann", "tile_id": TILE, "x": 231.0, "y": 228.0, "value": "plaque", "subtype": "compact",
+         "candidate": cid, "time": 4.0},  # Ann again: her latest counts
+    ])
+    labels = frames.in_field_frame(store.current(project.output("reviews")), tiles, project.context_px)
+    truth = decisions.consensus(project, "6E10", labels, tiles)
+    mine = truth[truth.candidate == cid]
+    assert len(mine) == 1 and len(truth) == 1
+    one = mine.iloc[0]
+    assert (one.n, one.value, one.subtype, one.sources) == (3, "plaque", "", "Ann, Ben, import: old")  # compact vs diffuse: split type
+    assert one.agreement == pytest.approx(2 / 3) and one.positive
+    decided = decisions.state(project, "6E10", tiles)
+    assert sorted(decided.by(cid)) == ["Ann", "Ben", "import: old"] and decided.calls[cid] == ("plaque", "")
+    assert store.consensus(labels, "6E10").pipe(lambda f: f[f.candidate == cid]).n.iloc[0] == 2  # unmatched, the old label stays its own object
+
+
 def test_a_store_can_be_made_from_the_pool_for_trying_the_rounds(rounds_project):
     from stainid.labels import pool
     from stainid.sampling.tiles import known_tiles
@@ -397,3 +430,33 @@ def test_the_admin_can_preview_the_tutorial_without_a_name(rounds_project):
     made = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "open": True, "tile_ids": [TILE]}).json()
     assert admin.get(f"/api/annotate/{made['name']}/fields/{TILE}").status_code == 401
     assert ann.get(f"/api/annotate/{made['name']}/fields/{TILE}").status_code == 200
+
+
+def test_the_labels_page_keys_objects_as_training_and_the_rounds_do(rounds_project):
+    """The Labels page's objects (`labels.objects`) use `store.object_keys` with the old labels matched onto candidates:
+    a label naming a candidate and an old label a few pixels off it are one object, and one person's two labels count
+    once (their latest), as in `decisions.consensus`."""
+    from stainid.labels import frames, objects, store
+
+    _, _, rows = rounds_project
+    project, tiles = state.get_state().project, state.get_state().tiles
+    target = rows[0]
+    tile = tiles[tiles.tile_id == TILE].iloc[0]
+    x0, y0 = frames.field_origin(tile, project.context_px)
+    x, y = float(target["x_core"]) - x0, float(target["y_core"]) - y0
+    store.append(project.output("reviews"), [
+        {"id": "a1", "source": "Ann", "stain": "6E10", "task": "class", "tile_id": TILE, "x": x, "y": y,
+         "candidate": target["candidate_id"], "value": "not a plaque", "time": 1.0},
+        {"id": "a2", "source": "Ann", "stain": "6E10", "task": "class", "tile_id": TILE, "x": x, "y": y,
+         "candidate": target["candidate_id"], "value": "plaque", "subtype": "compact", "time": 2.0},
+        {"id": "b1", "source": "Ben", "stain": "6E10", "task": "class", "tile_id": TILE, "x": x + 3, "y": y - 2,
+         "value": "plaque", "subtype": "compact", "time": 3.0}])
+    decisions.forget()
+    labels = store.current(project.output("reviews"))
+    found = objects.labelled(project, tiles, labels, "6E10")
+    assert len(found) == 1
+    one = found.iloc[0]
+    assert one.object == target["candidate_id"] and one.n == 2 and one.identity == "plaque" and one.subtype == "compact"
+    assert len(one.labels) == 3  # the history keeps every label
+    counted = decisions.consensus(project, "6E10", frames.in_field_frame(labels, tiles, project.context_px), tiles)
+    assert counted.object.tolist() == [one.object] and int(counted.n.iloc[0]) == one.n

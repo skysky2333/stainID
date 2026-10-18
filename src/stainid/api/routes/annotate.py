@@ -763,6 +763,7 @@ class Mark(BaseModel):
     png: str = ""  # round 2, task "exclude": the area marked as bad, painted (a PNG data URL at 1/`scale` of the field picture)
     pngs: dict[str, str] = {}  # … one painted mask per type (labels.exclusions.KINDS: "1"–"4", "include" for a cleared part)
     scale: float = 1.0
+    meta: dict | None = None  # where a label comes from: a split or merge (`labels.objectedit`)
 
 
 class Marks(BaseModel):
@@ -839,7 +840,8 @@ def next_item(name: str, request: Request, person: str = Depends(annotator), cou
     objects = pool.all_objects(state.project, meta["stain"])
     held = (state.id, name)
     items, remaining = sessions.next_objects(meta, objects, labels, person, min(20, max(1, count)),
-                                             queue_pictures.ready(state, meta["stain"], objects), _HELD.held(held), vocabulary(meta["stain"]))
+                                             queue_pictures.ready(state, meta["stain"], objects), _HELD.held(held), vocabulary(meta["stain"]),
+                                             _HELD.order(held, person))
     _HELD.hold(held, person, [i["key"] for i in items])
     pictures = queue_pictures.prepare(state, meta, objects, labels, first=pd.DataFrame(items, columns=["tile_id", "x", "y"]))
     return {"object": items[0] if items else None, "objects": items, "remaining": remaining, "pictures": pictures}

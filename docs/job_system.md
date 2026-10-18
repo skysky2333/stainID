@@ -25,41 +25,85 @@ points), `stainid.jobs.cli` (`stainid jobs …`), `stainid.api.jobs` (one projec
 
 ## How scheduling works
 
-The queue follows the batch schedulers people know (Slurm, Kubernetes): jobs declare resources and time, run side by
-side when they fit, and small ones flow around big ones without delaying them. Code: `stainid.jobs.policy` (rules),
-`stainid.jobs.arrays` (chunks), `Scheduler._schedule` (one round, about once a second).
+The queue is work-conserving: whenever processors, a GPU or memory are free and a waiting job fits, it starts,
+whatever its class. Nothing is reserved and no class is capped. Priority decides only the order in which jobs are
+looked at, and which jobs make room for which. Code: `Scheduler._schedule`, one round about once a second;
+`stainid.jobs.policy` holds sizes, estimates, conflicts and fair share; `stainid.jobs.arrays` holds the chunks.
 
-1. **Resources and size.** All jobs together share a budget: processors, GPUs, memory (default: this computer's
-   processors and GPUs, its memory less the 18 GB the app may take and 3 GB), at most 2 io-heavy jobs per disk and at
-   most 1 big public-dataset job at a time (`stainid jobs budget`, or `~/.stainid/queue/budget.json`:
-   `{"cpus": 24, "ram_gb": 30, "io_per_disk": 2, "caps": {"public": {"big": 1}}}`). Each job declares cpus, gpus,
-   ram, io (light or heavy) and network (`STEP_NEEDS` and `policy.IO_HEAVY` per step; `--cpus/--gpus/--ram/--io/--network`
-   on submit). Its run time is what it declared (`--time 2h`), else its units (tiles, core images × stains) × the time
-   per unit its step took before (this project's, then any project's, then a default), else how long the step took
-   when it last finished. Small = at most 4 processors, no GPU, 8 GB and 15 minutes; anything else is big. The Run
-   page shows "small · ~2 min" or "big · ~5 h".
-2. **Order.** By class, highest first; within a class the next job comes from the project (for annotation work: the
-   project and the person) with the fewest jobs running (fair share), then first in, first out.
-3. **Side by side.** A job starts as soon as what it needs is free (bin packing over processors, GPUs and memory).
-   Two jobs that write the same outputs never run at once: the same project, an output both make, overlapping stains
-   and core images (or shards), or a shared `--conflict` key; the later one waits. Readers overlap freely, and a step
-   waits for the steps whose outputs it reads (queued before it).
-4. **Backfill (EASY).** The first job of each class that does not fit gets a reservation: when it is expected to start
-   (the running jobs' expected ends, from their progress or estimates) and what will be left over then. A job further
-   down starts now only if it fits now and either ends before that time or uses only what is left over, so it never
-   delays the reserved job. A job without an estimate only uses what is left over.
-5. **Pre-emption.** When a job would fit once lower-class jobs stopped, those are asked to stop at their next unit
-   boundary, stopped hard (SIGTERM, then SIGKILL 30 s later) after their class's grace, and queued again at their
-   place. GPUs are handed out by index (`CUDA_VISIBLE_DEVICES`).
-6. **Arrays.** Find nuclei and the v2 proposals, calls and outlines over many core images run as a job array: one chunk
-   per TMA (a TMA of more than 200 core images in parts), or per 50 core images for image sets and slides, each the same
-   command with `--core <the chunk's list>` (`--array tma|N`, `--no-array`). Chunks run side by side when they fit, are
-   pre-empted one at a time, and have their own progress and estimate; the parent shows the overall progress, and
-   Pause, Resume, Cancel and Move act on all its chunks. A next stage's chunks wait for every chunk of the stage before.
+1. **Resources.**
+   - Each job declares cpus, gpus, ram, io (light or heavy) and network: `STEP_NEEDS` and `policy.IO_HEAVY` per step,
+     or `--cpus/--gpus/--ram/--io/--network` on submit.
+   - Processors and GPUs are the computer's (`stainid jobs budget --cpus 24` limits them, in
+     `~/.stainid/queue/budget.json`). A GPU that a program outside the queue uses (1.5 GB or more) is not handed out.
+   - At most 2 io-heavy jobs run per disk. A GPU job is held back by its GPU, not its disk.
+2. **Memory is measured.**
+   - Memory for jobs = the computer's total, less what the app uses now, less a 4 GB headroom for the app to grow, less
+     a 3 GB system reserve. On 53 GB with the app at 3 GB, that is 43 GB.
+   - A running job counts its highest measured memory plus 10%: its systemd unit's anonymous memory, without page
+     cache. Its declared value is only a floor until it has been measured for 2 minutes.
+   - A job also starts only while the memory available on the computer, less the headroom and 2 GB, holds what it
+     declared.
+   - The Run page and `stainid jobs list` show e.g. "RAM: 22 of 54 GB used · 25 free for jobs".
+3. **Order.**
+   - Classes go highest first.
+   - Within a class:
+     - jobs that have waited ready (held back only by room) for more than 30 minutes come first, oldest first;
+     - then light GPU jobs that fit a free GPU, so no GPU stays idle while one waits;
+     - then the others, taking turns between projects (and between people for annotation work), first in, first out.
+4. **All-or-nothing starts.**
+   - A job starts only when everything it needs is free at once, and it takes all of it in one step.
+   - That includes no running or earlier-queued job writing the same outputs. Writers of the same outputs are jobs of
+     the same project with an output in common and overlapping stains, core images or shards, or jobs sharing a
+     `--conflict` key. Readers overlap freely.
+   - A step also waits for the steps queued before it whose outputs it reads, and for its `--after` jobs.
+5. **Pre-emption is the only way to get room.**
+   - When the next job does not fit, it pauses the fewest jobs it outranks that make it fit: lowest class first, then
+     the largest holders of what it lacks. It outranks lower classes, and, once it has waited 30 minutes, newer jobs of
+     its own class that started after it was queued.
+   - They stop at their next unit boundary. After their class's grace they get SIGTERM, then SIGKILL 30 s later. They
+     are queued again, and they resume skipping their finished units.
+   - While they stop, what the job will take is not given to lower jobs. This lasts at most their grace, and it is how
+     Kubernetes treats a pre-empting pod's node.
+6. **Memory pressure.** When the memory available falls under the app's 4 GB headroom, the lowest-class jobs (largest
+   first) are paused at once, with at most 20 s to reach a boundary, before the kernel's out-of-memory killer acts. If
+   the app grows with many annotators, this is what keeps its headroom.
+7. **Arrays.**
+   - Find nuclei and the v2 proposals, calls and outlines over many core images run as a job array: one chunk per TMA
+     (a TMA of more than 200 core images in parts), or per 50 core images for image sets and slides.
+   - Each chunk is the same command with `--core <the chunk's list>`; `--array tma|N` and `--no-array` change the split.
+   - Chunks run side by side, are pre-empted one at a time, and have their own progress and estimate.
+   - The parent shows the overall progress, and Pause, Resume, Cancel and Move act on all its chunks.
+   - A next stage's chunks wait for every chunk of the stage before.
+8. **Size and time** are shown and never hold a job back.
+   - The run time is what was declared (`--time 2h`), else units × the step's time per unit in earlier runs, else how
+     long the step last took.
+   - Small = at most 4 processors, no GPU, 8 GB and 15 minutes; anything else is big. The Run page shows
+     "small · ~2 min" or "big · ~5 h".
 
-Work outside the queue counts too, looked at every 10 s: a job starts only while the computer has its memory free (plus
-2 GB), a GPU on which a program the queue did not start (not the app) uses 1.5 GB or more is not handed out, and the
-public and download classes start only while the load average leaves their processors spare.
+### Why it can't deadlock or starve
+
+- **No hold-and-wait.** A waiting job holds nothing; a job gets everything at once or nothing. Pausing releases
+  everything, including its conflict keys.
+- **Waits never form a cycle.** A job only ever waits for:
+  - running jobs, which end or are stopped within grace + 30 s;
+  - jobs queued before it (outputs it reads, writers of the same outputs);
+  - its `--after` jobs, which must exist when it is submitted, and a cycle is refused.
+  Every wait points backwards in time, so the waits-for graph is acyclic.
+- **Nothing waits forever.**
+  - A failed or stopped dependency ends its dependents ("Not started because “…” failed").
+  - A job that needs more than the computer has is refused at submit.
+- **No starvation.**
+  - The first job in priority order can always get room: every job it outranks can be paused.
+  - Jobs of its class or above end in finite time, and once it has waited 30 minutes, newer jobs of its own class
+    give way too.
+  - Ageing only lets older jobs pause newer ones, never back, so two jobs cannot keep pausing each other.
+- **Watchdog.** A job that has waited 15 minutes although what it needs is free, or is being freed, is logged
+  (`stainid.jobs`) and shown on the Run page and in `stainid jobs list`.
+- **Tests.** `tests/test_job_scheduling.py` checks:
+  - random mixes of jobs, classes, dependencies, conflicts and failures always drain;
+  - no job that fits stays waiting;
+  - an idle GPU gets a waiting public GPU job;
+  - a high job needing memory pauses the right low jobs, and they resume.
 
 ## Units: pause, resume, crash
 
@@ -110,7 +154,7 @@ stainid jobs list [--all] [--json]          stainid jobs show ID
 stainid jobs pause ID… | resume ID… | cancel ID…
 stainid jobs priority ID --up | --down | --top | --class public
 stainid jobs pause-all | resume-all         # the Run page's "Pause all background work"
-stainid jobs budget [--cpus N --gpus N --ram GB]
+stainid jobs budget [--cpus N --gpus N --ram GB]   # shows the real memory too
 stainid jobs serve                          # run the queue without the app
 ```
 

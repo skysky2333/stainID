@@ -20,7 +20,8 @@ export const ROUND_TEXT: Record<1 | 2, string> = {
 }
 /** What someone does on a round page, as the tutorial follows it. */
 export type RoundEvent = 'hover' | 'class' | 'subtype' | 'unsure' | 'remove' | 'undo' | 'mask' | 'add' | 'added' | 'precise-in' | 'precise-edit'
-  | 'precise-out' | 'save' | 'finish' | 'keep' | 'exclude' | 'overlays'
+  | 'precise-out' | 'save' | 'finish' | 'keep' | 'exclude' | 'overlays' | 'threshold' | 'start' | 'reset' | 'split-mode' | 'split-preview' | 'split'
+  | 'merge-mode' | 'merge-pick' | 'merge' | 'brush-size'
 export const LIVE_MS = 3000  // how often a round page renews its hold on the field and asks for the progress
 export const TIER_TEXT: Record<number, string> = {
   0: 'Shown because detection is unsure about it (its score is near the cut-off).',
@@ -262,6 +263,9 @@ export interface CandidateActions {
   onUnsure: () => void  // ` (or 0)
   onRemove: () => void  // Delete / Backspace: not an object (undoable)
   onMask: (bigger: boolean) => void  // Tab / + bigger, Shift+Tab / − smaller
+  /** Tab / Shift+Tab, + / −, while something else has a size (the brush: Tab smaller, Shift+Tab bigger): true when
+   *  it took the key, so the outline does not change */
+  onSize?: (bigger: boolean) => boolean
   onPrecise: () => void  // Space: precise editing in and out
   onUndo: () => void  // Z
   onEnter?: () => void  // round 1: keep detection's call; while drawing by hand: close the outline
@@ -279,10 +283,11 @@ export function useCandidateKeys(keys: KeyMap, actions: CandidateActions) {
     const onKey = (e: KeyboardEvent) => {
       const a = latest.current
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement).tagName) || e.metaKey || e.ctrlKey || e.altKey) return
-      if (e.key === 'Tab') { e.preventDefault(); a.onMask(!e.shiftKey); return }
-      if (e.key === '+' || e.key === '=') { a.onMask(true); return }
-      if (e.key === '-' || e.key === '_') { a.onMask(false); return }
+      if (e.key === 'Tab') { e.preventDefault(); if (a.onSize?.(e.shiftKey)) return; a.onMask(!e.shiftKey); return }
+      if (e.key === '+' || e.key === '=') { if (a.onSize?.(true)) return; a.onMask(true); return }
+      if (e.key === '-' || e.key === '_') { if (a.onSize?.(false)) return; a.onMask(false); return }
       if (e.repeat) return
+      if (e.key === 'Enter' && a.onEnter && !a.answering) { e.preventDefault(); a.onEnter(); return }  // with nothing under the mouse too
       if (e.key === ' ') { e.preventDefault(); a.onPrecise(); return }
       if (e.key === 'Escape') { a.onEscape?.(); return }
       if (e.key.toLowerCase() === 'z' && !keys.direct.z) { e.preventDefault(); a.onUndo(); return }

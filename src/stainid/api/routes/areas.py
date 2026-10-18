@@ -151,7 +151,7 @@ def core_payload(meta: dict, core_id: str, person: str) -> dict:
                        "edits": len(exclusions.edits(state.project, core_id, stain))})
     others = sorted(held().get(core_id, set()) - {person})
     return {"core_id": core_id, "images": images, "second_check": core_id in set(meta.get("second") or []), "open_by": others,
-            "progress": progress(meta)}
+            "progress": progress(meta), "pixel_size_um": state.project.pixel_size_um}
 
 
 @router.get("/annotate/{name}/areas/next")
@@ -249,6 +249,16 @@ def core_annotated(name: str, core_id: str, stain: str, request: Request, person
     if stain not in _core(meta, core_id):
         raise HTTPException(404, f"{core_id} has no {stain} image in this session")
     return store_view.people_areas(get_state().project, core_id, stain)
+
+
+@router.get("/annotate/{name}/cores/{core_id}/{stain}/areas")
+def core_areas(name: str, core_id: str, stain: str, request: Request, person: str = Depends(annotator)) -> dict:
+    """Each brush type's current area over the core image (`store_view.current_areas`, core px): what the brush starts
+    from, as on a field."""
+    meta = areas_meta(name, request)
+    if stain not in _core(meta, core_id):
+        raise HTTPException(404, f"{core_id} has no {stain} image in this session")
+    return store_view.current_areas(get_state().project, core_id, stain)
 
 
 @router.get("/annotate/{name}/cores/{core_id}/{stain}/objects")
@@ -421,6 +431,33 @@ def core_annotations(core_id: str, stain: str) -> dict:
     objects = [{**r, "outline_fixed": outlines.get(r["candidate_id"], [])} for r in found.to_dict("records")]
     known = set(found.candidate_id) if len(found) else set()
     objects += [{"candidate_id": c, "core_id": core_id, "kind": "outline", "outline_fixed": v} for c, v in outlines.items() if c not in known]
-    return {"objects": objects, "added": added.to_dict("records"), "areas": store_view.people_areas(state.project, core_id, stain),
+    edits = compare.object_edits(state.project, stain, state.tiles, core_id)
+    return {"objects": objects, "added": added.to_dict("records"), "areas": store_view.people_areas(state.project, core_id, stain), "edits": edits,
             "counts": {**{k: int((found.kind == k).sum()) if len(found) else 0 for k in compare.KINDS}, "added": int(len(added)),
-                       "outline_fixed": len(outlines)}}
+                       "outline_fixed": len(outlines), "split": sum(e["kind"] == "split" for e in edits),
+                       "merge": sum(e["kind"] == "merge" for e in edits)}}
+
+
+@router.get("/cores/{core_id}/{stain}/threshold-preview", dependencies=admin)
+def threshold_preview(core_id: str, stain: str) -> dict:
+    """What the Cores view's acceptance-threshold slider needs (a preview only: never saved, the analysis keeps
+    detection's threshold): detection's threshold and, per candidate, its score and the call it would get if it passed
+    (`labels.starting.if_accepted`, label-class ids; empty where a rule decides it whatever the threshold)."""
+    from stainid import candidates  # noqa: PLC0415
+    from stainid.labels import candidate_store, starting  # noqa: PLC0415
+    from stainid.labels import vocabulary as vocab  # noqa: PLC0415
+
+    project = get_state().project
+    frame = candidates.read_core(project, stain, core_id, ["candidate_id", "probability", "threshold", "reason"])
+    if frame.empty:
+        return {"detection": None, "columns": [], "rows": []}
+    words = vocab.of(project, stain)
+    passing = starting.if_accepted(project, stain, core_id)
+    thresholds = pd.to_numeric(frame.threshold, errors="coerce").dropna() if "threshold" in frame else pd.Series(dtype=float)
+    rows = []
+    for r in frame.itertuples(index=False):
+        would = passing.get(r.candidate_id) if r.reason in starting.SCORED else None
+        identity, subtype = candidate_store.ai_call(words, "accepted", *would) if would is not None else ("", "")
+        rows.append([r.candidate_id, None if pd.isna(r.probability) else round(float(r.probability), 3), identity, subtype])
+    return {"detection": float(thresholds.median()) if len(thresholds) else None, "columns": ["candidate_id", "probability", "identity", "subtype"],
+            "rows": rows}

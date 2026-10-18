@@ -49,6 +49,26 @@ def test_people_labelling_at_once_get_different_objects_while_there_are_any():
     assert held.held("q") == {}
 
 
+def test_pictures_finishing_meanwhile_change_neither_what_is_on_screen_nor_who_gets_what():
+    """Pictures are cut in the background, so which are ready changes between two requests; that must not hand someone
+    else's objects out, nor reorder the ones already on a person's screen."""
+    held = sessions.Reservations()
+    objects, labels = _objects(12), _labels()
+    ann, _ = sessions.next_objects(QUEUE, objects, labels, "Ann", 5, ready=pd.Series([False] * 12), held=held.held("q"))
+    held.hold("q", "Ann", [i["key"] for i in ann])
+    ready = pd.Series(objects.index.isin([round(i["x"] / 10) for i in ann[2:]]))  # Ann's later pictures are made first
+    ben, _ = sessions.next_objects(QUEUE, objects, labels, "Ben", 5, ready=ready, held=held.held("q"))
+    held.hold("q", "Ben", [i["key"] for i in ben])
+    assert not {i["key"] for i in ben} & {i["key"] for i in ann}
+    again, _ = sessions.next_objects(QUEUE, objects, labels, "Ann", 5, ready=ready, held=held.held("q"), handed=held.order("q", "Ann"))
+    assert [i["key"] for i in again] == [i["key"] for i in ann]
+    held.hold("q", "Ann", [i["key"] for i in again])  # handed again: renewed in place
+    held.release("q", "Ann", [ann[0]["key"]])
+    after, _ = sessions.next_objects(QUEUE, objects, _labels(("Ann", ann[0]["x"])), "Ann", 5, ready=~ready, held=held.held("q"),
+                                     handed=held.order("q", "Ann"))
+    assert [i["key"] for i in after][:4] == [i["key"] for i in ann[1:]] and not {i["key"] for i in after} & {i["key"] for i in ben}
+
+
 def test_objects_with_their_picture_ready_come_first_then_fewest_labels():
     objects = _objects(6)
     ready = pd.Series([False, False, True, False, True, False])

@@ -13,7 +13,7 @@ import pandas as pd
 
 from stainid import cache
 from stainid import exclusions as excluded_areas
-from stainid.labels import added, candidate_store, compare, frames, pool, store
+from stainid.labels import added, candidate_store, compare, decisions, frames, pool, store
 from stainid.labels import vocabulary as vocab
 from stainid.labels.tasks import positive
 from stainid.project import Project
@@ -92,7 +92,7 @@ def stain_overview(project: Project, stain: str, labels: pd.DataFrame, tiles: pd
     mine = labels[labels.stain == stain]
     reviewed = store.reviewed_fields(labels, stain)
     vocabulary = vocab.of(project, stain)
-    consensus = store.consensus(labels, stain, vocabulary)
+    consensus = decisions.consensus(project, stain, labels, tiles)  # by candidate, as training counts
     objects = pool.all_objects(project, stain)
     prepared = pool.prepared(project, stain)
     on_store = candidate_store.cores(project, stain)

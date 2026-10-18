@@ -11,6 +11,7 @@ import { Advanced } from '../setup/parts'
 import { CLASS_STYLE, RASTER_LAYERS } from '../viewer'
 import { INACTIVE_GREY, MODEL_CLASSES, UNSURE_AMBER, classColour } from '../classPalette'
 import type { Vocabulary } from '../labels/classKeys'
+import { ThresholdSlider } from '../labels/threshold'
 
 interface CoreInfo extends CoreDetail {
   images: (CoreDetail['images'][number] & { pixel_width_um?: number })[]
@@ -42,9 +43,19 @@ interface AddedObject { person: string; time: number; identity: string; subtype:
 /** People's painted (types "1"–"4") and cleared ("include") areas: rings in core px, the first outer, the rest holes. */
 interface PeopleArea { kind: string; rings: number[][][] }
 interface AreaAgreement { cells_people_excluded: number; cells_auto_excluded: number; cells_both: number; cleared_auto_cells: number; painted_new_cells: number; cells_analysed?: number; f1: number | null }
+/** A split or merge people made (labels/objectedit.py): the objects it replaced and the new ones (core px). Object
+ *  labels only: detection's objects stay what the analysis counts. */
+interface ObjectEdit {
+  kind: 'split' | 'merge'; person: string; time: number; core_id: string
+  originals: { candidate_id: string | null; x_core: number; y_core: number }[]
+  pieces: { identity: string; subtype: string; x_core: number; y_core: number; points: number[][] | null }[]
+}
+/** The Cores view's preview of the acceptance threshold (GET …/threshold-preview, labels/starting.py): per candidate
+ *  its score and the call it would get if it passed ("" where a rule decides it). Never saved. */
+interface ThresholdPreview { detection: number | null; rows: [string, number | null, string, string][] }
 interface CoreAnnotations {
-  objects: AnnotatedObject[]; added: AddedObject[]
-  counts: { agree: number; changed: number; rejected: number; unsure: number; added: number; outline_fixed: number }
+  objects: AnnotatedObject[]; added: AddedObject[]; edits?: ObjectEdit[]
+  counts: { agree: number; changed: number; rejected: number; unsure: number; added: number; outline_fixed: number; split?: number; merge?: number }
   areas?: { regions: PeopleArea[]; agreement: AreaAgreement | null; edits: { person: string; time: number; kinds: string[] }[] }
 }
 /** The review status of a core image's tiles (GET …/status, labels/status.py: the reader the Labels page uses too). */
@@ -113,7 +124,7 @@ const REASON_TEXT: Record<string, string> = {
 const reasonText = (code: string) => REASON_TEXT[code] ?? code.replace(/^rule:/, '').replace(/_/g, ' ')
 /** The colours of people's areas (the brush's, labels/brush.ts EXCLUDE_TYPES), and of a part they marked as fine. */
 const AREA_COLOURS: Record<string, string> = { '1': '#ffb000', '2': '#a855f7', '3': '#9ca3af', '4': '#00e5ff', include: '#22c55e' }
-const AREA_NAMES: Record<string, string> = { '1': 'fold or tissue damage', '2': 'artifact', '3': 'no tissue', '4': 'out of focus or bad staining', include: 'marked fine' }
+const AREA_NAMES: Record<string, string> = { '1': 'fold or tissue damage', '2': 'artifact', '3': 'no tissue', '4': 'out of focus or bad staining', include: 'taken out of a type (marked fine)' }
 /** The tile states of the minimap, with their fills. */
 const TILE_STATES: { id: TileState | 'not_analysed'; label: string; fill: string }[] = [
   { id: 'reviewed', label: 'reviewed', fill: 'rgb(34 197 94 / 45%)' },
@@ -249,6 +260,13 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
   const layout = useRef<HTMLDivElement>(null)
   const fit = useFitWindow(layout, !!ready)
 
+  // the acceptance-threshold preview: what would be accepted at another threshold (never saved; resets on reload)
+  const [previewOn, setPreviewOn] = useState(false)
+  const preview = useFetch<ThresholdPreview>(previewOn && found.data?.source === 'v2' ? `${base}/threshold-preview` : null)
+  const [previewAt, setPreviewAt] = useState<number | null>(null)
+  const detectionAt = preview.data?.detection ?? null
+  const previewValue = previewOn && detectionAt != null ? previewAt ?? detectionAt : null
+  const would = useMemo(() => new Map((preview.data?.rows ?? []).map(([id, p, identity, subtype]) => [id, { p, identity, subtype }])), [preview.data])
   const objects = useMemo<Found[]>(() => {
     const data = found.data
     if (!data) return []
@@ -258,8 +276,17 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
       color: objectColor(vocabulary, String(r[col.model_class]), col.class === undefined ? undefined : String(r[col.class] ?? '')),
       p: r[col.probability] === null ? null : Number(r[col.probability]), area: r[col.area_um2] === null ? null : Number(r[col.area_um2]),
       outline: outlines.get(`${r[col.x]},${r[col.y]}`), reason: col.reason === undefined ? undefined : String(r[col.reason] ?? ''),
-      candidate: col.candidate_id === undefined ? undefined : String(r[col.candidate_id] ?? '') }))
-  }, [found.data, shapes.data, vocabulary])
+      candidate: col.candidate_id === undefined ? undefined : String(r[col.candidate_id] ?? '') })).map((o) => {
+      if (previewValue == null || detectionAt == null || Math.abs(previewValue - detectionAt) < 1e-9 || !o.candidate) return o
+      const w = would.get(o.candidate)
+      if (!w || !w.identity || w.p == null) return o  // a rule decides it: as detection called it
+      if (w.p < previewValue) return { ...o, cls: 'rejected', color: INACTIVE_GREY }
+      if (o.cls !== 'rejected') return o
+      const cls = Object.entries(MODEL_CLASSES).find(([, [id, type]]) => id === w.identity && (type || '') === (w.subtype || ''))?.[0]
+        ?? Object.entries(MODEL_CLASSES).find(([, [id]]) => id === w.identity)?.[0] ?? w.identity
+      return { ...o, cls, color: vocabulary ? classColour(vocabulary, w.identity, w.subtype || null) : objectColor(vocabulary, cls) }
+    })
+  }, [found.data, shapes.data, vocabulary, previewValue, detectionAt, would])
   const colorOfClass = useMemo(() => Object.fromEntries(objects.map((o) => [o.cls, o.color])), [objects])
   const counts = useMemo(() => objects.reduce<Record<string, number>>((acc, o) => ({ ...acc, [o.cls]: (acc[o.cls] ?? 0) + 1 }), {}), [objects])
   const classes = Object.keys(counts).filter((c) => c !== 'rejected').sort()
@@ -308,6 +335,14 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
       out.push({ x: a.x_core + at, y: a.y_core - at, color, rings: [plus(a.x_core + at, a.y_core - at, arm)], circle: false })
       about.push({ added: a }, { added: a })
     }
+    for (const edit of notes.edits ?? []) {  // a split or merge: a badge on each object it replaced
+      for (const o of edit.originals) {
+        const at = o.candidate_id ? objectOf.get(o.candidate_id) : undefined
+        const x = at?.x ?? o.x_core, y = at?.y ?? o.y_core, r = at?.r ?? 8
+        out.push({ x: x - r * 0.8, y: y - r * 0.8, r: Math.max(2.5, r * 0.3), color: EDIT_COLOUR, dashed: edit.kind === 'merge', circle: true })
+        about.push({ edit, at })
+      }
+    }
     for (const area of notes.areas?.regions ?? []) {
       if (!area.rings.length || !area.rings[0].length) continue
       out.push({ x: area.rings[0][0][0], y: area.rings[0][0][1], color: AREA_COLOURS[area.kind] ?? '#ffffff', dashed: area.kind === 'include',
@@ -325,7 +360,7 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
   const pick = drawn.find((o) => o.index === selected) ?? null
 
   // pointing at an object with an outline someone fixed: their outline, thin and dashed, beside detection's (never instead)
-  const [fixed, setFixed] = useState<{ points: number[][]; color: string } | null>(null)
+  const [fixed, setFixed] = useState<{ points: number[][]; color: string; more?: number[][][] } | null>(null)
   const peopleLines = (a: AnnotatedObject) => [
     `Detection: ${className(vocabulary, a.detection_identity, a.detection_subtype)}`,
     ...(a.people ?? []).map((p) => `Annotator (${p.person}, ${day(p.time)}): ${p.role === 'skip' ? 'unsure' : className(vocabulary, p.identity, p.subtype)}`),
@@ -351,6 +386,13 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
     setFixed(null)
     if (about?.added) return `+ Added by ${about.added.person} (${day(about.added.time)}): ${className(vocabulary, about.added.identity, about.added.subtype)} — detection missed it`
     if (about?.area) return `People’s area: ${AREA_NAMES[about.area.kind] ?? about.area.kind}`
+    if (about?.edit) {  // pointing at a split or merged object: the people's outlines of the new objects
+      const shapes = about.edit.pieces.flatMap((q) => (q.points && q.points.length >= 3 ? [q.points] : []))
+      if (shapes.length) setFixed({ points: shapes[0], more: shapes.slice(1), color: EDIT_COLOUR })
+      const what = about.edit.kind === 'split' ? `Split in ${about.edit.pieces.length} by ${about.edit.person}` : `Merged (${about.edit.originals.length} into one) by ${about.edit.person}`
+      return [`${what} (${day(about.edit.time)})`, ...about.edit.pieces.map((q) => `→ ${className(vocabulary, q.identity, q.subtype)}`),
+        'A label: detection’s objects stay what the analysis counts'].join('\n')
+    }
     return ''
   }
   const go = (x: number, y: number, scale?: number) => setTarget((t) => ({ x, y, scale, key: (t?.key ?? 0) + 1 }))
@@ -387,7 +429,8 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
         ) : (
           <Preparing core={core} stain={stain} state={picture.data} error={picture.error} />
         )}
-        {!hidden && fixed && viewRect && <FixedOutlineHint box={pictureBox.current} view={viewRect} points={fixed.points} color={fixed.color} />}
+        {!hidden && fixed && viewRect && [fixed.points, ...(fixed.more ?? [])].map((points, i) => (
+          <FixedOutlineHint key={i} box={pictureBox.current} view={viewRect} points={points} color={fixed.color} />))}
       </div>
       <div className="core-side">
         <Minimap core={core.core_id} stain={stain} status={status} view={viewRect}
@@ -423,6 +466,18 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
           {(found.data?.tiles.length ?? 0) > 0 && <label className="layer-toggle"><input type="checkbox" checked={layers.tiles} onChange={() => toggle('tiles')} />
             <span className="swatch outline dashed" />Tile grid ({found.data!.tiles.length} tiles analysed)</label>}
         </div>
+        {found.data?.source === 'v2' && (
+          <div className="card threshold-preview">
+            <label className="layer-toggle"><input type="checkbox" checked={previewOn} onChange={() => { setPreviewOn(!previewOn); setPreviewAt(null) }} />
+              <b>Acceptance threshold</b></label>
+            {previewOn && (detectionAt == null ? (preview.data ? <p className="small muted">No detection threshold stored for this core.</p> : <Loading inline label="Loading…" />) : <>
+              <ThresholdSlider value={previewValue ?? detectionAt} detection={detectionAt} onChange={setPreviewAt} label="What would be accepted at" />
+              <p className="small" style={{ margin: '4px 0' }}>{(objects.length - objects.filter((o) => o.cls === 'rejected').length).toLocaleString()} accepted
+                at {(previewValue ?? detectionAt).toFixed(2)}</p>
+              <p className="small warning-text" style={{ margin: 0 }}>Preview only — the analysis uses detection’s threshold.</p>
+            </>)}
+          </div>
+        )}
         {pick && (
           <div className="card">
             <h3>Selected object</h3>
@@ -459,7 +514,8 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
 }
 
 /** What a mark of the Annotations layer is about (for its tooltip and for clicking it). */
-interface AnnotationMark { object?: AnnotatedObject; at?: Found; added?: AddedObject; area?: PeopleArea }
+interface AnnotationMark { object?: AnnotatedObject; at?: Found; added?: AddedObject; area?: PeopleArea; edit?: ObjectEdit }
+const EDIT_COLOUR = '#f472b6'  // the badge of a split (solid) or merged (dashed) object
 
 /** The page fits the window (no scrolling): the square picture takes the height left below the page's head, the side
  *  panel scrolls within the same height. Measured, so the head's height (wrapping, a note) does not matter; nothing on a

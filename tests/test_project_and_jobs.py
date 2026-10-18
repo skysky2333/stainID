@@ -71,9 +71,12 @@ def test_queue_respects_step_order_and_the_budget(tmp_path, monkeypatch):
     assert "Find nuclei" in neun.waiting and "Find nuclei" in fields.waiting and "Nuclei" in fields.waiting
     assert nuclei.gpus == [0]
     nuclei.status = "finished"
-    scheduler._schedule()  # NeuN takes all 8 processors: plaques and tau wait for room, the outlines for NeuN
-    assert neun.status == "running" and fields.status == "queued" and "processors" in fields.waiting
+    scheduler._schedule()  # the GPU is free: plaques and tau (a light GPU job) go first; NeuN needs all 8 processors and waits
+    assert fields.status == "running" and neun.status == "queued" and "processors" in neun.waiting
     assert masks.status == "queued" and "Detect NeuN" in masks.waiting
+    fields.status = "finished"
+    scheduler._schedule()
+    assert neun.status == "running"
 
 
 def test_failed_step_skips_what_waits_for_it_and_missing_inputs_are_reported(tmp_path, monkeypatch):

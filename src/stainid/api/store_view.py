@@ -259,6 +259,48 @@ def field_excluded(project, tile: dict) -> tuple[dict, bytes | None]:
     return info, _picture(project, core_id, stain, layer, window)
 
 
+PAINTED_TYPES = ("1", "2", "3", "4")  # the types the brush paints (labels.exclusions.KINDS)
+
+
+def field_areas(project, tile: dict) -> dict:
+    """Each brush type's current area over a field (`current_areas`), placed in the field picture's pixels."""
+    from stainid.labels import frames  # noqa: PLC0415
+
+    x0, y0 = frames.field_origin(tile, project.context_px)
+    x1, y1 = int(tile["x_px"]) + int(tile["width_px"]) + project.context_px, int(tile["y_px"]) + int(tile["height_px"]) + project.context_px
+    return current_areas(project, str(tile["core_id"]), str(tile["stain"]), (x0, y0, x1, y1))
+
+
+def current_areas(project, core_id: str, stain: str, box: tuple[int, int, int, int] | None = None) -> dict:
+    """Each brush type's current area, as the one brush (field tool and "Mark bad areas") starts from it: detection's
+    area of that type with every edit people saved merged in (`exclusions.final_say`, one region set per type), a
+    white-on-transparent PNG per type (data URL, one pixel per layer cell) and where it lies (`x`, `y`, `width`,
+    `height`, in px from the box's corner: the whole core image without a box). The brush adds to and takes from these
+    areas; nothing here is an analysis input."""
+    import base64  # noqa: PLC0415
+
+    import cv2  # noqa: PLC0415
+
+    layer = excluded_areas.final_say(project, core_id, stain)
+    if layer is None:
+        return {"status": "not_made", "kinds": {}}
+    x0, y0, x1, y1 = box if box is not None else (0, 0, layer.codes.shape[1] * layer.scale, layer.codes.shape[0] * layer.scale)
+    window = _cells(layer, x0, y0, x1, y1)
+    codes = layer.codes[window]
+    kinds = {}
+    for kind in PAINTED_TYPES:
+        cells = codes == int(kind)
+        if not cells.any():
+            continue
+        rgba = np.zeros((*codes.shape, 4), np.uint8)
+        rgba[cells] = 255
+        ok, png = cv2.imencode(".png", rgba)
+        if ok:
+            kinds[kind] = "data:image/png;base64," + base64.b64encode(png.tobytes()).decode()
+    return {"status": "done", "scale": layer.scale, "x": window[1].start * layer.scale - x0, "y": window[0].start * layer.scale - y0,
+            "width": codes.shape[1] * layer.scale, "height": codes.shape[0] * layer.scale, "version": layer.digest, "kinds": kinds}
+
+
 def people_areas(project, core_id: str, stain: str, origin: tuple[int, int] = (0, 0),
                  box: tuple[float, float, float, float] | None = None) -> dict:
     """People's areas of a core image for the Annotations layers (`stainid.exclusions.annotated`; they train and evaluate

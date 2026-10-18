@@ -23,7 +23,7 @@ from sklearn.model_selection import LeaveOneGroupOut, StratifiedGroupKFold
 from sklearn.pipeline import make_pipeline
 
 from stainid import exclusions as excluded_areas
-from stainid.labels import added, candidate_store, frames, pool, store, vocabulary
+from stainid.labels import added, candidate_store, decisions, frames, pool, store
 from stainid.labels import sessions as label_sessions
 from stainid.labels.tasks import MODEL_KEY
 from stainid.project import Project, save_project
@@ -48,7 +48,7 @@ def labelled(project: Project, stain: str, sessions: list[str] | None = None) ->
     counts = added.measure(project, stain)
     if any(counts.values()):
         print(f"measured {counts['measured']} object(s) people added; {counts['could_not_be_measured']} could not be measured", flush=True)
-    truth = store.consensus(label_sessions.in_sessions(labels, sessions), stain, vocabulary.of(project, stain))
+    truth = decisions.consensus(project, stain, label_sessions.in_sessions(labels, sessions), known_tiles(project))  # by candidate
     truth = truth[truth.positive.notna()]
     names = pool.feature_names(project, stain)
     tiles = known_tiles(project)

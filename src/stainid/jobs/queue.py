@@ -28,7 +28,9 @@ and queues again the ones a reboot ended. Without systemd (macOS, tests) they ru
 from __future__ import annotations
 
 import fcntl
+import functools
 import json
+import logging
 import os
 import shutil
 import signal
@@ -37,7 +39,7 @@ import sys
 import threading
 import time
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from stainid.jobs import ACTIVE, APP, COMMAND_LINE, JOB_ENV, Job, JobStore, alive, new_id, policy, stop
@@ -53,7 +55,16 @@ CLASS_TITLES = {"annotation": "Annotation and area edits", "pipeline": "Main-stu
 WEIGHTS = {"annotation": (0, 400, 400), "pipeline": (5, 100, 100), "models": (10, 50, 50), "public": (15, 20, 20), "downloads": (19, 10, 10)}
 GRACE = {"annotation": 300.0, "pipeline": 300.0, "models": 120.0, "public": 30.0, "downloads": 10.0}  # seconds to reach a unit boundary
 COMMAND_GRACE = 30.0
-OUTSIDE_RAM_MARGIN_GB = 2.0  # memory left free on the computer when a job starts
+OUTSIDE_RAM_MARGIN_GB = 2.0  # memory left free on the computer when a job starts, on top of the app's headroom
+APP_HEADROOM_GB = 4.0  # kept free for the web app to grow into (many annotators); below it the queue pauses jobs at once
+SYSTEM_RESERVE_GB = 3.0  # for the system and the desktop
+RAM_WARMUP_S = 120.0  # a job that started less than this ago counts what it declared (its memory is still growing)
+RAM_FLOOR_GB = 0.5  # the least a running job counts
+RAM_MARGIN = 1.1  # a running job counts its highest measured memory and this much more
+PRESSURE_GRACE = 20.0  # seconds a job paused for memory pressure has to reach a unit boundary
+AGE_S = 1800.0  # a job waiting this long goes ahead of its class's newer jobs and may pre-empt newer ones of its class
+WATCHDOG_S = 900.0  # a job waiting this long although what it needs is (or can be made) free is reported
+MEMORY_EVERY = 3.0  # seconds between two looks at the memory
 OUTSIDE_GPU_MB = 1500  # a GPU on which a program the queue did not start uses this much memory counts as busy
 KILL_AFTER = 30.0  # seconds from the polite stop (SIGTERM) to SIGKILL
 MAX_ATTEMPTS = 5  # runs that vanished without an exit code (reboot, killed) before the job is given up
@@ -74,6 +85,9 @@ STEP_NEEDS = {
     "train": {"cpus": 4, "ram_gb": 6}, "score_segmentation": {"cpus": 2, "ram_gb": 4},
 }
 EXEC_NEEDS = {"cpus": 2, "ram_gb": 4}
+
+
+LOG = logging.getLogger("stainid.jobs")
 
 
 def _in_queue(pid: int) -> bool:
@@ -97,7 +111,7 @@ class Budget:
     gpus: int
     ram_gb: float
     io_per_disk: int = policy.IO_PER_DISK  # io-heavy jobs at once on one disk
-    caps: dict = field(default_factory=lambda: {k: dict(v) for k, v in policy.DEFAULT_CAPS.items()})  # class -> {"big": n}
+    ram_cap: float | None = None  # a limit set by hand (`stainid jobs budget --ram`); else the memory follows the computer
 
     def fits(self, need: dict, used: dict) -> bool:
         return all(used.get(k, 0) + need.get(k, 0) <= getattr(self, k) + 1e-9 for k in ("cpus", "gpus", "ram_gb"))
@@ -107,6 +121,7 @@ class Budget:
         return {**need, **{k: min(need.get(k, 0), getattr(self, k)) for k in ("cpus", "gpus", "ram_gb")}}
 
 
+@functools.lru_cache(maxsize=1)
 def _gpu_count() -> int:
     if sys.platform == "darwin":
         return 1  # the Apple GPU
@@ -119,6 +134,7 @@ def _gpu_count() -> int:
     return sum(line.startswith("GPU ") for line in found.splitlines())
 
 
+@functools.lru_cache(maxsize=1)
 def _memory_gb() -> float:
     try:
         with open("/proc/meminfo") as handle:
@@ -127,16 +143,15 @@ def _memory_gb() -> float:
         return 16.0
 
 
-APP_RESERVE_GB = 18.0  # what the web app may take (its own cap), kept out of the jobs' budget
-
-
 def default_budget() -> Budget:
-    return Budget(float(os.cpu_count() or 2), _gpu_count(), max(4.0, round(_memory_gb() - APP_RESERVE_GB - 3, 1)))
+    """This computer's processors and GPUs; its memory less the system's reserve and the app's headroom (while the queue
+    runs, the memory follows what the app and other programs use: `Scheduler.current_budget`)."""
+    return Budget(float(os.cpu_count() or 2), _gpu_count(), max(4.0, round(_memory_gb() - SYSTEM_RESERVE_GB - APP_HEADROOM_GB - 3, 1)))
 
 
 def load_budget(directory: Path) -> Budget:
-    """`budget.json` in the queue folder ({"cpus": 24, "gpus": 2, "ram_gb": 30, "io_per_disk": 2, "caps": {"public": {"big": 1}}},
-    any of them), else this computer's."""
+    """`budget.json` in the queue folder ({"cpus": 24, "gpus": 2, "ram_gb": 30, "io_per_disk": 2}, any of them), else this
+    computer's. A memory limit given there caps the memory that otherwise follows the computer."""
     budget = default_budget()
     try:
         saved = json.loads((directory / "budget.json").read_text())
@@ -145,8 +160,8 @@ def load_budget(directory: Path) -> Budget:
     for key in ("cpus", "gpus", "ram_gb", "io_per_disk"):
         if isinstance(saved.get(key), (int, float)):
             setattr(budget, key, type(getattr(budget, key))(saved[key]))
-    if isinstance(saved.get("caps"), dict):
-        budget.caps = {k: dict(v) for k, v in saved["caps"].items() if isinstance(v, dict)}
+    if isinstance(saved.get("ram_gb"), (int, float)):
+        budget.ram_cap = float(saved["ram_gb"])
     return budget
 
 
@@ -319,6 +334,12 @@ class Scheduler:
         self._budget, self._launcher = budget, launcher
         self._handle = None
         self._stops: dict[str, tuple[str, float]] = {}  # job id -> (how far its hard stop has got, when)
+        self._ram_seen: dict[str, tuple] = {}  # job id -> (its start, highest measured GB, latest measured GB)
+        self._memory: tuple[float, dict] = (0.0, {})
+        self._urgent: set[str] = set()  # jobs asked to stop for memory pressure (short grace)
+        self._making_room: dict[str, float] = {}  # job id -> since when lower-priority jobs pause to make room for it
+        self.alerts: dict[str, str] = {}  # job id -> why the watchdog reports it
+        self._ready_since: dict[str, float] = {}  # queued job id -> since when nothing but room holds it back (ageing)
         self._thread: threading.Thread | None = None
         self._closed = False
         self.wants_lead = lead
@@ -456,8 +477,45 @@ class Scheduler:
 
     # -- submitting
 
-    def submit(self, job: Job) -> Job:
-        """Add a job (any process may: a new record is never written by two processes)."""
+    def check(self, job: Job) -> None:
+        """Refuse a job that could never run: one that needs more than this computer has, or that waits for a job that
+        does not exist or (through others) for itself."""
+        need, most = policy.counted(job_needs(job)), self.machine()
+        names = {"cpus": "processors", "gpus": "GPUs", "ram_gb": "GB of memory"}
+        over = [f"{need[k]:g} {names[k]} (this computer has {most[k]:g} for jobs)" for k in policy.KEYS if need[k] > most[k] + 1e-9]
+        if over:
+            raise ValueError("This job can never run: it needs " + ", ".join(over))
+        seen, todo = set(), list(job.after or [])
+        while todo:
+            other_id = todo.pop()
+            if other_id == job.id:
+                raise ValueError("--after: the jobs would wait for each other (a cycle)")
+            if other_id in seen:
+                continue
+            seen.add(other_id)
+            other = self.jobs.get(other_id) or self.store.load(self.store.path(other_id))
+            if other is None:
+                raise ValueError(f"--after: there is no job {other_id}")
+            todo += list(other.after or [])
+
+    def machine(self) -> dict:
+        """The most a job may ask for: the processors and GPUs of the budget, and the memory the jobs could have."""
+        budget = self.budget
+        ram = budget.ram_gb
+        if self.watch_outside:
+            memory = self.memory()
+            if memory.get("total_gb"):
+                ram = memory["total_gb"] - SYSTEM_RESERVE_GB - APP_HEADROOM_GB - memory.get("app_gb", 0.0)
+            if budget.ram_cap:
+                ram = min(ram, budget.ram_cap)
+        return {"cpus": budget.cpus, "gpus": budget.gpus, "ram_gb": ram}
+
+    def submit(self, job: Job, checked: bool = False) -> Job:
+        """Add a job (any process may: a new record is never written by two processes). Raises ValueError for a job
+        that could never run (`check`)."""
+        if not checked:
+            with self.lock:
+                self.check(job)
         job.status = "queued"
         job.order = job.order or job.created or time.time()
         job.klass = job_class(job) if job.klass else "pipeline"
@@ -516,9 +574,10 @@ class Scheduler:
         parent.children = [c.id for c in children]
         parent.status = "queued"
         with self.lock:
+            self.check(parent)
             for child in children:
-                self.submit(child)
-            self.submit(parent)
+                self.submit(child, checked=True)
+            self.submit(parent, checked=True)
         return parent
 
     def submit_command(self, command: list[str], cwd: str, title: str, klass: str, needs: dict | None = None, project=None,
@@ -805,6 +864,9 @@ class Scheduler:
         request, job.request, job.requested_at = job.request, "", None
         self._control(job, "")
         self._stops.pop(job.id, None)
+        urgent = job.id in self._urgent
+        self._urgent.discard(job.id)
+        self._ram_seen.pop(job.id, None)
         for name in ("pid", "env"):
             Path(self.files(job)[name]).unlink(missing_ok=True)
         job.pid, job.unit = None, ""
@@ -816,7 +878,8 @@ class Scheduler:
         elif request in ("pause", "preempt", "all") or code == PAUSED:
             job.status = "queued" if request == "preempt" else "paused"
             job.paused_by = request or "user"
-            job.waiting = "Paused for higher-priority work: continues where it stopped once there is room" if request == "preempt" else ""
+            job.waiting = ("Paused to keep memory free: continues where it stopped once there is room" if urgent and request == "preempt"
+                           else "Paused for higher-priority work: continues where it stopped once there is room" if request == "preempt" else "")
             job.ended = None
         elif code is None:  # vanished without an exit code: the computer restarted, or its runner was killed
             job.attempts += 1
@@ -851,6 +914,8 @@ class Scheduler:
             stage, when = self._stops.get(job.id, ("", 0.0))
             # a command that is not a stainID step may not look at its control file: it gets at most COMMAND_GRACE
             grace = job.grace or (min(GRACE[job_class(job)], COMMAND_GRACE) if job.command else GRACE[job_class(job)])
+            if job.id in self._urgent:  # memory is running out: no time to wait for a long unit
+                grace = min(grace, PRESSURE_GRACE)
             if not stage and now - (job.requested_at or now) > grace:
                 self._hard_stop(job)
             elif stage == "term" and now - when > KILL_AFTER:
@@ -860,14 +925,87 @@ class Scheduler:
     # -- what to start
 
     def _used(self, running: list[Job]) -> tuple[dict, set[int]]:
+        """What the running jobs hold (their memory as measured, `_holds`) and the GPUs they have."""
         used = {"cpus": 0.0, "gpus": 0, "ram_gb": 0.0}
         gpus: set[int] = set()
         for job in running:
-            need = self.budget.clamp(job_needs(job))
+            held = self._holds(job)
             for key in used:
-                used[key] += 0 if key == "cpus" and need.get("network") else need.get(key, 0)
+                used[key] += held.get(key, 0)
             gpus |= set(job.gpus or [])
         return used, gpus
+
+    # -- memory
+
+    def memory(self) -> dict:
+        """This computer's memory (GB), looked at every few seconds: total, available, the app's, and each running job's
+        (its cgroup's anonymous memory, else the resident memory of its processes)."""
+        when, found = self._memory
+        if found and time.time() - when < MEMORY_EVERY:
+            return found
+        found = {}
+        try:
+            with open("/proc/meminfo") as handle:
+                info = {line.split(":")[0]: int(line.split()[1]) for line in handle}
+            found = {"total_gb": info["MemTotal"] / 2**20, "available_gb": info.get("MemAvailable", 0) / 2**20}
+        except (OSError, ValueError, IndexError, KeyError):
+            pass
+        if found:
+            found["app_gb"] = _app_memory_gb()
+            for job in list(self.jobs.values()):
+                if job.status == "running" and not job.children:
+                    gb = self.measure(job)
+                    if gb is not None:
+                        before = self._ram_seen.get(job.id)
+                        peak = max(gb, before[1]) if before and before[0] == job.started else gb
+                        self._ram_seen[job.id] = (job.started, peak, gb)
+        self._memory = (time.time(), found)
+        return found
+
+    def measure(self, job: Job) -> float | None:
+        """A running job's memory in GB (None: cannot tell)."""
+        pids = self._pids(job) if job.source != COMMAND_LINE else ((job.pid,) if job.pid else ())
+        if not pids:
+            return None
+        group = _cgroup_of(pids[0])
+        if group and "stainid-job-" in group:
+            found = _cgroup_memory_gb(group)
+            if found is not None:
+                return found
+        return _tree_rss_gb(pids)
+
+    def _holds(self, job: Job) -> dict:
+        """What a running job takes from the budget. Memory: what it declared until it has been measured for a while, then
+        its highest measured memory (and a margin); `ram_free` is what it takes from the memory available right now."""
+        need = policy.counted(self.budget.clamp(job_needs(job)))
+        seen = self._ram_seen.get(job.id)
+        held = dict(need)
+        if self.watch_outside and seen is not None and seen[0] == job.started:
+            warm = time.time() - (job.started or 0) < RAM_WARMUP_S
+            held["ram_gb"] = max(need["ram_gb"], seen[1] * RAM_MARGIN) if warm else max(RAM_FLOOR_GB, seen[1] * RAM_MARGIN)
+            held["ram_free"] = max(need["ram_gb"] - seen[2], 0.0) if warm else 0.0  # still to come out of what is available
+            held["ram_now"] = seen[2]
+        else:
+            held["ram_free"] = need["ram_gb"]  # not measured yet: all of it is still to come
+            held["ram_now"] = 0.0
+        disk = policy.disk_of(job) if policy.io_of(job, job_needs(job)) == "heavy" and not need["gpus"] else None
+        if disk is not None:  # (a GPU job is held back by its GPU, not its disk)
+            held[f"io:{disk}"] = 1
+        return held
+
+    def current_budget(self) -> Budget:
+        """The budget with its memory as this computer has it now: total less the app's use, the app's headroom and the
+        system's reserve (capped by a limit set by hand)."""
+        from dataclasses import replace
+
+        budget = self.budget
+        if not self.watch_outside:
+            return budget
+        memory = self.memory()
+        if not memory.get("total_gb"):
+            return budget
+        ram = memory["total_gb"] - memory.get("app_gb", 0.0) - APP_HEADROOM_GB - SYSTEM_RESERVE_GB
+        return replace(budget, ram_gb=round(max(0.0, min(ram, budget.ram_cap) if budget.ram_cap else ram), 1))
 
     # -- estimates
 
@@ -942,74 +1080,170 @@ class Scheduler:
 
     # -- what to start
 
+    def _free(self, budget: Budget, running: list[Job]) -> dict:
+        """What is free now: processors, GPUs, memory (`ram_gb` against the budget; `ram_free` against what this computer
+        has available, less the app's headroom), and io slots per disk."""
+        used, busy = self._used(running)
+        free = {"cpus": budget.cpus - used["cpus"], "gpus": budget.gpus - max(len(busy), used["gpus"]), "ram_gb": budget.ram_gb - used["ram_gb"]}
+        outside = self.outside()["gpus"] if self.watch_outside else set()
+        free["gpus"] -= len(set(outside) - busy)
+        if self.watch_outside and (memory := self.memory()).get("available_gb") is not None:
+            free["ram_free"] = memory["available_gb"] - APP_HEADROOM_GB - OUTSIDE_RAM_MARGIN_GB - sum(self._holds(j)["ram_free"] for j in running)
+        for job in running:
+            for key, value in self._holds(job).items():
+                if key.startswith("io:"):
+                    free[key] = free.get(key, budget.io_per_disk) - value
+        return free
+
+    def _need(self, job: Job, budget: Budget) -> dict:
+        need = policy.counted(budget.clamp(job_needs(job)))
+        if self.watch_outside:
+            need["ram_free"] = need["ram_gb"]
+        disk = policy.disk_of(job) if policy.io_of(job, job_needs(job)) == "heavy" and not need["gpus"] else None
+        if disk is not None:
+            need[f"io:{disk}"] = 1
+        return need
+
+    @staticmethod
+    def _fits(need: dict, free: dict, budget: Budget) -> bool:
+        for key, value in need.items():
+            if value <= 0 or key == "ram_now":
+                continue
+            have = free.get(key, budget.io_per_disk if key.startswith("io:") else None)
+            if have is not None and value > have + 1e-9:
+                return False
+        return True
+
+    def _aged(self, job: Job, now: float) -> bool:
+        """Whether the job has waited longer than `AGE_S` with nothing but room holding it back."""
+        return now - self._ready_since.get(job.id, now) > AGE_S
+
+    def _order(self, queued: list[Job], running: list[Job], now: float, free_gpus: int = 0) -> list[Job]:
+        """By class; within a class the jobs that have waited longer than `AGE_S` first (oldest first), then the others:
+        those that fit a free GPU first (so no GPU stays idle while a GPU job waits), then taking turns between projects
+        (fair share)."""
+        aged = {j.id for j in queued if self._aged(j, now)}
+        ordered = policy.fair_order([j for j in queued if j.id not in aged], running, _key, lambda j: RANK[job_class(j)])
+        old = sorted((j for j in queued if j.id in aged), key=lambda j: (RANK[job_class(j)], j.created))
+        gpu = {j.id for j in ordered if 0 < job_needs(j).get("gpus", 0) <= free_gpus
+               and job_needs(j).get("cpus", 0) <= policy.SMALL["cpus"] and job_needs(j).get("ram_gb", 0) <= policy.SMALL["ram_gb"]}
+        out = []
+        for rank in sorted({RANK[job_class(j)] for j in queued}):
+            mine = [j for j in ordered if RANK[job_class(j)] == rank]
+            out += [j for j in old if RANK[job_class(j)] == rank] + [j for j in mine if j.id in gpu] + [j for j in mine if j.id not in gpu]
+        return out
+
+    def _may_preempt(self, job: Job, other: Job, now: float) -> bool:
+        """Whether `job` may pause `other` to get room: a lower class always; the same class only when `job` has waited
+        longer than `AGE_S` and `other` is a newer job that started after it was queued (older before newer, never back)."""
+        if other.source == COMMAND_LINE or other.request == "cancel":
+            return False
+        if RANK[job_class(other)] > RANK[job_class(job)]:
+            return True
+        return (RANK[job_class(other)] == RANK[job_class(job)] and self._aged(job, now)
+                and other.created > job.created and (other.started or 0) > job.created)
+
+    def _victims(self, job: Job, need: dict, free: dict, running: list[Job], budget: Budget, now: float) -> list[Job] | None:
+        """The fewest running jobs to pause so that `job` fits: lowest class first, then the largest holders of what it
+        lacks; jobs pausing already count as freed. None when even pausing every job it may pause would not do."""
+        room = dict(free)
+        for other in running:
+            if other.request:  # stopping already: what it holds comes free soon
+                room = self._released(room, other)
+        if self._fits(need, room, budget):
+            return []
+        pool = [o for o in running if not o.request and self._may_preempt(job, o, now)]
+        chosen: list[Job] = []
+        while not self._fits(need, room, budget):
+            short = {k: need[k] - room.get(k, 0) for k in need if need[k] > 0 and k in room and need[k] > room[k] + 1e-9}
+            best, score = None, None
+            for other in pool:
+                held = self._released({k: 0.0 for k in short}, other)
+                gain = sum(min(held.get(k, 0), lack) / max(lack, 1e-9) for k, lack in short.items())
+                if gain <= 0:
+                    continue
+                key = (RANK[job_class(other)], gain, other.started or 0)
+                if score is None or key > score:
+                    best, score = other, key
+            if best is None:
+                return None
+            pool.remove(best)
+            chosen.append(best)
+            room = self._released(room, best)
+        for other in list(reversed(chosen)):  # drop any that turned out not to be needed
+            rest = self._released(room, other, -1)
+            if self._fits(need, rest, budget):
+                chosen.remove(other)
+                room = rest
+        return chosen
+
+    def _released(self, room: dict, job: Job, sign: int = 1) -> dict:
+        """`room` once `job` has stopped: what it holds comes free (from what is available: its measured memory too)."""
+        held = self._holds(job)
+        freed = {k: v for k, v in held.items() if k != "ram_now"}
+        freed["ram_free"] = held["ram_free"] + held["ram_now"]
+        return {**room, **{k: room[k] + sign * v for k, v in freed.items() if k in room}}
+
+    def _relieve_memory(self, running: list[Job]) -> None:
+        """When the memory available falls under the app's headroom, pause the lowest-class jobs (largest first) at once
+        (short grace), before the kernel's out-of-memory killer acts."""
+        if not self.watch_outside:
+            return
+        memory = self.memory()
+        if memory.get("available_gb") is None or memory["available_gb"] >= APP_HEADROOM_GB:
+            return
+        lack = APP_HEADROOM_GB + OUTSIDE_RAM_MARGIN_GB - memory["available_gb"]
+        lack -= sum(self._holds(j)["ram_now"] for j in running if j.id in self._urgent and j.request)
+        pool = sorted((j for j in running if j.source != COMMAND_LINE and not j.request),
+                      key=lambda j: (-RANK[job_class(j)], -self._holds(j)["ram_now"]))
+        for job in pool:
+            if lack <= 0:
+                break
+            self._urgent.add(job.id)
+            self._ask_to_stop(job, "preempt")
+            lack -= max(self._holds(job)["ram_now"], 0.5)
+            LOG.warning("memory pressure (%.1f GB available): pausing %s", memory["available_gb"], title_of(job))
+
     def _schedule(self) -> None:
-        """Start what fits (`stainid.jobs.policy`): by class, taking turns between projects within one; a job that does
-        not fit gets a reservation (EASY backfill: later jobs start only if they do not delay it) and pre-empts lower
-        classes when that makes room; writers of the same outputs never run at once; io-heavy jobs per disk and big
-        jobs per class are capped; skip what cannot run (a step it waits for failed, an input is missing)."""
+        """Start every waiting job that fits, in priority order (work-conserving: nothing stays idle while a job that fits
+        waits). A job starts only when all it needs (processors, GPU, memory, an io slot on its disk, and no running
+        writer of the same outputs) is free at once, and takes it all in one step. A job that does not fit pauses the
+        fewest lower-priority jobs that make it fit (they resume later, skipping finished units); what it will take is
+        not handed to lower jobs while they stop (at most their grace time). See `docs/job_system.md`."""
         from stainid.workflows.steps import BY_ID, wait_reason
 
-        budget, now = self.budget, time.time()
+        budget, now = self.current_budget(), time.time()
         jobs = [j for j in self.jobs.values() if not j.children]
         running = [j for j in jobs if j.status == "running"]
         blocking = [j for j in jobs if j.status in (*ACTIVE, "paused")]  # a paused step still holds back what needs it
-        used, busy_gpus = self._used(running)
-        free = policy.minus({k: getattr(budget, k) for k in policy.KEYS}, used)
-        io_busy: dict = {}
-        big: dict[str, set[str]] = {}
-        sizes: dict[str, str] = {}
-        size = lambda top: sizes.setdefault(top.id, self.size(top))  # noqa: E731 - once per job and round
-        held_until = {}  # running job -> (expected end, what it holds): when what it holds is free again
-        for job in running:
-            if policy.io_of(job, job_needs(job)) == "heavy":
-                io_busy[policy.disk_of(job)] = io_busy.get(policy.disk_of(job), 0) + 1
-            top = self._top(job)
-            if size(top) == "big":
-                big.setdefault(job_class(job), set()).add(top.id)
-            left = self.remaining(job, now)
-            held_until[job.id] = (now + left if left is not None else policy.INF, policy.counted(budget.clamp(job_needs(job))))
+        self._relieve_memory(running)
+        free = self._free(budget, running)
+        busy_gpus = {g for j in running for g in (j.gpus or [])} | (set(self.outside()["gpus"]) if self.watch_outside else set())
         by_project: dict[str, list[Job]] = {}
         for other in blocking:
             by_project.setdefault(other.project, []).append(other)
         self._dependency_cache = {}
-        stopping = {j.id for j in running if j.request}
-        reservations: list[dict] = []  # per class, its first job that waits for room: when it can start, what is left then
         held = self.paused_all()
         queued = [j for j in jobs if j.status == "queued"]
-        for job in policy.fair_order(queued, running, _key, lambda j: RANK[job_class(j)]):
+        making_room: dict[str, float] = {}
+        alerts: dict[str, str] = {}
+        self._ready_since = {k: v for k, v in self._ready_since.items() if k in {j.id for j in queued}}
+        for job in self._order(queued, running, now, int(free["gpus"])):
             if held:
                 job.waiting = "All background work is paused"
+                self._ready_since.pop(job.id, None)
                 continue
             reason = self._blocked(job, by_project.get(job.project, []) + ([] if not job.project else by_project.get("", [])), BY_ID, wait_reason)
             if job.status != "queued":
                 continue
             if reason:
                 self._wait(job, reason)
+                self._ready_since.pop(job.id, None)
                 continue
-            klass, rank = job_class(job), RANK[job_class(job)]
-            top = self._top(job)
-            cap = (budget.caps.get(klass) or {}).get("big")
-            if cap is not None and size(top) == "big" and len(big.get(klass, set()) - {top.id}) >= cap:
-                self._wait(job, f"At most {cap} big {CLASS_TITLES[klass].lower()} job{'s' if cap != 1 else ''} at a time")
-                continue
-            need = policy.counted(budget.clamp(job_needs(job)))
-            heavy = policy.io_of(job, job_needs(job)) == "heavy"
-            disk = policy.disk_of(job)
-            if heavy and io_busy.get(disk, 0) >= budget.io_per_disk:
-                self._wait(job, f"Waits for its disk: {io_busy[disk]} io-heavy jobs use it already")
-                continue
-            outside = self.outside()["gpus"] if self.watch_outside and need["gpus"] else set()
-            gpus = [g for g in range(budget.gpus) if g not in busy_gpus and g not in outside][: int(need["gpus"])]
-            estimate = self.estimate(job)
-            if policy.fits(need, free) and len(gpus) >= int(need["gpus"]):
-                end = now + (estimate if estimate is not None else policy.INF)
-                delays = next((r for r in reservations if end > r["shadow"] and not policy.fits(need, r["extra"])), None)
-                if delays is not None:
-                    self._wait(job, f"Waits so as not to delay “{title_of(delays['job'])}”" + _starts_in(delays["shadow"], now))
-                    continue
-                if why := self._no_room_outside(job, need, gpus, used):
-                    self._wait(job, why)
-                    continue
+            self._ready_since.setdefault(job.id, now)
+            need = self._need(job, budget)
+            if self._fits(need, free, budget):
+                gpus = [g for g in range(budget.gpus) if g not in busy_gpus][: int(need["gpus"])]
                 step = BY_ID.get(job.workflow) if not job.command else None
                 if step is not None and (missing := self._missing(job, step)):
                     self._skip(job, missing)
@@ -1021,57 +1255,46 @@ class Scheduler:
                     job.outcome = {"done": 0, "total": 0, "last_line": str(error), "error": f"Could not start: {error}"}
                     self._save(job)
                     continue
-                free, used = policy.minus(free, need), policy.plus(used, need)
-                for r in reservations:
-                    if end > r["shadow"]:
-                        r["extra"] = policy.minus(r["extra"], need)  # it uses part of what is left over at that time
+                free = {k: v - need.get(k, 0) for k, v in free.items()} | {k: budget.io_per_disk - v for k, v in need.items() if k not in free}
                 busy_gpus |= set(gpus)
                 running.append(job)
-                held_until[job.id] = (end, need)
-                if heavy:
-                    io_busy[disk] = io_busy.get(disk, 0) + 1
-                if size(top) == "big":
-                    big.setdefault(klass, set()).add(top.id)
+                self._ready_since.pop(job.id, None)
                 continue
-            # it does not fit: lower classes give way (they stop at their next unit boundary and wait again)
-            lower = sorted((j for j in running if RANK[job_class(j)] > rank and j.source != COMMAND_LINE),
-                           key=lambda j: (-RANK[job_class(j)], -(j.started or 0)))
-            freed = {k: 0.0 for k in policy.KEYS}
-            for j in lower:
-                if j.id in stopping:
-                    freed = policy.plus(freed, policy.counted(budget.clamp(job_needs(j))))
-            victims = []
-            for j in lower:
-                if policy.fits(need, policy.plus(free, freed)):
-                    break
-                if j.id in stopping:
-                    continue
-                n = policy.counted(budget.clamp(job_needs(j)))
-                if not any(need[k] > free[k] + freed[k] + 1e-9 and n[k] > 0 for k in policy.KEYS):
-                    continue  # it holds nothing this job lacks
-                victims.append(j)
-                freed = policy.plus(freed, n)
-            ends = [(now + (j.grace or GRACE[job_class(j)]) + KILL_AFTER, held_until[j.id][1]) if j in victims else held_until[j.id]
-                    for j in running]
-            shadow, extra = policy.shadow(need, free, ends, now)
-            if policy.fits(need, policy.plus(free, freed)) and victims:
-                for j in victims:
-                    self._ask_to_stop(j, "preempt")
-                    stopping.add(j.id)
-                self._wait(job, "Starts as soon as lower-priority work has paused")
-            elif policy.fits(need, policy.plus(free, freed)) and stopping:
-                self._wait(job, "Starts as soon as lower-priority work has paused")
-            else:
-                short = [k for k in policy.KEYS if need[k] > free[k] + 1e-9] or ["gpus"]
+            victims = self._victims(job, need, free, running, budget, now)
+            if victims is None:
+                short = [k for k in policy.KEYS if need[k] > free.get(k, 0) + 1e-9] or (["ram_gb"] if need.get("ram_free", 0) > free.get("ram_free", 0) else [])
                 names = {"cpus": "processors", "gpus": "GPUs", "ram_gb": "GB of memory"}
-                self._wait(job, "Waits for room: needs " + ", ".join(f"{need[k]:g} {names[k]} ({max(0, free[k]):g} free)" for k in short)
-                           + _starts_in(shadow, now))
-            if not any(r["rank"] == rank for r in reservations):
-                reservations.append({"rank": rank, "job": job, "shadow": shadow, "extra": extra})
+                text = ", ".join(f"{need[k]:g} {names[k]} ({max(0, min(free.get(k, 0), free.get('ram_free', free.get(k, 0)) if k == 'ram_gb' else free.get(k, 0))):.0f} free)"
+                                 for k in short)
+                self._wait(job, ("Waits for room: needs " + text + " (held by work of the same or a higher priority)") if text
+                           else "Waits for its disk: other io-heavy jobs use it")
+                continue
+            for other in victims:
+                self._ask_to_stop(other, "preempt")
+            making_room[job.id] = self._making_room.get(job.id, now)
+            # what it will take is not handed to lower jobs meanwhile (bounded: the pausing jobs stop within their grace)
+            free = {k: v - need.get(k, 0) for k, v in free.items()}
+            self._wait(job, "Starts as soon as lower-priority work has paused")
+            if now - making_room[job.id] > WATCHDOG_S:  # the jobs asked to pause should have stopped long ago
+                alerts[job.id] = f"“{title_of(job)}” has waited {policy.duration_text(now - making_room[job.id])} for lower-priority work to pause"
+        self._making_room = making_room
+        for job in queued:  # the watchdog: a job that fits (or can be made to) should not wait long
+            if job.status == "queued" and job.id not in alerts and not held and now - self._queued_since(job) > WATCHDOG_S \
+                    and not job.waiting.startswith(("Waits for “", "Waits for room", "Waits for its disk")):
+                alerts[job.id] = f"“{title_of(job)}” has waited {policy.duration_text(now - self._queued_since(job))}: {job.waiting or 'not started'}"
+        for job_id, text in alerts.items():
+            if self.alerts.get(job_id) != text and job_id not in self.alerts:
+                LOG.warning("queue watchdog: %s", text)
+        self.alerts = alerts
+
+    def _queued_since(self, job: Job) -> float:
+        ended = [r[1] for r in job.runs if r and r[1]]
+        return max([job.created or 0.0, *ended])
 
     def _blocked(self, job: Job, blocking: list[Job], steps: dict, wait_reason) -> str:
         """Why a waiting job cannot start whatever the room: a job it was queued after, a step it needs the outputs of,
-        a step writing the same file, or a job writing the same outputs."""
+        or a writer of the same outputs that runs or was queued before it (waits only ever point at running or earlier
+        jobs, so they cannot go round in a circle)."""
         for before in job.after or []:  # the jobs it was queued after
             other = self.jobs.get(before)
             if other is None or other.status == "finished":
@@ -1094,27 +1317,18 @@ class Scheduler:
                     cache[key] = wait_reason(steps[other.workflow], step, "command line" if other.source == COMMAND_LINE else "")
                 if cache[key]:
                     return cache[key]
-            if (other.status == "running" or other.workflow == job.workflow or other.command or job.command) and policy.conflict(job, other):
+            writing = other.status == "running" or (other.status == "queued" and other.created < job.created)  # a paused job lets go
+            if writing and (other.status == "running" or other.workflow == job.workflow or other.command or job.command) and policy.conflict(job, other):
                 return f"Waits for “{title_of(other)}”: both write the same outputs"
         return ""
 
     def outside(self) -> dict:
         """What work outside the queue (other programs, runs started by hand) leaves for it, looked at every 10 s: free
-        memory (GB), GPUs whose memory is mostly taken by processes the queue did not start, and the load average."""
+        memory (GB) and the GPUs whose memory is mostly taken by processes the queue did not start."""
         when, found = self._outside
         if time.time() - when < 10:
             return found
-        found = {"ram_gb": None, "gpus": set(), "load": None}
-        try:
-            with open("/proc/meminfo") as handle:
-                info = {line.split(":")[0]: int(line.split()[1]) for line in handle}
-            found["ram_gb"] = info.get("MemAvailable", 0) / 2**20
-        except (OSError, ValueError, IndexError):
-            pass
-        try:
-            found["load"] = os.getloadavg()[0]
-        except OSError:
-            pass
+        found = {"ram_gb": self.memory().get("available_gb"), "gpus": set()}
         if shutil.which("nvidia-smi"):
             try:
                 query = lambda what: [r.split(", ") for r in subprocess.run(  # noqa: E731
@@ -1127,20 +1341,6 @@ class Scheduler:
                 pass
         self._outside = (time.time(), found)
         return found
-
-    def _no_room_outside(self, job: Job, need: dict, gpus: list[int], used: dict) -> str:
-        """Why a job that fits the budget cannot start because of work outside the queue ("" when it can)."""
-        if not self.watch_outside:
-            return ""
-        found = self.outside()
-        if found["ram_gb"] is not None and need.get("ram_gb", 0) > found["ram_gb"] - OUTSIDE_RAM_MARGIN_GB:
-            return f"Waits for memory: needs {need['ram_gb']:g} GB, {max(0.0, found['ram_gb'] - OUTSIDE_RAM_MARGIN_GB):.0f} GB free on this computer"
-        if need.get("gpus") and len(gpus) < int(need["gpus"]):
-            return "Waits for a GPU: the free ones are in use by work outside the queue"
-        if RANK[job_class(job)] >= RANK["public"] and found["load"] is not None and not need.get("network"):
-            if found["load"] + need.get("cpus", 0) > self.budget.cpus:  # the lowest classes run only on spare processors
-                return f"Waits for spare processors (this computer's load is {found['load']:.0f})"
-        return ""
 
     def _wait(self, job: Job, reason: str) -> None:
         if job.waiting != reason:
@@ -1267,18 +1467,90 @@ class Scheduler:
         tops = [j for j in jobs if not j.array_of]  # an array shows as its parent
         live = sorted((j for j in tops if j.status not in FINAL), key=lambda j: (j.status != "running", _key(j)))
         recent = sorted((j for j in tops if j.status in FINAL and (j.ended or 0) > time.time() - 86400), key=lambda j: -(j.ended or 0))[:50]
-        budget = self.budget
-        used, _ = self._used([j for j in jobs if j.status == "running" and not j.children])
+        budget = self.current_budget()
+        running = [j for j in jobs if j.status == "running" and not j.children]
+        used, _ = self._used(running)
+        memory = None
+        if self.watch_outside and (found := self.memory()).get("total_gb"):
+            free = self._free(budget, running)
+            memory = {"total_gb": round(found["total_gb"], 1), "used_gb": round(found["total_gb"] - found["available_gb"], 1),
+                      "available_gb": round(found["available_gb"], 1), "app_gb": round(found.get("app_gb", 0.0), 1),
+                      "jobs_gb": round(sum(self._holds(j)["ram_now"] for j in running), 1), "jobs_counted_gb": round(used["ram_gb"], 1),
+                      "for_jobs_gb": budget.ram_gb, "free_for_jobs_gb": round(max(0.0, min(free["ram_gb"], free.get("ram_free", free["ram_gb"]))), 1),
+                      "headroom_gb": APP_HEADROOM_GB}
         return {"classes": [{"id": c, "title": CLASS_TITLES[c], "rank": RANK[c], "jobs": [self.describe(j) for j in live if job_class(j) == c]}
                             for c in CLASSES],
                 "recent": [self.describe(j) for j in recent], "paused_all": self.paused_all(), "led": self.leader or self.led_elsewhere(),
-                "budget": asdict(budget), "used": used,
+                "budget": asdict(budget), "used": used, "memory": memory,
+                "alerts": [{"id": k, "text": v} for k, v in self.alerts.items()],
                 "outside": {**(found := self.outside()), "gpus": sorted(found["gpus"])} if self.watch_outside else None}
 
 
-def _starts_in(shadow: float, now: float) -> str:
-    text = policy.duration_text(shadow - now) if shadow != policy.INF else ""
-    return f"; expected to start in about {text}" if text and shadow > now else ""
+def _cgroup_of(pid: int) -> str:
+    try:
+        for line in Path(f"/proc/{pid}/cgroup").read_text().splitlines():
+            if line.startswith("0::"):
+                return line[3:].strip()
+    except OSError:
+        pass
+    return ""
+
+
+def _cgroup_memory_gb(group: str) -> float | None:
+    """A cgroup's anonymous and shared memory (what it would lose; page cache is left out, it can be given back)."""
+    try:
+        stat = dict(line.split() for line in Path(f"/sys/fs/cgroup{group}/memory.stat").read_text().splitlines())
+        return (int(stat.get("anon", 0)) + int(stat.get("shmem", 0))) / 2**30
+    except (OSError, ValueError):
+        return None
+
+
+def _tree_rss_gb(pids: tuple[int, ...]) -> float | None:
+    """The resident memory of these processes and all their children."""
+    children: dict[int, list[int]] = {}
+    for entry in Path("/proc").iterdir():
+        if entry.name.isdigit():
+            try:
+                parent = int((entry / "stat").read_text().rsplit(")", 1)[1].split()[1])
+            except (OSError, ValueError, IndexError):
+                continue
+            children.setdefault(parent, []).append(int(entry.name))
+    todo, seen, total = list(pids), set(), 0
+    while todo:
+        pid = todo.pop()
+        if pid in seen:
+            continue
+        seen.add(pid)
+        try:
+            total += int(next(line for line in Path(f"/proc/{pid}/status").read_text().splitlines() if line.startswith("VmRSS")).split()[1])
+        except (OSError, StopIteration, ValueError, IndexError):
+            continue
+        todo += children.get(pid, [])
+    return total / 2**20 if seen else None
+
+
+_APP_GROUP: list = [0.0, ""]
+
+
+def _app_memory_gb() -> float:
+    """What the web app uses now: its systemd unit's memory, else this process's (when the queue runs inside it)."""
+    group = _cgroup_of(os.getpid())
+    if "stainid-app" not in group:
+        if time.time() - _APP_GROUP[0] > 60:
+            _APP_GROUP[0] = time.time()
+            try:
+                shown = subprocess.run(["systemctl", "--user", "show", "-p", "ControlGroup", "--value", "stainid-app.service"],
+                                       capture_output=True, text=True, timeout=5).stdout.strip()
+            except (OSError, subprocess.SubprocessError):
+                shown = ""
+            _APP_GROUP[1] = shown if shown and "stainid-app" in shown else ""
+        group = _APP_GROUP[1]
+    if group:
+        found = _cgroup_memory_gb(group)
+        if found is not None:
+            return found
+    found = _tree_rss_gb((os.getpid(),)) if not group else None
+    return found or 0.0
 
 
 _SHARED: Scheduler | None = None

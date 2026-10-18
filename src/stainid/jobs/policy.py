@@ -1,8 +1,9 @@
 """How the queue decides (`stainid.jobs.queue.Scheduler._schedule`): job sizes and run-time estimates, which jobs may
-run side by side, fair share within a class, and the EASY backfill reservation.
+run side by side, and fair share within a class.
 
 - **Size** comes from what a job needs and how long it is expected to take, not from a label: a job is *small* when it
-  needs at most 4 processors, no GPU and 8 GB, and is expected to end within 15 minutes; else *big*.
+  needs at most 4 processors, no GPU and 8 GB, and is expected to end within 15 minutes; else *big*. It is shown, and
+  never holds a job back.
 - **Estimates**: the time the job declared (`--time`), else its units (tiles, core images × stains) times the time per
   unit its step took in earlier runs (this project's first, then any project's, then a default), else how long the
   same step took when it last ran to the end, else a default per step.
@@ -11,10 +12,7 @@ run side by side, fair share within a class, and the EASY backfill reservation.
   at once; readers overlap freely. At most `io_per_disk` io-heavy jobs use one disk at a time.
 - **Fair share**: within a class the next job comes from the project (for annotation work: the project and the person)
   with the fewest jobs running, so one project's 1,000-chunk array does not starve another's small job.
-- **EASY backfill**: the first job of each class that waits for room gets a reservation: the time it is expected to
-  start (its "shadow time", from the running jobs' expected ends) and what will be left over then. A job further down
-  may start now only if it fits now and either ends before that shadow time or uses only what is left over, so it
-  never delays a reserved job.
+- Nothing is reserved: a job that does not fit gets room by pre-empting lower-priority work (`Scheduler._victims`).
 """
 from __future__ import annotations
 
@@ -29,7 +27,6 @@ IO_HEAVY = {"dearray", "export", "qc", "tiles", "images", "calibrate", "nuclei",
 UNIT_SECONDS = {"nuclei": 5.0, "v2_proposals": 45.0, "v2_calls": 2.0, "v2_outlines": 40.0}
 STEP_SECONDS = {"slides": 10, "layout": 10, "summarize": 120, "v2_measures": 300, "train": 60, "download_models": 600,
                 "prepare_labels": 300, "score_segmentation": 300, "calibrate": 1800, "tiles": 600, "images": 1800}
-DEFAULT_CAPS = {"public": {"big": 1}}  # at most this many big jobs (an array counts once) of a class at a time
 IO_PER_DISK = 2
 
 
@@ -176,21 +173,6 @@ def fair_order(queued: list, running: list, key, rank) -> list:
             if heads[share] == len(groups[share]):
                 del groups[share], heads[share]
     return out
-
-
-# ---------------------------------------------------------------- EASY backfill
-
-def shadow(need: dict, free: dict, ends: list[tuple[float, dict]], now: float) -> tuple[float, dict]:
-    """When a job needing `need` could start, given what is free now and when the running jobs release theirs
-    (expected end, what it holds), and what would be left over then."""
-    avail = dict(free)
-    if fits(need, avail):
-        return now, minus(avail, need)
-    for end, held in sorted(ends, key=lambda e: e[0]):
-        avail = plus(avail, held)
-        if fits(need, avail):
-            return end, {k: max(0.0, v) for k, v in minus(avail, need).items()}
-    return INF, {k: 0.0 for k in KEYS}
 
 
 def duration_text(seconds: float | None) -> str:

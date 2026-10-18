@@ -15,7 +15,7 @@ import pandas as pd
 
 from stainid import candidates
 from stainid import exclusions as excluded_areas
-from stainid.labels import candidate_store, decisions, frames, store
+from stainid.labels import candidate_store, decisions, frames, objectedit, store
 from stainid.labels import vocabulary as vocab
 
 KINDS = ("agree", "changed", "rejected", "unsure")
@@ -107,7 +107,7 @@ def added_objects(project, stain: str, tiles: pd.DataFrame, core_id: str | None 
     if rows.empty:
         return pd.DataFrame(columns=columns)
     named = rows.candidate.fillna("").astype(str).str.len() > 0 if "candidate" in rows else pd.Series(False, index=rows.index)
-    rows = rows[~named & rows.x.notna()]
+    rows = rows[~named & rows.x.notna() & ~objectedit.pieces_mask(rows)]  # pieces of a split or merge: `object_edits`
     boxes = tiles[tiles.stain == stain].drop_duplicates("tile_id").set_index("tile_id") if not tiles.empty else pd.DataFrame()
     rows = rows[rows.tile_id.isin(set(boxes.index))] if len(boxes) else rows.iloc[:0]
     if core_id is not None and len(rows):
@@ -129,6 +129,53 @@ def added_objects(project, stain: str, tiles: pd.DataFrame, core_id: str | None 
                     "x_core": float(r.x) + x0, "y_core": float(r.y) + y0, "core_id": str(tile["core_id"]),
                     "points": [[round(float(x) + x0, 1), round(float(y) + y0, 1)] for x, y in drawn] if drawn else None})
     return pd.DataFrame(out, columns=columns)
+
+
+def object_edits(project, stain: str, tiles: pd.DataFrame, core_id: str | None = None) -> list[dict]:
+    """The splits and merges people made (`labels.objectedit`), each with who and when, the objects it replaced
+    (candidate ids where they were candidates; positions in core pixels) and the new objects (type and outline in core
+    pixels). Object labels only: detection's objects stay what the analysis counts."""
+    labels = excluded_areas.drop_excluded(project, store.current(project.output("reviews")))
+    if labels.empty or "meta" not in labels:
+        return []
+    mine = labels[labels.stain == stain]
+    replaced = mine[mine.task == objectedit.TASK]
+    if replaced.empty:
+        return []
+    boxes = tiles[tiles.stain == stain].drop_duplicates("tile_id").set_index("tile_id") if not tiles.empty else pd.DataFrame()
+
+    def origin(tile_id):
+        if tile_id not in boxes.index:
+            return None
+        return frames.field_origin(boxes.loc[tile_id], project.context_px), str(boxes.loc[tile_id, "core_id"])
+
+    pieces = mine[(mine.task.isin(["class", "outline"])) & objectedit.pieces_mask(mine)]
+    words = vocab.of(project, stain)
+    out = {}
+    for r in replaced.itertuples():
+        meta = r.meta if isinstance(r.meta, dict) else {}
+        found = origin(r.tile_id)
+        if found is None or r.x != r.x:
+            continue
+        (x0, y0), core = found
+        if core_id is not None and core != str(core_id):
+            continue
+        key = (r.source, str(meta.get("group", r.id)))
+        edit = out.setdefault(key, {"kind": str(r.value), "person": r.source, "time": float(r.time or 0), "core_id": core, "originals": [], "pieces": []})
+        edit["originals"].append({"candidate_id": r.candidate if isinstance(r.candidate, str) and r.candidate else None,
+                                  "x_core": float(r.x) + x0, "y_core": float(r.y) + y0})
+    for (person, group), edit in out.items():
+        mine_pieces = pieces[(pieces.source == person) & (pieces.meta.map(lambda m: str(m.get("group")) if isinstance(m, dict) else "") == group)]
+        shapes = {(r.tile_id, round(float(r.x)), round(float(r.y))): r.points for r in mine_pieces[mine_pieces.task == "outline"].itertuples()}
+        for r in store.classes(mine_pieces, stain, words).itertuples():
+            found = origin(r.tile_id)
+            if found is None:
+                continue
+            (x0, y0), _ = found
+            drawn = shapes.get((r.tile_id, round(float(r.x)), round(float(r.y))))
+            edit["pieces"].append({"identity": r.identity, "subtype": r.subtype or "", "x_core": float(r.x) + x0, "y_core": float(r.y) + y0,
+                                   "points": [[round(float(x) + x0, 1), round(float(y) + y0, 1)] for x, y in drawn] if drawn else None})
+    return sorted(out.values(), key=lambda e: e["time"])
 
 
 def summary(project, stain: str, tiles: pd.DataFrame, core_id: str | None = None) -> dict:

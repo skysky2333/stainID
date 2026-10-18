@@ -184,3 +184,37 @@ def test_agreement_and_detections_areas_against_peoples(rounds_project):
     assert folds and folds[0]["cleared_mm2"] > 0 and folds[0]["added_mm2"] > 0 and 0 < folds[0]["f1"] < 1
     assert len({r["donor_id"] for r in detector["by_donor"]}) == 2 and detector["model"] is None  # one donor and "all"; the hook for a trained model
     assert areas.needed({"second": [CORE]}, CORE) == 2
+
+
+def test_mark_bad_areas_uses_the_field_tool_s_brush_model(rounds_project):
+    """The same brush as the field tool: it starts from each type's current area over the whole core image, a drag adds
+    to the chosen type (extending detection's fold, one region), Shift-drag takes out of it (detection's part too:
+    "marked fine" is no more than a part taken out of a type), and the analysis layer never changes."""
+    import base64
+
+    import cv2
+    import numpy as np
+
+    admin, (ann, _), _ = rounds_project
+    project = state.get_state().project
+    _plain_mask(project)  # a detected fold over cells 45-54, every column
+    name = _session(admin)["name"]
+    before = exclusions.digest(project, CORE, "6E10")
+    current = ann.get(f"/api/annotate/{name}/cores/{CORE}/6E10/areas").json()
+    assert current["status"] == "done" and set(current["kinds"]) == {"1"} and (current["x"], current["y"]) == (0, 0)
+    assert current["width"] == current["height"] == 1200
+    picture = cv2.imdecode(np.frombuffer(base64.b64decode(current["kinds"]["1"].split(",", 1)[1]), np.uint8), cv2.IMREAD_UNCHANGED)
+    assert picture.shape[:2] == (150, 150) and picture[50, 10, 3] == 255 and picture[60, 10, 3] == 0
+    # add to type 1 at cells 55-64 (touching the fold), take cells 45-54 x 0-39 out of type 1
+    edits = {"6E10": {"pngs": {"1": _square(150, (55, 65, 0, 40)), "-1": _square(150, (45, 55, 0, 40))}, "scale": 8}}
+    assert ann.post(f"/api/annotate/{name}/cores/{CORE}/save", json={"checked": ["6E10", "AT8", "NeuN"], "edits": edits}).status_code == 200
+    final = exclusions.final_say(project, CORE, "6E10")
+    assert final.codes[60, 10] == 1 and final.codes[50, 10] == exclusions.COUNTED and final.codes[50, 100] == 1
+    folds = [r for r in final.regions() if r["kind"] == "1"]
+    assert len(folds) == 1  # the extended fold is one region
+    people = exclusions.annotated(project, CORE, "6E10")
+    assert people.codes[50, 10] == exclusions.CLEARED  # taken out: what used to be "marked fine"
+    after = ann.get(f"/api/annotate/{name}/cores/{CORE}/6E10/areas").json()
+    assert set(after["kinds"]) == {"1"} and after["version"] != current["version"]  # the brush starts from the new areas
+    assert exclusions.digest(project, CORE, "6E10") == before
+    assert ann.get(f"/api/annotate/{name}/cores/{CORE}").json()["pixel_size_um"] == project.pixel_size_um  # the brush in um

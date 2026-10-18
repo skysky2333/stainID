@@ -21,11 +21,14 @@ interface TutorialInfo { done: boolean; practice: { stain: string; tile_id: stri
 /** One step: done once the page reports one of `done` (`times` of them: "reject a few"). */
 interface Step { title: string; text: string; done: RoundEvent[]; times?: number }
 
-/** The steps, building up: reject what detection got wrong (Del), bring types back with a number, change a type (on a
- *  stain with types), unsure (`), a clean look (Space), precise editing, the brush (B), saving. `keys`: the practice
+/** The steps, building up: first the acceptance threshold (step 1 of every field: move it, watch objects switch, Start
+ *  editing), then reject what detection got wrong (Del), bring types back with a number, change a type (on a stain
+ *  with types), unsure (`), a clean look (Space), precise editing, split (S) and merge (M), the brush (B), saving. `keys`: the practice
  *  stain's key line (`Vocabulary.keymap` summary); `typed`: its objects have several types to choose from. */
 function stepsFor(typed: boolean, counted: string): Step[] {
   const steps: Step[] = [
+    { title: 'Step 1: the acceptance threshold', text: 'Every field starts with the slider at the top of the panel, at detection’s own threshold (marked on the track). Drag it (or press [ and ]): objects scoring at or above it turn solid, those below dotted grey. It only sets where this field starts; the analysis keeps detection’s threshold.', done: ['threshold'] },
+    { title: 'Start editing', text: 'When the field starts about right, press “Start editing” (or Enter). The slider locks and shows a lock; your first edit would lock it too. Only “Reset field” unlocks it again, and that discards the field’s unsaved changes.', done: ['start'] },
     { title: 'Point at an object', text: 'Move the mouse over an outlined object. It lights up, its name shows beside it, and what detection said about it shows on the right. Every key acts on the object under the mouse.', done: ['hover'] },
     { title: 'Reject what detection got wrong', text: 'Find a few objects detection got wrong, point at each and press Del. They turn dotted grey and stay visible. Some objects are already dotted grey: detection rejected those itself, and they look just the same.', done: ['remove'], times: 2 },
     { title: 'Bring the type back', text: `Point at a dotted grey object that is a real one and press ${counted}: it becomes solid in that type’s colour. Each type has its own colour (see the panel on the right).`, done: ['class'] },
@@ -36,9 +39,11 @@ function stepsFor(typed: boolean, counted: string): Step[] {
     { title: 'Precise editing', text: 'For an outline that is not right: click the object. It is zoomed in on, and everything else is locked until you leave. (To change its type you only point at it: no click needed.)', done: ['precise-in'] },
     { title: 'Fix it spot by spot', text: 'Click a spot to add it, Shift+click one to leave it out, or drag one of the white dots. Z takes one step back.', done: ['precise-edit'] },
     { title: 'Leave precise editing', text: 'Click outside the faint frame around the object (or press Enter) to keep the outline: the view goes back to where you were (Esc would cancel the edit).', done: ['precise-out'] },
+    { title: 'Split an object', text: 'Two objects outlined as one? Press S for split, then click the object: a split into two shows. Click elsewhere on it to move the split, press Enter to keep it (Esc drops it). You can also drag a line right across objects to cut each one along it. The pieces keep the type; the keys retype them.', done: ['split'] },
+    { title: 'Merge objects', text: 'One object outlined in pieces? Press M for merge, click the pieces (or drag over them) — the panel counts them — and press Enter. They become one object with the type of the largest. Press M or Esc to leave.', done: ['merge'] },
     { title: 'Bigger or smaller outline', text: 'Point at an object and press Tab for a bigger outline, Shift+Tab for a smaller one. Each object has three sizes ready, so it changes at once.', done: ['mask'] },
     { title: 'Add a missed object', text: `Click on tissue where detection missed an object: its outline appears as a new candidate (dotted grey with a diamond). Then press ${counted} to make it solid.`, done: ['added'] },
-    { title: 'Mark a bad area', text: 'Hatched areas are what the analysis leaves out: folds, artifacts, empty glass, found by detection. If you see one it missed, press B for the brush. While it is on, 1–4 choose the area’s type (fold, artifact, no tissue, out of focus) and the class keys rest. Paint over it; Shift-drag marks a part fine, also part of a detected one. Your areas teach and test the bad-area detection; the analysis keeps detection’s own. Press B again when done.', done: ['exclude'] },
+    { title: 'Mark a bad area', text: 'Hatched areas are what the analysis leaves out: folds, artifacts, empty glass, found by detection. Press B for the brush: 1–4 choose the type (fold, artifact, no tissue, out of focus), and that type’s area shows as one region — detection’s with everyone’s edits. Drag to add to it (a stroke touching a detected fold extends that fold); Shift-drag takes a part out, detection’s too. Tab makes the brush smaller, Shift+Tab bigger; the wheel still zooms. Your areas teach and test the bad-area detection; the analysis keeps detection’s own. Press B again when done.', done: ['exclude'] },
     { title: 'Save your work', text: 'Nothing you do is saved yet: the panel says how many unsaved changes you have, and a small orange dot marks each object you changed. Press Save (or Ctrl+S) to keep them — you stay on this field. (In this practice, Save only pretends.)', done: ['save'] },
     { title: 'Save and continue', text: 'When the field looks right, press “Save and continue”. Everything you left as it is counts as checked by you, the field is done, nobody else is asked to do it again, and your next field opens.', done: ['finish'] },
   ]
@@ -163,11 +168,11 @@ function Coached({ practice, preview, next }: { practice: NonNullable<TutorialIn
 
 interface AreaStep { title: string; text: string; done: AreaEvent[] }
 const AREA_STEPS: AreaStep[] = [
-  { title: 'One core, all its stains', text: 'You see one core at a time with each of its stains (the tabs above the picture). Hatched parts are what detection itself leaves out of the analysis; they do not change here. Press Tab or ] (or click a tab) to look at the next stain, Shift+Tab or [ to go back.', done: ['stain'] },
-  { title: 'Choose a type', text: 'Press 1–4 to choose what is wrong: 1 fold or tissue damage, 2 artifact (scratch, bubble, debris), 3 no tissue, 4 out of focus or bad staining. The brush on the picture takes its colour.', done: ['type'] },
-  { title: 'Paint a bad area', text: 'Drag over a part that should not be counted. It is hatched in the type’s colour. The middle mouse button moves the picture; Ctrl+wheel or + and − zoom.', done: ['paint'] },
-  { title: 'Brush size', text: 'Turn the mouse wheel over the picture to make the brush bigger or smaller.', done: ['size'] },
-  { title: 'Marked fine', text: 'Hold Shift and drag over a part that is fine after all, for example part of an area detection hatched. It shows faint green.', done: ['clear'] },
+  { title: 'One core, all its stains', text: 'You see one core at a time with each of its stains (the tabs above the picture). Hatched parts are each type’s area as it stands: what detection leaves out, with everyone’s edits (detection’s own areas, what the analysis uses, do not change here). Press ] (or click a tab) to look at the next stain, [ to go back.', done: ['stain'] },
+  { title: 'Choose a type', text: 'Press 1–4 to choose what is wrong: 1 fold or tissue damage, 2 artifact (scratch, bubble, debris), 3 no tissue, 4 out of focus or bad staining. The brush takes its colour, and that type’s area shows strongly as one region: detection’s with everyone’s edits.', done: ['type'] },
+  { title: 'Paint a bad area', text: 'Drag over a part that should not be counted: it is added to the type’s area (a stroke touching an area of that type extends it). The wheel zooms; the middle mouse button moves the picture.', done: ['paint'] },
+  { title: 'Brush size', text: 'Press Tab for a smaller brush, Shift+Tab for a bigger one — the same keys as in Fix the field. The ring under the mouse shows its size.', done: ['size'] },
+  { title: 'Take a part out', text: 'Hold Shift and drag over a part of the chosen type’s area that is fine after all, also an area detection found: it is taken out of that type.', done: ['clear'] },
   { title: 'Undo', text: 'Press Z to take back your last stroke.', done: ['undo'] },
   { title: 'A clean look', text: 'Press Space to hide everything drawn over the tissue, and Space again to bring it back.', done: ['overlays'] },
   { title: 'This stain is done', text: 'When a stain looks right — painted, or fine as it is — press Enter. It gets a tick and the next stain opens.', done: ['fine'] },

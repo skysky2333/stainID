@@ -98,7 +98,7 @@ The list of each stain's keys, in their groups, is always shown; *Change the cla
 descriptions, example pictures, hides classes or types, adds types and adds classes (choosing their role). Built-in
 classes can be hidden and renamed but not removed, and keep their role and their key, so a project's settings never
 change what the identity models learn from existing labels. A counted type's key is a number, a look-alike's a letter,
-unique per stain; Del, `, 0, B (the brush), S, Z and V A O are taken. Settings saved with the old keys (identity 1–7,
+unique per stain; Del, `, 0, B (the brush), S (split), M (merge), Z and V A O are taken. Settings saved with the old keys (identity 1–7,
 then a type by its place, or Q W T R) get today's built-in keys (`OLD_KEYS`). `labels.subtype_wait_s` is no longer
 used (one key picks the type) and is kept only so older settings load.
 

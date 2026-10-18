@@ -38,11 +38,11 @@ TYPE_SPLIT = "people disagree on the type"  # "plaque (people disagree on the ty
 REJECT_KEY, UNSURE_KEY, BRUSH_KEY = "delete", "`", "b"
 KEY_ALIASES = {"0": UNSURE_KEY, "backspace": REJECT_KEY}  # quiet aliases: 0 where ` is awkward, Backspace (a Mac's delete key)
 # keys the pages use for something else: field-page tools (v, a, o), save (s), undo (z), the brush (b), unsure (` and 0)
-RESERVED_KEYS = {"v", "a", "o", "s", "z", BRUSH_KEY, "0", UNSURE_KEY, REJECT_KEY}
+RESERVED_KEYS = {"v", "a", "o", "s", "m", "z", BRUSH_KEY, "0", UNSURE_KEY, REJECT_KEY}  # s split, m merge, z undo, b the brush
 COUNTED_KEYS = "123456789"
 EXTRA_COUNTED_FROM = "5"  # types people add take 5–9 (then any free number)
 LOOKALIKE_KEYS = "qwer"  # the built-in look-alikes
-EXTRA_LOOKALIKE_KEYS = "tyuiphjklcnmdfgx"  # look-alikes people add (then Q W E R when free)
+EXTRA_LOOKALIKE_KEYS = "tyuiphjklcndfgx"  # look-alikes people add (then Q W E R when free)
 DEFAULT_SUBTYPE_WAIT_S = 1.0  # no longer used (types are picked with one key); kept so older settings still load
 
 

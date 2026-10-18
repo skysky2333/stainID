@@ -107,8 +107,8 @@ page:
 1. **Choose a stain and what people should do.**
    - **Fix the field** (start here): the whole field with every object detection considered. People point at an
      object and press a key to change its call, fix its outline, or click to add what detection missed.
-   - **Mark bad areas**: one core at a time with all its stains, brush only: paint folds, artifacts, empty glass and
-     blur, or press Enter when a stain looks fine. A sample of cores is enough.
+   - **Mark bad areas**: one core at a time with all its stains, brush only (the field tool's brush and keys): add to or
+     take out of the areas of folds, artifacts, empty glass and blur, or press Enter when a stain looks fine. A sample of cores is enough.
 2. **Choose where the fields come from**: every ready core, some TMAs, or squares you click on the cores. The same
    works for slides and images.
 3. **Copy the link and send it.** People open it in their browser and type their name. No account or password is
@@ -131,7 +131,9 @@ What annotators see:
   | **Tab** / **Shift+Tab** | a bigger or smaller outline: each object has three Segment Anything outlines ready |
   | **Click** an object | precise editing of that object only: click a spot to add it, Shift+click one to leave it out, drag the dots (Z one step back); a click beyond the faint frame around it, or Enter, keeps it, Esc cancels |
   | **Space** | hide / show everything drawn over the picture, for a clean look at the tissue |
-  | **B** | the brush: paint bad areas (1–4 the type while it is on); they teach and test bad-area detection and their objects are left out of training and scoring — the analysis keeps detection's own areas |
+  | **[** / **]** | step 1 of every field: the acceptance threshold (where objects start), until *Start editing* or the first edit locks it |
+  | **S** / **M** | split an object in two (a click and Enter, or a line across objects) / merge objects (click or drag over them, Enter) |
+  | **B** | the brush: change the bad areas (1–4 the type while it is on; a drag adds to that type's area, Shift-drag takes out of it; Tab / Shift+Tab the brush size); they teach and test bad-area detection and their objects are left out of training and scoring — the analysis keeps detection's own areas |
   | **Z** | undo |
   | **Ctrl+S** / **Ctrl+Enter** | save / save and continue |
 
