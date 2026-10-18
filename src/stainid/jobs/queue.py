@@ -750,16 +750,14 @@ class Scheduler:
                 self._skip_dependents(parent, "failed" if status == "failed" else "did not finish")
 
     def _array_progress(self, parent: Job, chunks: list[Job]) -> dict:
-        from stainid.jobs import progress as log_progress
-
         done = total = 0
         error = ""
         for chunk in chunks:
             total += chunk.units
             if chunk.status == "finished":
                 done += chunk.units
-            elif chunk.status == "running" and chunk.log_file:
-                p = log_progress(Path(chunk.log_file))
+            elif chunk.status in ("running", "queued", "paused") and (chunk.log_file or chunk.outcome):
+                p = self.progress_of(chunk)
                 if p["total"]:
                     done += min(chunk.units, round(chunk.units * p["done"] / p["total"]))
             if chunk.status == "failed" and not error:
@@ -859,8 +857,10 @@ class Scheduler:
 
     def _ended(self, job: Job, code: int | None) -> None:
         now = time.time()
+        outcome = self.progress_of(job)  # over all runs so far (before this run joins `runs`)
+        outcome.pop("run_done", None)
         job.runs = [*job.runs, [job.started, now]]
-        job.returncode, job.outcome = code, self.store.progress(job)
+        job.returncode, job.outcome = code, outcome
         request, job.request, job.requested_at = job.request, "", None
         self._control(job, "")
         self._stops.pop(job.id, None)
@@ -1057,18 +1057,36 @@ class Scheduler:
                 return times[len(times) // 2]
         return None if job.command else policy.STEP_SECONDS.get(job.workflow)
 
-    def remaining(self, job: Job, now: float | None = None) -> float | None:
-        """Seconds a running job is expected to take still: from its progress, else from its estimate while that has not
-        passed (None: no basis for one, or it runs longer than expected, see `overdue`; never a made-up "30 s")."""
-        now = now or time.time()
-        elapsed = now - (job.started or now)
-        if job.request:  # asked to stop: by the end of its grace time at the latest
-            return max(0.0, (job.requested_at or now) + (job.grace or GRACE[job_class(job)]) + KILL_AFTER - now)
+    def progress_of(self, job: Job) -> dict:
+        """How far a job is over all its runs: what its log (or progress file) says, on top of what earlier runs did. A
+        step resumed after a pause often counts only what is left ("[1/30]" where 42 of 72 were done): it then still
+        shows 43 of 72. `run_done`: units done in this run (for the pace)."""
         from stainid.jobs import progress as log_progress
 
-        p = log_progress(Path(job.log_file)) if job.log_file else {"done": 0, "total": 0}
-        if p["done"] and p["total"] and p["done"] < p["total"] and elapsed > 0:
-            return elapsed / p["done"] * (p["total"] - p["done"])
+        p = log_progress(Path(job.log_file)) if job.log_file else self.store.progress(job)
+        before = job.outcome if job.runs and (job.outcome or {}).get("total") else None
+        if not before:
+            return {**p, "run_done": p["done"]}
+        done_before, total_before = int(before.get("done") or 0), int(before["total"])
+        if not p["total"]:  # the new run has said nothing yet
+            return {**p, "done": done_before, "total": total_before, "run_done": 0}
+        if p["total"] < total_before:  # it counts what is left
+            return {**p, "done": max(done_before, total_before - (p["total"] - p["done"])), "total": total_before, "run_done": p["done"]}
+        if p["total"] == total_before:  # it counts everything again (finished units first)
+            return {**p, "done": max(done_before, p["done"]), "run_done": max(0, p["done"] - done_before)}
+        return {**p, "run_done": p["done"]}
+
+    def remaining(self, job: Job, now: float | None = None) -> float | None:
+        """Seconds a running job is expected to take still: from its progress, else from its estimate while that has not
+        passed (None: no basis for one, or it runs longer than expected, see `overdue`, or it is being paused or stopped;
+        never a made-up "30 s")."""
+        now = now or time.time()
+        elapsed = now - (job.started or now)
+        if job.request:  # pausing or stopping: no time left to show (the pages say "Pausing…")
+            return None
+        p = self.progress_of(job)
+        if p["run_done"] and p["total"] and p["done"] < p["total"] and elapsed > 0:
+            return elapsed / p["run_done"] * (p["total"] - p["done"])
         total = self.estimate(job)
         return None if total is None or total <= elapsed else total - elapsed
 
@@ -1078,10 +1096,8 @@ class Scheduler:
             return False
         if job.children:
             return any(self.overdue(self.jobs[c], now) for c in job.children if c in self.jobs)
-        from stainid.jobs import progress as log_progress
-
-        p = log_progress(Path(job.log_file)) if job.log_file else {"done": 0, "total": 0}
-        if p["done"] and p["total"] and p["done"] < p["total"]:
+        p = self.progress_of(job)
+        if p["run_done"] and p["total"] and p["done"] < p["total"]:
             return False
         total = self.estimate(job)
         return total is not None and (now or time.time()) - job.started > total
@@ -1438,13 +1454,11 @@ class Scheduler:
 
     def describe(self, job: Job) -> dict:
         """A job as the Run page shows it: its class, place in the queue, progress and an estimate of the time left."""
-        from stainid.jobs import progress as log_progress
-
         chunks = [self.jobs[c] for c in job.children if c in self.jobs] if job.children else []
         if job.children:
             progress = job.outcome if job.status in FINAL and job.outcome else self._array_progress(job, chunks)
         else:
-            progress = job.outcome if job.status in FINAL and job.outcome else (log_progress(Path(job.log_file)) if job.log_file else self.store.progress(job))
+            progress = job.outcome if job.status in FINAL and job.outcome else self.progress_of(job)
         estimate = self.estimate(job)
         out = {**asdict(job), "env": {}, "title": title_of(job), "class": job_class(job), "class_title": CLASS_TITLES[job_class(job)],
                "rank": RANK[job_class(job)], "needs": job_needs(job), "progress": progress, "queue": None, "eta_s": None,

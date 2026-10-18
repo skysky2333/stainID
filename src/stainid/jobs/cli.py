@@ -82,7 +82,9 @@ def _line(info: dict) -> str:
     state = info["status"] + (f" ({info['stopping']}ing)" if info.get("stopping") else "")
     where = f"#{info['queue']['position']}" if info.get("queue") else ""
     took = policy.duration_text(info.get("estimate_s"))
-    if info["status"] == "running":  # its time so far, and an estimate only when there is a basis for one
+    if info.get("stopping"):  # asked to pause or stop: no time left, whatever the grace period
+        eta = {"cancel": "stopping…"}.get(info["stopping"], "pausing…")
+    elif info["status"] == "running":  # its time so far, and an estimate only when there is a basis for one
         eta = f"{_duration(info.get('elapsed_s') or 0)} in, " + ("longer than expected" if info.get("overdue") else
                                                                   f"~{_duration(info['eta_s'])} left" if info.get("eta_s") else "no estimate")
     else:

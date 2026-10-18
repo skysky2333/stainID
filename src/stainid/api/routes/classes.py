@@ -13,7 +13,7 @@ import re
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel
@@ -154,8 +154,11 @@ def example_from_object(stain: str, body: ObjectSpot) -> dict:
 
 
 @router.get("/annotate/class-examples/{stain}/{file}")
-def example(stain: str, file: str, person: str | None = Depends(viewer)) -> FileResponse:
-    """An example picture of a class (public: the people labelling see them)."""
+def example(stain: str, file: str, request: Request, person: str | None = Depends(viewer)) -> FileResponse:
+    """An example picture of a class (the people labelling a set of this study see them)."""
+    from stainid.api.routes import accounts as access  # noqa: PLC0415
+
+    access.may_see_project(request)
     path = examples_folder(get_state().project.output("reviews"), stain) / file
     if not FILE.fullmatch(file) or stain not in get_state().project.stains or not path.is_file():
         raise HTTPException(404, "no such example picture")
