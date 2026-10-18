@@ -12,7 +12,7 @@ pytest.importorskip("httpx")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from stainid import exclusions  # noqa: E402
+from stainid import exclusions, palette  # noqa: E402
 from stainid.api import state, store_view  # noqa: E402
 from stainid.api.app import create_app  # noqa: E402
 from stainid.v2.proposals import BITS, MASK_SCALE  # noqa: E402
@@ -85,10 +85,10 @@ def test_excluded_areas(client, synthetic_project):
     rgba = cv2.imdecode(np.frombuffer(picture.content, np.uint8), cv2.IMREAD_UNCHANGED)
     assert rgba.shape == (20, 20, 4)
     assert rgba[12, 5, 3] == 0 and rgba[5, 19, 3] == 0  # plain tissue and outside the tiles (no tissue there): transparent
-    assert rgba[3, 15, 3] > 0 and tuple(rgba[3, 15, :3][::-1]) == (255, 176, 0)  # fold (BGRA on disk)
+    assert rgba[3, 15, 3] > 0 and tuple(rgba[3, 15, :3][::-1]) == palette.area("1")  # fold, in the palette's colour (BGRA on disk)
     assert {int(rgba[y, x, 3]) for y in range(2, 4) for x in range(19)} == {70, 210}  # translucent fill and hatching lines
     assert {int(rgba[y, x, 3]) for y in range(15, 19) for x in range(15, 19)} == {40, 120}  # no tissue: lighter, a faint wash with fine dots
-    assert tuple(rgba[15, 15, :3][::-1]) == (120, 128, 140)
+    assert tuple(rgba[15, 15, :3][::-1]) == palette.area("3")
 
 
 def test_tissue_in_no_tile_is_drawn_as_not_analysed(client, synthetic_project, monkeypatch):

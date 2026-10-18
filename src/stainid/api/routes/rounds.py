@@ -19,6 +19,7 @@ held. Who finished the tutorial is kept in `<reviews>/tutorials.json` (`/api/ses
 from __future__ import annotations
 
 import json
+import logging
 import re
 import secrets
 import threading
@@ -59,6 +60,7 @@ from stainid.labels.tasks import STAINS
 from stainid.tables import write_text_atomic
 
 router = APIRouter(tags=["annotation rounds"])
+log = logging.getLogger(__name__)
 admin = [Depends(require_admin)]
 _TILES_HELD = sessions.Reservations(rounds.TILE_HOLD_SECONDS)  # tiles on someone's screen, per round and stain
 OUTLINE_SIMPLIFY_PX = 1.5
@@ -971,9 +973,16 @@ def merge_route(name: str, tile_id: str, body: Merge, request: Request, person: 
     """Merge mode (M): one outline for the objects chosen (their union, bridged where they do not touch)."""
     meta = _round_meta(name, request)
     field_tile(meta, tile_id)
-    outline = objectedit.merge(body.outlines)
+    shapes = [o for o in body.outlines if o is not None and len(o) >= 3]
+    if len(shapes) < 2:
+        raise HTTPException(400, "Choose two or more objects to merge.")
+    gap_um = objectedit.merge_gap(shapes) * get_state().project.pixel_size_um
+    limit_um = objectedit.MERGE_GAP_PX * get_state().project.pixel_size_um
+    if gap_um > limit_um:
+        raise HTTPException(400, f"These objects are {gap_um:.0f} µm apart: only objects that touch or nearly touch (within {limit_um:.0f} µm) can be merged.")
+    outline = objectedit.merge(shapes)
     if outline is None:
-        raise HTTPException(400, "choose two or more objects close to each other to merge")
+        raise HTTPException(400, "These objects could not be joined into one outline: choose objects that touch or nearly touch.")
     return {"outline": outline}
 
 
@@ -1006,11 +1015,18 @@ def segment(name: str, tile_id: str, body: Clicks, request: Request, person: str
             return sam_embeddings.outline(state, tile_id, meta["stain"], points)
         except IndexError:  # no click left inside the window around the first one
             return {"options": [], "chosen": 0}
+        except Exception as error:  # noqa: BLE001 - the weights would not load, the model failed: a plain message
+            log.exception("Segment Anything failed on %s", tile_id)
+            raise HTTPException(503, SAM_FAILED) from error
 
     if sam_embeddings.status(state, tile_id)["ready"]:  # the features are made: the decoder answers in a tenth of a second
         return run(None)
     label = "Waiting for Segment Anything" if sam_embeddings.busy() else "Outlining"
     return work.answer("segment", ("segment", secrets.token_hex(8)), run, work.URGENT, label, then="result")
+
+
+SAM_FAILED = ("One-click outlines are not working on this server right now (Segment Anything could not start). Draw the "
+              "outline by hand for now (Draw an object by hand…), and tell the person running stainID: the details are in the server's log.")
 
 
 # ---------- practice for the tutorial ----------
@@ -1101,9 +1117,10 @@ class Tutorial(BaseModel):
 
 @router.get("/session/tutorial")
 def tutorial(request: Request, person: str = Depends(annotator)) -> dict:
-    """Whether this person has been through the tutorial, and where it practises: the stain of the first open round
-    session (else the first with candidates). Finding the practice field reads a few cores the first time: in the
-    background then (`work`)."""
+    """Whether this person has been through the tutorial, and where it practises: a 6E10 field (`PRACTICE_STAIN`, for
+    everyone) with several plaque types, detection rejects and a detected fold or artifact, else the stain of the first
+    open round session, else the first stain with candidates (`practice_tile`); the "Mark bad areas" practice is
+    `practice-areas`. Finding the practice field reads a few cores the first time: in the background then (`work`)."""
     practice = work.answer("tutorial", ("tutorial", str(get_state().root)), lambda task: _practice(), work.NOW, "Finding a practice field",
                            fresh=work.within(15))
     if isinstance(practice, Response):
@@ -1126,7 +1143,10 @@ def _practice() -> dict | None:
 
 @router.post("/session/tutorial")
 def tutorial_done(body: Tutorial, person: str = Depends(annotator)) -> dict:
-    """Remember that this person finished (or skipped) the tutorial, or forget it (to see it again)."""
+    """Remember that this person finished (or skipped) the tutorial, or forget it (to see it again); someone trying it
+    without an account (`PREVIEW`) is not remembered."""
+    if person == PREVIEW:
+        return {"done": body.done}
     with _TUTORIALS:
         done = _tutorials()
         if body.done:

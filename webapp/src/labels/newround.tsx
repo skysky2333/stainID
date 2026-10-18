@@ -1,7 +1,7 @@
 /* Making an annotation round (the Labels page): "Fix the field" (objects) or "Mark bad areas" (the brush), where its objects come from (every ready core, some
    TMAs, or fields chosen on the cores, each core showing whether it is ready) and how many. Everything else (how
    generous the candidates are, how many people must decide each object, the session ID, a note, types) is under
-   Advanced, with the older kinds of session (whole-field review and quick check of the label pool, outline every object). */
+   Advanced, with the older kinds of session (whole-field review and quick check of the label pool). */
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { AreasOverview, RoundScope, SessionInfo, Vocabulary } from '../api'
@@ -168,8 +168,8 @@ export function NewRoundSession({ stains, onClose, onCreated, onOlder }: {
             {' '}<Link to="/settings#label-classes">Change the classes</Link></p>}
           {typed.length > 0 && <label className="layer-toggle"><input type="checkbox" checked={subtypes} onChange={(e) => setSubtypes(e.target.checked)} />
             Also ask for the type ({typed.map((c) => c.name).join(', ')})</label>}
-          <p className="small secondary" style={{ marginBottom: 0 }}>Older kinds of session — the whole-field review and quick check on the current label pool, and
-            “Outline every object” (a segmentation check): <button className="link-btn" onClick={onOlder}>make one of those instead…</button></p>
+          <p className="small secondary" style={{ marginBottom: 0 }}>Older kinds of session — the whole-field review and quick check on the current label
+            pool: <button className="link-btn" onClick={onOlder}>make one of those instead…</button></p>
         </Advanced>}
         <ErrorNote error={error ?? scope.error} />
         <div className="row"><span className="spacer" />

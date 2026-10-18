@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import type { AddedState, FieldObjectLite, FieldWork, Label, SessionDetail } from '../api'
 import { api, apiUrl, enc } from '../api'
 import { Empty, ErrorNote, Loaded, Loading, PageHead, Progress, fmt } from '../components'
+import { PALETTE } from '../palette'
 import { useFetch, useStored } from '../hooks'
 import { AI_VIEW_FOR_LABELLERS } from '../labelling'
 import type { ClassPick } from '../labels/classKeys'
@@ -16,7 +17,6 @@ import { MarkAreas } from '../labels/markareas'
 import { ROUND_TITLE, RoundProgressLine, useFitScreen } from '../labels/rounds'
 import type { RoundDetail } from '../api'
 import { Register, useSession } from '../session'
-import { OutlineWorkspace } from '../segcheck/OutlineWorkspace'
 import { useFirstTutorial } from '../labels/tutorial'
 import type { ImagePoint } from '../viewer'
 import { RASTER_LAYERS, ZoomViewer } from '../viewer'
@@ -48,7 +48,7 @@ export default function AnnotatePage() {
   const detail = useFetch<SessionDetail>(session.annotator ? `/api/annotate/${name}` : null)
   // someone new who followed a session's link: the tutorial first ("Mark bad areas": its own), then back here
   useFirstTutorial(!session.annotator ? 'objects' : !detail.data ? null : detail.data.meta.kind === 'areas' ? 'areas' : 'objects')
-  if (!session.annotator) return <><PageHead title="Help check tissue images" subtitle="Type your name to start." /><Register /></>
+  if (!session.annotator) return <><PageHead title="Help check tissue images" subtitle="Sign in to start, then add this set with the key you were given." /><Register /></>
   if (detail.error) return <SessionProblem error={detail.error} retry={detail.reload} />
   if (!detail.data) return <Loading label="Opening the session…" />
   const round = (detail.data.meta as Partial<RoundDetail>).round
@@ -58,7 +58,9 @@ export default function AnnotatePage() {
       Ask for a “Fix the field” session instead.</p><Link className="btn" to="/annotate">All sessions</Link></Empty></>
   if (round === 2 && tile) return <FixField key={tile} detail={detail.data} reload={detail.reload} tile={tile} />
   if (detail.data.meta.kind === 'queue') return <QuickCheck detail={detail.data} />
-  if (detail.data.meta.kind === 'outline' && tile) return <OutlineWorkspace key={tile} detail={detail.data} reload={detail.reload} tile={tile} />
+  if (detail.data.meta.kind === 'outline') return <><PageHead title={detail.data.meta.title} subtitle="Outline every object" />
+    <Empty><p style={{ marginTop: 0 }}>This kind of session is no longer used: its outlines stay in the label log and still count in the segmentation
+      check’s scores. Outlines are now fixed in “Fix the field”.</p><Link className="btn" to="/annotate">All sessions</Link></Empty></>
   return tile ? <Workspace key={tile} detail={detail.data} reload={detail.reload} tile={tile} /> : <SessionOverview detail={detail.data} reload={detail.reload} />
 }
 
@@ -372,7 +374,7 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
                 title={<span className="row"><span className="muted small">{tile}</span>{done && <span className="badge status-done">finished</span>}</span>}
                 cursor={active?.id === 'label' ? 'pointer' : 'crosshair'} onClick={click} onMove={move}>
                 {(_zoom, _size, unit) => <>
-                  {layers.box && <rect x={data.box.x} y={data.box.y} width={data.box.width} height={data.box.height} fill="none" stroke="#ffd21f" strokeWidth={2 * unit} strokeDasharray={`${12 * unit} ${8 * unit}`} />}
+                  {layers.box && <rect x={data.box.x} y={data.box.y} width={data.box.width} height={data.box.height} fill="none" stroke={PALETTE.markers.box} strokeWidth={2 * unit} strokeDasharray={`${12 * unit} ${8 * unit}`} />}
                   {layers.outlines && all.map((o) => {
                     const k = rkey(o.x, o.y)
                     const v = pickOf(myClass(o.x, o.y)) ?? aiPick(objects.find((q) => rkey(q.x, q.y) === k))

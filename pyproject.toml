@@ -43,7 +43,7 @@ stainid-audit-exports = "stainid.slides.export_audit:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-stainid = ["api/static/**/*"]
+stainid = ["api/static/**/*", "palette.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

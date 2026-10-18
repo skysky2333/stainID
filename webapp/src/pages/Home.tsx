@@ -165,7 +165,7 @@ function StageOverview({ steps }: { steps: Step[] }) {
 /** The study in numbers: donors, donor-regions, cores, fields, and donors per group (once there are cores). */
 function StudyFacts() {
   const summary = useFetch<Summary>('/api/summary', 60000)
-  const { groups, groupColor, groupLabel } = useProject()
+  const { groups, groupColor, groupLabel, info } = useProject()
   if (!summary.data) return summary.error ? <ErrorNote error={summary.error} /> : null
   const data = summary.data
   if (!data.cores) return null
@@ -176,7 +176,9 @@ function StudyFacts() {
       <div className="grid grid-4">
         <Stat value={data.donors.toLocaleString()} label="donors" />
         <Stat value={data.donor_regions.toLocaleString()} label={<Term term="donor-region">donor-regions</Term>} />
-        <Stat value={data.cores.toLocaleString()} label={<>cores on {data.tmas.length} <Term>TMA</Term>s</>} />
+        <Stat value={data.cores.toLocaleString()} label={info?.kind === 'images' || info?.kind === 'slides'  // an image set: pictures in batches, no TMAs
+          ? <>{info.kind} in {data.tmas.length.toLocaleString()} batch{data.tmas.length === 1 ? '' : 'es'}</>
+          : <>cores on {data.tmas.length} <Term>TMA</Term>s</>} />
         <Stat value={fields.toLocaleString()} label={<>analysis <Term>field</Term>s (all stains)</>} />
       </div>
       {Object.keys(data.groups).length > 0 && (

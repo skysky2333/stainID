@@ -1,33 +1,36 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
+import { PALETTE } from './palette'
 
+/** The names of detection's own classes where no label class names them (the current outputs); their colours are the
+ *  label classes' (classPalette.ts `MODEL_CLASSES`), these only for what has no class. */
 export const CLASS_STYLE: Record<string, { color: string; label: string; short?: string }> = {
-  neuron: { color: '#00d5ff', label: 'NeuN+ neuron', short: 'neuron' },
-  rejected: { color: '#ff3b3b', label: 'rejected candidate', short: 'rejected' },
-  compact: { color: '#ff00c8', label: 'compact plaque', short: 'compact' },
-  diffuse: { color: '#00dcff', label: 'diffuse plaque', short: 'diffuse' },
-  small_plaque: { color: '#c8c8c8', label: 'small plaque (10–15 µm)', short: 'small' },
-  tau_neuron_ring: { color: '#00e050', label: 'tau+ neuron (nucleus-ring)', short: 'ring' },
-  tau_neuron_dense: { color: '#ffd000', label: 'tau+ neuron (dense body)', short: 'dense body' },
-  unproposed: { color: '#ff9f1a', label: 'stained but never proposed', short: 'not proposed' },
+  neuron: { color: PALETTE.states.unknown, label: 'NeuN+ neuron', short: 'neuron' },
+  rejected: { color: PALETTE.states.inactive, label: 'rejected candidate', short: 'rejected' },
+  compact: { color: PALETTE.states.unknown, label: 'compact plaque', short: 'compact' },
+  diffuse: { color: PALETTE.states.unknown, label: 'diffuse plaque', short: 'diffuse' },
+  small_plaque: { color: PALETTE.states.unknown, label: 'small plaque (10–15 µm)', short: 'small' },
+  tau_neuron_ring: { color: PALETTE.states.unknown, label: 'tau+ neuron', short: 'tau+ neuron' },
+  tau_neuron_dense: { color: PALETTE.states.unknown, label: 'tau+ neuron', short: 'tau+ neuron' },
+  unproposed: { color: PALETTE.overlays.unproposed, label: 'stained but never proposed', short: 'not proposed' },
 }
 
 export const RASTER_LAYERS: Record<string, { label: string; color: string }> = {
-  dab: { label: 'DAB above slide threshold', color: '#ff2828' },
-  exclusions: { label: 'excluded (non-tissue, artifacts, folds)', color: '#5a6eff' },
-  threads: { label: 'neuropil threads (computed on demand)', color: '#286eff' },
+  dab: { label: 'DAB above slide threshold', color: PALETTE.overlays.dab },
+  exclusions: { label: 'excluded (non-tissue, artifacts, folds)', color: PALETTE.overlays.excluded },
+  threads: { label: 'neuropil threads (computed on demand)', color: PALETTE.overlays.threads },
 }
 
 export interface ImagePoint { x: number; y: number; unit: number }
 
 /**
  * A field image with raster layers and an SVG overlay in image pixel coordinates. Scroll zooms towards the pointer,
- * dragging (any button, the middle one too) pans; a left or right press without dragging is reported as a click in image
+ * dragging (the left button where nothing else takes it, the middle one always) pans, the right button does nothing; a left or right press without dragging is reported as a click in image
  * pixels (`unit` = image pixels per screen pixel). The page never scrolls from it: the wheel is taken, and the middle
  * button's autoscroll never starts. With `fit`, the picture is as large as fits the space its card is given (the
  * annotation pages size that to the window), instead of the card's width.
  */
-export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, onMove, children, fit = false, onPress, onRelease, onWheelOver, onSize, panLock = false, under }: {
+export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, onMove, children, fit = false, onPress, onRelease, onWheelOver, onSize, panLock = false, under, paint }: {
   src: string
   layers?: string[]
   title: ReactNode
@@ -48,6 +51,8 @@ export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, on
   onSize?: (size: { w: number; h: number }) => void
   /** drawn below `children` in a layer of its own (painted once, not again when what is above it changes) */
   under?: (zoom: number, size: { w: number; h: number }, unit: number) => ReactNode
+  /** HTML (the brush's canvases) between `under` and `children`, in a layer of its own: a change to it repaints only it */
+  paint?: ReactNode
 }) {
   const [view, setView] = useState({ zoom: 1, x: 0, y: 0 })
   const [size, setSize] = useState({ w: 2304, h: 2304 })
@@ -137,7 +142,9 @@ export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, on
     : null
   const viewer = (
     <div ref={box} className="viewer" style={{ ...(fitted ?? { aspectRatio: `${size.w} / ${size.h}` }), cursor: cursor ?? (zoom > 1 ? 'grab' : 'default') }}
+      onContextMenu={(e) => e.preventDefault()}
       onMouseDown={(e) => {
+        if (e.button === 2) return  // the right button does nothing on the picture; the middle one pans
         if (e.button === 1) e.preventDefault()  // no autoscroll: the middle button pans the picture
         drag.current = { x: e.clientX, y: e.clientY, ox: view.x, oy: view.y, moved: false, pan: !panLock || e.button === 1 }
         if (e.button !== 1) onPress?.(toImage(e), e)
@@ -150,6 +157,7 @@ export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, on
         onMove?.(toImage(e))
       }}
       onMouseUp={(e) => {
+        if (e.button === 2) return
         if (e.button !== 1) onRelease?.(toImage(e), e)
         if (drag.current && !drag.current.moved && e.button !== 1) onClick?.(toImage(e), e)
         drag.current = null
@@ -160,6 +168,7 @@ export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, on
         <img src={src} alt="field" draggable={false} />
         {layers.map((layer) => <img key={layer} src={layer} alt="" draggable={false} style={{ imageRendering: 'pixelated' }} />)}
         {under && <svg className="viewer-under" viewBox={`0 0 ${size.w} ${size.h}`}>{under(zoom, size, size.w / width / zoom)}</svg>}
+        {paint && <div className="viewer-paint">{paint}</div>}
         <svg viewBox={`0 0 ${size.w} ${size.h}`}>{children(zoom, size, size.w / width / zoom)}</svg>
       </div>
     </div>

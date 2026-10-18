@@ -167,7 +167,7 @@ export function SaveButtons({ unsaved, saving, onSave, onContinue, canContinue, 
   </>
 }
 
-/** The bigger / smaller switch between an object's masks: the size shown, and Tab / Shift+Tab. */
+/** The smaller / bigger switch between an object's masks: the size shown, and Tab (smaller) / Shift+Tab (bigger), as for the brush. */
 export function MaskSwitch({ masks, index, onChange, disabled = false, names }: {
   masks: (number[][] | null)[]; index: number; onChange: (i: number) => void; disabled?: boolean; names?: string[]
 }) {
@@ -180,20 +180,20 @@ export function MaskSwitch({ masks, index, onChange, disabled = false, names }: 
       <div className="mask-switch-head small"><b>Outline</b> <span aria-live="polite">{maskName(index, count, names)}</span>
         <span className="muted"> · {rank + 1} of {order.length} by size</span></div>
       <div className="mask-switch-row">
-        <button className="btn small" disabled={disabled || rank <= 0} onClick={() => onChange(order[rank - 1])} title="Smaller outline (Shift+Tab or −)">
-          <span className="kbd">⇧ Tab</span> Smaller</button>
+        <button className="btn small" disabled={disabled || rank <= 0} onClick={() => onChange(order[rank - 1])} title="Smaller outline (Tab or −)">
+          <span className="kbd">Tab</span> Smaller</button>
         <span className="mask-dots">
           {order.map((i) => <button key={i} className={`mask-dot${i === index ? ' on' : ''}`} onClick={() => onChange(i)}
             title={maskName(i, count, names)} aria-label={maskName(i, count, names)} aria-pressed={i === index} disabled={disabled} />)}
         </span>
-        <button className="btn small" disabled={disabled || rank < 0 || rank >= order.length - 1} onClick={() => onChange(order[rank + 1])} title="Bigger outline (Tab or +)">
-          Bigger <span className="kbd">Tab</span></button>
+        <button className="btn small" disabled={disabled || rank < 0 || rank >= order.length - 1} onClick={() => onChange(order[rank + 1])} title="Bigger outline (Shift+Tab or +)">
+          Bigger <span className="kbd">⇧ Tab</span></button>
       </div>
     </div>
   )
 }
 
-/** The next outline for Tab (bigger) or Shift+Tab (smaller), by size (`bySize`); the same when there is none that way. */
+/** The next outline for Shift+Tab (bigger) or Tab (smaller), by size (`bySize`); the same when there is none that way. */
 export function stepMask(masks: (number[][] | null)[], index: number, bigger: boolean): number {
   const order = bySize(masks)
   const rank = order.indexOf(index)
@@ -262,7 +262,7 @@ export interface CandidateActions {
   onClass: (pick: ClassPick) => void  // 1–9 and Q W E R …: this type
   onUnsure: () => void  // ` (or 0)
   onRemove: () => void  // Delete / Backspace: not an object (undoable)
-  onMask: (bigger: boolean) => void  // Tab / + bigger, Shift+Tab / − smaller
+  onMask: (bigger: boolean) => void  // Shift+Tab / + bigger, Tab / − smaller (as the brush)
   /** Tab / Shift+Tab, + / −, while something else has a size (the brush: Tab smaller, Shift+Tab bigger): true when
    *  it took the key, so the outline does not change */
   onSize?: (bigger: boolean) => boolean
@@ -283,7 +283,7 @@ export function useCandidateKeys(keys: KeyMap, actions: CandidateActions) {
     const onKey = (e: KeyboardEvent) => {
       const a = latest.current
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement).tagName) || e.metaKey || e.ctrlKey || e.altKey) return
-      if (e.key === 'Tab') { e.preventDefault(); if (a.onSize?.(e.shiftKey)) return; a.onMask(!e.shiftKey); return }
+      if (e.key === 'Tab') { e.preventDefault(); if (a.onSize?.(e.shiftKey)) return; a.onMask(e.shiftKey); return }  // Tab smaller, Shift+Tab bigger
       if (e.key === '+' || e.key === '=') { if (a.onSize?.(true)) return; a.onMask(true); return }
       if (e.key === '-' || e.key === '_') { if (a.onSize?.(false)) return; a.onMask(false); return }
       if (e.repeat) return
@@ -375,7 +375,7 @@ export function KeyLegend({ round, vocabulary, keys, sam }: { round: 1 | 2; voca
       {round === 2 && <span>Point at an object: the keys act on it</span>}
       {round === 1 && <span><span className="kbd">Enter</span> keep detection’s call</span>}
       <ClassKeyHint vocabulary={vocabulary} keys={keys} brush={round === 2} />
-      <span><span className="kbd">Tab</span> / <span className="kbd">⇧ Tab</span> bigger / smaller outline</span>
+      <span><span className="kbd">Tab</span> / <span className="kbd">⇧ Tab</span> smaller / bigger outline</span>
       {sam && <span><span className="kbd">Space</span> precise edit</span>}
       <span><span className="kbd">Z</span> undo (unsaved changes)</span>
       {round === 2 && sam && <span>Click empty tissue: add a missed object</span>}

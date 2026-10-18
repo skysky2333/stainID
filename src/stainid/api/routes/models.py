@@ -4,7 +4,9 @@ import time
 from functools import lru_cache
 from pathlib import Path
 
+import pandas as pd
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from stainid.api.state import get_state, reload_project
@@ -84,3 +86,31 @@ def use_model(request: ActivateRequest) -> dict:
         raise HTTPException(404, request.path)
     reload_project(activate(project, bundle).root)
     return {"ok": True}
+
+
+def _fixed_stains() -> list[str]:
+    from stainid.labels import candidate_store
+    from stainid.labels.tasks import STAINS
+
+    return [s for s in STAINS if candidate_store.cores(get_state().project, s)]
+
+
+@router.get("/models/outline-fixes")
+def outline_fixes() -> dict:
+    """Per stain with candidates: the outlines people fixed in "Fix the field" against each of detection's outlines
+    (`labels.outline_fixes`), the evidence for the stain's default outline (never changed here)."""
+    from stainid.labels import outline_fixes as fixes
+
+    state = get_state()
+    return {"stains": [fixes.summary(state.project, s, state.tiles) for s in _fixed_stains()]}
+
+
+@router.get("/models/outline-fixes.csv")
+def outline_fixes_csv() -> Response:
+    """Every fixed outline with its comparison (one row per object), to train a better outline from."""
+    from stainid.labels import outline_fixes as fixes
+
+    state = get_state()
+    parts = [p for p in (fixes.rows(state.project, s, state.tiles) for s in _fixed_stains()) if len(p)]
+    frame = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=fixes.ROW_COLUMNS)
+    return Response(frame.to_csv(index=False), media_type="text/csv", headers={"Content-Disposition": 'attachment; filename="outline_fixes.csv"'})

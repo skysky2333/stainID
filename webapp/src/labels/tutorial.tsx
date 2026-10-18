@@ -15,7 +15,7 @@ import { FixField } from './fixfield'
 import type { AreaEvent } from './markareas'
 import { MarkAreas, PRACTICE_AREAS } from './markareas'
 import type { RoundEvent } from './rounds'
-import { Register, useSession } from '../session'
+import { useSession } from '../session'
 
 interface TutorialInfo { done: boolean; practice: { stain: string; tile_id: string; round2: string } | null }
 /** One step: done once the page reports one of `done` (`times` of them: "reject a few"). */
@@ -41,7 +41,7 @@ function stepsFor(typed: boolean, counted: string): Step[] {
     { title: 'Leave precise editing', text: 'Click outside the faint frame around the object (or press Enter) to keep the outline: the view goes back to where you were (Esc would cancel the edit).', done: ['precise-out'] },
     { title: 'Split an object', text: 'Two objects outlined as one? Press S for split, then click the object: a split into two shows. Click elsewhere on it to move the split, press Enter to keep it (Esc drops it). You can also drag a line right across objects to cut each one along it. The pieces keep the type; the keys retype them.', done: ['split'] },
     { title: 'Merge objects', text: 'One object outlined in pieces? Press M for merge, click the pieces (or drag over them) — the panel counts them — and press Enter. They become one object with the type of the largest. Press M or Esc to leave.', done: ['merge'] },
-    { title: 'Bigger or smaller outline', text: 'Point at an object and press Tab for a bigger outline, Shift+Tab for a smaller one. Each object has three sizes ready, so it changes at once.', done: ['mask'] },
+    { title: 'Bigger or smaller outline', text: 'Point at an object and press Shift+Tab for a bigger outline, Tab for a smaller one (the same keys size the brush). Each object has three sizes ready, so it changes at once.', done: ['mask'] },
     { title: 'Add a missed object', text: `Click on tissue where detection missed an object: its outline appears as a new candidate (dotted grey with a diamond). Then press ${counted} to make it solid.`, done: ['added'] },
     { title: 'Mark a bad area', text: 'Hatched areas are what the analysis leaves out: folds, artifacts, empty glass, found by detection. Press B for the brush: 1–4 choose the type (fold, artifact, no tissue, out of focus), and that type’s area shows as one region — detection’s with everyone’s edits. Drag to add to it (a stroke touching a detected fold extends that fold); Shift-drag takes a part out, detection’s too. Tab makes the brush smaller, Shift+Tab bigger; the wheel still zooms. Your areas teach and test the bad-area detection; the analysis keeps detection’s own. Press B again when done.', done: ['exclude'] },
     { title: 'Save your work', text: 'Nothing you do is saved yet: the panel says how many unsaved changes you have, and a small orange dot marks each object you changed. Press Save (or Ctrl+S) to keep them — you stay on this field. (In this practice, Save only pretends.)', done: ['save'] },
@@ -53,7 +53,7 @@ function stepsFor(typed: boolean, counted: string): Step[] {
 /** "Tutorial" in the header of the annotation pages: shows it again. */
 export function TutorialLink() {
   const { session } = useSession()
-  return session.annotator ? <Link className="small tutorial-link" to="/annotate/tutorial" title="Show the tutorial again">Tutorial</Link> : null
+  return <Link className="small tutorial-link" to="/annotate/tutorial" title={session.annotator ? 'Show the tutorial again' : 'Try it: no account needed'}>Tutorial</Link>
 }
 
 const areasDoneKey = (person: string | null | undefined) => `stainid.tutorial.areas.${person ?? ''}`
@@ -85,8 +85,7 @@ export function Tutorial() {
   const preview = params.get('preview') === '1' && session.admin
   const next = params.get('next')?.startsWith('/annotate') ? params.get('next')! : '/annotate'
   const areas = params.get('kind') === 'areas'
-  const info = useFetch<TutorialInfo>((session.annotator || preview) && !areas ? '/api/session/tutorial' : null)
-  if (!session.annotator && !preview) return <><PageHead title="Tutorial" subtitle="Type your name first." /><Register /></>
+  const info = useFetch<TutorialInfo>(!areas ? '/api/session/tutorial' : null)  // public: no account needed, nothing is kept
   if (areas) return <AreasCoached preview={preview} next={next} />
   return (
     <Loaded state={info} label="Opening the tutorial…">

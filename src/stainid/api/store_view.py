@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from stainid import candidates
+from stainid import candidates, palette
 from stainid import exclusions as excluded_areas
 
 COLUMNS = ["candidate_id", "x_core", "y_core", "radius_px", "area_um2", "probability", "decision", "reason", "class", "subtype",
@@ -143,13 +143,13 @@ class ExcludedKind:
         self.label = excluded_areas.CODES[code]
 
 
-EXCLUDED_KINDS = (  # the colours are the brush's (webapp labels/brush.ts EXCLUDE_TYPES)
-    ExcludedKind("fold", 1, (255, 176, 0), "/", "1"),
-    ExcludedKind("artifact", 2, (168, 85, 247), "\\", "2"),
-    ExcludedKind("no_tissue", 3, (120, 128, 140), ".", "3", fill=40, line=120),  # lighter: glass is much of an edge tile
-    ExcludedKind("focus", 4, (0, 229, 255), "|", "4"),
-    ExcludedKind("edge_guard", 5, (20, 184, 166), "-"),
-    ExcludedKind("not_analysed", 6, (100, 116, 139), "/"),
+EXCLUDED_KINDS = (  # the colours are the one palette's (stainid/palette.json "areas"), the brush's too
+    ExcludedKind("fold", 1, palette.area("1"), "/", "1"),
+    ExcludedKind("artifact", 2, palette.area("2"), "\\", "2"),
+    ExcludedKind("no_tissue", 3, palette.area("3"), ".", "3", fill=40, line=120),  # lighter: glass is much of an edge tile
+    ExcludedKind("focus", 4, palette.area("4"), "|", "4"),
+    ExcludedKind("edge_guard", 5, palette.area("edge_guard"), "-"),
+    ExcludedKind("not_analysed", 6, palette.area("not_analysed"), "/"),
 )
 EXCLUDED_SCALE = excluded_areas.SCALE  # core-image px per layer px
 HATCH_PX = 4  # layer px between hatching lines (32 core-image px)

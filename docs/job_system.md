@@ -15,7 +15,7 @@ points), `stainid.jobs.cli` (`stainid jobs …`), `stainid.api.jobs` (one projec
 
    | Class | What | Nice / CPUWeight / IOWeight | Grace to reach a unit boundary |
    |---|---|---|---|
-   | annotation | label-field preparation, applying area edits | 0 / 400 / 400 | 300 s |
+   | annotation | preparing what annotators open (field pictures, crops, Segment Anything features ahead) | 0 / 400 / 400 | 300 s |
    | pipeline | the main study's stages | 5 / 100 / 100 | 300 s |
    | models | training, model comparison, segmentation check | 10 / 50 / 50 | 120 s |
    | public | any project with a `dataset:` section (or `jobs: {class: public}` in its stainid.yaml) | 15 / 20 / 20 | 30 s |
@@ -161,3 +161,33 @@ stainid jobs serve                          # run the queue without the app
 The Run page shows the queue grouped by class with each job's place, progress, time left and Pause / Resume / Cancel /
 Move up, its size and expected run time ("small · ~2 min", "big · ~5 h"), an array as one row with its chunks, and the
 budget in use.
+
+### Progress and time left
+
+A running job's line says how far it is, how long it has run, and what is known of the time left:
+
+- `12 of 72 done · 1 h 45 min so far · about 8 h left`: from its progress, at the pace so far;
+- `running · 1 h 45 min so far · no estimate`: it reports no progress and nothing tells how long it takes;
+- `… · taking longer than expected`: it has run past its expected time (`--time`, or how long the same command took
+  before) with no progress to go by. The queue never shows a made-up estimate.
+
+A stainID step reports progress with the `[i/n]` lines it prints. Any other command (`--exec`) can use its **progress
+file**, whose path is in `$STAINID_PROGRESS_FILE` (next to its log in the queue folder), in either form:
+
+```bash
+echo "12/72" >> "$STAINID_PROGRESS_FILE"           # done/total: the last such line counts
+echo "total 72" >> "$STAINID_PROGRESS_FILE"        # or the total once, then one line per finished unit
+echo "unit done" >> "$STAINID_PROGRESS_FILE"       # ("done <anything>" counts too)
+```
+
+```python
+import os
+progress = os.environ.get("STAINID_PROGRESS_FILE")   # None outside the queue
+...
+if progress:
+    with open(progress, "a") as f:
+        f.write(f"{done}/{total}\n")                   # several workers may append "unit done" lines side by side
+```
+
+The progress file wins over `[i/n]` lines in the log; it is kept when a job is paused and resumed, so a script that
+skips its finished units can simply go on counting. `stainid jobs list` shows the same: `1h45m in, no estimate`.

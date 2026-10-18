@@ -90,6 +90,7 @@ pytest.importorskip("fastapi")
 pytest.importorskip("httpx")
 
 from fastapi.testclient import TestClient  # noqa: E402
+from people import annotator  # noqa: E402
 
 from stainid.api import pyramid, state  # noqa: E402
 from stainid.api.app import create_app  # noqa: E402
@@ -125,9 +126,7 @@ def queue(synthetic_project, monkeypatch):
     assert made.status_code == 200, made.text
     people = []
     for name in ("Ann", "Ben"):
-        person = TestClient(admin.app)
-        person.post("/api/session/annotator", json={"name": name})
-        people.append(person)
+        people.append(annotator(admin, name, "quick"))
     yield admin, people, reads
     state.reset()
 

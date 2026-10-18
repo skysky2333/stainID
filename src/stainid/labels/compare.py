@@ -3,17 +3,19 @@ Labels overview read, built on the decisions scoring uses (`labels.decisions.sta
 each candidate, objects in excluded areas left out).
 
 Per candidate someone decided: detection's call (identity, subtype), the people's consensus and each person's answer,
-and how they compare (`kind`): "agree", "changed" (another class or type, also a candidate detection rejected that
-people call an object), "rejected" (people say it is not an object; detection accepted it) or "unsure" (only "unsure"
-answers). Also the outlines people fixed (`outline` labels on a candidate) and the objects people added that detection
-missed (class labels on no candidate). Labels only train and evaluate models: nothing here changes what the analysis
-counts.
+and how they compare (`kind`): "agree" (the same class; a label without a type agrees with detection's type),
+"changed" (another class or type, also a candidate detection rejected that people call an object), "rejected" (people
+say it is not an object; detection accepted it) or "unsure" (only "unsure" answers). Also the outlines people fixed
+(`outline` labels on a candidate) and the objects people added that detection missed (class labels on no candidate,
+also after matching old labels onto candidates by position, `decisions.matched`). Labels only train and evaluate
+models: nothing here changes what the analysis counts. The tables of a stain are worked out once for every core and
+kept until the label log, the candidate store or the excluded areas change (`layer`).
 """
 from __future__ import annotations
 
 import pandas as pd
 
-from stainid import candidates
+from stainid import cache, candidates
 from stainid import exclusions as excluded_areas
 from stainid.labels import candidate_store, decisions, frames, objectedit, store
 from stainid.labels import vocabulary as vocab
@@ -29,9 +31,60 @@ def _core_of(candidate_id: str) -> str:
         return ""
 
 
+def agrees(call: tuple[str, str], detection: tuple[str, str]) -> bool:
+    """Whether people's class agrees with detection's: the same identity, and the same type or none given (a label
+    without a type says nothing against detection's type)."""
+    return call[0] == detection[0] and (not call[1] or (call[1] or "") == (detection[1] or ""))
+
+
+def layer(project, stain: str, tiles: pd.DataFrame) -> dict:
+    """The comparison of every core image of a stain (`versus_detection`, `fixed_outlines`, `added_objects`,
+    `object_edits` over all cores), kept until the label log, the candidate store or the excluded areas change: one
+    core after another in the Cores view reads it without working it out again."""
+    inputs = [store.log_path(project.output("reviews")), candidate_store.folder(project, stain)]
+    key = ("compare layer", str(project.root), stain, len(tiles), excluded_areas.signature(project, stain), vocab.of(project, stain))
+    return cache.memo(key, inputs, lambda: {"found": _versus_detection(project, stain, tiles), "fixed": _fixed_outlines(project, stain, tiles),
+                                            "added": _added_objects(project, stain, tiles), "edits": _object_edits(project, stain, tiles)},
+                      folders=True)
+
+
+def _of_core(frame: pd.DataFrame, core_id: str | None, column: str = "core_id") -> pd.DataFrame:
+    if core_id is None or frame.empty:
+        return frame
+    return frame[frame[column].astype(str) == str(core_id)].reset_index(drop=True)
+
+
 def versus_detection(project, stain: str, tiles: pd.DataFrame, core_id: str | None = None) -> pd.DataFrame:
     """One row per candidate people decided (of one core image, or every one): `COLUMNS`; `people` a list of
     {person, identity, subtype, role, time}."""
+    return _of_core(layer(project, stain, tiles)["found"], core_id)
+
+
+def fixed_outlines(project, stain: str, tiles: pd.DataFrame, core_id: str | None = None) -> pd.DataFrame:
+    """Outlines people fixed (precise editing, another mask, drawing), the latest per person and candidate: candidate_id,
+    person, time, points (core pixels) or mask (the index of the Segment Anything mask chosen)."""
+    found = layer(project, stain, tiles)["fixed"]
+    if core_id is None or found.empty:
+        return found
+    return found[found.candidate_id.map(_core_of) == str(core_id)].reset_index(drop=True)
+
+
+def added_objects(project, stain: str, tiles: pd.DataFrame, core_id: str | None = None) -> pd.DataFrame:
+    """Objects people added where detection had no candidate (class labels naming none and matched onto none by
+    position), the latest per person: person, time, identity, subtype, x_core, y_core, core_id and their outline (core
+    pixels) when they drew or chose one."""
+    return _of_core(layer(project, stain, tiles)["added"], core_id)
+
+
+def object_edits(project, stain: str, tiles: pd.DataFrame, core_id: str | None = None) -> list[dict]:
+    """The splits and merges people made (`labels.objectedit`), each with who and when, the objects it replaced
+    (candidate ids where they were candidates; positions in core pixels) and the new objects (type and outline in core
+    pixels). Object labels only: detection's objects stay what the analysis counts."""
+    edits = layer(project, stain, tiles)["edits"]
+    return edits if core_id is None else [e for e in edits if e["core_id"] == str(core_id)]
+
+
+def _versus_detection(project, stain: str, tiles: pd.DataFrame, core_id: str | None = None) -> pd.DataFrame:
     state = decisions.state(project, stain, tiles)
     rows = state.rows
     if rows.empty:
@@ -41,7 +94,10 @@ def versus_detection(project, stain: str, tiles: pd.DataFrame, core_id: str | No
         rows = rows[rows.core_id == str(core_id)]
     if rows.empty:
         return pd.DataFrame(columns=COLUMNS)
-    found = candidate_store.for_cores(project, stain, set(rows.core_id), ["candidate_id", "x_core", "y_core", "decision", "class", "subtype"])
+    if core_id is None:  # every core: the compact copies matching keeps, not each core's whole table
+        found = candidate_store.core_calls(project, stain, set(rows.core_id))
+    else:
+        found = candidate_store.for_cores(project, stain, set(rows.core_id), ["candidate_id", "x_core", "y_core", "decision", "class", "subtype"])
     found = found.drop_duplicates("candidate_id").set_index("candidate_id") if len(found) else found
     words = vocab.of(project, stain)
     out = []
@@ -57,7 +113,7 @@ def versus_detection(project, stain: str, tiles: pd.DataFrame, core_id: str | No
             kind, call = "unsure", ("", "")
         else:
             call = state.calls.get(candidate, (said.identity.iloc[-1], said.subtype.iloc[-1] or ""))
-            if (call[0], call[1] or "") == (identity, subtype or ""):
+            if agrees((call[0], call[1] or ""), (identity, subtype or "")):
                 kind = "agree"
             elif candidate_store.accepted(row.decision) and words.role(call[0]) == vocab.NEGATIVE:
                 kind = "rejected"
@@ -76,9 +132,7 @@ def _object_labels(project, stain: str, task: str) -> pd.DataFrame:
     return labels[(labels.stain == stain) & (labels.task == task)]
 
 
-def fixed_outlines(project, stain: str, tiles: pd.DataFrame, core_id: str | None = None) -> pd.DataFrame:
-    """Outlines people fixed (precise editing, another mask, drawing), the latest per person and candidate: candidate_id,
-    person, time, points (core pixels) or mask (the index of the Segment Anything mask chosen)."""
+def _fixed_outlines(project, stain: str, tiles: pd.DataFrame, core_id: str | None = None) -> pd.DataFrame:
     rows = _object_labels(project, stain, "outline")
     if rows.empty or "candidate" not in rows:
         return pd.DataFrame(columns=["candidate_id", "person", "time", "points", "mask"])
@@ -99,15 +153,17 @@ def fixed_outlines(project, stain: str, tiles: pd.DataFrame, core_id: str | None
     return pd.DataFrame(out, columns=["candidate_id", "person", "time", "points", "mask"])
 
 
-def added_objects(project, stain: str, tiles: pd.DataFrame, core_id: str | None = None) -> pd.DataFrame:
-    """Objects people added where detection had no candidate (class labels naming none), the latest per person:
-    person, time, identity, subtype, x_core, y_core, core_id and their outline (core pixels) when they drew or chose one."""
+def _added_objects(project, stain: str, tiles: pd.DataFrame, core_id: str | None = None) -> pd.DataFrame:
     columns = ["person", "time", "identity", "subtype", "x_core", "y_core", "core_id", "points"]
     rows = _object_labels(project, stain, "class")
     if rows.empty:
         return pd.DataFrame(columns=columns)
     named = rows.candidate.fillna("").astype(str).str.len() > 0 if "candidate" in rows else pd.Series(False, index=rows.index)
     rows = rows[~named & rows.x.notna() & ~objectedit.pieces_mask(rows)]  # pieces of a split or merge: `object_edits`
+    rows = frames.in_field_frame(rows, tiles, project.context_px) if len(rows) else rows
+    on = decisions.matched(project, stain, rows, tiles) if len(rows) else None
+    if on is not None:  # an old label at a candidate's position is about that candidate, not an object detection missed
+        rows = rows[on.reindex(rows.index).fillna("").astype(str) == ""]
     boxes = tiles[tiles.stain == stain].drop_duplicates("tile_id").set_index("tile_id") if not tiles.empty else pd.DataFrame()
     rows = rows[rows.tile_id.isin(set(boxes.index))] if len(boxes) else rows.iloc[:0]
     if core_id is not None and len(rows):
@@ -131,10 +187,7 @@ def added_objects(project, stain: str, tiles: pd.DataFrame, core_id: str | None 
     return pd.DataFrame(out, columns=columns)
 
 
-def object_edits(project, stain: str, tiles: pd.DataFrame, core_id: str | None = None) -> list[dict]:
-    """The splits and merges people made (`labels.objectedit`), each with who and when, the objects it replaced
-    (candidate ids where they were candidates; positions in core pixels) and the new objects (type and outline in core
-    pixels). Object labels only: detection's objects stay what the analysis counts."""
+def _object_edits(project, stain: str, tiles: pd.DataFrame, core_id: str | None = None) -> list[dict]:
     labels = excluded_areas.drop_excluded(project, store.current(project.output("reviews")))
     if labels.empty or "meta" not in labels:
         return []

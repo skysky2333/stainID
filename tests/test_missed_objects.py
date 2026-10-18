@@ -107,7 +107,7 @@ def client(synthetic_project, monkeypatch):
 
 
 def test_people_add_missed_objects_and_they_are_measured(client, monkeypatch):
-    from fastapi.testclient import TestClient
+    from people import annotator
 
     from stainid.api.routes import annotate
     from stainid.api.state import get_state
@@ -119,8 +119,7 @@ def test_people_add_missed_objects_and_they_are_measured(client, monkeypatch):
     tile = "LIP-1_B-2_6E10_S01"
     _pool(project, "6E10", [{"x": 100.0, "y": 100.0, "radius_px": 10.0, "ai_value": "not a plaque", "ai_probability": 0.2, "tma": "1"}], tile_id=tile)
     client.post("/api/labels/sessions", json={"name": "round_1", "stain": "6E10", "tile_ids": [tile], "open": True})
-    ann = TestClient(client.app)
-    ann.post("/api/session/annotator", json={"name": "Ann"})
+    ann = annotator(client, "Ann", "round_1")
     url = "/api/annotate/round_1/labels"
     ann.post(url, json={"records": [{"task": "class", "tile_id": tile, "x": 100.0, "y": 100.0, "value": "not a plaque"}]})
     assert threads == []  # a label on a candidate needs no measuring

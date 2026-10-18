@@ -245,7 +245,7 @@ def _label_counts(reviews: Path) -> str:
 def _segmentation_status(project: Project) -> dict:
     report = project.output("tables") / "segmentation_benchmark" / "report.json"
     if not report.exists():
-        return _state(0, 1, "report", "Set up the check under Models: people outline every object in a few fields")
+        return _state(0, 1, "report", "Nothing scored yet: needs a dataset's expert polygons or an older outline session")
     stains = json.loads(report.read_text()).get("stains", [])
     scored = sum(s.get("fields_scored", 0) for s in stains)
     return _state(1, 1, "report", f"{scored} fields scored")
@@ -497,7 +497,7 @@ STEPS = (
                  "reference labels). Empty: every session.", advanced=True)),
          view="/models", duration="under a minute", status=_trained_status),
     Step("score_segmentation", "Models", "Check segmentation", "Measure how well detection finds and outlines objects.",
-         "Compares the objects people outlined in the segmentation check (an “Outline every object” session) with every candidate the "
+         "Compares objects outlined completely (a dataset's expert polygons, or an older “Outline every object” session) with every candidate the "
          "detection step proposes and with the objects it counts: how many are found, never proposed, cut into pieces or merged, and how "
          "well the outlines fit. Finds the candidates of the check's fields first where that has not been done (10–30 s per field).",
          ("tiles", "calibration"), ("segmentation_check",), ("score-segmentation",),

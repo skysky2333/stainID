@@ -136,6 +136,8 @@ export interface Job {
   /** the shared queue: the job's project, priority class, what it needs, what was asked of it, estimates */
   project_name?: string; class?: string; class_title?: string; rank?: number; paused_by?: string; stopping?: string
   needs?: { cpus: number; gpus: number; ram_gb: number; network: boolean; io?: string }; eta_s?: number | null; typical_s?: number | null
+  /** a running job: seconds since it started; `overdue`: past the time it was expected to take (no progress to go by) */
+  elapsed_s?: number | null; overdue?: boolean
   /** small or big (from what it needs and how long it should take), its expected run time, and for a job array its chunks */
   size?: 'small' | 'big'; estimate_s?: number | null; io?: 'light' | 'heavy'
   children?: string[]; chunks?: { total: number; finished: number; running: number; queued: number; paused: number; failed: number } | null
@@ -164,7 +166,18 @@ export interface ModelInfo {
   size_mb?: number; modified?: string; bundle?: Record<string, unknown>
 }
 
-export interface Session { admin: boolean; annotator: string | null; default_password: boolean; local: boolean; project: string | null; allowed_origins?: string[] }
+export interface Session {
+  admin: boolean; annotator: string | null; default_password: boolean; local: boolean; project: string | null; allowed_origins?: string[]
+  /** the signed-in account (one sign-in for everyone; `role` decides what they see), null when nobody is signed in */
+  account: Account | null
+}
+export interface Account { id: string; name: string; role: 'admin' | 'annotator'; must_change: boolean; past_name: string; handle: string; created: number }
+/** A labelling set in someone's collection ("my sets"), of any project on the server. */
+export interface MySet extends OpenSession { project: string; project_name: string; joined: number | null; link: string }
+/** Who may label a session: its join key and its members (Labels → a session → More). */
+export interface SessionAccess { key: string | null; enabled: boolean; members: { id: string; name: string; handle: string; role: string; joined: number }[] }
+export interface People { people: Account[]; past_names: { name: string; account: string | null; account_name: string | null }[] }
+export interface ApiToken { id: string; label: string; created: number; last_used: number | null }
 export type AiView = 'full' | 'positions' | 'none'
 export interface StainOverview {
   stain: string; fields: number; fields_prepared: number; fields_reviewed: number; fields_with_labels: number
@@ -322,10 +335,13 @@ function setInFlight(change: number) {
 export interface Pending {
   id: string; kind: string; label: string; state: 'waiting' | 'running' | 'done' | 'failed'; ahead: number; running: number
   done: number; total: number; eta_s: number; error?: string
+  /** running longer than this kind of work usually takes: the page says so instead of a time */
+  overdue?: boolean
 }
 /** "Waiting: 2 ahead of you · about 20 s", "Preparing 3/10 · about 15 s": a pending request as people read it. */
 export function pendingText(p: Pending): string {
-  const eta = p.eta_s >= 1 ? `about ${p.eta_s < 90 ? `${Math.round(p.eta_s)} s` : `${Math.round(p.eta_s / 60)} min`}` : ''
+  const eta = p.overdue ? 'taking longer than usual'
+    : p.eta_s >= 1 ? `about ${p.eta_s < 90 ? `${Math.round(p.eta_s)} s` : `${Math.round(p.eta_s / 60)} min`}` : ''
   const what = p.state === 'waiting'
     ? (p.ahead > 0 ? `Waiting: ${p.ahead} ahead of you` : 'Waiting for a free worker')
     : `${p.label || 'Preparing'}${p.total > 0 ? ` ${Math.min(p.done + 1, p.total)}/${p.total}` : '…'}`

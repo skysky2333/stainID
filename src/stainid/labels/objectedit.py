@@ -215,21 +215,56 @@ def split_line(polygon, line, width: float = 1.5) -> list[list[list[float]]] | N
     return _pieces(two, origin, total)
 
 
-def merge(polygons: list, max_gap_px: int = 80) -> list[list[float]] | None:
-    """One outline for several objects: the union of their outlines, closed by a growing closing until it is one piece
-    (at most `max_gap_px` apart); None for fewer than two or when they lie too far apart."""
+MERGE_GAP_PX = 80  # objects further apart than this (field px) are not merged
+
+
+def merge_gap(polygons: list) -> float:
+    """How far apart the objects are, as a merge would bridge them: the largest gap (field px) on the shortest links
+    that join them all (a minimum spanning tree over the nearest distances between their outlines); 0 when they touch."""
+    rings = [np.asarray(p, np.float64).reshape(-1, 2) for p in polygons]
+    n = len(rings)
+    if n < 2:
+        return 0.0
+    boxes = [(r[:, 0].min(), r[:, 1].min(), r[:, 0].max(), r[:, 1].max()) for r in rings]
+    gap = np.zeros((n, n))
+    for i in range(n):
+        for j in range(i + 1, n):
+            a, b = boxes[i], boxes[j]
+            box_gap = max(0.0, max(a[0], b[0]) - min(a[2], b[2]), max(a[1], b[1]) - min(a[3], b[3]))
+            if box_gap > 4 * MERGE_GAP_PX:  # far apart: no need to measure exactly
+                gap[i, j] = gap[j, i] = box_gap
+                continue
+            inside = any(cv2.pointPolygonTest(rings[j].astype(np.float32).reshape(-1, 1, 2), (float(x), float(y)), False) >= 0 for x, y in rings[i][:: max(1, len(rings[i]) // 32)])
+            d = 0.0 if inside else float(np.sqrt(((rings[i][:, None, :] - rings[j][None, :, :]) ** 2).sum(-1)).min())
+            gap[i, j] = gap[j, i] = d
+    joined, widest = {0}, 0.0
+    while len(joined) < n:  # Prim's tree: add the nearest object each time
+        best = min(((gap[i, j], j) for i in joined for j in range(n) if j not in joined))
+        widest = max(widest, best[0])
+        joined.add(best[1])
+    return widest
+
+
+def merge(polygons: list, max_gap_px: int = MERGE_GAP_PX) -> list[list[float]] | None:
+    """One outline for several objects: the union of their outlines, bridged by a closing just wide enough to make it
+    one piece; None for fewer than two or when they lie more than `max_gap_px` apart (`merge_gap`, checked first so a
+    refusal is immediate)."""
     polygons = [p for p in polygons if p is not None and len(p) >= 3]
-    if len(polygons) < 2:
+    if len(polygons) < 2 or merge_gap(polygons) > max_gap_px:
         return None
-    mask, origin = _mask(polygons, pad=PAD + max_gap_px)
+    widest = merge_gap(polygons)
+    mask, origin = _mask(polygons, pad=PAD + int(widest) + 4)
     joined = mask
-    size = 1
-    while cv2.connectedComponents(joined, connectivity=8)[0] - 1 > 1:
-        size += 2
-        if size > 2 * max_gap_px + 1:
+    size = 1 if widest <= 0 else int(widest) + 3 | 1
+    while cv2.connectedComponents(joined, connectivity=8)[0] - 1 > 1 or size == 1:
+        if size > 1:
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
+            joined = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+            if cv2.connectedComponents(joined, connectivity=8)[0] - 1 <= 1:
+                break
+        size += 4
+        if size > 2 * max_gap_px + 5:
             return None
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
-        joined = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
     joined = joined | mask
     return _outline(joined, origin)
 

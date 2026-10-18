@@ -7,7 +7,7 @@ A session is `sessions/<name>/meta.json`; its labels go into the shared label st
   with one label so far, or at random) from the fields whose candidate pool is prepared. The page asks for the next
   few objects at a time; those are held for that person for a while (`Reservations`), so people labelling at once get
   different objects. The rule is applied anew on every ask, so the queue follows new data and new labels.
-- `outline`: outline every object of whole fields, with stainID detection shown, to measure segmentation (`labels.outline`).
+- `outline`: outline every object of whole fields, to measure segmentation (`labels.outline`); no longer made, kept readable and scored.
 
 A field is one square tile of a core (about 560 µm, 2048 pixels), shown to people as one picture.
 
@@ -77,6 +77,9 @@ def folder(root: Path, name: str) -> Path:
     return root / FOLDER / name
 
 
+ON_CREATE: list = []  # called with (root, name) when a session is made: the app gives it its join key (`api.routes.accounts`)
+
+
 def create(root: Path, name: str, **meta) -> dict:
     target = folder(root, name)
     if target.exists():
@@ -88,6 +91,11 @@ def create(root: Path, name: str, **meta) -> dict:
     target.mkdir(parents=True)
     full = {"name": name, **meta, "created": time.time(), "open": False}
     write_text_atomic(target / "meta.json", json.dumps(full, indent=1))
+    for hook in ON_CREATE:
+        try:
+            hook(root, name)
+        except Exception:  # noqa: BLE001 - a session outside the app (an import on the command line) gets its key when first shown
+            pass
     return full
 
 

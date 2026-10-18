@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import type { AiView, AreasOverview, ClassCount, LabelsOverview, Labeller, ReferenceLabels, SessionInfo, StainOverview, Vocabulary } from '../api'
+import type { AiView, AreasOverview, ClassCount, LabelsOverview, Labeller, ReferenceLabels, RoundProgress, SessionInfo, StainOverview, Vocabulary } from '../api'
 import { api, apiUrl, appPath, enc } from '../api'
 import { Empty, ErrorNote, HelpBox, Loaded, Modal, PageHead, Progress, fmt, timeAgo, withError } from '../components'
 import { useFetch } from '../hooks'
 import { AI_VIEW_TEXT, ConfirmDialog, CopyButton, DetectionLine, KIND_TEXT, TOOL_TEXT, objectsOf, percent } from '../labelling'
+import { SessionAccessCard } from '../labels/access'
 import { SessionLabelsView } from '../labels/examine'
 import { FIELD_TEXT, FieldChoice, SessionFields } from '../labels/fields'
 import { AREAS_TITLE } from '../labels/markareas'
@@ -31,7 +32,7 @@ export default function Labels() {
 
   return (
     <>
-      <PageHead title="Labels" subtitle="Ask colleagues to check stainID detection’s calls on a few fields; their labels then train better models.">
+      <PageHead title="Labels" subtitle="Ask colleagues to fix detection on a few fields and mark bad areas on some cores; their labels train and test the models, never the analysis.">
         <a className="btn" href={apiUrl('/api/labels/export.csv')}>Download all labels</a>
         <a className="btn" href={appPath('/annotate/tutorial?preview=1')} target="_blank" rel="noreferrer"
           title="See exactly what annotators see first: the 4-minute practice on a field of this project (nothing is saved)">Try the tutorial</a>
@@ -46,7 +47,8 @@ export default function Labels() {
             considered; people point at an object and press a key to change its call or outline, and click to add what it missed. <b>Mark bad
             areas</b>: core by core with a brush, for folds, artifacts, glass and blur (a sample of cores is enough).</li>
           <li><b>Try the tutorial</b> to see what annotators see first (nothing is saved).</li>
-          <li><b>Send the link</b>. People type their name and label in their browser — no account needed. Each person gets their own field, and their work is kept when they press Save.</li>
+          <li><b>Send the link and the set’s key</b> (a session → More → Who can label). People sign in or make an account, add the set with the key and label
+            in their browser. Each person gets their own field, and their work is kept when they press Save.</li>
           <li><b>Watch progress</b> here, field by field, then <Link to="/models">train a new model</Link> from the sessions you choose and compare it with the one in use.</li>
         </ol>
       </HelpBox>
@@ -99,7 +101,7 @@ function Sessions({ sessions, reference, linkFor, onChanged, onNew }: {
         {ordered.filter((s) => isRound(s)).map((s) => <SessionRow key={s.name} s={s} link={linkFor(s.name)} onChanged={onChanged} />)}
         {ordered.some((s) => !isRound(s)) && (ordered.some((s) => isRound(s))
           ? <details className="advanced older-sessions">
-            <summary><span>Older kinds of session</span><span className="muted small"> · {ordered.filter((s) => !isRound(s)).length} (segmentation checks, whole-field reviews, quick checks)
+            <summary><span>Older kinds of session</span><span className="muted small"> · {ordered.filter((s) => !isRound(s)).length} (older segmentation checks, whole-field reviews, quick checks)
               {ordered.some((s) => !isRound(s) && s.open) ? ` · ${ordered.filter((s) => !isRound(s) && s.open).length} open` : ''}</span></summary>
             <div className="advanced-body session-list">{ordered.filter((s) => !isRound(s)).map((s) => <SessionRow key={s.name} s={s} link={linkFor(s.name)} onChanged={onChanged} />)}</div>
           </details>
@@ -196,9 +198,10 @@ function SessionRow({ s, link, onChanged }: { s: SessionInfo; link: string; onCh
         </div>
         <div className="muted small">{s.kind === 'areas' ? `Every stain · ${AREAS_TITLE}${s.order === 'random' ? ' · random order' : s.order ? ' · likely problems first' : ''}`
           : `${s.stain} · ${s.round ? `Round ${s.round} · ${ROUND_TITLE[s.round]}` : KIND_TEXT[s.kind]}`}
-          {(s.labels_needed ?? s.per_field) > 1 ? ` · ${s.labels_needed ?? s.per_field} people per ${s.kind === 'queue' ? 'object' : 'field'}` : ''}</div>
+          {(s.labels_needed ?? s.per_field) > 1 ? ` · ${s.labels_needed ?? s.per_field} people per ${s.kind === 'queue' ? 'object' : s.kind === 'areas' ? 'core' : 'field'}` : ''}</div>
         <SessionProgress s={s} />
-        <People people={s.labellers} fields={s.kind !== 'queue' ? s.fields ?? 0 : null} />
+        {s.kind === 'areas' ? <CorePeople progress={s.round_progress} labellers={s.labellers} />
+          : <People people={s.labellers} fields={s.kind !== 'queue' ? s.fields ?? 0 : null} />}
       </div>
       <div className="session-actions">
         {s.open && !s.read_only && <CopyButton text={link} />}
@@ -251,6 +254,21 @@ function SessionProgress({ s }: { s: SessionInfo }) {
   )
 }
 
+/** "Mark bad areas" goes core by core: each person with the cores they checked. */
+function CorePeople({ progress, labellers }: { progress?: RoundProgress; labellers: Labeller[] }) {
+  const people = progress?.people ?? []
+  if (!people.length) return <div className="muted small">Nobody has checked a core yet.</div>
+  const last = new Map(labellers.map((p) => [p.person, p.last_active]))
+  return (
+    <div className="people-chips">
+      {people.map((p) => (
+        <span key={p.person} className="person-chip"><b>{p.person}</b> {p.decided.toLocaleString()} of {progress!.total.toLocaleString()} cores
+          {last.get(p.person) ? <span className="muted"> · {timeAgo(last.get(p.person)!)}</span> : null}</span>
+      ))}
+    </div>
+  )
+}
+
 function People({ people, fields }: { people: Labeller[]; fields: number | null }) {
   if (!people.length) return <div className="muted small">Nobody has labelled yet.</div>
   return (
@@ -289,7 +307,11 @@ function SessionMore({ s, onChanged, onError }: { s: SessionInfo; onChanged: () 
         <button className="btn small danger-outline" onClick={() => setConfirm('delete')}>Delete session</button>
       </div>
       {s.instructions && <p className="small secondary"><b>Note for labellers:</b> {s.instructions}</p>}
-      {s.kind !== 'queue' && <SessionFields s={s} onChanged={onChanged} />}
+      {!s.read_only && <SessionAccessCard name={s.name} />}
+      {s.kind === 'areas' ? <p className="small secondary">{typeof s.cores === 'number' ? s.cores.toLocaleString() : (s.cores?.length ?? 0).toLocaleString()} cores, each with
+        all its stains; a core is handed to one person at a time{s.round_progress?.second_checks ? `, and ${s.round_progress.second_checks.toLocaleString()} also go to a second person` : ''}.
+        {' '}To check other cores, make a new session.</p>
+        : s.kind !== 'queue' && <SessionFields s={s} onChanged={onChanged} />}
       {examining && <SessionLabelsView name={s.name} title={s.title} onClose={() => setExamining(false)} />}
       <Advanced hint="settings and per-person counts">
         <table className="compact"><tbody>
@@ -333,8 +355,8 @@ function ShareCard({ share, error, link, anyOpen }: { share: Share | null; error
   return (
     <section className="card labels-section">
       <div className="row"><h2 style={{ margin: 0 }}>Link for labellers</h2><span className="spacer" />{share && <CopyButton text={link} />}</div>
-      <p className="small secondary">Anyone with this link sees the open sessions{anyOpen ? '' : ' (none is open right now)'}, types their name and starts.
-        The rest of stainID stays behind your admin password.</p>
+      <p className="small secondary">People sign in at this link (or make an account), then add a set with its key (a session → More → Who can label);
+        they see only the open sets they joined{anyOpen ? '' : ' (none is open right now)'}. The rest of stainID is for admins only.</p>
       {share ? <code className="path-box share-link">{link}</code> : !error && <p className="muted small">Finding this computer’s address…</p>}
       <ErrorNote error={error} />
       {share && !share.network && (
@@ -454,8 +476,7 @@ function SessionClasses({ vocabulary, typesAsked, onTypesAsked }: { vocabulary: 
   )
 }
 
-type Kind = 'fields' | 'queue' | 'outline'
-const OUTLINE_PICK_TEXT = 'Ready fields (of TMAs 1–7 in a TMA study; others can be chosen on Models), spread over TMAs, groups, regions and sparse, medium and dense staining; fields nobody has labelled first.'
+type Kind = 'fields' | 'queue'
 
 function NewSession({ stains, onClose, onCreated }: { stains: string[]; onClose: () => void; onCreated: (s: SessionInfo) => void }) {
   const defaults = useFetch<Defaults>('/api/labels/defaults')
@@ -466,8 +487,7 @@ function NewSession({ stains, onClose, onCreated }: { stains: string[]; onClose:
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => setForm((f) => ({ ...f, [key]: value }))
-  const placeholder = form.kind === 'outline' ? `Segmentation check – ${form.stain}`
-    : `${form.stain} ${form.kind === 'fields' ? 'review' : 'quick check'} – ${new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`
+  const placeholder = `${form.stain} ${form.kind === 'fields' ? 'review' : 'quick check'} – ${new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`
   const pasted = form.tile_ids.split(/[\s,]+/).filter(Boolean)
   const ids = mode === 'pick' ? chosen : pasted
   const create = async () => {
@@ -480,7 +500,7 @@ function NewSession({ stains, onClose, onCreated }: { stains: string[]; onClose:
   }
   const choice = (kind: Kind, title: string, text: string) => (
     <label className={`choice-card${form.kind === kind ? ' chosen' : ''}`}>
-      <input type="radio" name="kind" checked={form.kind === kind} onChange={() => setForm((f) => ({ ...f, kind, n_fields: kind === 'outline' ? 40 : f.n_fields === 40 ? 20 : f.n_fields }))} />
+      <input type="radio" name="kind" checked={form.kind === kind} onChange={() => setForm((f) => ({ ...f, kind }))} />
       <span><b>{title}</b><span className="small secondary">{text}</span></span>
     </label>
   )
@@ -498,14 +518,13 @@ function NewSession({ stains, onClose, onCreated }: { stains: string[]; onClose:
           <div className="choice-grid">
             {choice('fields', 'Whole-field review (current label pool)', 'People see a whole field with detection’s calls filled in, correct the wrong ones and add what it missed. Gives complete labels for every object.')}
             {choice('queue', 'Quick check, one object at a time (current label pool)', 'People see one object and pick what it is with a key press. Fast; aims at the objects detection is unsure about.')}
-            {choice('outline', 'Outline every object (segmentation check)', 'People outline every object in whole fields, with what detection found shown (it can be hidden), to measure how well detection finds and outlines objects. Scored on Models.')}
           </div>
         </fieldset>
         {form.kind !== 'queue' && <FieldChoice stain={form.stain} mode={mode} n={form.n_fields} chosen={chosen} onMode={setMode}
-          onN={(n) => set('n_fields', n)} onChosen={setChosen} autoText={form.kind === 'outline' ? OUTLINE_PICK_TEXT : undefined} />}
+          onN={(n) => set('n_fields', n)} onChosen={setChosen} />}
         <label className="field">Title people see<input type="text" value={form.title} placeholder={placeholder} onChange={(e) => set('title', e.target.value)} /></label>
         <label className="field">Note for labellers (optional)<textarea rows={2} value={form.instructions} placeholder="e.g. Count only neurons with a visible nucleus." onChange={(e) => set('instructions', e.target.value)} /></label>
-        {defaults.data?.vocabularies[form.stain] && form.kind !== 'outline' && <SessionClasses vocabulary={defaults.data.vocabularies[form.stain]} typesAsked={form.subtypes}
+        {defaults.data?.vocabularies[form.stain] && <SessionClasses vocabulary={defaults.data.vocabularies[form.stain]} typesAsked={form.subtypes}
           onTypesAsked={(on) => set('subtypes', on)} />}
         <label className="layer-toggle"><input type="checkbox" checked={form.open} onChange={(e) => set('open', e.target.checked)} />Open to labellers right away</label>
         <Advanced hint="session ID, people per field, what people see of detection, tasks, field IDs">
@@ -514,8 +533,8 @@ function NewSession({ stains, onClose, onCreated }: { stains: string[]; onClose:
               onChange={(e) => set('name', e.target.value.replace(/[^A-Za-z0-9_-]/g, '_'))} /></label>
             {form.kind === 'fields' && <label className="field">People per field<input type="number" min={1} value={form.per_field} style={{ width: 80 }}
               onChange={(e) => set('per_field', Math.max(1, Number(e.target.value)))} /></label>}
-            {form.kind !== 'outline' && <label className="field">What people see of detection<select value={form.ai_view} onChange={(e) => set('ai_view', e.target.value as AiView)}>
-              {(defaults.data?.ai_views ?? ['full', 'positions', 'none'] as AiView[]).map((v) => <option key={v} value={v}>{AI_VIEW_TEXT[v]}</option>)}</select></label>}
+            <label className="field">What people see of detection<select value={form.ai_view} onChange={(e) => set('ai_view', e.target.value as AiView)}>
+              {(defaults.data?.ai_views ?? ['full', 'positions', 'none'] as AiView[]).map((v) => <option key={v} value={v}>{AI_VIEW_TEXT[v]}</option>)}</select></label>
             {form.kind === 'queue' && <label className="field">Which objects<select value={form.rule} onChange={(e) => set('rule', e.target.value)}>
               {Object.entries(defaults.data?.rules ?? { uncertain: 'where detection is unsure' }).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label>}
           </div>

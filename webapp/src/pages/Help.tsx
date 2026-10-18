@@ -31,17 +31,17 @@ const FAQ: [string, ReactNode][] = [
     The main results table is <code>data/analysis/results_donor_region.csv</code>; download it and the others on <Link to="/results">Results</Link> (Downloads).</>],
   ['What does a measure in the results mean?', <>Open <Link to="/results">Results</Link> → <b>What the measures mean</b>: every column of the results tables with
     its unit and a plain explanation, and the column name used in the CSV file.</>],
-  ['How do I know the results are right?', <>Look at the cores and what was found in them on <Link to="/cohort">Cores</Link>, and ask colleagues to check detection’s calls
-    on <Link to="/labels">Labels</Link>: each stain shows how often detection agrees with people, and <Link to="/models">Models</Link> shows the cross-validated precision and
-    recall on all labels.</>],
+  ['How do I know the results are right?', <>Look at the cores and what was found in them on <Link to="/cohort">Cores</Link>, and ask colleagues to fix detection on a few
+    fields on <Link to="/labels">Labels</Link> (<b>Fix the field</b>; <b>Mark bad areas</b> for folds and artifacts): each stain shows how often detection agrees with people, and <Link to="/models">Models</Link> shows the cross-validated precision and
+    recall on all labels. Its <b>Outline fixes</b> card compares the outlines people fixed with each of detection’s outlines, per stain: which outline to draw first.</>],
   ['The detections look wrong for my staining.', <>Label objects on your own slides (an annotation round on <Link to="/labels">Labels</Link>; 100–200 objects is a good start),
     then train on <Link to="/models">Models</Link> and switch to the new model if it scores better. Then run the detection steps again with <b>Start over</b>.</>],
   ['A step says “Made with an older model”.', <>You switched to a different model after that step ran. Its results stay as they are
     until you run the step again with <b>Start over</b> (under Advanced); then make the results tables again.</>],
   ['How do other people label for me?', <>On <Link to="/labels">Labels</Link>, press <b>New labelling session</b>, pick a stain and a round
     (<b>Fix the field</b>: whole fields, correcting detection and adding what it missed; <b>Mark bad areas</b>: core by core with a brush), then send people the <b>Link for labellers</b>
-    (it ends in /annotate and names the study). They type their name and work in their own browser, with no password. Someone new first gets a short practice
-    tutorial. Each person is handed a field nobody else is on, so no one does the same work twice; you follow their progress and download the labels on the
+    (it ends in /annotate and names the study) with the session’s <b>key</b> (see “Sharing a set with a key”). They sign in, or make an account, and work in their own
+    browser. Someone new first gets a short practice tutorial. Each person is handed a field nobody else is on, so no one does the same work twice; you follow their progress and download the labels on the
     same page.</>],
   ['How does labelling work?', <>Each field starts with <b>step 1</b>: the <b>acceptance threshold</b> slider at detection’s own threshold. Moving it changes
     which objects start solid and which dotted grey; <b>Start editing</b> (or Enter, or your first edit) locks it, and only <b>Reset field</b> frees it again
@@ -49,10 +49,10 @@ const FAQ: [string, ReactNode][] = [
     {' '}What stainID detection found is then on the picture: each type solid in its own colour, objects it rejected dotted grey.
     Point at an object and press one key: a <b>number</b> picks a counted type, a <b>letter</b> a named look-alike, <b>Del</b> rejects it (dotted grey,
     like detection’s own rejects; a number makes it solid again), <b>`</b> unsure (dotted amber with “?”, left out of training and evaluation).
-    <b>Tab</b> / <b>Shift+Tab</b> a bigger or smaller outline, a <b>click</b> on the object to edit the outline spot by spot (a click outside or Enter
+    <b>Tab</b> / <b>Shift+Tab</b> a smaller or bigger outline (the same for the brush), a <b>click</b> on the object to edit the outline spot by spot (a click outside or Enter
     keeps it), <b>Space</b> to hide the drawings for a clean look, <b>S</b> to split an object in two (click it, Enter; or draw a line across objects),
     {' '}<b>M</b> to merge objects (click or drag over them, Enter), <b>B</b> the brush for bad areas (a drag adds to the chosen type’s area, Shift-drag
-    takes out of it, <b>Tab</b> / <b>Shift+Tab</b> the brush size), <b>Z</b> undo. Splits and merges are your labels: detection’s objects stay what the
+    takes out of it, <b>Tab</b> / <b>Shift+Tab</b> a smaller or bigger brush), <b>Z</b> undo. Splits and merges are your labels: detection’s objects stay what the
     analysis counts. In <b>Fix the field</b>, clicking empty
     tissue outlines a missed object. Nothing is saved until <b>Save</b> or <b>Save and continue</b>; unsaved changes come back after a reload. The keys
     are always shown in the side panel.</>],
@@ -77,15 +77,29 @@ const FAQ: [string, ReactNode][] = [
     <b>Cores view</b>: <b>Space</b> hides or shows everything drawn (the minimap stays), <b>←</b> / <b>→</b> the previous or next core with the same stain and
     layers, <b>↑</b> / <b>↓</b> move the picture, scroll zooms, drag moves, click an object for its details; on the minimap a click or drag moves there and a
     double-click opens that tile for annotation. <b>Mark bad areas</b>: the brush of <b>Fix the field</b>, always on — <b>1</b>–<b>4</b> the area type, a drag
-    adds to that type’s area, Shift-drag takes out of it, <b>Tab</b> / <b>Shift+Tab</b> (or <b>+</b> / <b>−</b>) a smaller or bigger brush, the wheel zooms, the
+    adds to that type’s area, Shift-drag takes out of it, <b>Tab</b> / <b>Shift+Tab</b> (or <b>−</b> / <b>+</b>) a smaller or bigger brush, the wheel zooms, the
     middle button pans, <b>Z</b> undoes a stroke, <b>Space</b> hides the drawings, <b>]</b> / <b>[</b> the next or previous stain, <b>Enter</b> says this stain
     is fine and moves on (on the last stain it saves and opens the next core).</>],
   ['A labelling session says no core has detection’s candidates.', <>The annotation rounds show the candidates of the staged detection. Run the
     <b>Detect</b> steps on the <Link to="/workflow">Run</Link> page for that stain first (at least <b>Find candidates</b> and <b>Decide</b>; <b>Run what’s left</b> runs them).</>],
   ['A Detect step says some cores are out of date.', <>Something those cores were made from changed after they ran: a setting, a model or an earlier
     step. (Areas people mark never make a step out of date: the analysis uses detection’s own.) Run the step again: it redoes only the out-of-date cores and keeps the rest.</>],
-  ['Who can sign in?', <>Everything except the annotation pages needs the admin password, from this computer or any other. It is <b>admin</b> until you
-    change it in <Link to="/settings">Settings</Link>.</>],
+  ['Who can sign in?', <>Everyone signs in on the same page with their name and password. <b>Admins</b> see all of stainID and every labelling set;
+    <b>annotators</b> only the labelling pages and the sets they added with a key. Anyone can make an annotator account; an admin promotes people,
+    resets forgotten passwords and removes accounts in <Link to="/settings">Settings → People</Link> (there is always at least one admin). The first admin is
+    <b>admin</b>, with the admin password of earlier versions (<b>admin</b> on a new server, until you change it). The tutorial needs no account.</>],
+  ['How to join a labelling set (annotators)', <>Open the link you were sent and <b>sign in</b>, or press <b>New here? Make an account</b> and choose your name
+    and a password (names are unique on the server). Then type the <b>key</b> you were given under <b>Add a set</b>: the set appears in <b>My labelling sets</b>
+    with its progress, and <b>Start</b> or <b>Continue</b> opens it. Sign in with the same name next time, on any computer, to carry on. Forgot your password?
+    Ask the person running the study: they give you a one-time password, and you choose a new one when you sign in with it.</>],
+  ['Sharing a set with a key (admins)', <>Every labelling session has its own key. On <Link to="/labels">Labels</Link>, open a session’s <b>More</b>: <b>Who can
+    label</b> shows the key (<b>Copy</b> it and send it with the link), the people who joined (<b>Remove</b> takes someone out) and <b>Joining on</b>. <b>New key</b>
+    makes the old key stop working; people who already joined keep their access. Turn joining off once everyone is in. Only people who joined a set (and
+    admins) can open it: the server checks on every request. Labels made before accounts existed keep their names; nobody can sign up under them, and in
+    Settings → People you link an account to such a name so it carries on that history.</>],
+  ['Can a script use the server?', <>Yes, with an API token of an account: Settings → API tokens for scripts, or <code>stainid accounts token NAME</code> on
+    the server. Send it as <code>Authorization: Bearer &lt;token&gt;</code>. A token can do what its account can; revoke it there, and removing the account
+    ends its tokens.</>],
   ['Is anything deleted?', <>No. <b>Start over</b> and uploads move old files aside with a date in their name; nothing is removed.
     “Remove from list” on the Projects page only takes a study off the list.</>],
   ['Can several people work at once?', <>Yes, in the same study or in different ones: each person picks a study on the <a href="/">Projects</a> page, and switching

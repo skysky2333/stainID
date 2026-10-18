@@ -14,7 +14,7 @@ keeps; it finds every core or tissue region, looks at every tile of tissue, and 
 
 Other antibodies of the same kind work too (4G8 or NAB228 for amyloid, PHF-1 for tau), as do other chromogens.
 
-![The Run page: the flow chart of every step, with its state, counts, what it makes and how long it took](docs/images/workflow.png)
+![The Run page: the flow chart of every step, with its state, counts, what it makes and how long it took, and the one job queue](docs/images/workflow.png)
 
 *The Run page: every step as a flow chart, the data each hands on along the arrows. Screenshots show a synthetic demo
 project, not study data (see [The app](#the-app)).*
@@ -46,8 +46,10 @@ project, not study data (see [The app](#the-app)).*
 - **A labelled training set.** Collect labels from several people, with repeat labels for agreement and every label
   traceable to who made it and when.
 - **Better detection for your lab's staining.** Retrain the NeuN, 6E10 and AT8 models on your own slides.
-- **An end-to-end accuracy check.** People outline every object in a few fields, with what detection found shown. The check then
-  shows what detection missed, cut in two, merged or outlined poorly.
+- **Which outline fits.** The outlines people fix in *Fix the field* (a precise edit, a split, a merge) are compared with
+  each of detection's outlines (the stain outline, Segment Anything small, medium and large) on the Models page, the
+  evidence for each stain's default outline. A dataset's expert polygons get a full segmentation check: what detection
+  missed, cut in two, merged or outlined poorly.
 
 ## Getting started
 
@@ -111,8 +113,8 @@ page:
      take out of the areas of folds, artifacts, empty glass and blur, or press Enter when a stain looks fine. A sample of cores is enough.
 2. **Choose where the fields come from**: every ready core, some TMAs, or squares you click on the cores. The same
    works for slides and images.
-3. **Copy the link and send it.** People open it in their browser and type their name. No account or password is
-   needed, and the rest of stainID stays behind the admin password.
+3. **Copy the link and the session's key, and send them.** People open the link, sign in or make an account, and add
+   the set with its key. Annotator accounts see only the sets they joined; the rest of stainID is for admins.
 
 What annotators see:
 
@@ -128,12 +130,12 @@ What annotators see:
   | **Q W E** | a named look-alike, not counted (6E10: CAA, staining inside a neuron; AT8: neuritic crown, tau in an astrocyte, thread) |
   | **`** (or 0) | unsure: dotted amber "?", left out of training and evaluation |
   | **Delete** | reject (not a plaque / tau / neuron): it turns dotted grey like detection's own rejects; a number key makes it solid again |
-  | **Tab** / **Shift+Tab** | a bigger or smaller outline: each object has three Segment Anything outlines ready |
+  | **Tab** / **Shift+Tab** | a smaller or bigger outline (with the brush on, a smaller or bigger brush): each object has three Segment Anything outlines ready |
   | **Click** an object | precise editing of that object only: click a spot to add it, Shift+click one to leave it out, drag the dots (Z one step back); a click beyond the faint frame around it, or Enter, keeps it, Esc cancels |
   | **Space** | hide / show everything drawn over the picture, for a clean look at the tissue |
   | **[** / **]** | step 1 of every field: the acceptance threshold (where objects start), until *Start editing* or the first edit locks it |
   | **S** / **M** | split an object in two (a click and Enter, or a line across objects) / merge objects (click or drag over them, Enter) |
-  | **B** | the brush: change the bad areas (1–4 the type while it is on; a drag adds to that type's area, Shift-drag takes out of it; Tab / Shift+Tab the brush size); they teach and test bad-area detection and their objects are left out of training and scoring — the analysis keeps detection's own areas |
+  | **B** | the brush: change the bad areas (1–4 the type while it is on; a drag adds to that type's area, Shift-drag takes out of it; Tab / Shift+Tab a smaller / bigger brush); they teach and test bad-area detection and their objects are left out of training and scoring — the analysis keeps detection's own areas |
   | **Z** | undo |
   | **Ctrl+S** / **Ctrl+Enter** | save / save and continue |
 
@@ -152,12 +154,11 @@ What annotators see:
   3–5 minutes, where nothing is saved), also when they arrive by a session's own link. The coach asks for one thing at
   a time; *Tutorial* at the top shows it again. *Try the tutorial* on the Labels page shows the admin the same practice.
 
-Both rounds write one shared set of answers, so no object is asked about twice, and labels made earlier are matched
-onto detection's candidates. The Labels page follows progress field by field and person by person. It also shows how
+Every session writes into one shared label log, so no object is asked about twice, and labels made earlier are
+matched onto detection's candidates (the candidate id first, the position only where a label names none). The Labels page follows progress field by field and person by person. It also shows how
 often people agree with detection, and the labels train a new model on the Models page. The classes and their types
 (e.g. *tau+ neuron · pretangle*) can be changed in Settings ([label classes](docs/label_classes.md)). The older kinds
-of session (whole-field review, a quick object queue, and *Outline every object* for the segmentation check) are under
-*Advanced*.
+of session (whole-field review and a quick object queue) are under *Advanced*.
 
 The rounds work on the candidates of the staged detection ([below](#detection-stage-by-stage)), so a stain needs its
 *Find candidates* and *Decide* steps run first (*Run what's left* does it). To try the rounds before that, run
@@ -193,7 +194,7 @@ One stainID server serves a whole lab:
 - Anyone on the network opens `http://<the computer running stainID>:8765`.
 - Each study has its own address (`/p/<project>/…`), so people can work in different studies side by side.
 - Heavy steps take turns over all studies, so the computer stays usable.
-- Annotators only need the link. Everything else needs the admin password.
+- One sign-in for everyone: admins see everything, annotators only the labelling sets they joined with a key.
 
 The pictures the app makes for viewing are kept within a space limit per study (100 GB by default; Settings →
 Advanced). The least recently used pictures go first and are made again when someone needs them; study data and
@@ -208,12 +209,18 @@ All screenshots show a synthetic demo project: the tissue images, donors, labels
 |---|---|
 | ![Fix the field](docs/images/annotate.jpg) | ![Precise editing](docs/images/annotate-precise.jpg) |
 | **Fix the field** (at `/p/<project>/annotate`): every candidate of the field, solid in its class colour or dotted grey when rejected or removed; the object under the mouse lights up, its name beside it and its facts (class, detection's call and score, area, outline) in the side panel with the class keys and colours | **Precise editing** (click the object): only this object can change; a click adds a spot, Shift+click leaves one out, the white dots drag; a click beyond the faint frame keeps it |
-| ![Tutorial](docs/images/tutorial.jpg) | |
-| **Tutorial**: where a new annotator starts, on a practice field where nothing is saved; *Try the tutorial* on the Labels page shows it to the admin | |
+| ![The brush](docs/images/annotate-brush.jpg) | ![Mark bad areas](docs/images/areas.jpg) |
+| **The brush** (B in Fix the field): a drag adds to the chosen type of bad area, Shift-drag takes out of it; each type's area is one merged region, the chosen one strong | **Mark bad areas**: one core at a time with every stain image of it as a tab; the same brush, the types' areas as they stand (detection's with people's edits) |
+| ![Split](docs/images/annotate-split.jpg) | ![Merge](docs/images/annotate-merge.jpg) |
+| **Split** (S): a click on an object shows it cut in two, or draw a line across it; Enter keeps the pieces | **Merge** (M): click the objects that are one, Enter merges them (only objects that touch or nearly touch) |
+| ![Tutorial](docs/images/tutorial.jpg) | ![Annotations on the Cores view](docs/images/viewer-annotations.jpg) |
+| **Tutorial**: where a new annotator starts, on a practice field where nothing is saved; *Try the tutorial* on the Labels page shows it to the admin | **Annotations** on the Cores view: where people's labels differ from detection, their bad areas, the excluded areas, and the minimap with each tile's review status |
 | ![Home](docs/images/home.png) | ![Models](docs/images/models.png) |
-| **Home**: your next step and overall progress | **Models**: download published models; train from labels, compare, switch |
+| **Home**: your next step and overall progress | **Models**: download published models; train from labels, compare, switch; how detection's outlines match people's fixes |
 | ![Core viewer](docs/images/viewer.jpg) | ![Labels](docs/images/labels.png) |
-| **Cores**: the whole core; click any spot for a full-resolution preview with every candidate drawn on it (rejected ones dotted grey) | **Labels**: annotation rounds with their progress, agreement with detection, the link to share and *Try the tutorial* |
+| **Cores**: the whole core, zoomable, with every candidate drawn on it (rejected ones dotted grey), the minimap, the excluded areas and the Annotations layer | **Labels**: annotation rounds with their progress, agreement with detection, the link to share and *Try the tutorial* |
+| ![Excluded from analysis](docs/images/viewer-excluded.jpg) | |
+| **Excluded from analysis** on the Cores view: detection's own bad areas from its stage-2 mask, hatched by type (here the demo's synthetic fold, a tear with no tissue and the glass around the core), with each type's share; only these leave objects out of the analysis | |
 | ![Results](docs/images/results.png) | ![Projects](docs/images/projects.png) |
 | **Results**: download the main table, what every column means, plots by group | **Projects**: every study with its status; new study, open a folder, switch |
 | ![Settings](docs/images/settings.png) | |
@@ -301,7 +308,9 @@ as they were. See [docs/pipeline_v2.md](docs/pipeline_v2.md) for every stage, ru
 Read in this order:
 
 1. [Adding new slides to a study](docs/guide_adding_slides.md): the guided setup, step by step, for people new to stainID.
-2. [Using the app](docs/webapp.md): every page, how steps are queued, annotation rounds, the segmentation check and training models.
+2. [Using the app](docs/webapp.md): every page, how steps are queued, annotation rounds, outline fixes, the segmentation check and training models.
+   [Architecture](docs/architecture.md): where each object (candidate, outline, class, excluded area) is stored, and who reads it.
+   [The job system](docs/job_system.md): the one prioritised, pausable queue every step runs through.
 3. [Label classes](docs/label_classes.md): the classes and types people label with, their keys, and how to change them.
 4. [Project files](docs/project.md): the project settings (`stainid.yaml`), the input tables and every output file.
    [Project kinds](docs/project_kinds.md): image sets, whole slides, imaging settings, dataset packages and scoring on

@@ -1149,7 +1149,7 @@ tr.significant-row td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 /* ---------- annotation rounds: a field at a time, nothing saved until Save (labels/rounds.tsx, checkcalls.tsx, fixfield.tsx) ---------- */
 .save-state.unsaved { color: var(--warning); font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
 .unsaved-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warning); flex: none; }
-.round-object .unsaved-mark { fill: var(--series-2); stroke: #000; }
+.round-object .unsaved-mark { stroke: #000; }
 .round-restored, .field-others { margin: 0 0 10px; }
 .round-answer { margin: -4px 0 10px; }
 .round-answer.unsaved b { color: var(--warning); }
@@ -1288,7 +1288,8 @@ details.side-details.compact > summary { font-weight: 500; }
 }
 .tutorial-coach h3 { text-transform: none; letter-spacing: 0; font-size: 1rem; color: var(--text-primary); }
 .outline-defaults { margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
-.viewer svg.viewer-under { will-change: transform; }  /* the field tool's objects: a layer of their own, not painted again on every mouse move */
+.viewer svg.viewer-under { will-change: transform; }
+.viewer-paint { position: absolute; inset: 0; pointer-events: none; will-change: transform; }  /* the brush's canvases (brush.ts) */  /* the field tool's objects: a layer of their own, not painted again on every mouse move */
 .look-swatch.hatched { background: repeating-linear-gradient(45deg, currentColor 0 2px, transparent 2px 5px); }
 
 /* "Mark bad areas" (labels/markareas.tsx): the stain tabs, the brush and the layers over the core picture */
@@ -1334,3 +1335,4 @@ details.side-details.compact > summary { font-weight: 500; }
 .lock-icon { color: var(--text-muted); flex: none; }
 .threshold-preview .threshold-slider { margin-top: 6px; }
 .piece-mark { pointer-events: none; font-weight: 700; }
+.legend-sign { margin: 0 4px 0 -2px; font-size: 11px; line-height: 1; }

@@ -18,9 +18,24 @@ stainid serve --cache-min-free 80G         # free space every drive keeps: below
 The app opens on the **Projects** page (see [Projects](#projects)), or on the project given with `--project`. If
 stainID is already running, starting it again just opens the browser.
 
-**Admin password.** The app asks for the admin password; it is `admin` until you change it under *Settings → Admin
-password*. The app listens on your network (so annotators can reach the annotation pages), but everything except
-those pages needs the password, and while it is still `admin` you can only sign in on the computer running stainID.
+**Accounts.** Everyone signs in on the same page with a name and a password, and their **role** decides what they
+see: an **admin** gets every page and can open every labelling set; an **annotator** gets only the annotation pages
+(*My labelling sets*, *Add a set* with a key, the tutorial). Every admin-only request is refused for annotators (403)
+by the server, not only hidden in the page. Anyone can make an annotator account on the sign-in page; admins add
+people, promote and demote them, reset forgotten passwords (a one-time password; the person chooses a new one when
+signing in with it) and remove accounts under *Settings → People*. There is always at least one admin: the last one
+cannot be demoted or removed. Names are unique on the server (case does not matter); passwords are kept as scrypt
+hashes with a salt of their own; sign-ins and join keys are rate-limited. Accounts belong to the server
+(`~/.stainid/accounts.sqlite`), so one account works in every project.
+
+The first admin is the account **admin** with the admin password of earlier versions: after an update, sign in with
+the name `admin` and the password you used before (`admin` on a new server, until you change it under *Settings →
+Your password*). The tutorial needs no account: anyone can try it, and nothing is kept.
+
+**API tokens.** Scripts and agents use a token of an account instead of a password: *Settings → API tokens for
+scripts*, or `stainid accounts token NAME` on the server (printed once; `stainid accounts list | add | reset | role`
+manage accounts there too). Send it as `Authorization: Bearer <token>` (or `?access_token=<token>` on a plain GET). A
+token can do what its account can; revoking it, or removing the account, ends it.
 
 **Several people at once.** Anyone on your network can open `http://<the computer running stainID>:8765` in their
 browser. Each person signs in (or, on the annotation pages, gives a name) and picks a project. People in the same
@@ -172,20 +187,19 @@ for static files. Two things are needed:
    *Back to …* returns to the default. For a copy everyone uses, set it once in that copy's `config.js` (next to
    `index.html`): `window.STAINID_SERVER = 'http://analysis-pc:8765'`, no rebuild needed.
 
-Sign-in then works as usual (the default password still only works on the computer running stainID); the page keeps
-the sign-in as a token instead of a cookie.
+Sign-in then works as usual; the page keeps the sign-in as a token instead of a cookie.
 
 ## Other pages
 
 | Page | What it is for |
 |---|---|
 | **Home** | Your next step (the guided setup while the study is not set up, or new slides to add), a checklist of every step, cohort numbers and recent jobs. |
-| **Cores** | Every core of every TMA (or every image or slide); click one to see the whole core, then click any spot for a full-resolution preview (220–660 µm) with stainID detection's objects where detection has run and the DAB layer. Where the v2 detection has run, the preview reads its saved candidates: the counted objects with their exact outlines, and, as layers to switch on, the rejected ones (each with why, in plain words), the AT8 threads it saved and the stained areas no candidate covers. Only the preview is sent over the network, never the whole scan. The analysed fields themselves are reviewed on Labels. |
+| **Cores** | Every core of every TMA (or every image or slide); click one to open the whole core as a zoomable picture (tiles at every level, so only what is on screen is sent, never the whole scan) with stainID detection's objects. Where the v2 detection has run it reads the saved candidates: the counted objects with their exact outlines in their class's colour, and, as layers, the rejected ones (each with why, in plain words), the AT8 threads, the stained areas no candidate covers, *Excluded from analysis* (detection's areas, hatched by type: what the analysis leaves out) and the **Annotations** layer (where people's labels differ from detection: changed, rejected, unsure, added, split and merged objects, fixed outlines on hover, and people's bad areas; labels only, never what the analysis counts). The **minimap** shows the whole core with each analysed tile shaded by its review status (reviewed, in progress, not annotated; hatched where no tile was analysed) and the view as a rectangle; a click moves there, a double-click opens that tile for annotation. **Space** hides everything drawn for a clean look, **←** / **→** go to the previous or next core with the same stain and layers, **↑** / **↓** move the picture. The *Acceptance threshold* card previews what would be accepted at another threshold (never saved; the analysis uses detection's threshold). |
 | **Stain thresholds** | The DAB threshold of every slide and why it exists. |
 | **Labels** | Labelling progress per stain, how often people and detection agree, the labelling sessions (create, open, close, share the link, follow people, download) and all labels as CSV. |
 | **Models** | Every model with its status and settings, download buttons, training from all labels, and trained models compared with the current one. |
 | **Results** | The main results table (download), every other table, plots by group and region, and the meaning of every column. |
-| **Settings** | Study name, TMA layout, diagnostic groups and every file location, with a folder picker. Also leads to the Projects page to open or create another project, changes the admin password and (folded away) chooses the server. |
+| **Settings** | Study name, TMA layout, diagnostic groups and every file location, with a folder picker. Also leads to the Projects page to open or create another project, manages the people with accounts (*People*), your password, API tokens for scripts, and (folded away) chooses the server. |
 | **Help** | Getting started, common questions and a glossary. Words with a dotted underline show their definition on hover. |
 
 ## Labels
@@ -226,7 +240,7 @@ studies, image sets and whole-slide projects.
      empty glass and blur, or say a stain looks fine. A sample of cores is enough. The brush is the field tool's
      (`BrushMasks`, labels/brush.ts), always on and with the same keys: each type's current area over the whole core
      image (GET `…/cores/{core}/{stain}/areas`), a drag adds to the chosen type, Shift-drag takes out of it
-     (detection's part too: marking a part fine is no more than that), Tab / Shift+Tab (or + / −) the brush size in µm,
+     (detection's part too: marking a part fine is no more than that), Tab / Shift+Tab (or − / +) a smaller or bigger brush (µm),
      the wheel zooms, Z undoes a stroke, [ / ] the other stain, Enter this stain is done.
    - "Check detection's calls" (one object at a time) is no longer made. Its old sessions stay listed as history and
      their labels stay valid object labels for training and evaluation.
@@ -242,11 +256,21 @@ studies, image sets and whole-slide projects.
 - the session ID, a note for labellers, and *Also ask for the type*;
 - the older kinds of session (see below).
 
-**Sharing.** *Link for labellers* on the Labels page (`http://<this computer>:8765/p/<project>/annotate`) opens every
-open session of the study. The link names the project, so people label in the right study whatever others have open.
-People type their name, with no account or password, and can stop and continue later under the same name. Nothing else
-in stainID is reachable without the admin password. Links without a project (`…:8765/annotate`) open the project
-opened last.
+**Sharing a set with a key (admins).** Every labelling session gets a **join key** when it is made: ten characters
+from an alphabet without look-alikes (`k7mq2-xr9ta`, about 50 bits; wrong keys are rate-limited). The key names both
+the project and the session. Open a session's *More* on the Labels page: *Who can label* shows the key (*Copy*), the
+people who joined (*Remove*), and *Joining on*. *New key* stops the old key at once; people who joined keep their
+access. Send people *Link for labellers* (`http://<this computer>:8765/p/<project>/annotate`) and the key. Only the
+members of a set, and admins, can open it: the server checks membership on every annotation request. Labels, claims on
+fields, look-ahead holds and fair share are by account (labels carry the account id, `account`, besides the name).
+
+**How to join a labelling set (annotators).** Open the link and sign in, or *Make an account* with your name and a
+password. Type the key under *Add a set*: the set joins *My labelling sets* (sets of every project on the server, with
+their progress), and *Start* or *Continue* opens it. Sign in again next time, on any computer, to carry on.
+
+**Past names.** Labels made before accounts existed keep their names, and those names are reserved: nobody can sign
+up as one. Under *Settings → People*, link an account to such a name (*Past labels as*): the account then labels under
+that name and sees its history as its own.
 
 **The first time.** A name that has not been through the tutorial goes there first, from the list of sessions or from
 a session's own link (and back there afterwards; `/api/session/tutorial` names the practice field). It is a practice on a real field
@@ -255,8 +279,9 @@ nothing is saved (about 3–5 minutes): step 1, the acceptance threshold (move i
 editing*), reject (Del), bring types back (numbers), unsure (`), a clean look (Space), precise editing, split (S) and
 merge (M), the brush (B), saving. A coach asks for one thing at a time and
 waits until it is done. *Skip tutorial* is always there, and *Tutorial* at the top shows it again. Who finished it is
-kept in `outputs.reviews/tutorials.json`. **Try the tutorial** on the Labels page opens the same practice for the
-admin, without a name, in a new tab: what annotators see, with nothing saved or remembered.
+kept in `outputs.reviews/tutorials.json`. The tutorial is public: someone without an account can try it, and nothing
+is saved or remembered. **Try the tutorial** on the Labels page opens the same practice in a new tab: what
+annotators see.
 
 **Step 1: the acceptance threshold.** Every field opens with a slider at the top of the panel, *Acceptance
 threshold*, at detection's own threshold for the stain's model (marked on the track). Dragging it (or [ and ] in steps
@@ -296,7 +321,7 @@ fields; and the *Tutorial* link. Pointing at an object also shows its name besid
 | Q W E R, T Y U … | a named look-alike, solid and not counted: 6E10 Q CAA, W staining inside a neuron; AT8 Q neuritic crown, W tau in an astrocyte, E thread |
 | ` (or 0) | unsure: dotted amber with a "?", left out of training and evaluation; that person is not asked again, but the others are |
 | Delete (Backspace) | the stain's single reject (not a plaque, not tau, not a neuron): it turns dotted grey and stays visible, the same as detection's own rejects (also an object the person added); a number key makes it solid again |
-| Tab / Shift+Tab (or + / −) | a bigger or smaller outline: the three Segment Anything outputs come with the object, so it changes at once (with the brush on: the brush size) |
+| Tab / Shift+Tab (or − / +) | a smaller or bigger outline: the three Segment Anything outputs come with the object, so it changes at once (with the brush on: a smaller or bigger brush, the same direction) |
 | [ / ] | step 1: the acceptance threshold down / up by 0.01 (until it locks) |
 | S | split mode, on and off (Esc leaves): a click on an object splits it in two (a watershed of its outline on its distance transform, the stain breaking ties; `labels/objectedit.py`) as a preview; a second click elsewhere on it moves the split, Enter keeps it, Esc drops it. Or drag a line: every object it crosses right through is cut along it. The pieces keep the object's type and the keys retype them |
 | M | merge mode, on and off (Esc leaves): click objects to add them to the merge or take them out (highlighted; "3 selected · Enter to merge"), or drag over objects to add every one the stroke touches; Enter merges them into one object, their outlines' union (bridged by a small closing where they do not touch), with the type of the largest piece |
@@ -309,7 +334,7 @@ fields; and the *Tutorial* link. Pointing at an object also shows its name besid
 | Ctrl+Enter (⌘Enter) | save and continue |
 
 In round 2, a click on empty tissue outlines a missed object with one click (Segment Anything). It is a new
-candidate, dotted grey, and Tab / Shift+Tab switch between its three sizes, until a class key makes it solid. *Draw an object by hand…* is the last resort. One click answers at once,
+candidate, dotted grey, and Tab / Shift+Tab switch to a smaller or bigger one of its three sizes, until a class key makes it solid. *Draw an object by hand…* is the last resort. One click answers at once,
 because the server makes the Segment Anything features of the session's fields ahead: on a GPU every field of the
 open sessions, and on the CPU the field someone has open and their next ones. They are kept in
 `data/cache/sam_embeddings/`, and the page says *Preparing one-click outlines…* until its field is ready.
@@ -361,7 +386,6 @@ v2 store:
 - **Quick object queue**: one object at a time, labelled with the keyboard. The next object is chosen anew each time
   from all prepared fields: where detection is unsure, where people disagree with each other or with detection, objects one
   other person has labelled, or at random.
-- **Outline every object**: the segmentation check (below).
 
 These need their fields **prepared**. The *Prepare fields for labelling* step (`stainid labels prepare`) finds every
 candidate as the detection step does and stores its measurements and detection's call in
@@ -372,29 +396,32 @@ were imported once with `stainid labels import`, each as its own source (`import
 unchanged. Every label belongs to a session; the imported ones (no session) together form the read-only pseudo-session
 *AI reference labels* (`reference`), which the Labels page lists and lets you look inside like any other session.
 
+### Outline fixes
+
+How well detection outlines objects is measured on the outlines people fix in *Fix the field* (*Models → Outlines →
+Outline fixes*, `stainid.labels.outline_fixes`). Per stain: how many objects people changed the outline of (a precise
+edit, a split, a merge), and for those objects each of detection's outlines — the stain outline, Segment Anything's
+small, medium and large masks, and the one shown first — against the person's outline: the median IoU, the median
+area ratio (detection's area over the person's) and how often each was the closest. Switching to another of
+detection's outlines without drawing is counted apart. When one outline is clearly closer than the one shown first
+(at least 0.05 higher median IoU over at least 5 objects) a hint says so, e.g. *SAM medium matches people's fixes
+better for AT8 (IoU 0.81 vs 0.66)*: the evidence for the stain's default outline on the Run page, which is never
+changed for you. It is an indication, not a full accuracy measure: only the objects people chose to fix count, and a
+precise edit starts from the outline shown. *Download the fixed outlines (CSV)* gives one row per object with the
+person's outline (core pixels) and its comparison, to train a better outline from; the outlines themselves are labels
+in the label log like any other (read through `labels.compare`, the Annotations layer's reader).
+
 ### The segmentation check
 
 A model's scores (AUC, precision, recall) are measured on the candidates the detection step proposed, so they cannot see
 objects that were never proposed, or that its segmentation cut into pieces or merged with a neighbour. The segmentation
-check measures that end to end:
+check measures that end to end, where every object of some fields was outlined: by a dataset's raters (polygons in a
+dataset package, the public-dataset projects) or in an *Outline every object* session of an older project. Such sessions
+are no longer made and cannot be worked on; their outlines stay in the label log (tasks `object` and `complete`), are
+listed on Labels and are scored here. The card on *Models → How well does detection outline objects?* shows only where
+there is something to score.
 
-1. **Set it up** on *Models → How well does detection outline objects?* (or *New labelling session → Outline every
-   object*): one session per stain, "Segmentation check – <stain>", about 40 ready fields chosen from TMAs 1–7 (in an
-   image set: every batch; *Advanced* lets you choose), spread over TMA × diagnosis group × region and over sparse,
-   medium and dense staining (thirds of detection's objects per mm² of tissue), fields nobody has labelled first. Its
-   fields' candidates are found in the background (`stainid score-segmentation --proposals-only`, 10–30 s per field).
-2. **People outline every object** of the stain's classes whose middle lies in the field's yellow square, with
-   what detection found shown (it can be hidden): *click to outline* (Segment Anything: Tab tries another size, Shift+click adds a spot that belongs to
-   the object, right-click one that does not; a click answers in well under a tenth of a second because the server
-   prepares each field's picture features ahead — on a GPU, fp16, every field of the open checks as soon as one is made
-   or opened; on the CPU the field someone has open and their next two, about 50 s each — kept in
-   `data/cache/sam_embeddings/`; the page says *Preparing outlines…* until its field is done (clicks work meanwhile, the
-   first in each part of the field slower); `$STAINID_SAM_DEVICE` (`cpu`, `cuda:1`) chooses the device), *draw by hand* (D), drag corners, 1–9 for the
-   class ("unsure" is left out of the scores), Delete, Esc. *Show detection* (R) shows what detection counted and
-   every candidate it considered, on by default. *Mark field complete* asks to confirm that nothing is left; only
-   complete fields are scored. These outlines are kept apart from the class labels models train on (tasks `object`
-   and `complete` in the label store).
-3. **Score now** (`stainid score-segmentation`) matches every outlined object one to one with (a) every candidate:
+**Score now** (`stainid score-segmentation`) matches every outlined object one to one with (a) every candidate:
    *proposed*, and (b) the candidates the model counted: *found and counted*, and *right* (precision), at IoU ≥ 0.5 and
    0.3. An object that is not found is *never proposed* (no candidate overlaps it), *merged with a neighbour* (the
    candidate covering it covers another outlined object too), *cut into pieces* (two or more candidates each cover part

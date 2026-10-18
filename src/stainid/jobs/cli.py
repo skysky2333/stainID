@@ -37,7 +37,7 @@ def add_parser(sub) -> None:
     s.add_argument("--grace", type=float, default=0.0, help="seconds it gets to reach a unit boundary when paused (default: its class's)")
     s.add_argument("--env", action="append", default=[], metavar="KEY=VALUE", help="extra environment for the command")
     s.add_argument("--after", action="append", default=[], metavar="ID", help="start only once this job has finished (repeat for several)")
-    s.add_argument("--time", default="", metavar="DURATION", help="how long it is expected to take (e.g. 90s, 20m, 5h): its size and backfill")
+    s.add_argument("--time", default="", metavar="DURATION", help="how long it is expected to take (e.g. 90s, 20m, 5h): shown as its size and expected run time")
     s.add_argument("--conflict", action="append", default=[], metavar="KEY",
                    help="never run at the same time as another job with this key (e.g. what both write)")
     s.add_argument("--io", choices=("light", "heavy"), default=None, help="io-heavy jobs are limited per disk (default: from the step)")
@@ -82,7 +82,13 @@ def _line(info: dict) -> str:
     state = info["status"] + (f" ({info['stopping']}ing)" if info.get("stopping") else "")
     where = f"#{info['queue']['position']}" if info.get("queue") else ""
     took = policy.duration_text(info.get("estimate_s"))
-    eta = f"~{_duration(info['eta_s'])} left" if info.get("eta_s") else f"{info.get('size', '')}{' ~' + took if took else ''}"
+    if info.get("stopping"):  # asked to pause or stop: no time left, whatever the grace period
+        eta = {"cancel": "stopping…"}.get(info["stopping"], "pausing…")
+    elif info["status"] == "running":  # its time so far, and an estimate only when there is a basis for one
+        eta = f"{_duration(info.get('elapsed_s') or 0)} in, " + ("longer than expected" if info.get("overdue") else
+                                                                  f"~{_duration(info['eta_s'])} left" if info.get("eta_s") else "no estimate")
+    else:
+        eta = f"{info.get('size', '')}{' ~' + took if took else ''}"
     note = info.get("waiting") or ""
     return f"  {info['id']}  {state:<12} {where:<4} {info['title'][:34]:<34} {info.get('project_name', '')[:28]:<28} {done:<10} {eta:<12} {note}"
 

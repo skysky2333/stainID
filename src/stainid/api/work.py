@@ -37,6 +37,8 @@ KEEP_SECONDS = 300.0  # finished work stays known this long (its result is fetch
 NICE = 5  # pool threads run this much nicer than the request threads (Linux: per thread)
 URGENT, NOW, SOON, AHEAD = -1, 0, 1, 2  # a click / someone is waiting / someone will soon / made ahead
 GUESS_SECONDS = 5.0  # the estimate of a kind of work never seen yet
+PLAIN_ERROR = ("Something went wrong on the server. Try again in a moment; if it keeps happening, tell the person running stainID "
+               "(the details are in the server's log).")
 
 
 @dataclass
@@ -59,6 +61,7 @@ class Task:
     status_code: int = 500
     event: threading.Event = field(default_factory=threading.Event)
     context: contextvars.Context = field(default_factory=contextvars.copy_context)  # the request's project (`state.CURRENT`)
+    viewers: set = field(default_factory=set)  # the accounts that asked for it (None: someone not signed in); see `may_see`
 
     def step(self, done: int, total: int | None = None) -> None:
         """Progress of the work: `done` of `total` steps."""
@@ -76,10 +79,57 @@ _DURATIONS: dict[str, deque] = {}
 _THREADS: list[threading.Thread] = []
 
 
+_SAVED: tuple[str, dict[str, list[float]]] | None = None  # durations of earlier servers (`durations_file`), read once
+_SAVED_AT = [0.0]
+
+
+def durations_file():
+    from stainid.api import registry  # noqa: PLC0415
+
+    return registry.SETTINGS.parent / "work_durations.json"
+
+
+def _saved() -> dict[str, list[float]]:
+    global _SAVED
+    path = str(durations_file())
+    if _SAVED is None or _SAVED[0] != path:
+        import json  # noqa: PLC0415
+
+        try:
+            found = json.loads(durations_file().read_text())
+            _SAVED = (path, {str(k): [float(x) for x in v][-20:] for k, v in found.items() if isinstance(v, list)})
+        except (OSError, ValueError, TypeError):
+            _SAVED = (path, {})
+    return _SAVED[1]
+
+
+def _save_durations() -> None:
+    """Keep the recent durations for the next server (a cold start would otherwise guess `GUESS_SECONDS` for work that
+    takes minutes), at most every 30 s."""
+    import json  # noqa: PLC0415
+
+    if time.monotonic() - _SAVED_AT[0] < 30:
+        return
+    _SAVED_AT[0] = time.monotonic()
+    merged = {**_saved(), **{k: list(v) for k, v in _DURATIONS.items()}}
+    try:
+        from stainid.tables import write_text_atomic  # noqa: PLC0415
+
+        write_text_atomic(durations_file(), json.dumps(merged))
+    except OSError:
+        pass
+
+
 def typical(kind: str) -> float:
-    """How long this kind of work took lately (median of the last 20), a guess before it ever ran."""
-    seen = _DURATIONS.get(kind)
+    """How long this kind of work took lately (median of the last 20; also from earlier servers), a guess before it
+    ever ran."""
+    seen = _DURATIONS.get(kind) or _saved().get(kind)
     return statistics.median(seen) if seen else GUESS_SECONDS
+
+
+def overdue(task: Task, now: float) -> bool:
+    """Running longer than this kind of work usually takes (and saying nothing about how far it is)."""
+    return task.state == "running" and task.started is not None and not (task.total and task.done) and now - task.started > typical(task.kind)
 
 
 def _left(task: Task, now: float) -> float:
@@ -89,6 +139,8 @@ def _left(task: Task, now: float) -> float:
     spent = now - task.started
     if task.total and task.done:
         return max(0.0, spent / task.done * (task.total - task.done))
+    if spent > expected:  # longer than usual: no promise of "half a second" for minutes on end; at least as long again as half of it
+        return max(1.0, spent * 0.5)
     return max(0.5, expected - spent)
 
 
@@ -109,7 +161,7 @@ def status(task: Task) -> dict:
         else:
             eta = _left(task, now) if task.state == "running" else 0.0
         out = {"id": task.id, "kind": task.kind, "label": task.label, "state": task.state, "ahead": len(ahead) if task.state == "waiting" else 0,
-               "running": len(_RUNNING), "done": task.done, "total": task.total, "eta_s": round(eta, 1)}
+               "running": len(_RUNNING), "done": task.done, "total": task.total, "eta_s": round(eta, 1), "overdue": overdue(task, now)}
     if task.state == "failed":
         out |= {"error": task.error, "status_code": task.status_code}
     return out
@@ -141,8 +193,10 @@ def submit(kind: str, key: Any, run: Callable[[Task], Any], priority: int = NOW,
             if task.state == "waiting" and priority < task.priority:
                 task.priority = priority
                 _COND.notify_all()
+            task.viewers.add(_asker())
             return task
         task = Task(kind, key, run, priority, label, admin)
+        task.viewers.add(_asker())
         _BY_KEY[key] = task
         _BY_ID[task.id] = task
         if alone:
@@ -153,6 +207,21 @@ def submit(kind: str, key: Any, run: Callable[[Task], Any], priority: int = NOW,
         _start_workers()
         _COND.notify_all()
         return task
+
+
+def _asker() -> str | None:
+    """The account of the request asking for work (set by the app for every request), None when nobody is signed in."""
+    from stainid.labels import store  # noqa: PLC0415
+
+    return store.ATTRIBUTION.get()
+
+
+def may_see(task: Task, account_id: str | None, admin: bool) -> bool:
+    """Whether this account may follow the task and read its result: admins every task; anyone else only work they
+    asked for themselves (someone not signed in: work asked for without an account, such as the tutorial's)."""
+    if admin:
+        return True
+    return not task.admin and account_id in task.viewers
 
 
 def within(seconds: float) -> Callable[[Task], bool]:
@@ -229,11 +298,13 @@ def _run_one(task: Task) -> None:
         task.state, task.error, task.status_code = "failed", str(error.detail), error.status_code
     except Exception as error:  # noqa: BLE001 - reported to the page that waits for it
         log.exception("background work %s %s failed", task.kind, task.key)
-        task.state, task.error, task.status_code = "failed", f"{type(error).__name__}: {error}", 500
+        # the admin's pages show what went wrong; annotators get a plain message (the detail is in the server log)
+        task.state, task.error, task.status_code = "failed", f"{type(error).__name__}: {error}" if task.admin else PLAIN_ERROR, 500
     with _COND:
         task.finished = time.monotonic()
         if task.state == "done":
-            _DURATIONS.setdefault(task.kind, deque(maxlen=20)).append(task.finished - (task.started or task.finished))
+            _DURATIONS.setdefault(task.kind, deque(_saved().get(task.kind, []), maxlen=20)).append(task.finished - (task.started or task.finished))
+            _save_durations()
         if task in _RUNNING:
             _RUNNING.remove(task)
         _COND.notify_all()

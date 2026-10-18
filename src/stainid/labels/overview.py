@@ -1,12 +1,18 @@
 """Where labelling stands, per stain: coverage, what people said, how often people agree, and how the AI compares.
 
 How the AI compares is measured on every real object people labelled (`detection`), not only on the objects the
-detection step proposed: a real object with no pool candidate at its position (within `pool.MATCH_PX`) on a prepared
-field is one the AI never proposed, a missed object like one it proposed but rejected. The older figure, among proposed
-objects only (`ai`), is kept for comparison.
+detection step proposed. Detection's calls come from the v2 candidate store only (`candidate_store.calls_of`, the one
+source of detection's calls, as the Cores view and `labels.compare` read them): a real object no candidate is about
+(`decisions.consensus` keys objects by candidate, old labels matched by position) on a core the store has is one the AI
+never proposed, a missed object like one it proposed but rejected. Only for cores the store does not have (a project
+from before the v2 detection) is the older candidate pool read (`_legacy`). The older figure, among proposed objects
+only (`ai`), is kept for comparison.
 """
 from __future__ import annotations
 
+import hashlib
+import json
+import threading
 from pathlib import Path
 
 import pandas as pd
@@ -19,38 +25,57 @@ from stainid.labels.tasks import positive
 from stainid.project import Project
 
 _CACHE: dict[tuple, tuple[tuple, dict]] = {}
+_MAKING: dict[tuple, threading.Lock] = {}  # one count at a time per project and stain (the warm-up and a page share it)
+_MAKING_LOCK = threading.Lock()
 SPLIT = "people disagree"  # an object people labelled differently, as many for one class as for another
 
 
-def match(consensus: pd.DataFrame, objects: pd.DataFrame, stain: str, prepared: set[str] | None = None,
-          extra: pd.DataFrame | None = None, stored: pd.Series | None = None) -> pd.DataFrame:
-    """Each consensus label with the AI call of the pool candidate at its position, and whether the detection step
-    proposed the object at all: True (a candidate is there), False (no candidate, on a field in `prepared`: the AI never
-    proposed it) or None (no candidate on a field that is not prepared, so it cannot tell). `extra`: measured added
-    objects (`labels.added`); one that turned out to be a candidate counts as that candidate. `stored`: the AI's call of
-    the v2 store candidate at each row's position (`candidate_store.calls_at`, None where there is none)."""
-    by_tile = {t: g for t, g in objects.groupby("tile_id")}
-    extra_by_tile = {t: g for t, g in extra.groupby("tile_id")} if extra is not None and len(extra) else {}
+def match(consensus: pd.DataFrame, calls: pd.DataFrame | None, stain: str, prepared: set[str] | None = None,
+          legacy: dict[int, tuple] | None = None) -> pd.DataFrame:
+    """Each consensus object with detection's call on the candidate it is about (`calls`: `candidate_store.calls_of`),
+    and whether the detection step proposed the object at all: True (it is a candidate), False (no candidate, on a
+    field in `prepared`, a core the store has: the AI never proposed it) or None (it cannot tell). `legacy`: the call
+    and whether it was proposed for objects of cores the store does not have (`_legacy`), by row position."""
     prepared = prepared or set()
-    calls, proposed = [], []
-    for row in consensus.itertuples():
+    legacy = legacy or {}
+    known = set(calls.index) if calls is not None else set()
+    out, proposed = [], []
+    for k, (candidate, tile) in enumerate(zip(consensus.candidate.fillna("").astype(str), consensus.tile_id)):
+        if k in legacy:
+            out.append(legacy[k][0])
+            proposed.append(legacy[k][1])
+        elif candidate in known:
+            out.append(str(calls.at[candidate, "value"]))
+            proposed.append(True)
+        else:
+            out.append(None)
+            proposed.append(False if tile in prepared else None)
+    out = [None if isinstance(c, float) and pd.isna(c) else c for c in out]
+    return consensus.assign(ai_value=out, ai_positive=[None if c is None else positive(stain, c) for c in out], proposed=proposed)
+
+
+def _legacy(project: Project, stain: str, consensus: pd.DataFrame, places: list[int]) -> dict[int, tuple]:
+    """Detection's call on objects of cores the v2 store does not have (a project from before the v2 detection): the
+    older candidate pool at the object's position (or the measured object an added label turned out to be), and whether
+    it was proposed (False on a prepared pool field with no candidate there, None elsewhere)."""
+    objects = pool.all_objects(project, stain)
+    by_tile = {t: g for t, g in objects.groupby("tile_id")} if len(objects) else {}
+    extra = added.all_added(project, stain)
+    extra_by_tile = {t: g for t, g in extra.groupby("tile_id")} if extra is not None and len(extra) else {}
+    prepared = pool.prepared(project, stain)
+    out = {}
+    for k in places:
+        row = consensus.iloc[k]
         candidates = by_tile.get(row.tile_id)
         i = pool.nearest(candidates, row.x, row.y)
         hit = added.resolve(extra_by_tile.get(row.tile_id), row.x, row.y) if i is None else None
         if i is not None:
-            calls.append(candidates.iloc[i].ai_value)
-            proposed.append(True)
-        elif stored is not None and stored.get(row.Index) is not None:
-            calls.append(stored[row.Index])
-            proposed.append(True)
+            out[k] = (candidates.iloc[i].ai_value, True)
         elif hit is not None and pd.notna(hit.candidate_x):
-            calls.append(hit.ai_value)
-            proposed.append(True)
+            out[k] = (hit.ai_value, True)
         else:
-            calls.append(None)
-            proposed.append(False if row.tile_id in prepared else None)
-    calls = [None if isinstance(c, float) and pd.isna(c) else c for c in calls]
-    return consensus.assign(ai_value=calls, ai_positive=[None if c is None else positive(stain, c) for c in calls], proposed=proposed)
+            out[k] = (None, False if row.tile_id in prepared else None)
+    return out
 
 
 def detection(matched: pd.DataFrame) -> dict:
@@ -93,13 +118,12 @@ def stain_overview(project: Project, stain: str, labels: pd.DataFrame, tiles: pd
     reviewed = store.reviewed_fields(labels, stain)
     vocabulary = vocab.of(project, stain)
     consensus = decisions.consensus(project, stain, labels, tiles)  # by candidate, as training counts
-    objects = pool.all_objects(project, stain)
-    prepared = pool.prepared(project, stain)
     on_store = candidate_store.cores(project, stain)
-    if on_store and not tiles.empty:  # fields whose core has v2 candidates are prepared too
-        prepared = prepared | set(tiles.tile_id[(tiles.stain == stain) & tiles.core_id.astype(str).isin(on_store)])
-    stored = candidate_store.calls_at(project, stain, consensus, tiles) if on_store and len(consensus) else None
-    matched = match(consensus, objects, stain, prepared, added.all_added(project, stain), stored) if len(consensus) \
+    stored_fields = set(tiles.tile_id[(tiles.stain == stain) & tiles.core_id.astype(str).isin(on_store)]) if on_store and "core_id" in tiles else set()
+    prepared = stored_fields | pool.prepared(project, stain)
+    calls = candidate_store.calls_of(project, stain, consensus.candidate) if len(consensus) else None
+    old = [k for k, tile in enumerate(consensus.tile_id) if tile not in stored_fields] if len(consensus) else []
+    matched = match(consensus, calls, stain, stored_fields, _legacy(project, stain, consensus, old) if old else None) if len(consensus) \
         else consensus.assign(ai_value=[], ai_positive=[], proposed=[])
     judged = matched[matched.ai_positive.notna() & matched.positive.notna()]
     human, ai = judged.positive.astype(bool).to_numpy(), judged.ai_positive.astype(bool).to_numpy()
@@ -132,11 +156,58 @@ def stain_overview(project: Project, stain: str, labels: pd.DataFrame, tiles: pd
     }
 
 
+def _saved_path(project: Project, stain: str) -> Path:
+    from stainid import disk_cache  # noqa: PLC0415
+
+    return disk_cache.path(project.root, "label_overview", f"{stain}.json")
+
+
+def _saved(project: Project, stain: str, digest: str) -> dict | None:
+    """The overview a server worked out before from the same inputs (it outlives restarts: a cold server answers at
+    once when nothing changed since)."""
+    from stainid import disk_cache  # noqa: PLC0415
+
+    path = _saved_path(project, stain)
+    try:
+        found = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    if found.get("digest") != digest:
+        return None
+    disk_cache.used(path)
+    return found.get("overview")
+
+
+def _save(project: Project, stain: str, digest: str, value: dict) -> None:
+    from stainid import disk_cache  # noqa: PLC0415
+
+    try:
+        disk_cache.write(_saved_path(project, stain), json.dumps({"digest": digest, "overview": value}).encode())
+    except (OSError, TypeError, ValueError):
+        pass
+
+
 def cached_stain_overview(project: Project, stain: str, root: Path, tiles: pd.DataFrame) -> dict:
-    """`stain_overview`, worked out again only when a label is saved or a pool field is (re)built."""
+    """`stain_overview`, worked out again only when a label is saved, a pool field is (re)built (older cores without the
+    store), detection writes this stain's candidates or masks, or an area is edited; kept in memory and in the project's
+    cache (`label_overview`)."""
     key = (str(project.root), stain)
     stamp = (store.signature(root), pool.signature(project, stain), added.signature(project, stain), len(tiles), vocab.of(project, stain),
              cache.signature(candidate_store.folder(project, stain)), excluded_areas.signature(project, stain))
-    if key not in _CACHE or _CACHE[key][0] != stamp:
-        _CACHE[key] = (stamp, stain_overview(project, stain, frames.in_field_frame(excluded_areas.drop_excluded(project, store.current(root)), tiles, project.context_px), tiles))
-    return _CACHE[key][1]
+    kept = _CACHE.get(key)
+    if kept is not None and kept[0] == stamp:
+        return kept[1]
+    with _MAKING_LOCK:
+        lock = _MAKING.setdefault(key, threading.Lock())
+    with lock:
+        kept = _CACHE.get(key)
+        if kept is not None and kept[0] == stamp:
+            return kept[1]
+        digest = hashlib.sha1(json.dumps([key, stamp], default=repr).encode()).hexdigest()
+        value = _saved(project, stain, digest)
+        if value is None:
+            labels = frames.in_field_frame(excluded_areas.drop_excluded(project, store.current(root)), tiles, project.context_px)
+            value = stain_overview(project, stain, labels, tiles)
+            _save(project, stain, digest, value)
+        _CACHE[key] = (stamp, value)
+        return value

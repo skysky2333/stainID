@@ -84,6 +84,9 @@ def session_meta(name: str, request: Request) -> dict:
     meta = sessions.meta(root(), name)
     if not meta["open"] and not is_admin(request):
         raise HTTPException(403, "this labelling session is not open at the moment")
+    from stainid.api.routes import accounts as access  # noqa: PLC0415 - who may label it: admins, and the people who joined it
+
+    access.may_label(request, name)
     return meta
 
 
@@ -550,9 +553,9 @@ def _create_session(body: NewSession) -> dict:
     if body.round:
         return _rounds().create_round_session(body)
     if body.kind == outline.KIND:
-        from stainid.api.routes.outline import create_outline_session
+        from stainid.api.routes.outline import RETIRED
 
-        return create_outline_session(body)
+        raise HTTPException(400, RETIRED)
     fields: list[str] = []
     if body.kind == "fields":
         fields = _known_fields(body.stain, body.tile_ids) if body.tile_ids else _pick(body.stain, 20 if body.n_fields is None else body.n_fields, len(sessions.names(root())))
@@ -588,9 +591,9 @@ def add_fields(name: str, body: MoreFields, request: Request) -> dict:
     """More fields for a session: these exact ones (`tile_ids`), or `n` that stainID picks."""
     meta = session_meta(name, request)
     if meta["kind"] == outline.KIND:
-        from stainid.api.routes.outline import add_outline_fields
+        from stainid.api.routes.outline import RETIRED
 
-        return add_outline_fields(meta, body.n, body.tile_ids)
+        raise HTTPException(400, RETIRED)
     if rounds.is_round(meta):
         return _rounds().add_fields(meta, body.n, body.tile_ids, body.seed)
     if meta["kind"] != "fields":
@@ -772,9 +775,22 @@ class Marks(BaseModel):
 
 @router.get("/annotate")
 def list_open(request: Request, person: str | None = Depends(viewer)) -> list[dict]:
+    """The sessions of this project the person may label: every one for an admin, else the ones they joined."""
+    from stainid.api import accounts  # noqa: PLC0415
+    from stainid.api.session import current_account  # noqa: PLC0415
+
+    account = current_account(request)
+    joined = None if is_admin(request) else {n for p, n, _ in accounts.sets_of(account.id) if p == get_state().id} if account else set()
+    return open_sessions(request, person, joined)
+
+
+def open_sessions(request: Request, person: str | None, only: set[str] | None = None) -> list[dict]:
+    """The open sessions (an admin: every one) of the request's project, or of them the ones in `only`, with progress."""
     labels = store.current(root())
     out = []
     for name in sessions.names(root()):
+        if only is not None and name not in only:
+            continue
         meta = sessions.meta(root(), name)
         if not meta["open"] and not is_admin(request):
             continue

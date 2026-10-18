@@ -7,16 +7,18 @@
    plaque is the same colour on every page. Dotted light grey is the reject (Del) and detection's own rejects: not
    active; dotted amber with a "?" is "unsure".
    The colours are saturated and clear of DAB brown and haematoxylin blue, so they read on the tissue; on the light
-   pages they are drawn with a thin dark edge. No runtime imports: tests/js/class_palette.test.ts runs this file in Node. */
+   pages they are drawn with a thin dark edge. The colours are the one palette's (palette.ts, src/stainid/palette.json),
+   distinct from every area type, layer and marker. tests/js/class_palette.test.ts runs this file in Node. */
 import type { Vocabulary } from './labels/classKeys'
+import { PALETTE } from './palette.ts'
 
-export const CLASS_COLOURS = ['#ff2bd6', '#ffe600', '#00e5ff', '#7cff3a', '#b98cff', '#ff4d4d', '#ffa64d', '#9dffe0', '#ffffff']
+export const CLASS_COLOURS = PALETTE.classes
 /** Not active: rejected (Del, or by detection), removed by a person, new without a class (always dotted). */
-export const INACTIVE_GREY = '#d0d4da'
+export const INACTIVE_GREY = PALETTE.states.inactive
 /** "Unsure" (` or 0): dotted, with a small "?". */
-export const UNSURE_AMBER = '#ffb020'
+export const UNSURE_AMBER = PALETTE.states.unsure
 /** A value that is no class of the vocabulary (an old label, a class since removed). */
-export const UNKNOWN_COLOUR = '#9aa1ab'
+export const UNKNOWN_COLOUR = PALETTE.states.unknown
 export const REJECT_SLOT = -2
 export const UNSURE_SLOT = -3
 
