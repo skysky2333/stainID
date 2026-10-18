@@ -63,6 +63,18 @@ positive level and edge-guard trigger — and the fold and linear-artifact masks
 over the wide crop, the background moved the 6E10 extent level by up to 8% per tile and a lower level joined
 neighbouring deposits into one.
 
+Only the objects that need the window pay for it (`proposals.whole_objects`): a tile whose window is wider than 384 px
+(6E10) is first detected over the tile and 384 px, and every candidate it keeps that comes within 176 px of that crop's
+edge is detected again in a local window around it (its box and 256 px, grown by 512 px on each side the object still
+comes within 176 px of, or its centroid within 260 px of, up to the tile's window; corners on the window's pixel
+parity), at the tile's own crop-wide levels (`Field.reference`). The cut candidate gives way to the local regions
+covering at least a quarter of it whose centroid the tile keeps. The margins hold everything a candidate's measures look
+at (the 140 µm review patch reaches 256 px from the centroid, the 45 µm nuclei ring 165 px from the outline, the 4 µm
+smoothing about 45 px), so this is the whole window's result: on four 6E10 cores the same 9,826 candidates and outlines,
+tile measures and unproposed regions as the 1024 px windows, in 215–385 s per core instead of 875–1,300 s. The tissue areas come from the
+standard crop in every case (`Field.tissue_area`: a hole is filled when the standard crop encloses it), as do the fold
+and linear-artifact masks.
+
 The window changes only what detection sees. The tiles, their ids, the tissue areas (each tile's own area), the
 calibration and the nuclei stay as they are: the linear-artifact and fold masks are made per tile on its standard crop
 (the tile and 128 px, as the calibration makes them) and cut from there for the wider window

@@ -202,25 +202,16 @@ def tile_summary(field: Field, stain: str, kept: list[dict], unproposed: int) ->
     return out
 
 
-def process_tile(field: Field, stain: str, settings: dict, shared: dict) -> dict:
-    """Everything stage 2 keeps of one tile: candidate rows (field coordinates), summary, unproposed regions, threads."""
-    module = {"NeuN": neun, "6E10": amyloid, "AT8": tau}[stain]
-    regions = module.propose(field, settings, shared)
-    if stain == "6E10":
-        extent = np.zeros(field.shape, bool)
-        for region in regions:
-            if region.source == "legacy":
-                extent[region.box] |= region.mask
-        field.memo["amyloid_extent"] = extent
-    # an object across the tile's edge is segmented from each side's crop, with slightly different centroids: keep it
-    # here when its centroid lies within half the context margin of the tile (`owned_once` keeps one copy per core)
+def candidate_rows(field: Field, stain: str, regions: list[Region]) -> list[tuple[Region, dict]]:
+    """The rows (field coordinates, features) of the regions the tile keeps: those whose centroid lies in it or within
+    half its context margin (an object across the tile's edge is segmented from each side's crop, with slightly
+    different centroids; `owned_once` keeps one copy per core)."""
     margin = own_margin(field)
     kept = [r for r in regions if field.inside(*_centroid(r), margin)]
     exclusion = field.neun_exclusion if stain == "NeuN" else field.exclusion
     rows = []
     inputs = _model_inputs(stain, field, kept)
     extras = _extras(stain, field, kept)
-    ps = field.pixel_size_um
     ox, oy = field.origin
     tx, ty = int(field.tile["x_px"]), int(field.tile["y_px"])
     for region, model_values, extra in zip(kept, inputs, extras):
@@ -238,6 +229,33 @@ def process_tile(field: Field, stain: str, settings: dict, shared: dict) -> dict
             **generic, **_legacy_columns(stain, region), **extra, **model_values,
             "_own": field.inside(cx, cy), "_area_px": region.area_px,
         })
+    return list(zip(kept, rows))
+
+
+def tile_regions(field: Field, stain: str, settings: dict, shared: dict) -> list[Region]:
+    """The stain's proposals of a field (`<stain module>.propose`); 6E10 also remembers the legacy deposits' extent."""
+    module = {"NeuN": neun, "6E10": amyloid, "AT8": tau}[stain]
+    regions = module.propose(field, settings, shared)
+    if stain == "6E10":
+        extent = np.zeros(field.shape, bool)
+        for region in regions:
+            if region.source == "legacy":
+                extent[region.box] |= region.mask
+        field.memo["amyloid_extent"] = extent
+    return regions
+
+
+def process_tile(field: Field, stain: str, settings: dict, shared: dict, whole=None) -> dict:
+    """Everything stage 2 keeps of one tile: candidate rows (field coordinates), summary, unproposed regions, threads.
+    `whole(rows)`, when given, replaces the rows of objects the field's crop cuts by those objects seen whole
+    (`whole_objects`)."""
+    regions = tile_regions(field, stain, settings, shared)
+    rows = [row for _, row in candidate_rows(field, stain, regions)]
+    if whole is not None:
+        rows = whole(rows)
+    exclusion = field.neun_exclusion if stain == "NeuN" else field.exclusion
+    ps = field.pixel_size_um
+    ox, oy = field.origin
     owner = np.zeros(field.shape, np.int32)
     for index, region in enumerate(regions, start=1):
         view = owner[region.box]
@@ -282,6 +300,114 @@ def own_margin(field: Field) -> int:
 
 
 # ---------------------------------------------------------------- the detection window
+
+# ---------------------------------------------------------------- objects seen whole
+
+FIRST_WINDOW = 384  # how far (core px) beyond its tile a tile is first detected when its window is wider: the
+# features of the objects it keeps (centroid within half the 128 px margin of the tile) see only real pixels there (the
+# 6E10 140 µm review patch reaches 256 px from the centroid)
+EDGE_PX = 176  # an object within this of the first crop's edge is detected again whole: the 4 µm smoothing of the
+# coarse and tree levels reaches about 45 px from its outline, the 45 µm nuclei ring 165 px
+CENTRE_PX = 260  # and in a local window, an object whose centroid lies within this of the window's edge (the 140 µm
+# review patch reaches 256 px from the centroid; the first crop keeps centroids 320 px from its edge)
+WHOLE_PAD = 256  # a local window around a cut object: its box grown by this much on every side, ...
+WHOLE_GROW = 512  # ... and by this much more on each side the object still comes near
+
+
+def _near_sides(box: tuple[int, int, int, int], within: tuple[int, int, int, int], limit: tuple[int, int, int, int],
+                centre: tuple[float, float] | None = None) -> list[bool]:
+    """Which sides (left, top, right, bottom) of `within` a box (x0, y0, x1, y1, core px, end exclusive) comes within
+    EDGE_PX of (or its `centre` within CENTRE_PX of), where `within` can still grow (it is not at `limit`, the tile's
+    detection window)."""
+    near = [box[0] - within[0] < EDGE_PX, box[1] - within[1] < EDGE_PX, within[2] - box[2] < EDGE_PX, within[3] - box[3] < EDGE_PX]
+    if centre is not None:
+        x, y = centre
+        near = [n or c for n, c in zip(near, (x - within[0] < CENTRE_PX, y - within[1] < CENTRE_PX, within[2] - x < CENTRE_PX,
+                                               within[3] - y < CENTRE_PX))]
+    return [n and within[k] != limit[k] for k, n in enumerate(near)]
+
+
+def _even(value: int, floor: int) -> int:
+    """`value` down to an even number, not below `floor`: a local window's corner keeps the parity of the tile's window
+    corner, so a centroid rounds to the same pixel in both (the review patch, the context crops)."""
+    return max(floor, value - (value - floor) % 2)
+
+
+def whole_objects(rows: list[dict], field: Field, limit: tuple[int, int, int, int], local_field, stain: str, settings: dict,
+                  shared: dict) -> tuple[list[dict], dict]:
+    """The rows of a tile with every object its first crop may cut seen whole: each kept row within EDGE_PX of the
+    crop's edge, where the tile's detection window (`limit`, core px) reaches further, is detected again in a local
+    window around it (`local_field(box)`: the image there, at the tile's own crop-wide levels by `Field.reference`),
+    grown until the object no longer comes near the window's edge or the window reaches `limit`. The row gives way to the
+    local regions covering at least a quarter of it whose centroid the tile keeps (none: the object is another tile's).
+    The same as detecting the tile in its whole window, at the cost of the cut objects' windows only."""
+    ox, oy = field.origin
+    crop = (ox, oy, ox + field.shape[1], oy + field.shape[0])
+    cut = [i for i, r in enumerate(rows) if any(_near_sides(_box(r), crop, limit))]
+    stats = {"cut": len(cut), "windows": 0, "local_px": 0, "replaced": 0, "added": 0}
+    if not cut:
+        return rows, stats
+    groups = []
+    for i in cut:
+        b = _box(rows[i])
+        groups.append(([_even(b[0] - WHOLE_PAD, limit[0]), _even(b[1] - WHOLE_PAD, limit[1]), min(limit[2], b[2] + WHOLE_PAD),
+                        min(limit[3], b[3] + WHOLE_PAD)], [i]))
+    groups = _merge_windows(groups)
+    replaced, added, seen = set(), [], set()
+    while groups:
+        box, members = groups.pop()
+        local = local_field(tuple(box))
+        with shared_pictures(local.rgb):
+            regions = tile_regions(local, stain, settings, shared)
+            found, grow = {}, [False] * 4
+            for i in members:
+                piece = _raster(rows[i], tuple(box))
+                area = int(piece.sum())
+                found[i] = [r for r in regions if area and int((piece[r.box] & r.mask).sum()) >= 0.25 * area]
+                for r in found[i]:
+                    reach = (r.x0 + box[0], r.y0 + box[1], r.x0 + r.mask.shape[1] + box[0], r.y0 + r.mask.shape[0] + box[1])
+                    ys, xs = np.nonzero(r.mask)
+                    centre = (r.x0 + box[0] + float(xs.mean()), r.y0 + box[1] + float(ys.mean()))
+                    grow = [g or n for g, n in zip(grow, _near_sides(reach, tuple(box), limit, centre))]
+            if any(grow):
+                local.release()
+                bigger = [_even(box[0] - WHOLE_GROW, limit[0]) if grow[0] else box[0], _even(box[1] - WHOLE_GROW, limit[1]) if grow[1] else box[1],
+                          min(limit[2], box[2] + WHOLE_GROW) if grow[2] else box[2], min(limit[3], box[3] + WHOLE_GROW) if grow[3] else box[3]]
+                groups = _merge_windows(groups + [(bigger, members)])
+                continue
+            stats["windows"] += 1
+            stats["local_px"] += local.shape[0] * local.shape[1]
+            chosen = list({id(r): r for i in members for r in found[i]}.values())
+            for region, row in candidate_rows(local, stain, chosen):
+                key = (row["bbox"], row["_area_px"])
+                if key not in seen:
+                    seen.add(key)
+                    added.append(row)
+            replaced |= {i for i in members if found[i]}
+        local.release()
+    stats["replaced"], stats["added"] = len(replaced), len(added)
+    return [r for i, r in enumerate(rows) if i not in replaced] + added, stats
+
+
+def _merge_windows(groups: list) -> list:
+    """Overlapping local windows as one (their box's union holds both)."""
+    groups = list(groups)
+    merged = True
+    while merged:
+        merged = False
+        for a in range(len(groups)):
+            for b in range(a + 1, len(groups)):
+                if _overlap(tuple(groups[a][0]), tuple(groups[b][0])):
+                    box = [min(groups[a][0][0], groups[b][0][0]), min(groups[a][0][1], groups[b][0][1]),
+                           max(groups[a][0][2], groups[b][0][2]), max(groups[a][0][3], groups[b][0][3])]
+                    groups[a] = (box, groups[a][1] + groups[b][1])
+                    del groups[b]
+                    merged = True
+                    break
+            if merged:
+                break
+    return groups
+
 
 def detection_context(project, settings: dict) -> int:
     """How far (core px) beyond its tile a tile's detection window reaches (`proposals.<stain>.context_px`, at least the
@@ -356,8 +482,10 @@ def window_nuclei(tile: dict, tiles: list[dict], window: tuple[int, int, int, in
         piece = np.where(piece > 0, piece + next_label, 0).astype(np.uint32)
         next_label += int(labels.max()) + 1
         out[part[1] - y0: part[3] - y0, part[0] - x0: part[2] - x0] = piece
-    sx0, sy0, sx1, sy1 = standard
-    out[sy0 - y0: sy1 - y0, sx0 - x0: sx1 - x0] = own[: sy1 - sy0, : sx1 - sx0]
+    part = _overlap(standard, window)  # all of it for the tile's own window; a local window may hold a part of it
+    if part is not None:
+        out[part[1] - y0: part[3] - y0, part[0] - x0: part[2] - x0] = own[part[1] - standard[1]: part[3] - standard[1],
+                                                                          part[0] - standard[0]: part[2] - standard[0]]
     return out
 
 
@@ -530,27 +658,50 @@ def propose_core(project, stain: str, core_id: str, tiles: list[dict], threshold
         size = (image.height, image.width)
         mask = np.zeros(((size[0] + MASK_SCALE - 1) // MASK_SCALE, (size[1] + MASK_SCALE - 1) // MASK_SCALE), np.uint8)
         wide = window > context
+        whole_objects_on = bool(p.get("whole_objects", True))
+        local_counts: dict = {}
         automatic = automatic_masks(image, tiles, context, pixel_size, size, tiles_at_once) if wide else None
         cutting = threading.Lock()
 
-        def one(tile: dict) -> tuple[dict, np.ndarray]:
-            x, y = int(tile["x_px"]), int(tile["y_px"])
+        def cut_field(tile: dict, box: tuple[int, int, int, int], reference: Field | None = None) -> Field:
+            """The field of a tile over `box` (core px): the image there, detection's masks of the standard crops, the
+            nuclei of the tiles it covers; `reference`: the tile's own field, whose crop-wide levels a local window takes."""
+            x, y, w, h = int(tile["x_px"]), int(tile["y_px"]), int(tile["width_px"]), int(tile["height_px"])
             with cutting:
-                rgb, inner = context_crop(image, x, y, int(tile["width_px"]), int(tile["height_px"]), window)
-            origin = (x - inner[1].start, y - inner[0].start)
-            box = (origin[0], origin[1], origin[0] + rgb.shape[1], origin[1] + rgb.shape[0])
+                rgb = np.asarray(image.crop(box).convert("RGB"))
             raw = window_nuclei(tile, tiles, box, context, size, load_nuclei) if wide else load_nuclei(tile)
-            field = Field({**tile, "context_px": context}, rgb, inner, origin, threshold, pixel_size[tile["tile_id"]],
-                          np.zeros(rgb.shape[:2], bool), raw, glass,
-                          smooth_px=float(p["smooth_px"]), background_um=float(p["local_background_um"]))
+            inner = (slice(y - box[1], y - box[1] + h), slice(x - box[0], x - box[0] + w))
+            field = Field({**tile, "context_px": context}, rgb, inner, (box[0], box[1]), threshold, pixel_size[tile["tile_id"]],
+                          np.zeros(rgb.shape[:2], bool), raw, glass, smooth_px=float(p["smooth_px"]),
+                          background_um=float(p["local_background_um"]), reference=reference)
             if automatic is not None:  # detection's masks as the standard crops make them (calibration, tile measures)
                 field.__dict__["linear"] = automatic[0][box[1]: box[3], box[0]: box[2]]
                 field.__dict__["fold"] = automatic[1][box[1]: box[3], box[0]: box[2]]
-            with shared_pictures(rgb):  # the stain separation and tissue mask of the field, made once for every step
-                result = process_tile(field, stain, settings, shared)
+            return field
+
+        def window_box(tile: dict, reach: int) -> tuple[int, int, int, int]:
+            x, y, w, h = int(tile["x_px"]), int(tile["y_px"]), int(tile["width_px"]), int(tile["height_px"])
+            return max(0, x - reach), max(0, y - reach), min(size[1], x + w + reach), min(size[0], y + h + reach)
+
+        def one(tile: dict) -> tuple[dict, np.ndarray]:
+            # the tile is detected over a first window; the objects that window may cut are detected again whole in
+            # local windows around them (`whole_objects`), within the tile's whole detection window
+            first = min(window, max(context, FIRST_WINDOW)) if whole_objects_on else window
+            field = cut_field(tile, window_box(tile, first))
+            whole = None
+            if window > first:
+                def whole(rows: list[dict]) -> list[dict]:
+                    found, counts = whole_objects(rows, field, window_box(tile, window), lambda box: cut_field(tile, box, field),
+                                                  stain, settings, shared)
+                    for key, value in counts.items():
+                        local_counts[key] = local_counts.get(key, 0) + value
+                    return found
+
+            with shared_pictures(field.rgb):  # the stain separation and tissue mask of the field, made once for every step
+                result = process_tile(field, stain, settings, shared, whole)
                 piece = mask_piece(field, stain)
             field.release()
-            del field, rgb, raw
+            field = whole = None
             gc.collect()
             return result, piece
 
@@ -574,7 +725,7 @@ def propose_core(project, stain: str, core_id: str, tiles: list[dict], threshold
     write_core(project, stain, core_id, tiles, rows, summaries, unproposed, thread_rows, mask)
     manifest.write(project, "proposals", stain, core_id, expected(project, stain, core_id, tiles, threshold, nuclei_names),
                    candidates=len(rows), unproposed=len(unproposed), seconds=round(time.time() - started, 1), tiles=len(tiles))
-    return {"candidates": len(rows), "unproposed": len(unproposed), "seconds": time.time() - started}
+    return {"candidates": len(rows), "unproposed": len(unproposed), "seconds": time.time() - started, "whole_objects": local_counts}
 
 
 def write_core(project, stain: str, core_id: str, tiles: list[dict], rows: list[dict], summaries: list[dict], unproposed: list[dict],
