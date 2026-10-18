@@ -27,6 +27,9 @@ class Field:
     smooth_px: float = 1.0
     background_um: float = 60.0
     memo: dict = field(default_factory=dict)  # values derived once per field by the stain modules
+    # the tile's own field, for a local window cut around an object of it: its crop-wide levels are the tile's (none for
+    # the tile's own field)
+    reference: Field | None = None
 
     @property
     def shape(self) -> tuple[int, int]:
@@ -51,11 +54,16 @@ class Field:
         levels) are taken over it, so a wider detection window shows more of each object at the levels the standard
         crop sets, and does not move them (a lower extent level joins neighbouring plaques). All of the field for a
         field cut with the standard margin."""
-        context = int(self.tile.get("context_px", 128))
         out = np.zeros(self.shape, bool)
-        out[max(0, self.inner[0].start - context): self.inner[0].stop + context,
-            max(0, self.inner[1].start - context): self.inner[1].stop + context] = True
+        out[self.standard_box] = True
         return out
+
+    @property
+    def standard_box(self) -> tuple[slice, slice]:
+        """`standard` as the slices of the field it covers."""
+        context = int(self.tile.get("context_px", 128))
+        return (slice(min(self.shape[0], max(0, self.inner[0].start - context)), max(0, min(self.shape[0], self.inner[0].stop + context))),
+                slice(min(self.shape[1], max(0, self.inner[1].start - context)), max(0, min(self.shape[1], self.inner[1].stop + context))))
 
     @cached_property
     def hed(self) -> np.ndarray:
@@ -84,8 +92,15 @@ class Field:
 
     @cached_property
     def tissue_area(self) -> np.ndarray:
-        """Tissue for areas (the core's glass level, enclosed holes filled)."""
-        return tissue_area_mask(self.rgb, self.glass)
+        """Tissue for areas (the core's glass level, enclosed holes filled), made on the standard crop (`standard`): a
+        hole is filled when the standard crop encloses it, so the tile's areas do not depend on the detection window
+        (only the tile's own area is used)."""
+        box = self.standard_box
+        if box[0].stop <= box[0].start or box[1].stop <= box[1].start:
+            return tissue_area_mask(self.rgb, self.glass)
+        out = np.zeros(self.shape, bool)
+        out[box] = tissue_area_mask(np.ascontiguousarray(self.rgb[box]), self.glass)
+        return out
 
     @cached_property
     def linear(self) -> np.ndarray:

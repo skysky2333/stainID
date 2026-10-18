@@ -156,14 +156,29 @@ def tree_regions(field_, levels: list[float], allowed: np.ndarray, minimum_um2: 
                   None if not split_max_um2 else round(split_max_um2 / pixel_area), mode, split_rules)
 
 
-def stained_level(field_, smooth: np.ndarray, level: float, contrast: float, valid: np.ndarray) -> float:
+def stained_level(field_, smooth: np.ndarray, level: float, contrast: float, valid: np.ndarray, smooth_um: float | None = None) -> float:
     """`level` × the slide threshold, raised to the median of `smooth` over `valid` tissue + `contrast` × the threshold
-    where the background is darker (a pale halo stands out from its tissue, not from glass)."""
+    where the background is darker (a pale halo stands out from its tissue, not from glass). The median is the tile's
+    standard crop's (`Field.standard`); for a local window cut around an object, of the tile's own field
+    (`Field.reference`: its DAB smoothed over `smooth_um`, its tissue outside the excluded areas)."""
     out = float(level) * field_.threshold
+    if float(contrast) <= 0:
+        return out
+    own = getattr(field_, "reference", None)
+    if own is not None and smooth_um is not None:
+        key = ("stained_median", float(smooth_um))
+        if key not in own.memo:
+            mine = own.tissue & ~own.exclusion
+            if (mine & own.standard).sum() >= 100:
+                mine = mine & own.standard
+            blurred = cv2.GaussianBlur(own.dab, (0, 0), float(smooth_um) / own.pixel_size_um)
+            own.memo[key] = float(np.median(blurred[mine])) if mine.sum() >= 100 else None
+        median = own.memo[key]
+        return max(out, median + float(contrast) * field_.threshold) if median is not None else out
     standard = getattr(field_, "standard", None)  # the standard crop's tissue (a wider detection window moves no level)
     if standard is not None and (valid & standard).sum() >= 100:
         valid = valid & standard
-    if float(contrast) > 0 and valid.sum() >= 100:
+    if valid.sum() >= 100:
         out = max(out, float(np.median(smooth[valid])) + float(contrast) * field_.threshold)
     return out
 
@@ -174,7 +189,7 @@ def coarse_regions(field_, smooth_um: float, level: float, contrast: float, allo
     pixel scale it is a cloud of specks below the threshold."""
     pixel_area = field_.pixel_size_um ** 2
     smooth = cv2.GaussianBlur(field_.dab, (0, 0), float(smooth_um) / field_.pixel_size_um)
-    at = stained_level(field_, smooth, level, contrast, allowed)
+    at = stained_level(field_, smooth, level, contrast, allowed, smooth_um)
     mask = cv2.morphologyEx(((smooth >= at) & allowed).astype(np.uint8), cv2.MORPH_CLOSE, disk(1)).astype(bool) & allowed
     lo, hi = max(1, round(minimum_um2 / pixel_area)), round(maximum_um2 / pixel_area)
     return [Region(box[0].start, box[1].start, local, source, level=None) for box, local, area in components(mask) if lo <= area <= hi]

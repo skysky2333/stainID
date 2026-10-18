@@ -74,6 +74,26 @@ def apply_amyloid_class_overrides(
         summary["review_status"] = "partially_ai_visual_adjudicated_development"
 
 
+def component_h_maxima(body: np.ndarray, h: float, extent: np.ndarray, level: float) -> np.ndarray:
+    """The h-maxima of `body` within each 8-connected component of `extent` that reaches `level` (outside the component,
+    below every value): a deposit's split seeds come from its own peaks, not from brighter stain elsewhere in the crop
+    that the tissue background joins it to, so they are the same in any crop that holds the deposit whole (and the
+    reconstruction runs over the deposits' boxes, not the whole crop)."""
+    out = np.zeros(body.shape, bool)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(extent.astype(np.uint8), connectivity=8)
+    if count <= 1:
+        return out
+    peaks = ndimage.maximum(body, labels, index=np.arange(1, count))
+    floor = body.dtype.type(float(body.min()) - 2.0 * float(h) - 1.0)
+    height, width = body.shape
+    for index in np.flatnonzero(np.asarray(peaks) >= level) + 1:
+        x, y, w, hh = (int(v) for v in stats[index, :4])
+        box = (slice(max(0, y - 1), min(height, y + hh + 1)), slice(max(0, x - 1), min(width, x + w + 1)))
+        inside = labels[box] == index
+        out[box] |= h_maxima(np.where(inside, body[box], floor), h).astype(bool) & inside
+    return out
+
+
 def _remove_small_components(mask: np.ndarray, minimum_pixels: int) -> np.ndarray:
     count, labels, stats, _ = cv2.connectedComponentsWithStats(
         mask.astype(np.uint8), 8
@@ -166,6 +186,7 @@ def segment_amyloid_candidates(
     split_touching: bool = False,
     split_prominence: float = 1.0,
     statistics_mask: np.ndarray | None = None,
+    background: tuple[float, float] | None = None,
 ) -> tuple[
     dict[str, float | int],
     list[dict[str, float | int | bool | str]],
@@ -174,7 +195,8 @@ def segment_amyloid_candidates(
     np.ndarray,
 ]:
     """`statistics_mask`: the pixels the background median and spread (so the seed and extent levels) are taken over
-    (with the valid tissue); all of the image when None."""
+    (with the valid tissue); all of the image when None. `background`: that median and median absolute deviation,
+    given (a local window cut around an object takes its tile's)."""
     tissue = field_tissue_mask(rgb)
     excluded = np.zeros(tissue.shape, dtype=bool)
     if exclusion_mask is not None:
@@ -186,9 +208,12 @@ def segment_amyloid_candidates(
         raise ValueError("6E10 candidate detection requires at least 100 tissue pixels")
 
     dab = np.maximum(rgb_to_hed(rgb)[..., 2], 0.0).astype(np.float32)
-    sample = valid if statistics_mask is None or (valid & statistics_mask).sum() < 100 else valid & statistics_mask
-    background_median = float(np.median(dab[sample]))
-    background_mad = float(np.median(np.abs(dab[sample] - background_median)))
+    if background is not None:
+        background_median, background_mad = float(background[0]), float(background[1])
+    else:
+        sample = valid if statistics_mask is None or (valid & statistics_mask).sum() < 100 else valid & statistics_mask
+        background_median = float(np.median(dab[sample]))
+        background_mad = float(np.median(np.abs(dab[sample] - background_median)))
     background_sigma = max(1.4826 * background_mad, 0.001)
     seed_threshold = max(
         0.035,
@@ -219,7 +244,7 @@ def segment_amyloid_candidates(
     if split_touching:
         pixel_size_um = float(np.sqrt(pixel_width_um * pixel_height_um))
         body = cv2.GaussianBlur(dab, (0, 0), 3.0 / pixel_size_um)
-        seeds = h_maxima(body, split_prominence * seed_threshold).astype(bool) & (body >= seed_threshold) & extent
+        seeds = component_h_maxima(body, split_prominence * seed_threshold, extent, seed_threshold) & (body >= seed_threshold)
         peak_count, markers = cv2.connectedComponents(seeds.astype(np.uint8), connectivity=8)
         peaks = np.zeros((peak_count - 1, 2))
         split = watershed(-body, markers, mask=extent)

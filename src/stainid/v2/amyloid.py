@@ -17,16 +17,28 @@ from stainid.v2.tree import coarse_regions, tree_regions, walk_roots
 CORE_QUANTILES = np.linspace(0, 1, 21)
 
 
+def background(field) -> tuple[float, float]:
+    """The legacy segmentation's background median and median absolute deviation: of the valid tissue of the
+    tile's standard crop (`Field.standard`), of the tile's own field (`Field.reference`) for a local window."""
+    own = field.reference if getattr(field, "reference", None) is not None else field
+    if "amyloid_background" not in own.memo:
+        valid = own.tissue & ~own.exclusion
+        dab = own.dab
+        sample = valid & own.standard
+        values = dab[sample] if sample.sum() >= 100 else dab[valid] if valid.sum() >= 100 else dab[own.tissue] if own.tissue.any() else dab.ravel()
+        median = float(np.median(values))
+        own.memo["amyloid_background"] = (median, float(np.median(np.abs(values - median))))
+    return own.memo["amyloid_background"]
+
+
 def _levels(field) -> dict:
     """The legacy segmentation's background statistics, seed and extent thresholds and smoothed DAB for this field (the
-    statistics over its standard crop, `Field.standard`, as the segmentation takes them)."""
+    statistics as `background` takes them, as the segmentation does)."""
     if "amyloid" not in field.memo:
         valid = field.tissue & ~field.exclusion
         dab = field.dab
-        sample = valid & field.standard
-        values = dab[sample] if sample.sum() >= 100 else dab[valid] if valid.sum() >= 100 else dab[field.tissue] if field.tissue.any() else dab.ravel()
-        median = float(np.median(values))
-        sigma = max(1.4826 * float(np.median(np.abs(values - median))), 0.001)
+        median, mad = background(field)
+        sigma = max(1.4826 * mad, 0.001)
         seed_threshold = max(0.035, float(field.threshold), median + 6.0 * sigma)
         extent_threshold = max(0.010, 0.30 * seed_threshold, median + 2.5 * sigma)
         local_dab = cv2.GaussianBlur(dab, (0, 0), 1.2)
@@ -79,7 +91,9 @@ def deposit_row(field, region: Region) -> dict:
 
 def propose(field, settings: dict, shared: dict) -> list[Region]:
     _, objects, labels, _, _ = segment_amyloid_candidates(field.rgb, field.threshold, field.pixel_width_um, field.pixel_height_um,
-                                                          field.exclusion, split_touching=True, statistics_mask=field.standard)
+                                                          field.exclusion, split_touching=True,
+                                                          statistics_mask=field.standard if field.reference is None else None,
+                                                          background=background(field) if field.reference is not None else None)
     regions = label_regions(labels, "legacy", style="amyloid")
     occupancy = Occupancy(field.shape)
     for row in objects:
