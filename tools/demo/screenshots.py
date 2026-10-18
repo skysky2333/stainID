@@ -17,10 +17,16 @@ the light theme and writes:
 - projects.png, home.png, workflow.png (the Run page with its flow chart), models.png, labels.png, results.png,
   settings.png;
 - viewer.jpg: the Cores view of the AD core with the most tau+ neurons near its centre;
+- viewer-annotations.jpg: the Cores view of the core of Ann's field with the Annotations layer on (where people's labels
+  differ from detection), the excluded areas shaded and the minimap with each tile's review status;
 - annotate.jpg: "Fix the field" on the field the demo's Ann has started (her changes: classes in their colours, removed
-  and rejected candidates dotted grey), zoomed in a little, pointing at an object (its name beside it, its facts in the
-  side panel);
+  and rejected candidates dotted grey; the acceptance-threshold slider at the side), zoomed in a little, pointing at an
+  object (its name beside it, its facts in the side panel);
 - annotate-precise.jpg: the same field in precise editing (the dots to drag);
+- annotate-brush.jpg: the same field with the brush on (B) and one stroke of a bad area painted (not saved);
+- annotate-split.jpg / annotate-merge.jpg: splitting an object in two (S, the preview before Enter) and two objects
+  chosen to merge (M) (neither saved);
+- areas.jpg: a "Mark bad areas" core, every stain image of it as a tab, with a stroke painted (not saved);
 - tutorial.jpg: the tutorial a new annotator (Dana) is sent to first.
 """
 from __future__ import annotations
@@ -39,9 +45,14 @@ SHOTS = {  # name: (path in the project, or None when chosen from the data, view
     "home.png": ("/", 1500, 911),
     "models.png": ("/models", 1500, 911),
     "viewer.jpg": (None, 1500, 1000),
+    "viewer-annotations.jpg": (None, 1500, 1000),
     "labels.png": ("/labels", 1400, 900),
     "annotate.jpg": (None, 1500, 900),
     "annotate-precise.jpg": (None, 1500, 900),
+    "annotate-brush.jpg": (None, 1500, 900),
+    "annotate-split.jpg": (None, 1500, 900),
+    "annotate-merge.jpg": (None, 1500, 900),
+    "areas.jpg": (None, 1500, 950),
     "tutorial.jpg": ("/annotate", 1500, 900),
     "results.png": ("/results", 1500, 911),
     "settings.png": ("/settings", 1500, 911),
@@ -97,6 +108,32 @@ def point_at(page: Page, selector: str, near: tuple[float, float] | None = None)
         time.sleep(0.6)
 
 
+def objects_near_centre(page: Page, n: int) -> list[tuple[float, float]]:
+    """The middles of the `n` drawn objects closest to the picture's centre (screen px)."""
+    view = page.locator(".viewer").first.bounding_box()
+    cx, cy = view["x"] + view["width"] * 0.5, view["y"] + view["height"] * 0.5
+    found = []
+    for shape in page.locator(".round-object.look-class polygon:last-child").all():
+        box = shape.bounding_box()
+        if box and box["width"] >= 8:
+            x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+            if view["x"] < x < view["x"] + view["width"] and view["y"] < y < view["y"] + view["height"]:
+                found.append((x, y))
+    return sorted(found, key=lambda q: (q[0] - cx) ** 2 + (q[1] - cy) ** 2)[:n]
+
+
+def stroke(page: Page, selector: str, fx: float = 0.3, fy: float = 0.3, length: float = 0.25) -> None:
+    """One brush stroke across part of the picture (a drag), left to right with a little wave."""
+    view = page.locator(selector).first.bounding_box()
+    x, y = view["x"] + view["width"] * fx, view["y"] + view["height"] * fy
+    page.mouse.move(x, y)
+    page.mouse.down()
+    for k in range(30):
+        page.mouse.move(x + view["width"] * length * k / 29, y + 18 * ((k % 10) / 9))
+    page.mouse.up()
+    time.sleep(0.5)
+
+
 def zoom_in(page: Page, steps: int = 3) -> None:
     view = page.locator(".viewer").first.bounding_box()
     page.mouse.move(view["x"] + view["width"] * 0.5, view["y"] + view["height"] * 0.55)
@@ -147,8 +184,15 @@ def main() -> None:
             request.post(f"{base}/api/session/annotator", data={"name": person})
             if name == "viewer.jpg":
                 path = viewer_target(page, api, args.stain)
-            if name in ("annotate.jpg", "annotate-precise.jpg"):
+            if name.startswith("annotate"):
                 path = f"/annotate/{rounds['fix']}/{rounds['ann_field']}"
+            if name == "viewer-annotations.jpg":
+                path = f"/cores/{rounds['ann_field'].rsplit('_', 2)[0]}?stain={rounds['ann_field'].rsplit('_', 2)[1]}"
+            if name == "areas.jpg":
+                if not rounds.get("areas"):
+                    print("areas.jpg: the demo has no Mark bad areas session (make the demo again)", flush=True)
+                    continue
+                path = f"/annotate/{rounds['areas']}"
             page.set_viewport_size({"width": width, "height": height})
             page.goto(f"{base}/" if name == "projects.png" else pages + path)
             settle(page, 1.5)
@@ -161,6 +205,34 @@ def main() -> None:
                 page.mouse.down()  # a click on the object: precise editing
                 page.mouse.up()
                 time.sleep(1.2)
+            if name == "annotate-brush.jpg":
+                zoom_in(page, 1)
+                page.keyboard.press("b")
+                for _ in range(4):
+                    page.keyboard.press("Shift+Tab")  # a bigger brush
+                stroke(page, ".annotate-image .viewer", 0.25, 0.3, 0.3)
+            if name == "annotate-split.jpg":
+                zoom_in(page, 3)
+                page.keyboard.press("s")
+                near = objects_near_centre(page, 1)
+                if near:
+                    page.mouse.click(*near[0])
+                    time.sleep(2.5)  # the preview of the two pieces
+            if name == "annotate-merge.jpg":
+                zoom_in(page, 2)
+                page.keyboard.press("m")
+                for xy in objects_near_centre(page, 2):
+                    page.mouse.click(*xy)
+                    time.sleep(0.4)
+            if name == "viewer-annotations.jpg":
+                page.locator("label.layer-toggle", has_text="Annotations").first.click()
+                settle(page, 2.0)
+            if name == "areas.jpg":
+                page.wait_for_selector(".area-pending", timeout=120000)
+                settle(page, 3.0)
+                for _ in range(5):
+                    page.keyboard.press("Shift+Tab")
+                stroke(page, ".dz", 0.3, 0.35, 0.2)
             if name == "workflow.png":
                 page.locator(".flow-node", has_text="Find candidates").first.hover()
                 time.sleep(0.5)

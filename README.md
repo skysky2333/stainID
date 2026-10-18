@@ -209,10 +209,14 @@ All screenshots show a synthetic demo project: the tissue images, donors, labels
 |---|---|
 | ![Fix the field](docs/images/annotate.jpg) | ![Precise editing](docs/images/annotate-precise.jpg) |
 | **Fix the field** (at `/p/<project>/annotate`): every candidate of the field, solid in its class colour or dotted grey when rejected or removed; the object under the mouse lights up, its name beside it and its facts (class, detection's call and score, area, outline) in the side panel with the class keys and colours | **Precise editing** (click the object): only this object can change; a click adds a spot, Shift+click leaves one out, the white dots drag; a click beyond the faint frame keeps it |
-| ![Tutorial](docs/images/tutorial.jpg) | |
-| **Tutorial**: where a new annotator starts, on a practice field where nothing is saved; *Try the tutorial* on the Labels page shows it to the admin | |
+| ![The brush](docs/images/annotate-brush.jpg) | ![Mark bad areas](docs/images/areas.jpg) |
+| **The brush** (B in Fix the field): a drag adds to the chosen type of bad area, Shift-drag takes out of it; each type's area is one merged region, the chosen one strong | **Mark bad areas**: one core at a time with every stain image of it as a tab; the same brush, the types' areas as they stand (detection's with people's edits) |
+| ![Split](docs/images/annotate-split.jpg) | ![Merge](docs/images/annotate-merge.jpg) |
+| **Split** (S): a click on an object shows it cut in two, or draw a line across it; Enter keeps the pieces | **Merge** (M): click the objects that are one, Enter merges them (only objects that touch or nearly touch) |
+| ![Tutorial](docs/images/tutorial.jpg) | ![Annotations on the Cores view](docs/images/viewer-annotations.jpg) |
+| **Tutorial**: where a new annotator starts, on a practice field where nothing is saved; *Try the tutorial* on the Labels page shows it to the admin | **Annotations** on the Cores view: where people's labels differ from detection, their bad areas, the excluded areas, and the minimap with each tile's review status |
 | ![Home](docs/images/home.png) | ![Models](docs/images/models.png) |
-| **Home**: your next step and overall progress | **Models**: download published models; train from labels, compare, switch |
+| **Home**: your next step and overall progress | **Models**: download published models; train from labels, compare, switch; how detection's outlines match people's fixes |
 | ![Core viewer](docs/images/viewer.jpg) | ![Labels](docs/images/labels.png) |
 | **Cores**: the whole core, zoomable, with every candidate drawn on it (rejected ones dotted grey), the minimap, the excluded areas and the Annotations layer | **Labels**: annotation rounds with their progress, agreement with detection, the link to share and *Try the tutorial* |
 | ![Results](docs/images/results.png) | ![Projects](docs/images/projects.png) |

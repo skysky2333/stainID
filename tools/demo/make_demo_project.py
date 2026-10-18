@@ -14,7 +14,7 @@ The v2 detection is written as if its stages had run: a candidate store per core
 simulated detector saw, accepted and rejected, with three outline sizes standing in for the Segment Anything masks; the
 objects it missed are left for people to add), stage manifests with the digests the stages would record (so the Run
 page shows every v2 stage done and up to date), the v2 results tables and finished runs of each step in the job store.
-On that store sits an AT8 "Fix the field" session, with Ann's saved work on a field
+On that store sit an AT8 "Fix the field" session and a "Mark bad areas" session over every core, with Ann's saved work on a field
 she has not finished, fields finished by Ben and Carla, and the tutorial done by the three of them (so a new name gets
 it). demo.json names the sessions and fields the screenshots open.
 
@@ -809,7 +809,23 @@ def round_sessions(project, tiles: pd.DataFrame, drawn: dict, rng: np.random.Gen
 
     store.append(reviews, records)
     (reviews / "tutorials.json").write_text(json.dumps({p: when - 3600 + 60 * i for i, p in enumerate(PEOPLE)}, indent=1))
-    return {"fix": fix_name, "ann_field": ann_field}
+    return {"fix": fix_name, "ann_field": ann_field, "areas": areas_session(project, tiles, when)}
+
+
+def areas_session(project, tiles: pd.DataFrame, when: float) -> str:
+    """A "Mark bad areas" session over every core (each with all its stain images), random order, about one in ten
+    cores asked of a second person, as the Labels page makes it (`stainid.api.routes.areas.create`)."""
+    from stainid.labels import areas
+
+    reviews = project.output("reviews")
+    stains_of = {str(c): sorted(set(g.stain)) for c, g in tiles.groupby("core_id")}
+    cores = areas.order(sorted(stains_of), {}, "random", seed=7)
+    name = "bad_areas"
+    sessions.create(reviews, name, title="Mark bad areas", stain="all", kind=areas.KIND, tools=["area"], ai_view="full", per_field=1, rule="random",
+                    fields=[], instructions="", source=areas.SOURCE, cores=cores, stains_of={c: stains_of[c] for c in cores},
+                    second=areas.second_checks(cores, 7), order="random", seed=7, cores_asked=-1, cores_remaining=len(cores), priority={})
+    sessions.update(reviews, name, open=True, created=when)
+    return name
 
 
 # ---------------------------------------------------------------- main
