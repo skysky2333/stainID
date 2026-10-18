@@ -63,11 +63,13 @@ Every downstream rule is expressed relative to this threshold, so staining-inten
 between slides do not change what counts as positive. Slides that already have a threshold keep it
 (`--redo` works it out again). The cohort's thresholds were calibrated again on 17 Oct 2026 on today's
 tiles without the excluded areas (`data/analysis/v2_audit/recalibration.csv`, the table in
-`slide_dab_calibration.excluded_out.csv`); they are not installed yet: `slide_dab_calibration.csv` is still the
-14 Oct table, and the new one replaces it at the next full re-run (the old one kept as
-`slide_dab_calibration.before_exclusions.csv`). Leaving the excluded areas out moves no threshold by more than
-3.5 %, but 15 of the 39 installed rows are stale (made from an earlier, smaller sample), among them LIP-6 6E10
-(0.026 installed against 0.064 OD recalibrated) and LIP-1 AT8 (0.014 against 0.039).
+`slide_dab_calibration.excluded_out.csv`), installed for the clean re-run of 18 Oct 2026 (the 14 Oct table kept
+as `slide_dab_calibration.before_v2b.csv`). Leaving the excluded areas out moves no threshold by more than 3.5 %, but
+15 of the 39 earlier rows were stale (made from an earlier, smaller sample), among them LIP-6 6E10 (0.026 against
+0.064 OD recalibrated) and LIP-1 AT8 (0.014 against 0.039). At the stale LIP-6 level the 6E10 split seeds were low
+(h = the seed level), so single plaques were cut into 2–3 pieces and pale specks under 100 µm² were proposed by the
+thousand (all rejected); at 0.064 the pale deposits keep their candidates (34 of 35 in the lower half of LIP-6 A-2, 50
+of 55 in B-5, as before) and the plaques are whole, as on the other slides.
 
 ## 4. Exclusions
 

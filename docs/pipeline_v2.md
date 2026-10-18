@@ -131,6 +131,10 @@ its pixel count, width sum and the candidate it lies in), `unproposed/<stain>/<c
 picture `masks/<stain>/<core>.png` (bits: 1 tissue, 2 linear artifact, 4 fold, 8 manual exclusion — not set any more, 16 AT8
 edge guard, 32 analysed tile).
 
+Follow-up (speed): the AT8 thread network (`tau.maps`, about 12 s per tile) runs on every tile, also on tiles with no
+candidate and little stain; AT8 is now the slowest stain of stage 2 (about 900 s per core image with 12 at once). A
+tile whose DAB never reaches the network's level could skip it.
+
 Stained regions no candidate proposes (`unproposed/`, per stain `proposals.<stain>.unproposed`): NeuN and AT8 as
 before (smoothed DAB ≥ the threshold, ≥ 15 / 20 µm², touching no candidate); 6E10 the DAB smoothed over 4 µm at
 max(0.75 × threshold, tissue median + 0.25 × threshold), ≥ 100 µm², that no single candidate covers a quarter of — a
@@ -145,8 +149,13 @@ also stores slide-scaled inputs for every stain (`s_<name>`, `stainid.v2.scaled`
 80th percentile around the nucleus, the context DAB and the stained area above 0.35 × threshold without the 0.012 OD
 floor; AT8 the soma's DAB 90th percentile, the background median and the context DAB (its contrast and soma DAB are
 already in thresholds). A new model trains on them when `v2.training.<stain>.slide_scaled` is set (off for every
-stain until the model comparison, absolute against scaled, has been decided); an AT8 model so trained also cuts mature tangles on the scaled 90th percentile (`mature_feature` in the bundle). The
+stain: on the recalibrated thresholds the October 2026 comparison found scaled inputs no better leave-one-TMA-out —
+6E10 AUC 0.965 against 0.968, AT8 0.897 against 0.901, NeuN 0.934 against 0.953; LIP-6 6E10 0.917 against 0.925); an AT8 model so trained also cuts mature tangles on the scaled 90th percentile (`mature_feature` in the bundle). The
 current models keep reading the legacy `m_` inputs until a new one is made active.
+
+The paragraph below describes the models before the 18 Oct 2026 re-run. LIP-6 6E10 is not 3–4 × paler: its stale
+threshold (0.026 OD) was; recalibrated it is 0.064 OD, within the cohort's 0.061–0.107, and its labelled plaques' OD is
+at the low end of the others (median smoothed OD 0.075 against 0.083–0.181).
 
 The current 6E10 model takes absolute DAB OD and dense-core / seed measures cut at absolute OD. The LIP-6 6E10 slide is
 3–4 × paler than the others (threshold 0.026 OD against 0.067–0.108), so its plaques have low intensities and no dense
