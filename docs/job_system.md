@@ -91,7 +91,15 @@ looked at, and which jobs make room for which. Code: `Scheduler._schedule`, one 
   Every wait points backwards in time, so the waits-for graph is acyclic.
 - **Nothing waits forever.**
   - A failed or stopped dependency ends its dependents ("Not started because “…” failed").
-  - A job that needs more than the computer has is refused at submit.
+  - A job that asks for more than this computer can ever give jobs is given the most there is, with a warning
+    that says so plainly ("asks for 40 GB of memory; at most 37 GB can be given to jobs on this computer: it runs with
+    37 GB of memory"; shown at submit and kept in the job's record). The most is the processors and GPUs of the
+    budget, and for memory the total less the system's reserve, the app and its headroom, and no more than is
+    available once the jobs' own memory is given back, less the headroom and the 2 GB a job start keeps free. This
+    is checked at submit and again whenever the queue is idle (other programs may have taken memory since).
+  - A wait for room says who holds it: "held by work of the same or a higher priority" only when such running work
+    holds what is short; otherwise lower-priority work that cannot be paused now, or the app and other programs on
+    this computer.
 - **No starvation.**
   - The first job in priority order can always get room: every job it outranks can be paused.
   - Jobs of its class or above end in finite time, and once it has waited 30 minutes, newer jobs of its own class

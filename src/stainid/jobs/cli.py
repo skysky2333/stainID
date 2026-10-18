@@ -246,12 +246,16 @@ def _submit(scheduler, args, project_path: Path | None) -> None:
                 scheduler.store.save(job)
     if args.id_only:
         print(job.id)
+        if job.warning:
+            print(f"Warning: it {job.warning}", file=sys.stderr)
         return
     info = scheduler.describe(job)
     took = policy.duration_text(info["estimate_s"])
     parts = f", an array of {len(job.children)} chunks" if job.children else ""
     print(f"Queued {job.id} ({info['class_title']}, place {info['queue']['position']} of {info['queue']['in_class']}{parts}, "
           f"{info['size']}{' · ~' + took if took else ''}): {info['title']}")
+    if job.warning:
+        print(f"Warning: it {job.warning}")
     _hint(scheduler)
 
 

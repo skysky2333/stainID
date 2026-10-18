@@ -103,6 +103,8 @@ class Job:
     conflicts: list = field(default_factory=list)
     array_of: str = ""
     children: list = field(default_factory=list)
+    # what it asked for that this computer can never give jobs, and what it was given instead (`Scheduler.cap`)
+    warning: str = ""
 
 
 def new_id() -> str:

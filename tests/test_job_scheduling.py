@@ -270,10 +270,10 @@ def test_memory_pressure_pauses_the_lowest_class_jobs_at_once(tmp_path, started,
     assert scheduler.current_budget().ram_gb == 53 - 14 - 4 - 3
 
 
-def test_jobs_that_could_never_run_or_wait_in_a_circle_are_refused(tmp_path, started):
+def test_jobs_that_wait_in_a_circle_are_refused_and_too_big_ones_capped(tmp_path, started):
     scheduler = queue.Scheduler(tmp_path / "q", budget=queue.Budget(8, 1, 32))
-    with pytest.raises(ValueError, match="can never run: it needs 2 GPUs"):
-        scheduler.submit_command(["true"], "/tmp", "two GPUs", "models", {"gpus": 2})
+    two = scheduler.submit_command(["true"], "/tmp", "two GPUs", "models", {"gpus": 2})
+    assert two.needs["gpus"] == 1 and two.warning == "asks for 2 GPUs; at most 1 GPUs can be given to jobs on this computer: it runs with 1 GPUs"
     with pytest.raises(ValueError, match="no job nowhere"):
         scheduler.submit_command(["true"], "/tmp", "after nothing", "models", {"cpus": 1}, after=["nowhere"])
     a = scheduler.submit_command(["true"], "/tmp", "a", "models", {"cpus": 1})
@@ -288,6 +288,51 @@ def test_jobs_that_could_never_run_or_wait_in_a_circle_are_refused(tmp_path, sta
     scheduler._schedule()
     scheduler._schedule()
     assert b.status == "skipped" and "“a” failed" in b.outcome["error"] and c.status == "skipped"
+
+
+def test_a_job_that_asks_for_more_memory_than_jobs_can_ever_have_is_capped_and_runs(tmp_path, started, monkeypatch):
+    """54 GB, the app 3.3 and 45 available: at most 45 - 4 headroom - 2 margin = 39 GB for jobs. A job declaring 40 GB
+    used to wait for ever ("held by work of the same or a higher priority") on an idle computer."""
+    scheduler = queue.Scheduler(tmp_path / "q", budget=queue.Budget(32, 2, 999))
+    found = _memory(scheduler, monkeypatch, total=54, available=45, app=3.3)
+    assert scheduler.machine()["ram_gb"] == pytest.approx(39.0)
+    big = scheduler.submit_command(["true"], "/tmp", "v2b stage 2 proposals", "pipeline", {"cpus": 16, "ram_gb": 40})
+    assert big.needs["ram_gb"] == 39.0
+    assert big.warning == "asks for 40 GB of memory; at most 39 GB can be given to jobs on this computer: it runs with 39 GB of memory"
+    assert scheduler.store.load(scheduler.store.path(big.id)).warning == big.warning  # kept with the record
+    scheduler._schedule()
+    assert big.status == "running"
+    # queued while the computer had more, then other programs took memory: capped again once the queue is idle
+    scheduler2 = queue.Scheduler(tmp_path / "q2", budget=queue.Budget(32, 2, 999))
+    found = _memory(scheduler2, monkeypatch, total=54, available=45, app=3.3)
+    later = scheduler2.submit_command(["true"], "/tmp", "proposals", "pipeline", {"cpus": 16, "ram_gb": 38})
+    assert not later.warning
+    found["available_gb"] = 43.0  # 37 GB for jobs now
+    scheduler2._schedule()
+    assert later.status == "running" and later.needs["ram_gb"] == 37.0 and "at most 37 GB can be given to jobs" in later.warning
+    # a running job that is not measured yet counts with what it declared: a submit meanwhile is not capped by it
+    found["available_gb"] = 20.0
+    other = scheduler2.submit_command(["true"], "/tmp", "another", "pipeline", {"cpus": 1, "ram_gb": 30})
+    assert not other.warning and other.needs["ram_gb"] == 30
+
+
+def test_a_wait_for_room_names_who_holds_it(tmp_path, started, monkeypatch):
+    scheduler = queue.Scheduler(tmp_path / "q", budget=queue.Budget(8, 0, 999))
+    found = _memory(scheduler, monkeypatch, total=54, available=45, app=3.3)
+    first = scheduler.submit_command(["true"], "/tmp", "first", "pipeline", {"cpus": 6, "ram_gb": 2})
+    scheduler._schedule()
+    second = scheduler.submit_command(["true"], "/tmp", "second", "pipeline", {"cpus": 4, "ram_gb": 2})
+    scheduler._schedule()
+    assert first.status == "running" and second.waiting == "Waits for room: needs 4 processors (2 free) (held by work of the same or a higher priority)"
+    idle = queue.Scheduler(tmp_path / "q2", budget=queue.Budget(8, 0, 999))
+    found = _memory(idle, monkeypatch, total=54, available=45, app=3.3)
+    third = idle.submit_command(["true"], "/tmp", "third", "pipeline", {"cpus": 1, "ram_gb": 30})
+    found["available_gb"] = 12.0  # nothing of the queue runs; other programs took the memory
+    monkeypatch.setattr(idle, "cap", lambda job: "")  # (the idle cap is tested above: here only the wording)
+    idle._schedule()
+    assert third.status == "queued" and "held by" not in third.waiting
+    assert third.waiting == ("Waits for room: needs 30 GB of memory (6 free) "
+                             "(the rest of the memory is used by the app and other programs on this computer, not by queued work)")
 
 
 def test_a_job_that_waited_long_goes_first_and_may_pause_newer_jobs_of_its_class(tmp_path, started):

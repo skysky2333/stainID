@@ -31,6 +31,7 @@ import fcntl
 import functools
 import json
 import logging
+import math
 import os
 import shutil
 import signal
@@ -477,14 +478,26 @@ class Scheduler:
 
     # -- submitting
 
-    def check(self, job: Job) -> None:
-        """Refuse a job that could never run: one that needs more than this computer has, or that waits for a job that
-        does not exist or (through others) for itself."""
+    def cap(self, job: Job) -> str:
+        """A job that asks for more than this computer can ever give jobs (`machine`) is given the most there is, with a
+        warning saying so plainly (it would otherwise wait for ever); returns the warning ("" when it fits)."""
         need, most = policy.counted(job_needs(job)), self.machine()
-        names = {"cpus": "processors", "gpus": "GPUs", "ram_gb": "GB of memory"}
-        over = [f"{need[k]:g} {names[k]} (this computer has {most[k]:g} for jobs)" for k in policy.KEYS if need[k] > most[k] + 1e-9]
-        if over:
-            raise ValueError("This job can never run: it needs " + ", ".join(over))
+        over = [k for k in policy.KEYS if need[k] > most[k] + 1e-9]
+        if not over:
+            return ""
+        names = {"cpus": ("processors", ""), "gpus": ("GPUs", ""), "ram_gb": ("GB of memory", " GB")}
+        given = {k: (math.floor(most[k] * 10) / 10 if k == "ram_gb" else math.floor(most[k])) for k in over}
+        text = "; ".join(f"asks for {need[k]:g} {names[k][0]}; at most {given[k]:g}{names[k][1] or ' ' + names[k][0]} can be given to jobs on this computer"
+                         for k in over) + ": it runs with " + ", ".join(f"{given[k]:g} {names[k][0]}" for k in over)
+        job.needs = {**job_needs(job), **given}
+        job.warning = text
+        LOG.warning("queue: “%s” %s", title_of(job), text)
+        return text
+
+    def check(self, job: Job) -> None:
+        """Give a job that asks for more than this computer can ever give jobs the most there is, with a warning (`cap`),
+        and refuse one that waits for a job that does not exist or (through others) for itself."""
+        self.cap(job)
         seen, todo = set(), list(job.after or [])
         while todo:
             other_id = todo.pop()
@@ -499,20 +512,29 @@ class Scheduler:
             todo += list(other.after or [])
 
     def machine(self) -> dict:
-        """The most a job may ask for: the processors and GPUs of the budget, and the memory the jobs could have."""
+        """The most jobs can ever be given: the processors and GPUs of the budget, and the memory the jobs could have with
+        none of them running (the total less the system's reserve, the app and its headroom, and no more than is available
+        once the jobs' own memory is given back, less the app's headroom and the margin a job start keeps free)."""
         budget = self.budget
         ram = budget.ram_gb
         if self.watch_outside:
             memory = self.memory()
             if memory.get("total_gb"):
                 ram = memory["total_gb"] - SYSTEM_RESERVE_GB - APP_HEADROOM_GB - memory.get("app_gb", 0.0)
+            if memory.get("available_gb") is not None:
+                jobs_gb = 0.0  # given back: what each running job uses now (what it declared until it is measured, so never less)
+                for job in [j for j in self.jobs.values() if j.status == "running" and not j.children]:
+                    seen = self._ram_seen.get(job.id)
+                    jobs_gb += seen[2] if seen is not None and seen[0] == job.started else float(job_needs(job).get("ram_gb", 0) or 0)
+                ram = min(ram, memory["available_gb"] + jobs_gb - APP_HEADROOM_GB - OUTSIDE_RAM_MARGIN_GB)
             if budget.ram_cap:
                 ram = min(ram, budget.ram_cap)
-        return {"cpus": budget.cpus, "gpus": budget.gpus, "ram_gb": ram}
+        return {"cpus": budget.cpus, "gpus": budget.gpus, "ram_gb": max(0.0, ram)}
 
     def submit(self, job: Job, checked: bool = False) -> Job:
         """Add a job (any process may: a new record is never written by two processes). Raises ValueError for a job
-        that could never run (`check`)."""
+        that waits for one that does not exist or for itself (`check`); one that asks for more than jobs can ever be
+        given is given the most there is, with a warning (`cap`)."""
         if not checked:
             with self.lock:
                 self.check(job)
@@ -560,6 +582,7 @@ class Scheduler:
         folder.mkdir(parents=True, exist_ok=True)
         parent.order = parent.order or time.time()
         parent.units = sum(c["units"] for c in chunks)
+        self.cap(parent)  # (the chunks are given what the parent is)
         base = arrays.without_cores(parent.argv)
         children = []
         for number, chunk in enumerate(chunks):
@@ -1272,6 +1295,8 @@ class Scheduler:
                 self._ready_since.pop(job.id, None)
                 continue
             self._ready_since.setdefault(job.id, now)
+            if not running and self.cap(job):  # with nothing running: it asks for more than jobs can ever be given
+                self._save(job)
             need = self._need(job, budget)
             if self._fits(need, free, budget):
                 gpus = [g for g in range(budget.gpus) if g not in busy_gpus][: int(need["gpus"])]
@@ -1293,12 +1318,7 @@ class Scheduler:
                 continue
             victims = self._victims(job, need, free, running, budget, now)
             if victims is None:
-                short = [k for k in policy.KEYS if need[k] > free.get(k, 0) + 1e-9] or (["ram_gb"] if need.get("ram_free", 0) > free.get("ram_free", 0) else [])
-                names = {"cpus": "processors", "gpus": "GPUs", "ram_gb": "GB of memory"}
-                text = ", ".join(f"{need[k]:g} {names[k]} ({max(0, min(free.get(k, 0), free.get('ram_free', free.get(k, 0)) if k == 'ram_gb' else free.get(k, 0))):.0f} free)"
-                                 for k in short)
-                self._wait(job, ("Waits for room: needs " + text + " (held by work of the same or a higher priority)") if text
-                           else "Waits for its disk: other io-heavy jobs use it")
+                self._wait(job, self._room_text(job, need, free, running))
                 continue
             for other in victims:
                 self._ask_to_stop(other, "preempt")
@@ -1372,6 +1392,30 @@ class Scheduler:
                 pass
         self._outside = (time.time(), found)
         return found
+
+    def _room_text(self, job: Job, need: dict, free: dict, running: list[Job]) -> str:
+        """Why a job that does not fit waits: what it needs and what is free, and who holds the rest — work of the same
+        or a higher priority, lower-priority work that cannot be paused, or (when no job holds it) programs outside the
+        queue."""
+        short = [k for k in policy.KEYS if need[k] > free.get(k, 0) + 1e-9] or (["ram_gb"] if need.get("ram_free", 0) > free.get("ram_free", 0) else [])
+        if not short:
+            return "Waits for its disk: other io-heavy jobs use it"
+        names = {"cpus": "processors", "gpus": "GPUs", "ram_gb": "GB of memory"}
+        text = ", ".join(f"{need[k]:g} {names[k]} ({max(0, min(free.get(k, 0), free.get('ram_free', free.get(k, 0))) if k == 'ram_gb' else free.get(k, 0)):.0f} free)"
+                         for k in short)
+        rank = RANK.get(job_class(job), len(CLASSES))
+        holders = [j for j in running if any(self._holds(j).get(k, 0) > 0 for k in short)]
+        if any(RANK.get(job_class(j), len(CLASSES)) <= rank for j in holders):
+            who = "held by work of the same or a higher priority"
+        elif holders:
+            who = "held by lower-priority work that cannot be paused now"
+        elif short == ["gpus"]:
+            who = "the GPUs are used by programs outside the queue"
+        elif "ram_gb" in short:
+            who = "the rest of the memory is used by the app and other programs on this computer, not by queued work"
+        else:
+            who = "this computer has no more for jobs"
+        return f"Waits for room: needs {text} ({who})"
 
     def _wait(self, job: Job, reason: str) -> None:
         if job.waiting != reason:
