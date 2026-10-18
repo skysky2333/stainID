@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from stainid import cache, candidates
+from stainid import cache, candidates, disk_cache
 from stainid import exclusions as excluded_areas
 from stainid.labels import candidate_store, decisions, frames, objectedit, store
 from stainid.labels import vocabulary as vocab
@@ -45,7 +45,7 @@ def layer(project, stain: str, tiles: pd.DataFrame) -> dict:
     key = ("compare layer", str(project.root), stain, len(tiles), excluded_areas.signature(project, stain), vocab.of(project, stain))
     return cache.memo(key, inputs, lambda: {"found": _versus_detection(project, stain, tiles), "fixed": _fixed_outlines(project, stain, tiles),
                                             "added": _added_objects(project, stain, tiles), "edits": _object_edits(project, stain, tiles)},
-                      folders=True)
+                      folders=True, persist=disk_cache.answer_file(project.root, f"compare-{stain}.pkl"))
 
 
 def _of_core(frame: pd.DataFrame, core_id: str | None, column: str = "core_id") -> pd.DataFrame:

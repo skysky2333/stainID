@@ -91,6 +91,7 @@ KINDS: dict[str, str] = {
     "images": "Images at the analysis scale (image sets)",
     "sam_embeddings": "Prepared fields for click-to-outline",
     "candidate_index": "Candidate positions and calls of every core (for matching labels)",
+    "answers": "The app's heavy answers, kept for a quick start",
     "label_overview": "The Labels page's counts per stain",
 }
 _KIND = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
@@ -168,6 +169,12 @@ def wrote(*paths: Path | str) -> None:
         _WROTE[os.fspath(p)] = now
     _start()
     _look_at_space(paths)
+
+
+def answer_file(project_root: Path | str, name: str) -> Path:
+    """Where one of the app's heavy answers is kept for a quick start ("answers"); whoever writes or reads it records
+    that (`cache.memo(persist=)`, `work.answer(saved=)` do)."""
+    return path(project_root, "answers", name)
 
 
 def write(target: Path | str, data: bytes) -> None:

@@ -59,14 +59,19 @@ _LOCKS: dict[Hashable, threading.Lock] = {}
 _GUARD = threading.Lock()
 
 
-def memo(key: Hashable, inputs: Iterable[Path | str], make: Callable[[], Any], every: float = 0.0, folders: bool = False) -> Any:
+def memo(key: Hashable, inputs: Iterable[Path | str], make: Callable[[], Any], every: float = 0.0, folders: bool = False,
+         persist: Path | None = None, background: bool = False) -> Any:
     """`make()`, kept until one of `inputs` (files or folders) changes; when it is slow to make, looked at no more often
     than `every` seconds. `folders`: some inputs are folders (see `FOLDER_AGE`).
-    Parallel requests for the same key wait for one `make()` instead of each doing the work."""
+    Parallel requests for the same key wait for one `make()` instead of each doing the work.
+    `persist`: a file the value is also kept in (pickled, with the key and the inputs' signatures), so that a server
+    started again finds it there while nothing changed instead of working it out again (heavy cohort-wide values).
+    `background`: once there is a value, a change is worked out on a thread of its own while callers keep getting the
+    value they had (what pages poll, such as how far the steps are: never a request waiting seconds for a recount)."""
     inputs = tuple(inputs)
     entry = _ENTRIES.get(key)
     now = time.monotonic()
-    if entry is not None and entry.fresh_enough(now, every):
+    if entry is not None and (entry.fresh_enough(now, every) or (background and key in _REFRESHING)):
         return entry.value
     with _GUARD:
         lock = _LOCKS.setdefault(key, threading.Lock())
@@ -79,11 +84,92 @@ def memo(key: Hashable, inputs: Iterable[Path | str], make: Callable[[], Any], e
         if entry is not None and entry.trusted and entry.signatures == signatures and (not folders or now - entry.made < FOLDER_AGE):
             entry.checked = now
             return entry.value
+        if entry is not None and background:
+            _refresh(key, lock, signatures, make, persist)
+            return entry.value
+        if entry is None and persist is not None:
+            saved = _load(persist, key, signatures)
+            if saved is not None:
+                _ENTRIES[key] = _Entry(saved, signatures, now, now, True, True)
+                return saved
         wall = time.time()
         value = make()
         trusted = all(s is None or s[0] / 1e9 < wall - RACY_SECONDS for s in signatures)
         _ENTRIES[key] = _Entry(value, signatures, now, now, trusted, time.monotonic() - now >= SLOW)
+        if persist is not None and trusted:
+            _save(persist, key, signatures, value)
         return value
+
+
+def remember(key: Hashable, inputs: Iterable[Path | str], value: Any) -> None:
+    """Keep a value made by other means (a fresh look) as `memo(key, inputs, ...)`'s, so the next caller agrees with it."""
+    now, wall = time.monotonic(), time.time()
+    signatures = tuple(signature(p) for p in inputs)
+    trusted = all(s is None or s[0] / 1e9 < wall - RACY_SECONDS for s in signatures)
+    _ENTRIES[key] = _Entry(value, signatures, now, now, trusted, True)
+
+
+_REFRESHING: set = set()
+
+
+def _refresh(key: Hashable, lock: threading.Lock, signatures: tuple, make: Callable[[], Any], persist: Path | None) -> None:
+    """Work a value out again on a thread of its own (one at a time per key); callers get the old one meanwhile."""
+    with _GUARD:
+        if key in _REFRESHING:
+            return
+        _REFRESHING.add(key)
+
+    def work() -> None:
+        try:
+            with lock:
+                now, wall = time.monotonic(), time.time()
+                value = make()
+                trusted = all(s is None or s[0] / 1e9 < wall - RACY_SECONDS for s in signatures)
+                _ENTRIES[key] = _Entry(value, signatures, now, time.monotonic(), trusted, time.monotonic() - now >= SLOW)
+            if persist is not None and trusted:
+                _save(persist, key, signatures, value)
+        except Exception:  # noqa: BLE001 - the old value stays; the next caller tries again
+            pass
+        finally:
+            with _GUARD:
+                _REFRESHING.discard(key)
+
+    threading.Thread(target=work, name="stainid-refresh", daemon=True).start()
+
+
+def _load(path: Path, key: Hashable, signatures: tuple) -> Any:
+    import pickle  # noqa: PLC0415
+
+    try:
+        with open(path, "rb") as handle:
+            saved_key, saved_signatures, value = pickle.load(handle)  # noqa: S301 - a file this app wrote in its own cache
+    except Exception:  # noqa: BLE001 - missing, unreadable or from another version: made again
+        return None
+    if saved_key != repr(key) or saved_signatures != signatures:
+        return None
+    _note("used", path)
+    return value
+
+
+def _save(path: Path, key: Hashable, signatures: tuple, value: Any) -> None:
+    import pickle  # noqa: PLC0415
+
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        part = path.with_name(f".{path.name}.{os.getpid()}.part")
+        with open(part, "wb") as handle:
+            pickle.dump((repr(key), signatures, value), handle, protocol=pickle.HIGHEST_PROTOCOL)
+        os.replace(part, path)
+        _note("wrote", path)
+    except Exception:  # noqa: BLE001 - only a quicker start lost
+        pass
+
+
+def _note(what: str, path: Path) -> None:
+    """Record a kept value's file with the project's cache space (`disk_cache.used` / `wrote`)."""
+    from stainid import disk_cache  # noqa: PLC0415
+
+    disk_cache.used(path) if what == "used" else disk_cache.wrote(path)
 
 
 def forget() -> None:

@@ -2,6 +2,8 @@
 every core's files again and again (D3), and the pending-work estimate is honest when work takes longer than usual."""
 from __future__ import annotations
 
+import os
+import threading
 import time
 
 import numpy as np
@@ -107,3 +109,57 @@ def test_durations_of_earlier_servers_give_the_first_estimate(tmp_path, monkeypa
     monkeypatch.delitem(work._DURATIONS, "labels overview", raising=False)
     assert work.typical("labels overview") == 50.0
     assert np.isclose(work.typical("never seen"), work.GUESS_SECONDS)
+
+
+def test_a_heavy_value_kept_on_disk_outlives_a_restart_until_its_inputs_change(tmp_path):
+    from stainid import cache
+
+    source, saved = tmp_path / "input.txt", tmp_path / "cache" / "value.pkl"
+    source.write_text("one")
+    made = []
+    make = lambda: made.append(1) or {"value": source.read_text()}  # noqa: E731
+    old = time.time() - 60
+    os.utime(source, (old, old))  # not just written: its signature is trusted
+    assert cache.memo(("persist test", 1), [source], make, persist=saved) == {"value": "one"} and saved.exists()
+    cache.forget()  # a new server
+    assert cache.memo(("persist test", 1), [source], make, persist=saved) == {"value": "one"} and len(made) == 1
+    cache.forget()
+    source.write_text("two")
+    os.utime(source, (old + 1, old + 1))
+    assert cache.memo(("persist test", 1), [source], make, persist=saved) == {"value": "two"} and len(made) == 2
+
+
+def test_a_background_value_answers_at_once_while_a_change_is_worked_out(tmp_path):
+    from stainid import cache
+
+    source = tmp_path / "input.txt"
+    source.write_text("one")
+    slow = threading.Event()
+
+    def make():
+        if source.read_text() == "two":
+            slow.wait(10)
+        return source.read_text()
+
+    assert cache.memo(("background test",), [source], make, background=True) == "one"
+    source.write_text("two")
+    os.utime(source, (time.time() + 5, time.time() + 5))
+    started = time.monotonic()
+    assert cache.memo(("background test",), [source], make, background=True) == "one"  # the old value, without waiting
+    assert time.monotonic() - started < 1
+    slow.set()
+    deadline = time.monotonic() + 10
+    while cache.memo(("background test",), [source], make, background=True) != "two":
+        assert time.monotonic() < deadline
+        time.sleep(0.05)
+
+
+def test_slow_work_with_a_saved_answer_gives_the_last_one_at_once(tmp_path):
+    saved = tmp_path / "answers" / "steps.json"
+    release = threading.Event()
+    first = work.answer("saved test", ("saved test", 1), lambda task: {"n": 1}, saved=saved)
+    assert first == {"n": 1} and saved.exists()
+    started = time.monotonic()
+    again = work.answer("saved test", ("saved test", 2), lambda task: release.wait(10) and {"n": 2}, saved=saved)
+    assert again == {"n": 1} and time.monotonic() - started < 2  # a busy or restarted server: what it knew
+    release.set()

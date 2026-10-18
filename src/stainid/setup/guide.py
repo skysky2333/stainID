@@ -8,9 +8,13 @@ from pathlib import Path
 from stainid import cache
 from stainid.project import Project
 from stainid.setup.checks import project_issues
-from stainid.slides.dearray import slide_slug
 from stainid.slides.table import find_slides
 from stainid.workflows.steps import MAIN_STAGES, best_device
+
+
+def slide_slug(path: Path) -> str:
+    """`slides.dearray.slide_slug`, without importing the slide readers (seconds of imports for the Home page)."""
+    return Path(path).stem.replace(" ", "_")
 
 # seconds per unit of work, roughly (the step cards give the same figures in words)
 SECONDS = {"dearray": 60, "export": 90, "qc": 3, "tiles": 3, "images": 3, "calibrate": 60, "neun": 5, "fields": 60, "summarize": 60,
@@ -51,8 +55,49 @@ def mark_checked(project: Project, slide_path: str, checked: bool = True) -> Non
     path.write_text(json.dumps(report, indent=1))
 
 
+REFERENCE_CORE_UM = 1500.0  # the core `SECONDS` were measured on (per core image)
+MEASURED = {"v2_proposals": "proposals", "v2_calls": "calls", "v2_outlines": "outlines"}
+
+
+def _median(values: list[float]) -> float | None:
+    values = sorted(v for v in values if v > 0)
+    return values[len(values) // 2] if values else None
+
+
+def _image_area_um2(rows: list[dict]) -> float | None:
+    """The median area of the core images (image sets: a patch can be a few hundred µm across, not a 1.5 mm core)."""
+    def area(r: dict) -> float:
+        try:
+            return float(r["native_width_px"]) * float(r["pixel_width_um"]) * float(r["native_height_px"]) * float(r["pixel_height_um"])
+        except (KeyError, TypeError, ValueError):
+            return 0.0
+    return _median([area(r) for r in rows[:5000]])
+
+
+def _tile_area_um2(rows: list[dict]) -> float | None:
+    def area(r: dict) -> float:
+        try:
+            return float(r["width_px"]) * float(r["pixel_width_um"]) * float(r["height_px"]) * float(r["pixel_height_um"])
+        except (KeyError, TypeError, ValueError):
+            return 0.0
+    return _median([area(r) for r in rows[:5000]])
+
+
+def _measured(project: Project) -> dict[str, float]:
+    """Seconds per core image the v2 stages took on this project (median over the cores done; the slowest stain)."""
+    try:
+        from stainid.v2.run import seconds_per_core  # noqa: PLC0415
+
+        found = seconds_per_core(project)
+    except Exception:  # noqa: BLE001 - no measurement: the estimate uses the defaults
+        return {}
+    return {step: max(found[stage].values()) for step, stage in MEASURED.items() if found.get(stage)}
+
+
 def estimate(project: Project, remaining: list[str]) -> dict:
-    """Rough run time of the steps in `remaining` on this computer, from the number of slides, cores and tiles."""
+    """Rough run time of the steps in `remaining` on this computer, from the number of slides, cores and tiles: what
+    each core image took on this project where that is measured (the v2 stages record it), else the typical time per
+    core scaled by the images' area (an image set of small patches is not costed like 1.5 mm TMA cores)."""
     slides = len(_rows(project.input("slides_table")))
     manifest = _rows(project.input("core_manifest"))
     if not project.is_tma:  # image sets: one core image per image; whole slides: about 30 regions of tissue per slide
@@ -69,7 +114,13 @@ def estimate(project: Project, remaining: list[str]) -> dict:
     else:
         positions = slides * int(project.config["tma"]["rows"]) * int(project.config["tma"]["columns"])
         biological, diameter = int(positions * 0.9), 1500.0
-    tiles = len(_rows(project.analysis_tiles())) or int(biological * max(1.0, 0.85 * (diameter / TILE_UM) ** 2))
+    tile_rows = _rows(project.analysis_tiles())
+    tiles = len(tile_rows) or int(biological * max(1.0, 0.85 * (diameter / TILE_UM) ** 2))
+    measured_area = _image_area_um2(_rows(project.input("core_images"))) if not project.is_tma else None
+    core_area = measured_area or (3.14159 / 4 * diameter ** 2)
+    core_scale = min(4.0, max(0.01, core_area / (3.14159 / 4 * REFERENCE_CORE_UM ** 2)))  # per-core times scale with the tissue
+    tile_scale = min(1.0, max(0.05, (_tile_area_um2(tile_rows) or TILE_UM ** 2) / TILE_UM ** 2))
+    measured = _measured(project)
     device = best_device()
     units = {"dearray": slides, "export": slides, "qc": biological, "tiles": biological, "images": biological, "calibrate": slides,
              "neun": tiles / 3, "fields": biological * 2 / 3, "summarize": 1,
@@ -77,9 +128,12 @@ def estimate(project: Project, remaining: list[str]) -> dict:
     steps = []
     for step in remaining:
         if step == "nuclei":
-            seconds = tiles * NUCLEI_SECONDS[device]
+            seconds = tiles * NUCLEI_SECONDS[device] * tile_scale
+        elif step in measured:
+            seconds = units.get(step, 0) * measured[step]
         elif step in SECONDS:
-            seconds = units.get(step, 0) * SECONDS[step]
+            per_core = step in ("qc", "tiles", "images", "fields", "v2_proposals", "v2_calls", "v2_outlines")
+            seconds = units.get(step, 0) * SECONDS[step] * (core_scale if per_core else tile_scale if step == "neun" else 1.0)
         else:
             continue
         steps.append({"id": step, "seconds": int(seconds)})

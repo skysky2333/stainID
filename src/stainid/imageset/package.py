@@ -345,10 +345,15 @@ def dataset_files(project: Project, fresh: bool = False) -> dict | None:
     package = project_package(project)
     if package is None:
         return None
-    if fresh:
-        return _project_files(project, package, fresh=True)
     inputs = [package.folder / "images.csv", project.input("image_list")]
-    return cache.memo(("dataset files", str(project.root)), inputs, lambda: _project_files(project, package), FILES_RECHECK_SECONDS, folders=True)
+    if fresh:
+        found = _project_files(project, package, fresh=True)
+        cache.remember(("dataset files", str(project.root)), inputs, found)  # what the next look (in the background) starts from
+        return found
+    from stainid import disk_cache  # noqa: PLC0415
+
+    return cache.memo(("dataset files", str(project.root)), inputs, lambda: _project_files(project, package), FILES_RECHECK_SECONDS, folders=True,
+                      persist=disk_cache.answer_file(project.root, "dataset-files.pkl"), background=True)
 
 
 def add_new_files(project: Project) -> int:

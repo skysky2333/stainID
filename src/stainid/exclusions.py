@@ -46,6 +46,7 @@ import numpy as np
 import pandas as pd
 
 from stainid import cache
+from stainid.tables import write_text_atomic
 
 SCALE = 8  # core-image px per layer px (stainid.v2.proposals.MASK_SCALE)
 TISSUE, LINEAR, FOLD, MANUAL, EDGE_GUARD, TILE = 1, 2, 4, 8, 16, 32  # stainid.v2.proposals.BITS
@@ -707,13 +708,53 @@ def drop_excluded(project, labels: pd.DataFrame, tasks=("class", "outline")) -> 
         kept = _DROPPED.get(key)
     if kept is not None and time.monotonic() - kept[0] < DROPPED_FOR:
         return labels.drop(index=kept[1]) if kept[1] else labels
-    drop = _to_drop(project, labels, about)
+    saved = _saved_drops(project, key) if kept is None else None  # a server started again: what it worked out before
+    drop = saved if saved is not None else _to_drop(project, labels, about)
+    if saved is None:
+        _save_drops(project, key, drop)
     with _LOCK:
         _DROPPED[key] = (time.monotonic(), drop)
         _DROPPED.move_to_end(key)
         while len(_DROPPED) > 16:
             _DROPPED.popitem(last=False)
     return labels.drop(index=drop) if drop else labels
+
+
+def _drops_file(project, key: tuple):
+    import hashlib  # noqa: PLC0415
+
+    from stainid import disk_cache  # noqa: PLC0415
+
+    return disk_cache.answer_file(project.root, f"excluded-labels-{hashlib.sha1(repr(key).encode()).hexdigest()[:20]}.json")
+
+
+def _saved_drops(project, key: tuple) -> list | None:
+    from stainid import disk_cache  # noqa: PLC0415
+
+    path = _drops_file(project, key)
+    try:
+        found = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    if found.get("key") != repr(key):
+        return None
+    disk_cache.used(path)
+    return found["drop"]
+
+
+def _save_drops(project, key: tuple, drop: list) -> None:
+    """Keep the rows dropped for these labels and inputs on disk (the newest few), for the next server."""
+    try:
+        path = _drops_file(project, key)
+        from stainid import disk_cache  # noqa: PLC0415
+
+        write_text_atomic(path, json.dumps({"key": repr(key), "drop": [d.item() if hasattr(d, "item") else d for d in drop]}))
+        disk_cache.wrote(path)
+        old = sorted(path.parent.glob("excluded-labels-*.json"), key=lambda p: p.stat().st_mtime)[:-8]
+        for stale in old:
+            stale.unlink(missing_ok=True)
+    except (OSError, TypeError, ValueError):
+        pass
 
 
 def _to_drop(project, labels: pd.DataFrame, about) -> list:
