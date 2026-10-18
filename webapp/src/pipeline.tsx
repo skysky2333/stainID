@@ -50,6 +50,23 @@ export function duration(seconds: number): string {
   return `${Number((seconds / 86400).toFixed(1))} days`
 }
 
+/** Time used so far, to the minute: "1 h 45 min". */
+export function elapsedText(seconds: number): string {
+  if (seconds < 3600) return duration(seconds)
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.round((seconds % 3600) / 60)
+  return minutes ? `${hours} h ${minutes} min` : `${hours} h`
+}
+
+/** What a running job's line says: how far it is (or just "running"), its time so far, and what the queue knows of the
+ *  time left: an estimate, "taking longer than expected" once that has passed, or "no estimate" (never a made-up one). */
+export function runningText(job: Job): string[] {
+  const { done, total } = job.progress
+  const since = job.elapsed_s ?? (job.started ? Date.now() / 1000 - job.started : 0)
+  return [total ? `${done.toLocaleString()} of ${total.toLocaleString()} done` : 'running', `${elapsedText(since)} so far`,
+    job.overdue ? 'taking longer than expected' : job.eta_s ? `about ${duration(job.eta_s)} left` : 'no estimate']
+}
+
 /** Time a running job still needs, from its own pace so far (null before it has done anything). */
 function timeLeft(job: Job, now: number): number | null {
   const { done, total } = job.progress
@@ -202,10 +219,10 @@ export function runFacts(jobs: Job[], step?: Step, counts = true): { running: Jo
   const lefts = running.map((j) => timeLeft(j, now)).filter((t): t is number => t !== null)
   const started = Math.min(...running.map((j) => j.started ?? now))
   const text = [
-    !counts ? '' : total ? `${done.toLocaleString()} of ${total.toLocaleString()}${counted ? ` ${step.progress.unit}` : ''}` : 'starting…',
+    !counts ? '' : total ? `${done.toLocaleString()} of ${total.toLocaleString()}${counted ? ` ${step.progress.unit}` : ''}` : '',
     running.length > 1 ? `${running.length} parts` : '',
-    `running for ${duration(now - started)}`,
-    lefts.length ? `about ${duration(Math.max(...lefts))} left` : '',
+    `running for ${elapsedText(now - started)}`,
+    lefts.length ? `about ${duration(Math.max(...lefts))} left` : running.some((j) => j.overdue) ? 'taking longer than expected' : 'no estimate',
   ].filter(Boolean).join(' · ')
   return { running, done, total, text }
 }
@@ -246,7 +263,7 @@ export function NowRunning({ jobs, steps = [], onChanged }: { jobs: Job[]; steps
                       return (
                         <tr key={job.id}>
                           <td>Part {i + 1} <CommandLineTag job={job} /></td>
-                          <td className="num">{job.progress.total ? `${job.progress.done.toLocaleString()} of ${job.progress.total.toLocaleString()}` : job.status === 'queued' ? 'waiting' : 'starting…'}</td>
+                          <td className="num">{job.progress.total ? `${job.progress.done.toLocaleString()} of ${job.progress.total.toLocaleString()}` : job.status === 'queued' ? 'waiting' : 'running'}</td>
                           <td className="muted">{left !== null ? `about ${duration(left)} left` : ''}</td>
                           <td className="num"><button className="link-btn small" onClick={() => stop(title, [job])}>Stop this part</button></td>
                         </tr>

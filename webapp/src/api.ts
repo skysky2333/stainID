@@ -136,6 +136,8 @@ export interface Job {
   /** the shared queue: the job's project, priority class, what it needs, what was asked of it, estimates */
   project_name?: string; class?: string; class_title?: string; rank?: number; paused_by?: string; stopping?: string
   needs?: { cpus: number; gpus: number; ram_gb: number; network: boolean; io?: string }; eta_s?: number | null; typical_s?: number | null
+  /** a running job: seconds since it started; `overdue`: past the time it was expected to take (no progress to go by) */
+  elapsed_s?: number | null; overdue?: boolean
   /** small or big (from what it needs and how long it should take), its expected run time, and for a job array its chunks */
   size?: 'small' | 'big'; estimate_s?: number | null; io?: 'light' | 'heavy'
   children?: string[]; chunks?: { total: number; finished: number; running: number; queued: number; paused: number; failed: number } | null

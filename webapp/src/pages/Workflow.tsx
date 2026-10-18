@@ -4,7 +4,7 @@ import type { Job, ResourceInfo, SetupOverview, SlideRow, SlidesInfo, Step, Step
 import { api, apiUrl, queueText, runStep } from '../api'
 import { CommandLineTag, Empty, ErrorNote, FilePicker, HelpBox, Loaded, OptionField, PageHead, PathLine, Progress, StatusBadge, Term, timeAgo, withError } from '../components'
 import { useFetch } from '../hooks'
-import { LEGACY_STAGE, MAIN_STAGES, OPTIONAL, PipelineMap, STAGE, duration, groupState, isActive, runFacts, stepState, stopJobs } from '../pipeline'
+import { LEGACY_STAGE, MAIN_STAGES, OPTIONAL, PipelineMap, STAGE, duration, groupState, isActive, runFacts, runningText, stepState, stopJobs } from '../pipeline'
 import { useProject } from '../project'
 import { QueuePanel } from '../queue/QueuePanel'
 import { Advanced } from '../setup/parts'
@@ -470,7 +470,7 @@ function jobFacts(job: Job): string {
   const took = job.started && job.ended ? ` · took ${duration(job.ended - job.started)}` : ''
   if (job.status === 'queued' || job.status === 'paused') return queueText(job)
   if (job.status === 'failed' || job.status === 'skipped') return job.progress.error || 'See the log'
-  if (job.status === 'running') return total ? `${done.toLocaleString()} of ${total.toLocaleString()} done` : 'Starting…'
+  if (job.status === 'running') return runningText(job).join(' · ')
   return (total ? `${done.toLocaleString()} of ${total.toLocaleString()} done` : '') + took
 }
 
