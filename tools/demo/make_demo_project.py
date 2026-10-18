@@ -12,7 +12,8 @@ The cheap stainid steps run for real on the demo: stain calibration, model train
 
 The v2 detection is written as if its stages had run: a candidate store per core image and stain (every candidate the
 simulated detector saw, accepted and rejected, with three outline sizes standing in for the Segment Anything masks; the
-objects it missed are left for people to add), stage manifests with the digests the stages would record (so the Run
+objects it missed are left for people to add), the stage-2 masks (the tiles, the tissue, and on some core images a
+synthetic fold and a region with no tissue: detection's excluded areas), stage manifests with the digests the stages would record (so the Run
 page shows every v2 stage done and up to date), the v2 results tables and finished runs of each step in the job store.
 On that store sit an AT8 "Fix the field" session and a "Mark bad areas" session over every core, with Ann's saved work on a field
 she has not finished, fields finished by Ben and Carla, and the tutorial done by the three of them (so a new name gets
@@ -669,6 +670,69 @@ def candidate_store_outputs(project, drawn: dict, rng: np.random.Generator) -> d
     return out
 
 
+AREA_CORES = {  # core images always given detected areas (the screenshots' and the tutorial's): (fold, no tissue) in core px
+    "DEMO-2_D-2": (((1500, 2500), (2500, 1950), (3300, 1450)), (900, 3500)),
+    "DEMO-1_A-1": (((1200, 1700), (2200, 2300), (3300, 2600)), (3300, 3400)),
+}
+AREA_SHARE = 0.25  # of the other core images, about this share get a fold and a no-tissue region at random
+FOLD_UM, HOLE_UM = 130.0, 420.0  # the fold band's width, the no-tissue region's diameter
+
+
+def area_masks(project, rng: np.random.Generator) -> int:
+    """Detection's own areas, as stage 2 writes them (`stainid.v2.proposals.write_core`: `<outputs.v2>/masks/<stain>/
+    <core_id>.png`, 1/`MASK_SCALE` of the core image, bit flags `BITS`, read by `stainid.exclusions.automatic`): the
+    tiles (`tile`), the tissue found as the tiling finds it (`tissue`, `qc.core_qc.tissue_mask`), and on some core images
+    a synthetic fold (a band, `fold`: excluded in 6E10 and AT8; NeuN counts folded tissue) and a region with no tissue
+    (the tissue bit cleared: a tear). Returns how many core images got areas."""
+    from PIL import Image
+
+    from stainid.imaging.core_images import read_bgr
+    from stainid.qc.core_qc import tissue_mask
+    from stainid.v2.proposals import BITS, MASK_SCALE
+    from stainid.v2.run import groups
+
+    root = project.output("v2") / "masks"
+    made = 0
+    for (core_id, stain), group in sorted(groups(project, STAINS).items()):  # every whole-core tile, as stage 2 reads them
+        path = project.root / str(group[0]["image_path"])
+        with Image.open(path) as image:
+            width, height = image.size
+        shape = ((height + MASK_SCALE - 1) // MASK_SCALE, (width + MASK_SCALE - 1) // MASK_SCALE)
+        bgr = read_bgr(path, cv2.IMREAD_REDUCED_COLOR_8)
+        tissue = tissue_mask(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))[0].astype(np.uint8)
+        tissue = cv2.resize(tissue, (shape[1], shape[0]), interpolation=cv2.INTER_NEAREST) > 0
+        bits = np.zeros(shape, np.uint8)
+        for t in group:  # each tile's own square
+            y0, x0 = int(t["y_px"]) // MASK_SCALE, int(t["x_px"]) // MASK_SCALE
+            bits[y0: y0 + int(t["height_px"]) // MASK_SCALE, x0: x0 + int(t["width_px"]) // MASK_SCALE] |= BITS["tile"]
+        bits[tissue] |= BITS["tissue"]
+        chosen = AREA_CORES.get(str(core_id))
+        if chosen is None and rng.random() < AREA_SHARE and tissue.any():
+            ys, xs = np.nonzero(tissue)
+            centre = np.array([xs.mean(), ys.mean()]) * MASK_SCALE
+            spread = 0.25 * np.array([np.ptp(xs), np.ptp(ys)]) * MASK_SCALE
+            mid = centre + rng.uniform(-1, 1, 2) * spread
+            angle = rng.uniform(0, np.pi)
+            step = np.array([np.cos(angle), np.sin(angle)]) * rng.uniform(700, 1100)
+            bend = np.array([-step[1], step[0]]) * rng.uniform(-0.25, 0.25)
+            fold = (tuple(mid - step), tuple(mid + bend), tuple(mid + step))
+            chosen = (fold, tuple(centre + rng.uniform(-1, 1, 2) * spread))
+        if chosen is not None:
+            fold, hole = chosen
+            band = np.zeros(shape, np.uint8)
+            cv2.polylines(band, [np.round(np.asarray(fold) / MASK_SCALE).astype(np.int32)], False, 1,
+                          thickness=max(1, int(round(FOLD_UM / PIXEL_UM / MASK_SCALE))))
+            bits[(band > 0) & tissue] |= BITS["fold"]
+            torn = np.zeros(shape, np.uint8)
+            cv2.ellipse(torn, (int(hole[0] / MASK_SCALE), int(hole[1] / MASK_SCALE)),
+                        (int(HOLE_UM / PIXEL_UM / MASK_SCALE / 2), int(0.7 * HOLE_UM / PIXEL_UM / MASK_SCALE / 2)), 30, 0, 360, 1, -1)
+            bits[torn > 0] &= ~np.uint8(BITS["tissue"])
+            made += 1
+        (root / stain).mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(root / stain / f"{core_id}.png"), bits)
+    return made
+
+
 def v2_manifests(project, counts: dict[tuple[str, str], int]) -> None:
     """Stage manifests with the digests the stages would record now (as `stainid.v2.run.status` works them out), so every
     v2 stage shows as done and up to date; and the v2 results tables (the same as the current ones: the demo has one
@@ -921,6 +985,7 @@ def build(out: Path, seed: int, workers: int) -> None:
     print("v2 detection: candidate store, stage manifests and results tables", flush=True)
     project = load_project(root)
     counts = candidate_store_outputs(project, drawn, rng)
+    area_masks(project, rng)
     v2_manifests(project, counts)
     job_records(project, cores, len(whole), models_at)
     print("annotation rounds", flush=True)

@@ -219,6 +219,8 @@ All screenshots show a synthetic demo project: the tissue images, donors, labels
 | **Home**: your next step and overall progress | **Models**: download published models; train from labels, compare, switch; how detection's outlines match people's fixes |
 | ![Core viewer](docs/images/viewer.jpg) | ![Labels](docs/images/labels.png) |
 | **Cores**: the whole core, zoomable, with every candidate drawn on it (rejected ones dotted grey), the minimap, the excluded areas and the Annotations layer | **Labels**: annotation rounds with their progress, agreement with detection, the link to share and *Try the tutorial* |
+| ![Excluded from analysis](docs/images/viewer-excluded.jpg) | |
+| **Excluded from analysis** on the Cores view: detection's own bad areas from its stage-2 mask, hatched by type (here the demo's synthetic fold, a tear with no tissue and the glass around the core), with each type's share; only these leave objects out of the analysis | |
 | ![Results](docs/images/results.png) | ![Projects](docs/images/projects.png) |
 | **Results**: download the main table, what every column means, plots by group | **Projects**: every study with its status; new study, open a folder, switch |
 | ![Settings](docs/images/settings.png) | |

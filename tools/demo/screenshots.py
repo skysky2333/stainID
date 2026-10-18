@@ -18,6 +18,8 @@ sessions; random passwords, kept nowhere), opens each page of the project the se
 - projects.png, home.png, workflow.png (the Run page with its flow chart), models.png, labels.png, results.png,
   settings.png;
 - viewer.jpg: the Cores view of the AD core with the most tau+ neurons near its centre;
+- viewer-excluded.jpg: the Cores view of the core of Ann's field (whole) with what the analysis leaves out shaded (detection's areas from
+  the stage-2 mask: the demo's synthetic fold and the parts with no tissue), hatched by type;
 - viewer-annotations.jpg: the Cores view of the core of Ann's field with the Annotations layer on (where people's labels
   differ from detection), the excluded areas shaded and the minimap with each tile's review status;
 - annotate.jpg: "Fix the field" on the field the demo's Ann has started (her changes: classes in their colours, removed
@@ -46,6 +48,7 @@ SHOTS = {  # name: (path in the project, or None when chosen from the data, view
     "home.png": ("/", 1500, 911),
     "models.png": ("/models", 1500, 911),
     "viewer.jpg": (None, 1500, 1000),
+    "viewer-excluded.jpg": (None, 1500, 1000),
     "viewer-annotations.jpg": (None, 1500, 1000),
     "labels.png": ("/labels", 1400, 900),
     "annotate.jpg": (None, 1500, 900),
@@ -237,7 +240,7 @@ def main() -> None:
                 path = viewer_target(page, api, args.stain)
             if name.startswith("annotate"):
                 path = f"/annotate/{rounds['fix']}/{rounds['ann_field']}"
-            if name == "viewer-annotations.jpg":
+            if name in ("viewer-annotations.jpg", "viewer-excluded.jpg"):
                 path = f"/cores/{rounds['ann_field'].rsplit('_', 2)[0]}?stain={rounds['ann_field'].rsplit('_', 2)[1]}"
             if name == "areas.jpg":
                 if not rounds.get("areas"):
@@ -284,6 +287,10 @@ def main() -> None:
                     for x, y, _ in sorted(objects_near_centre(page, 2)):
                         page.mouse.click(x, y)
                         time.sleep(0.4)
+            if name == "viewer-excluded.jpg":  # only what the analysis leaves out, over what detection found
+                page.locator("label.layer-toggle", has_text="Annotations").first.locator("input").uncheck()
+                page.locator("label.layer-toggle", has_text="Excluded from analysis").first.locator("input").check()
+                settle(page, 2.0)
             if name == "viewer-annotations.jpg":
                 page.locator("label.layer-toggle", has_text="Annotations").first.locator("input").check()
                 settle(page, 2.0)
