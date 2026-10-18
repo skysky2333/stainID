@@ -146,6 +146,26 @@ def status(project) -> dict:
     return out
 
 
+def seconds_per_core(project) -> dict[str, dict[str, float]]:
+    """Per stage and stain: the median seconds a core image took (the manifests record it), where at least 3 were
+    made; for the Home page's estimate of what is left. Kept on disk while the manifests stay the same."""
+    from stainid import disk_cache  # noqa: PLC0415
+
+    def make() -> dict:
+        out: dict[str, dict[str, float]] = {}
+        for stage in ("proposals", "calls", "outlines"):
+            for stain in STAINS:
+                spent = sorted(float(m["seconds"]) for m in manifest.read_all(project, stage, stain).values()
+                               if m and isinstance(m.get("seconds"), (int, float)))
+                if len(spent) >= 3:
+                    out.setdefault(stage, {})[stain] = round(spent[len(spent) // 2], 2)
+        return out
+
+    folders = [manifest.root(project) / "manifests" / stage / stain for stage in ("proposals", "calls", "outlines") for stain in STAINS]
+    return cache.memo(("v2 seconds per core", str(project.root)), folders, make, every=60.0, folders=True,
+                      persist=disk_cache.answer_file(project.root, "v2-seconds.pkl"), background=True)
+
+
 def status_inputs(project) -> list:
     """What `status` is made from, for keeping it until one of them changes: every manifest folder, the tiles, the slide
     thresholds, the settings, the models and the Segment Anything weights."""
@@ -161,7 +181,10 @@ def status_inputs(project) -> list:
 def cached_status(project) -> dict:
     """`status`, made once while its inputs stay the same (looked at no more often than every 10 s while it is slow to
     make); parallel callers wait for the one making it."""
-    return cache.memo(("v2 status", str(project.root)), status_inputs(project), lambda: status(project), every=10.0, folders=True)
+    from stainid import disk_cache  # noqa: PLC0415
+
+    return cache.memo(("v2 status", str(project.root)), status_inputs(project), lambda: status(project), every=10.0, folders=True,
+                      persist=disk_cache.answer_file(project.root, "v2-status.pkl"), background=True)  # a server started again: no 5,000 manifests read
 
 
 # ---------------------------------------------------------------- stage 2

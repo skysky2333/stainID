@@ -20,7 +20,8 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from stainid import cache, candidates
+from stainid import cache, candidates, disk_cache
+from stainid.exclusions import signature as excluded_signature
 from stainid.labels import candidate_store, compare, store
 
 OPTIONS = ("stain", "sam_small", "sam_medium", "sam_large")
@@ -128,7 +129,9 @@ def rows(project, stain: str, tiles: pd.DataFrame) -> pd.DataFrame:
 
 def _cached(project, stain: str, tiles: pd.DataFrame):
     inputs = [store.log_path(project.output("reviews")), candidate_store.folder(project, stain)]
-    return cache.memo(("outline fixes", str(project.root), stain, len(tiles)), inputs, lambda: _rows(project, stain, tiles), folders=True)
+    key = ("outline fixes", str(project.root), stain, len(tiles), excluded_signature(project, stain))
+    return cache.memo(key, inputs, lambda: _rows(project, stain, tiles), folders=True,
+                      persist=disk_cache.answer_file(project.root, f"outline-fixes-{stain}.pkl"))
 
 
 def summary(project, stain: str, tiles: pd.DataFrame) -> dict:
