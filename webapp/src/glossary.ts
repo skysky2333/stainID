@@ -53,5 +53,5 @@ export const GLOSSARY: Record<string, string> = {
   shard: 'A part of a long run. Splitting into parts lets several processes (or computers) share the work.',
   /* segmentation check */
   IoU: 'Intersection over union: how well two outlines of one object agree — the area they share divided by the area they cover together (1 = identical).',
-  'segmentation check': 'People outline every object in a few fields; detection’s candidates and counted objects are compared with them.',
+  'segmentation check': 'Every object of a few fields outlined (a dataset’s expert polygons, or an older outline session); detection’s candidates and counted objects are compared with them.',
 }

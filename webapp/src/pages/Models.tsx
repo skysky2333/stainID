@@ -8,6 +8,7 @@ import { ConfirmDialog, DetectionLine, QualityBadge, QualityLine, objectsOf, qua
 import { useProject } from '../project'
 import { ScoreOnLabels } from '../scoring'
 import { Advanced } from '../setup/parts'
+import { OutlineFixes } from '../segcheck/OutlineFixes'
 import { SegmentationCheck } from '../segcheck/SegmentationCheck'
 
 const TITLES: Record<string, string> = {
@@ -73,7 +74,8 @@ export default function Models() {
           </div>
           <ErrorNote error={trained.error} />
           <ScoreOnLabels />
-          <h2 className="stage-title">Segmentation</h2>
+          <h2 className="stage-title">Outlines</h2>
+          <OutlineFixes />
           <SegmentationCheck />
           <h2 className="stage-title">Bad-area detector</h2>
           <BadAreaDetector />

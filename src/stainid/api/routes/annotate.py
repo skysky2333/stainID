@@ -550,9 +550,9 @@ def _create_session(body: NewSession) -> dict:
     if body.round:
         return _rounds().create_round_session(body)
     if body.kind == outline.KIND:
-        from stainid.api.routes.outline import create_outline_session
+        from stainid.api.routes.outline import RETIRED
 
-        return create_outline_session(body)
+        raise HTTPException(400, RETIRED)
     fields: list[str] = []
     if body.kind == "fields":
         fields = _known_fields(body.stain, body.tile_ids) if body.tile_ids else _pick(body.stain, 20 if body.n_fields is None else body.n_fields, len(sessions.names(root())))
@@ -588,9 +588,9 @@ def add_fields(name: str, body: MoreFields, request: Request) -> dict:
     """More fields for a session: these exact ones (`tile_ids`), or `n` that stainID picks."""
     meta = session_meta(name, request)
     if meta["kind"] == outline.KIND:
-        from stainid.api.routes.outline import add_outline_fields
+        from stainid.api.routes.outline import RETIRED
 
-        return add_outline_fields(meta, body.n, body.tile_ids)
+        raise HTTPException(400, RETIRED)
     if rounds.is_round(meta):
         return _rounds().add_fields(meta, body.n, body.tile_ids, body.seed)
     if meta["kind"] != "fields":

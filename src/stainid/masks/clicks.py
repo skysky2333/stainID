@@ -1,4 +1,4 @@
-"""Click-to-outline with Segment Anything, for people outlining objects in the browser (outline sessions).
+"""Click-to-outline with Segment Anything, for people outlining objects in the browser ("Fix the field").
 
 Segment Anything works in two parts. Its image encoder turns a 1024-px window of a field into features: the expensive
 part, about 40 ms on a GPU and 5 s on four CPU cores. Its small mask decoder turns those features and the clicks into

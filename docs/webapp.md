@@ -361,7 +361,6 @@ v2 store:
 - **Quick object queue**: one object at a time, labelled with the keyboard. The next object is chosen anew each time
   from all prepared fields: where detection is unsure, where people disagree with each other or with detection, objects one
   other person has labelled, or at random.
-- **Outline every object**: the segmentation check (below).
 
 These need their fields **prepared**. The *Prepare fields for labelling* step (`stainid labels prepare`) finds every
 candidate as the detection step does and stores its measurements and detection's call in
@@ -372,29 +371,32 @@ were imported once with `stainid labels import`, each as its own source (`import
 unchanged. Every label belongs to a session; the imported ones (no session) together form the read-only pseudo-session
 *AI reference labels* (`reference`), which the Labels page lists and lets you look inside like any other session.
 
+### Outline fixes
+
+How well detection outlines objects is measured on the outlines people fix in *Fix the field* (*Models → Outlines →
+Outline fixes*, `stainid.labels.outline_fixes`). Per stain: how many objects people changed the outline of (a precise
+edit, a split, a merge), and for those objects each of detection's outlines — the stain outline, Segment Anything's
+small, medium and large masks, and the one shown first — against the person's outline: the median IoU, the median
+area ratio (detection's area over the person's) and how often each was the closest. Switching to another of
+detection's outlines without drawing is counted apart. When one outline is clearly closer than the one shown first
+(at least 0.05 higher median IoU over at least 5 objects) a hint says so, e.g. *SAM medium matches people's fixes
+better for AT8 (IoU 0.81 vs 0.66)*: the evidence for the stain's default outline on the Run page, which is never
+changed for you. It is an indication, not a full accuracy measure: only the objects people chose to fix count, and a
+precise edit starts from the outline shown. *Download the fixed outlines (CSV)* gives one row per object with the
+person's outline (core pixels) and its comparison, to train a better outline from; the outlines themselves are labels
+in the label log like any other (read through `labels.compare`, the Annotations layer's reader).
+
 ### The segmentation check
 
 A model's scores (AUC, precision, recall) are measured on the candidates the detection step proposed, so they cannot see
 objects that were never proposed, or that its segmentation cut into pieces or merged with a neighbour. The segmentation
-check measures that end to end:
+check measures that end to end, where every object of some fields was outlined: by a dataset's raters (polygons in a
+dataset package, the public-dataset projects) or in an *Outline every object* session of an older project. Such sessions
+are no longer made and cannot be worked on; their outlines stay in the label log (tasks `object` and `complete`), are
+listed on Labels and are scored here. The card on *Models → How well does detection outline objects?* shows only where
+there is something to score.
 
-1. **Set it up** on *Models → How well does detection outline objects?* (or *New labelling session → Outline every
-   object*): one session per stain, "Segmentation check – <stain>", about 40 ready fields chosen from TMAs 1–7 (in an
-   image set: every batch; *Advanced* lets you choose), spread over TMA × diagnosis group × region and over sparse,
-   medium and dense staining (thirds of detection's objects per mm² of tissue), fields nobody has labelled first. Its
-   fields' candidates are found in the background (`stainid score-segmentation --proposals-only`, 10–30 s per field).
-2. **People outline every object** of the stain's classes whose middle lies in the field's yellow square, with
-   what detection found shown (it can be hidden): *click to outline* (Segment Anything: Tab tries another size, Shift+click adds a spot that belongs to
-   the object, right-click one that does not; a click answers in well under a tenth of a second because the server
-   prepares each field's picture features ahead — on a GPU, fp16, every field of the open checks as soon as one is made
-   or opened; on the CPU the field someone has open and their next two, about 50 s each — kept in
-   `data/cache/sam_embeddings/`; the page says *Preparing outlines…* until its field is done (clicks work meanwhile, the
-   first in each part of the field slower); `$STAINID_SAM_DEVICE` (`cpu`, `cuda:1`) chooses the device), *draw by hand* (D), drag corners, 1–9 for the
-   class ("unsure" is left out of the scores), Delete, Esc. *Show detection* (R) shows what detection counted and
-   every candidate it considered, on by default. *Mark field complete* asks to confirm that nothing is left; only
-   complete fields are scored. These outlines are kept apart from the class labels models train on (tasks `object`
-   and `complete` in the label store).
-3. **Score now** (`stainid score-segmentation`) matches every outlined object one to one with (a) every candidate:
+**Score now** (`stainid score-segmentation`) matches every outlined object one to one with (a) every candidate:
    *proposed*, and (b) the candidates the model counted: *found and counted*, and *right* (precision), at IoU ≥ 0.5 and
    0.3. An object that is not found is *never proposed* (no candidate overlaps it), *merged with a neighbour* (the
    candidate covering it covers another outlined object too), *cut into pieces* (two or more candidates each cover part

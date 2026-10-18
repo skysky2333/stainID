@@ -125,24 +125,29 @@ def test_a_failing_gpu_falls_back_to_the_cpu(on_cpu, tmp_path, monkeypatch):
 def app(synthetic_project, monkeypatch, on_cpu):
     pytest.importorskip("fastapi")
     pytest.importorskip("httpx")
+    import pandas as pd
     from fastapi.testclient import TestClient
+    from test_annotation_rounds import _store_row
 
     from stainid.api import state
     from stainid.api.app import create_app
-    from stainid.api.routes import outline as outline_routes
+    from stainid.api.routes import annotate
+    from stainid.labels import candidate_store
 
     monkeypatch.chdir(synthetic_project)
-    monkeypatch.setattr(outline_routes, "proposals_job", lambda stain, session: None)
+    monkeypatch.setattr(annotate, "prepare_job", lambda *args, **kwargs: None)
+    monkeypatch.setattr(annotate, "measure_added_soon", lambda *args, **kwargs: None)
     state.reset()
+    candidate_store.write_core(state.get_state().project, "6E10", "LIP-1_B-2", pd.DataFrame([_store_row(400.0, 400.0, 0.9, True)]))
     for model in ("sam", "amyloid"):
         weights = state.get_state().project.model(model)
         weights.parent.mkdir(parents=True, exist_ok=True)
         weights.write_bytes(b"weights")
     admin = TestClient(create_app(), client=("127.0.0.1", 50000))
     assert admin.post("/api/session/admin", json={"password": "admin"}).status_code == 200
-    made = admin.post("/api/segmentation/sessions", json={"stains": ["6E10"], "n_fields": 1})
+    made = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "open": True, "tile_ids": [TILE]})  # "Fix the field"
     assert made.status_code == 200, made.text
-    name = made.json()[0]["name"]
+    name = made.json()["name"]
     ann = TestClient(admin.app)
     ann.post("/api/session/annotator", json={"name": "Ann"})
     ann.session_name = name
@@ -153,7 +158,7 @@ def app(synthetic_project, monkeypatch, on_cpu):
 def _wait_ready(ann, name: str) -> dict:
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
-        status = ann.get(f"/api/annotate/{name}/outline/{TILE}/segment").json()
+        status = ann.get(f"/api/annotate/{name}/fields/{TILE}/segment").json()
         if status["state"] != "preparing":
             return status
         time.sleep(0.05)
@@ -165,10 +170,10 @@ def test_a_field_is_prepared_in_the_background_and_clicks_use_what_was_kept(app)
     from stainid.api.state import get_state
 
     name = app.session_name
-    work = app.get(f"/api/annotate/{name}/outline/{TILE}").json()
+    work = app.get(f"/api/annotate/{name}/fields/{TILE}").json()
     assert work["segment_anything"] and work["segment_ready"] is False  # asked for at once
     assert _wait_ready(app, name) == {"ready": True, "state": "ready"}
-    assert app.get(f"/api/annotate/{name}/outline/{TILE}").json()["segment_ready"]
+    assert app.get(f"/api/annotate/{name}/fields/{TILE}").json()["segment_ready"]
     state = get_state()
     stem = sam_embeddings.field_stem(state, TILE)
     folder = state.cache_dir("sam_embeddings")
@@ -178,7 +183,7 @@ def test_a_field_is_prepared_in_the_background_and_clicks_use_what_was_kept(app)
     model = clicks.outliner(sam_embeddings.checkpoint(state))
     original = model.encode
     model.encode = lambda window: made.append(window.shape) or original(window)
-    out = app.post(f"/api/annotate/{name}/outline/{TILE}/segment", json={"points": [[250, 250, 1]]})
+    out = app.post(f"/api/annotate/{name}/fields/{TILE}/segment", json={"points": [[250, 250, 1]]})
     assert out.status_code == 200 and set(out.json()) == {"options", "chosen"}
     assert made == []  # from what was made ahead
 
@@ -186,7 +191,7 @@ def test_a_field_is_prepared_in_the_background_and_clicks_use_what_was_kept(app)
     disk_cache.flush()
     disk_cache.evict(state.root, 0, keep_seconds=0)  # cleaned up: made again on the next click
     assert not any(folder.iterdir())
-    assert app.post(f"/api/annotate/{name}/outline/{TILE}/segment", json={"points": [[250, 250, 1]]}).status_code == 200
+    assert app.post(f"/api/annotate/{name}/fields/{TILE}/segment", json={"points": [[250, 250, 1]]}).status_code == 200
     assert made == [(768, 768, 3)] and (folder / f"{stem}.0-0.npz").exists()
 
 

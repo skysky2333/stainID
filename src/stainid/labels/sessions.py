@@ -7,7 +7,7 @@ A session is `sessions/<name>/meta.json`; its labels go into the shared label st
   with one label so far, or at random) from the fields whose candidate pool is prepared. The page asks for the next
   few objects at a time; those are held for that person for a while (`Reservations`), so people labelling at once get
   different objects. The rule is applied anew on every ask, so the queue follows new data and new labels.
-- `outline`: outline every object of whole fields, with stainID detection shown, to measure segmentation (`labels.outline`).
+- `outline`: outline every object of whole fields, to measure segmentation (`labels.outline`); no longer made, kept readable and scored.
 
 A field is one square tile of a core (about 560 µm, 2048 pixels), shown to people as one picture.
 

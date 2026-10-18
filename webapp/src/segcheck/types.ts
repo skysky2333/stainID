@@ -57,7 +57,7 @@ export interface CheckSession {
 }
 export interface CheckOverview {
   stains: string[]; checks: CheckSession[]; report: CheckReport | null; files: { label: string; path: string; exists: boolean }[]
-  segment_anything: boolean; tmas: Record<string, { all: string[]; default: string[] }>; default_fields: number; now: number
+  segment_anything: boolean; now: number
   /** a TMA study (else the `tma` column holds image batches); read-only sessions imported from a dataset package */
   tma_study: boolean; imported_sessions: number
 }

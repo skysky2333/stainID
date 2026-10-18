@@ -1,10 +1,12 @@
-/* "How well does detection outline objects?" on the Models page: the segmentation check per stain (people outline every
-   object of a few fields; detection's candidates and counted objects are compared with them), how far the outlining is,
-   the scores in plain words, and every figure and file under Advanced. */
+/* The segmentation check on the Models page, shown only where there is something to score: polygons a dataset's raters
+   drew (imported sessions, the public-dataset projects) and outline sessions of older projects ("Outline every object",
+   no longer made), compared with detection's candidates and counted objects; the scores in plain words, and every figure
+   and file under Advanced. In a study, outline accuracy comes from the outlines people fix in "Fix the field"
+   (OutlineFixes). */
 import { useState } from 'react'
 import type { Job } from '../api'
-import { api, appPath, downloadUrl, runStep } from '../api'
-import { Empty, ErrorNote, Loaded, Modal, Progress, Term, fmt, timeAgo, withError } from '../components'
+import { downloadUrl, runStep } from '../api'
+import { ErrorNote, Loaded, Progress, Term, fmt, timeAgo, withError } from '../components'
 import { useFetch } from '../hooks'
 import { objectsOf, percent } from '../labelling'
 import { useProject } from '../project'
@@ -24,42 +26,36 @@ const active = (job: Job | undefined) => !!job && (job.status === 'running' || j
 export function SegmentationCheck() {
   const overview = useFetch<CheckOverview>('/api/segmentation', 15000)
   const jobs = useFetch<Job[]>('/api/jobs', 5000)
-  const [settingUp, setSettingUp] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const job = (jobs.data ?? []).find((j) => j.workflow === 'score_segmentation')
   const running = active(job)
   const score = () => withError(async () => { await runStep('score_segmentation', { stain: 'all' }); jobs.reload() }, setError)
   const scorable = !!overview.data && (overview.data.checks.some((c) => c.complete > 0) || overview.data.imported_sessions > 0)
+  if (overview.data && !overview.data.checks.length && !overview.data.imported_sessions) return null  // nothing to score
   return (
     <section className="card segcheck">
       <div className="row"><h2 style={{ margin: 0 }}>How well does detection outline objects?</h2><span className="spacer" />
         {overview.data && (overview.data.checks.length > 0 || overview.data.imported_sessions > 0) && <button className="btn small" disabled={running || !scorable}
           title={scorable ? 'Compares every complete field with what detection found' : 'No field is marked complete yet'}
           onClick={score}>{running ? 'Scoring…' : 'Score now'}</button>}</div>
-      <p className="secondary small" style={{ marginTop: 4 }}>The model scores above are measured only on the objects detection proposed. Here people outline
-        <i> every</i> object in a few fields, so the check also counts objects detection never proposed, cut into pieces or merged with a neighbour.</p>
+      <p className="secondary small" style={{ marginTop: 4 }}>The model scores above are measured only on the objects detection proposed. Here every object
+        was outlined in a few fields (by a dataset’s raters, or in an older outline session), so the check also counts objects detection never proposed, cut
+        into pieces or merged with a neighbour.</p>
       <Loaded state={overview} label="Loading the segmentation check…">
         {(data) => data.checks.length || data.imported_sessions ? <>
           {running && job && <JobLine job={job} />}
           {!running && job?.status === 'failed' && <ErrorNote error={`Scoring stopped: ${job.progress.error || job.progress.last_line || 'see the log on the Run page'}`} />}
           <div className="segcheck-stains">
             {data.stains.map((stain) => <StainCheck key={stain} stain={stain} checks={data.checks.filter((c) => c.stain === stain)}
-              scores={data.report?.stains.find((s) => s.stain === stain)} onSetUp={() => setSettingUp(true)} />)}
+              scores={data.report?.stains.find((s) => s.stain === stain)} />)}
           </div>
           {data.imported_sessions > 0 && <Imported raters={data.report?.imported ?? []} scored={!!data.report} />}
           {data.report && <p className="muted small">Scored {timeAgo(data.report.made)}{data.report.failed.length > 0 && ` · ${data.report.failed.length} fields could not be scored`}.
             {' '}Fields marked complete since then count after <b>Score now</b>.</p>}
           <Details data={data} />
-        </> : (
-          <Empty>
-            <p style={{ marginTop: 0 }}>No segmentation check yet. stainID picks about {data.default_fields} fields per stain, spread over TMAs, groups, regions and
-              how much stain they hold; people outline every object in them, with what detection found shown. That takes about 5–15 minutes per field.</p>
-            <button className="btn primary" onClick={() => setSettingUp(true)}>Set up the check…</button>
-          </Empty>
-        )}
+        </> : null}
       </Loaded>
       <ErrorNote error={error} />
-      {settingUp && overview.data && <SetUp data={overview.data} onClose={() => setSettingUp(false)} onDone={() => { overview.reload(); jobs.reload() }} />}
     </section>
   )
 }
@@ -92,27 +88,23 @@ function JobLine({ job }: { job: Job }) {
   )
 }
 
-function StainCheck({ stain, checks, scores, onSetUp }: { stain: string; checks: CheckSession[]; scores?: StainScores; onSetUp: () => void }) {
+function StainCheck({ stain, checks, scores }: { stain: string; checks: CheckSession[]; scores?: StainScores }) {
   const fields = checks.reduce((n, c) => n + c.fields, 0)
   const complete = checks.reduce((n, c) => n + c.complete, 0)
   const words = objectsOf(stain)
-  if (!checks.length) {
-    return <div className="segcheck-stain"><h3>{stain}</h3><p className="small muted">No check for {stain} yet.</p>
-      <button className="btn small" onClick={onSetUp}>Set up…</button></div>
-  }
+  if (!checks.length) return null
   return (
     <div className="segcheck-stain">
       <div className="row"><h3 style={{ margin: 0 }}>{stain}</h3><span className="spacer" />
-        {checks.map((c) => <a key={c.name} className="small" href={appPath(`/annotate/${c.name}`)} target="_blank" rel="noreferrer"
-          title={c.title}>Open the outlining page ↗</a>)}</div>
+        <span className="small muted">an older outline session</span></div>
       <Progress done={complete} total={fields} />
       <div className="small secondary">{complete.toLocaleString()} of {fields.toLocaleString()} fields outlined completely
-        {checks.some((c) => !c.open) && <span className="muted"> · closed to labellers (open it on Labels)</span>}</div>
+</div>
       {scores && scores.objects > 0 ? <Scores s={scores} words={words} />
         : scores && scores.fields_scored > 0 ? <p className="small secondary">The {scores.fields_scored} fields outlined so far hold no {words}; detection counted
           {' '}{(scores.counted ?? 0).toLocaleString()} there{scores.counted ? ', all wrong' : ''}.</p>
         : <p className="small muted">{complete ? 'Press Score now to compare the complete fields with what detection found.'
-          : 'Scores appear once people have outlined fields completely. Send them the link on the Labels page.'}</p>}
+          : 'No field of it was outlined completely.'}</p>}
     </div>
   )
 }
@@ -247,50 +239,3 @@ function IouHistogram({ proposal, detection }: { proposal: number[]; detection: 
 }
 
 /* ---------- setting it up ---------- */
-
-function SetUp({ data, onClose, onDone }: { data: CheckOverview; onClose: () => void; onDone: () => void }) {
-  const { tmaName } = useProject()
-  const missing = data.stains.filter((s) => !data.checks.some((c) => c.stain === s))
-  const [stains, setStains] = useState<string[]>(missing)
-  const [n, setN] = useState(data.default_fields)
-  const allTmas = [...new Set(data.stains.flatMap((s) => data.tmas[s]?.all ?? []))].sort((a, b) => a.length - b.length || a.localeCompare(b))
-  const [tmas, setTmas] = useState<string[]>([...new Set(data.stains.flatMap((s) => data.tmas[s]?.default ?? []))])
-  const [open, setOpen] = useState(true)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const toggle = (list: string[], value: string) => (list.includes(value) ? list.filter((v) => v !== value) : [...list, value])
-  const create = async () => {
-    setBusy(true)
-    const made = await withError(() => api.post('/api/segmentation/sessions', { stains, n_fields: n, tmas, open }), setError)
-    setBusy(false)
-    if (made) { onDone(); onClose() }
-  }
-  return (
-    <Modal title="Set up the segmentation check" onClose={onClose}>
-      <p className="secondary" style={{ marginTop: 0 }}>One session per stain, “Segmentation check – <i>stain</i>”. People outline <b>every</b> object in each field, with
-        what detection found shown (they may hide it), and mark the field complete. Fields are ready ones, spread over TMAs, diagnosis groups, regions and sparse, medium and dense
-        staining. Meanwhile stainID finds detection’s candidates in those fields in the background.</p>
-      <fieldset className="field"><legend>Stains</legend>
-        <div className="row">{data.stains.map((s) => {
-          const exists = !missing.includes(s)
-          return <label key={s} className="layer-toggle" title={exists ? 'This stain has a check already' : undefined}>
-            <input type="checkbox" disabled={exists} checked={!exists && stains.includes(s)} onChange={() => setStains(toggle(stains, s))} />{s}{exists && ' (set up)'}</label>
-        })}</div>
-      </fieldset>
-      <label className="field">Fields per stain<input type="number" min={1} max={200} value={n} style={{ width: 90 }} onChange={(e) => setN(Math.max(1, Number(e.target.value)))} /></label>
-      <label className="layer-toggle"><input type="checkbox" checked={open} onChange={(e) => setOpen(e.target.checked)} />Open to labellers right away</label>
-      <Advanced hint={data.tma_study ? 'which TMAs' : 'which batches of images'}>
-        <fieldset className="field"><legend>Fields come from these {data.tma_study ? 'TMAs' : 'batches of images'}</legend>
-          <div className="row">{allTmas.map((t) => <label key={t} className="layer-toggle">
-            <input type="checkbox" checked={tmas.includes(t)} onChange={() => setTmas(toggle(tmas, t))} />{data.tma_study ? tmaName(t) : t}</label>)}</div>
-        </fieldset>
-      </Advanced>
-      <ErrorNote error={error} />
-      <div className="row"><span className="spacer" />
-        <button className="btn" onClick={onClose}>Cancel</button>
-        <button className="btn primary" disabled={busy || !stains.length || !tmas.length} onClick={create}>
-          {busy ? 'Choosing fields…' : `Create ${stains.length} session${stains.length === 1 ? '' : 's'}`}</button>
-      </div>
-    </Modal>
-  )
-}

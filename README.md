@@ -46,8 +46,10 @@ project, not study data (see [The app](#the-app)).*
 - **A labelled training set.** Collect labels from several people, with repeat labels for agreement and every label
   traceable to who made it and when.
 - **Better detection for your lab's staining.** Retrain the NeuN, 6E10 and AT8 models on your own slides.
-- **An end-to-end accuracy check.** People outline every object in a few fields, with what detection found shown. The check then
-  shows what detection missed, cut in two, merged or outlined poorly.
+- **Which outline fits.** The outlines people fix in *Fix the field* (a precise edit, a split, a merge) are compared with
+  each of detection's outlines (the stain outline, Segment Anything small, medium and large) on the Models page, the
+  evidence for each stain's default outline. A dataset's expert polygons get a full segmentation check: what detection
+  missed, cut in two, merged or outlined poorly.
 
 ## Getting started
 
@@ -156,8 +158,7 @@ Every session writes into one shared label log, so no object is asked about twic
 matched onto detection's candidates (the candidate id first, the position only where a label names none). The Labels page follows progress field by field and person by person. It also shows how
 often people agree with detection, and the labels train a new model on the Models page. The classes and their types
 (e.g. *tau+ neuron · pretangle*) can be changed in Settings ([label classes](docs/label_classes.md)). The older kinds
-of session (whole-field review, a quick object queue, and *Outline every object* for the segmentation check) are under
-*Advanced*.
+of session (whole-field review and a quick object queue) are under *Advanced*.
 
 The rounds work on the candidates of the staged detection ([below](#detection-stage-by-stage)), so a stain needs its
 *Find candidates* and *Decide* steps run first (*Run what's left* does it). To try the rounds before that, run
@@ -301,7 +302,7 @@ as they were. See [docs/pipeline_v2.md](docs/pipeline_v2.md) for every stage, ru
 Read in this order:
 
 1. [Adding new slides to a study](docs/guide_adding_slides.md): the guided setup, step by step, for people new to stainID.
-2. [Using the app](docs/webapp.md): every page, how steps are queued, annotation rounds, the segmentation check and training models.
+2. [Using the app](docs/webapp.md): every page, how steps are queued, annotation rounds, outline fixes, the segmentation check and training models.
    [Architecture](docs/architecture.md): where each object (candidate, outline, class, excluded area) is stored, and who reads it.
    [The job system](docs/job_system.md): the one prioritised, pausable queue every step runs through.
 3. [Label classes](docs/label_classes.md): the classes and types people label with, their keys, and how to change them.

@@ -23,7 +23,7 @@ export const AI_VIEW_FOR_LABELLERS: Record<AiView, string> = {
 export const TOOL_TEXT: Record<string, string> = {
   class: 'correct the class of each object', point: 'add objects detection missed', outline: 'fix or draw outlines', tag: 'tag the whole field',
 }
-export const KIND_TEXT = { fields: 'check whole fields', queue: 'one object at a time', outline: 'outline every object (segmentation check)' } as const
+export const KIND_TEXT = { fields: 'check whole fields', queue: 'one object at a time', outline: 'outline every object (older segmentation check)' } as const
 
 /** A trained model's cross-validated quality in a word, from how many real objects it finds and how many of its calls are right. */
 export function quality(m: Metrics | null | undefined): { word: string; tone: 'good' | 'fair' | 'weak' } | null {

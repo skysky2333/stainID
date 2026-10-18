@@ -99,7 +99,7 @@ function Sessions({ sessions, reference, linkFor, onChanged, onNew }: {
         {ordered.filter((s) => isRound(s)).map((s) => <SessionRow key={s.name} s={s} link={linkFor(s.name)} onChanged={onChanged} />)}
         {ordered.some((s) => !isRound(s)) && (ordered.some((s) => isRound(s))
           ? <details className="advanced older-sessions">
-            <summary><span>Older kinds of session</span><span className="muted small"> · {ordered.filter((s) => !isRound(s)).length} (segmentation checks, whole-field reviews, quick checks)
+            <summary><span>Older kinds of session</span><span className="muted small"> · {ordered.filter((s) => !isRound(s)).length} (older segmentation checks, whole-field reviews, quick checks)
               {ordered.some((s) => !isRound(s) && s.open) ? ` · ${ordered.filter((s) => !isRound(s) && s.open).length} open` : ''}</span></summary>
             <div className="advanced-body session-list">{ordered.filter((s) => !isRound(s)).map((s) => <SessionRow key={s.name} s={s} link={linkFor(s.name)} onChanged={onChanged} />)}</div>
           </details>
@@ -473,8 +473,7 @@ function SessionClasses({ vocabulary, typesAsked, onTypesAsked }: { vocabulary: 
   )
 }
 
-type Kind = 'fields' | 'queue' | 'outline'
-const OUTLINE_PICK_TEXT = 'Ready fields (of TMAs 1–7 in a TMA study; others can be chosen on Models), spread over TMAs, groups, regions and sparse, medium and dense staining; fields nobody has labelled first.'
+type Kind = 'fields' | 'queue'
 
 function NewSession({ stains, onClose, onCreated }: { stains: string[]; onClose: () => void; onCreated: (s: SessionInfo) => void }) {
   const defaults = useFetch<Defaults>('/api/labels/defaults')
@@ -485,8 +484,7 @@ function NewSession({ stains, onClose, onCreated }: { stains: string[]; onClose:
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => setForm((f) => ({ ...f, [key]: value }))
-  const placeholder = form.kind === 'outline' ? `Segmentation check – ${form.stain}`
-    : `${form.stain} ${form.kind === 'fields' ? 'review' : 'quick check'} – ${new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`
+  const placeholder = `${form.stain} ${form.kind === 'fields' ? 'review' : 'quick check'} – ${new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`
   const pasted = form.tile_ids.split(/[\s,]+/).filter(Boolean)
   const ids = mode === 'pick' ? chosen : pasted
   const create = async () => {
@@ -499,7 +497,7 @@ function NewSession({ stains, onClose, onCreated }: { stains: string[]; onClose:
   }
   const choice = (kind: Kind, title: string, text: string) => (
     <label className={`choice-card${form.kind === kind ? ' chosen' : ''}`}>
-      <input type="radio" name="kind" checked={form.kind === kind} onChange={() => setForm((f) => ({ ...f, kind, n_fields: kind === 'outline' ? 40 : f.n_fields === 40 ? 20 : f.n_fields }))} />
+      <input type="radio" name="kind" checked={form.kind === kind} onChange={() => setForm((f) => ({ ...f, kind }))} />
       <span><b>{title}</b><span className="small secondary">{text}</span></span>
     </label>
   )
@@ -517,14 +515,13 @@ function NewSession({ stains, onClose, onCreated }: { stains: string[]; onClose:
           <div className="choice-grid">
             {choice('fields', 'Whole-field review (current label pool)', 'People see a whole field with detection’s calls filled in, correct the wrong ones and add what it missed. Gives complete labels for every object.')}
             {choice('queue', 'Quick check, one object at a time (current label pool)', 'People see one object and pick what it is with a key press. Fast; aims at the objects detection is unsure about.')}
-            {choice('outline', 'Outline every object (segmentation check)', 'People outline every object in whole fields, with what detection found shown (it can be hidden), to measure how well detection finds and outlines objects. Scored on Models.')}
           </div>
         </fieldset>
         {form.kind !== 'queue' && <FieldChoice stain={form.stain} mode={mode} n={form.n_fields} chosen={chosen} onMode={setMode}
-          onN={(n) => set('n_fields', n)} onChosen={setChosen} autoText={form.kind === 'outline' ? OUTLINE_PICK_TEXT : undefined} />}
+          onN={(n) => set('n_fields', n)} onChosen={setChosen} />}
         <label className="field">Title people see<input type="text" value={form.title} placeholder={placeholder} onChange={(e) => set('title', e.target.value)} /></label>
         <label className="field">Note for labellers (optional)<textarea rows={2} value={form.instructions} placeholder="e.g. Count only neurons with a visible nucleus." onChange={(e) => set('instructions', e.target.value)} /></label>
-        {defaults.data?.vocabularies[form.stain] && form.kind !== 'outline' && <SessionClasses vocabulary={defaults.data.vocabularies[form.stain]} typesAsked={form.subtypes}
+        {defaults.data?.vocabularies[form.stain] && <SessionClasses vocabulary={defaults.data.vocabularies[form.stain]} typesAsked={form.subtypes}
           onTypesAsked={(on) => set('subtypes', on)} />}
         <label className="layer-toggle"><input type="checkbox" checked={form.open} onChange={(e) => set('open', e.target.checked)} />Open to labellers right away</label>
         <Advanced hint="session ID, people per field, what people see of detection, tasks, field IDs">
@@ -533,8 +530,8 @@ function NewSession({ stains, onClose, onCreated }: { stains: string[]; onClose:
               onChange={(e) => set('name', e.target.value.replace(/[^A-Za-z0-9_-]/g, '_'))} /></label>
             {form.kind === 'fields' && <label className="field">People per field<input type="number" min={1} value={form.per_field} style={{ width: 80 }}
               onChange={(e) => set('per_field', Math.max(1, Number(e.target.value)))} /></label>}
-            {form.kind !== 'outline' && <label className="field">What people see of detection<select value={form.ai_view} onChange={(e) => set('ai_view', e.target.value as AiView)}>
-              {(defaults.data?.ai_views ?? ['full', 'positions', 'none'] as AiView[]).map((v) => <option key={v} value={v}>{AI_VIEW_TEXT[v]}</option>)}</select></label>}
+            <label className="field">What people see of detection<select value={form.ai_view} onChange={(e) => set('ai_view', e.target.value as AiView)}>
+              {(defaults.data?.ai_views ?? ['full', 'positions', 'none'] as AiView[]).map((v) => <option key={v} value={v}>{AI_VIEW_TEXT[v]}</option>)}</select></label>
             {form.kind === 'queue' && <label className="field">Which objects<select value={form.rule} onChange={(e) => set('rule', e.target.value)}>
               {Object.entries(defaults.data?.rules ?? { uncertain: 'where detection is unsure' }).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label>}
           </div>

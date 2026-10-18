@@ -125,11 +125,8 @@ def client(synthetic_project, monkeypatch):
 
     from stainid.api import state
     from stainid.api.app import create_app
-    from stainid.api.routes import outline as outline_routes
 
     monkeypatch.chdir(synthetic_project)
-    jobs = []
-    monkeypatch.setattr(outline_routes, "proposals_job", lambda stain, session: jobs.append((stain, session)))
     rgb = np.full((1200, 1200, 3), 225, np.uint8)
     for x, y in PLAQUES:
         cv2.circle(rgb, (ORIGIN + x, ORIGIN + y), 40, (110, 70, 30), -1)
@@ -145,58 +142,46 @@ def client(synthetic_project, monkeypatch):
     model.write_bytes(b"model")
     admin = TestClient(create_app(), client=("127.0.0.1", 50000))
     assert admin.post("/api/session/admin", json={"password": "admin"}).status_code == 200
-    admin.jobs = jobs
     yield admin
     state.reset()
 
 
-def test_outline_session_from_set_up_to_scores(client):
+def test_an_older_outline_session_stays_readable_and_scored(client):
+    """Outline sessions are no longer made or worked on (outline accuracy comes from "Fix the field"): one from an older
+    project keeps its labels, is listed and is scored against detection's candidates."""
     from fastapi.testclient import TestClient
 
     from stainid.api import state
+    from stainid.labels import sessions, store
+    from stainid.labels import vocabulary as vocab
     from stainid.segmentation import proposals, report
 
-    created = client.post("/api/segmentation/sessions", json={"stains": ["6E10"], "n_fields": 40}).json()
-    assert [c["title"] for c in created] == ["Segmentation check – 6E10"] and created[0]["fields"] == [TILE] and created[0]["open"]
-    name = created[0]["name"]
-    assert created[0]["kind"] == "outline" and created[0]["ai_view"] == "full" and created[0]["benchmark"]["tmas"] == ["1"]
-    assert client.jobs == [("6E10", name)]  # its candidates are found in the background
+    refused = client.post("/api/labels/sessions", json={"stain": "6E10", "kind": "outline", "n_fields": 1, "tile_ids": [TILE]})
+    assert refused.status_code == 400 and "no longer made" in refused.json()["detail"]
+    assert client.post("/api/segmentation/sessions", json={"stains": ["6E10"]}).status_code in (404, 405)
+    project = state.get_state().project
+    reviews = project.output("reviews")
+    name = "seg_check_6E10"
+    meta = sessions.create(reviews, name, title=outline.title("6E10"), stain="6E10", kind=outline.KIND, tools=["outline"], ai_view="full",
+                           per_field=1, rule="random", fields=[TILE], instructions="", benchmark={"tmas": ["1"], "density": {TILE: "medium"}})
+    words = vocab.of(project, "6E10")
+    records = [outline.object_record(meta, words, "Ann", TILE, f"p{i}", "compact plaque", circle(x, y, 40), False) for i, (x, y) in enumerate(PLAQUES)]
+    records.append(outline.object_record(meta, words, "Ann", TILE, "p4", "diffuse plaque", circle(*FAINT, 30), False))
+    records.append(outline.object_record(meta, words, "Ann", TILE, "odd", "unsure", circle(600, 600, 10), False))
+    records.append(outline.complete_record(meta, "Ann", TILE, True))
+    store.append(reviews, records)
 
     ann = TestClient(client.app)
     ann.post("/api/session/annotator", json={"name": "Ann"})
-    detail = ann.get(f"/api/annotate/{name}").json()
-    assert [(c["id"], c["scored"]) for c in detail["meta"]["outline_classes"]] == [("plaque", True), ("unsure", False)]
-    assert detail["fields"] == [{"tile_id": TILE, "done_by_me": False, "annotators_done": 0, "open_by_others": 0, "prepared": True}]
-    assert ann.get(f"/api/annotate/{name}/next").json()["tile_id"] == TILE
-    work = ann.get(f"/api/annotate/{name}/outline/{TILE}").json()
-    assert work["box"] == {"x": 128, "y": 128, "width": 512, "height": 512} and work["objects"] == [] and not work["complete"]
-    assert ann.get(f"/api/annotate/{name}/fields/{TILE}/image.jpg").headers["content-type"] == "image/jpeg"
-
-    records = [{"ref": f"p{i}", "value": "compact plaque", "points": circle(x, y, 40)} for i, (x, y) in enumerate([*PLAQUES, FAINT])]
-    records.append({"ref": "odd", "value": "unsure", "points": circle(600, 600, 10)})
-    assert len(ann.post(f"/api/annotate/{name}/outline/{TILE}/objects", json={"records": records}).json()) == 6
-    moved = ann.post(f"/api/annotate/{name}/outline/{TILE}/objects", json={"records": [{"ref": "p4", "value": "diffuse plaque", "points": circle(*FAINT, 30)}]})
-    assert moved.json()[0]["id"] == f"object:{name}:{TILE}:p4" and moved.json()[0]["x"] == pytest.approx(FAINT[0], abs=0.5)
-    bad = ann.post(f"/api/annotate/{name}/outline/{TILE}/objects", json={"records": [{"ref": "x", "value": "not a plaque", "points": circle(1, 1, 5)}]})
-    assert bad.status_code == 400
-    assert ann.post(f"/api/annotate/{name}/outline/{TILE}/segment", json={"points": [[250, 250, 1]]}).status_code == 409  # no SAM weights
-    assert len(ann.get(f"/api/annotate/{name}/outline/{TILE}").json()["objects"]) == 6
-    reference = ann.get(f"/api/annotate/{name}/outline/{TILE}/reference").json()
-    assert [(c["x"], c["y"]) for c in reference["counted"]] == [(250, 250), (450, 250), STRAY] and reference["candidates"] is None
-
-    ann.post(f"/api/annotate/{name}/outline/{TILE}/complete", json={"complete": True})
-    assert ann.get(f"/api/annotate/{name}").json()["fields"][0]["done_by_me"]
+    assert ann.get(f"/api/annotate/{name}/outline/{TILE}").status_code == 404  # its outlining page is retired
     listed = client.get("/api/labels/overview").json()["sessions"]
-    assert [(s["kind"], s["fields_covered"], s["fields_prepared"], s["labels"]) for s in listed] == [("outline", 1, 1, 6)]
-    fields = client.get(f"/api/labels/sessions/{name}/fields").json()
-    assert fields[0]["state"] == "done" and fields[0]["done_by"] == ["Ann"]
+    assert [(s["kind"], s["fields_covered"], s["labels"]) for s in listed] == [("outline", 1, 6)]
     assert client.get("/api/labels/sets", params={"stain": "6E10"}).json() == []  # outlines never train a model
 
     project = state.get_state().project
     report.run(project, "6E10", proposals_only=True)
     saved = proposals.load(project, "6E10", TILE)
     assert len(saved["x"]) == 4 and saved["layers"].shape == (1, 768, 768)
-    assert ann.get(f"/api/annotate/{name}/outline/{TILE}/reference").json()["candidates"]
     scores = report.run(project, "6E10")["stains"][0]
     assert scores["objects"] == 5 and scores["fields_scored"] == 1 and scores["people"] == ["Ann"]
     assert scores["outcomes"] == {"counted": 2, "rejected": 2, "missed": 1, "merged": 0, "split": 0, "poor outline": 0}

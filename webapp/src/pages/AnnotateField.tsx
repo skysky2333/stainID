@@ -17,7 +17,6 @@ import { MarkAreas } from '../labels/markareas'
 import { ROUND_TITLE, RoundProgressLine, useFitScreen } from '../labels/rounds'
 import type { RoundDetail } from '../api'
 import { Register, useSession } from '../session'
-import { OutlineWorkspace } from '../segcheck/OutlineWorkspace'
 import { useFirstTutorial } from '../labels/tutorial'
 import type { ImagePoint } from '../viewer'
 import { RASTER_LAYERS, ZoomViewer } from '../viewer'
@@ -59,7 +58,9 @@ export default function AnnotatePage() {
       Ask for a “Fix the field” session instead.</p><Link className="btn" to="/annotate">All sessions</Link></Empty></>
   if (round === 2 && tile) return <FixField key={tile} detail={detail.data} reload={detail.reload} tile={tile} />
   if (detail.data.meta.kind === 'queue') return <QuickCheck detail={detail.data} />
-  if (detail.data.meta.kind === 'outline' && tile) return <OutlineWorkspace key={tile} detail={detail.data} reload={detail.reload} tile={tile} />
+  if (detail.data.meta.kind === 'outline') return <><PageHead title={detail.data.meta.title} subtitle="Outline every object" />
+    <Empty><p style={{ marginTop: 0 }}>This kind of session is no longer used: its outlines stay in the label log and still count in the segmentation
+      check’s scores. Outlines are now fixed in “Fix the field”.</p><Link className="btn" to="/annotate">All sessions</Link></Empty></>
   return tile ? <Workspace key={tile} detail={detail.data} reload={detail.reload} tile={tile} /> : <SessionOverview detail={detail.data} reload={detail.reload} />
 }
 

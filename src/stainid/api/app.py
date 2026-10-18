@@ -12,7 +12,7 @@ import logging
 import re
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -103,6 +103,8 @@ def create_app() -> FastAPI:
 
         @app.get("/{path:path}", include_in_schema=False)
         def spa(path: str) -> FileResponse:
+            if path == "api" or path.startswith("api/"):  # an address of the API that does not exist: not the page
+                raise HTTPException(404, "not found")
             target = (STATIC / path).resolve()
             return FileResponse(target if path and target.is_file() and target.is_relative_to(STATIC.resolve()) else STATIC / "index.html")
 

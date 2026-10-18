@@ -33,7 +33,7 @@ const FAQ: [string, ReactNode][] = [
     its unit and a plain explanation, and the column name used in the CSV file.</>],
   ['How do I know the results are right?', <>Look at the cores and what was found in them on <Link to="/cohort">Cores</Link>, and ask colleagues to fix detection on a few
     fields on <Link to="/labels">Labels</Link> (<b>Fix the field</b>; <b>Mark bad areas</b> for folds and artifacts): each stain shows how often detection agrees with people, and <Link to="/models">Models</Link> shows the cross-validated precision and
-    recall on all labels.</>],
+    recall on all labels. Its <b>Outline fixes</b> card compares the outlines people fixed with each of detection’s outlines, per stain: which outline to draw first.</>],
   ['The detections look wrong for my staining.', <>Label objects on your own slides (an annotation round on <Link to="/labels">Labels</Link>; 100–200 objects is a good start),
     then train on <Link to="/models">Models</Link> and switch to the new model if it scores better. Then run the detection steps again with <b>Start over</b>.</>],
   ['A step says “Made with an older model”.', <>You switched to a different model after that step ran. Its results stay as they are
