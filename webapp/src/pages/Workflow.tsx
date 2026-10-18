@@ -468,7 +468,7 @@ const PAGE = 20
 function jobFacts(job: Job): string {
   const { done, total } = job.progress
   const took = job.started && job.ended ? ` · took ${duration(job.ended - job.started)}` : ''
-  if (job.status === 'queued' || job.status === 'paused') return queueText(job)
+  if (job.status === 'queued' || job.status === 'paused') return [total ? `${done.toLocaleString()} of ${total.toLocaleString()} done` : '', queueText(job)].filter(Boolean).join(' · ')
   if (job.status === 'failed' || job.status === 'skipped') return job.progress.error || 'See the log'
   if (job.status === 'running') return runningText(job).join(' · ')
   return (total ? `${done.toLocaleString()} of ${total.toLocaleString()} done` : '') + took
@@ -496,7 +496,7 @@ export function JobsTable({ limit, bare = false }: { limit?: number; bare?: bool
                     <td>{job.title} <CommandLineTag job={job} /></td>
                     <td><StatusBadge status={job.status} /></td>
                     <td className="jobs-progress">
-                      {job.status === 'running' && <Progress done={job.progress.done} total={job.progress.total} />}
+                      {(job.status === 'running' || (job.progress.done > 0 && (job.status === 'paused' || job.status === 'queued'))) && <Progress done={job.progress.done} total={job.progress.total} />}
                       <div className="muted small ellipsis" title={jobFacts(job)}>{jobFacts(job)}</div>
                     </td>
                     <td className="muted small">{job.started ? timeAgo(job.started) : '—'}</td>

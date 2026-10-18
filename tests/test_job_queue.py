@@ -331,3 +331,32 @@ def test_an_exec_job_reports_progress_through_its_progress_file(tmp_path):
 
     progress_file(tmp_path / "x.log").write_text("3/72\n12/72\n")  # "done/total" lines: the last one counts
     assert (progress(tmp_path / "x.log")["done"], progress(tmp_path / "x.log")["total"]) == (12, 72)
+
+
+def test_units_done_before_a_pause_still_count_and_a_job_being_paused_shows_no_time_left(tmp_path, monkeypatch):
+    from stainid.jobs import cli as jobs_cli
+
+    monkeypatch.setattr(queue.Scheduler, "_start", lambda self, job, gpus: setattr(job, "status", "running"))
+    scheduler = queue.Scheduler(tmp_path / "q", budget=queue.Budget(8, 0, 32))
+    job = scheduler.submit_command(["true"], str(tmp_path), "proposals", "public", {"cpus": 1, "ram_gb": 1})
+    scheduler._schedule()
+    log = tmp_path / "job.log"
+    job.log_file, job.started = str(log), time.time() - 600
+    log.write_text("".join(f"[{i}/72] core {i}\n" for i in range(1, 43)))
+    job.request = "preempt"  # being paused for higher-priority work: "pausing…", not its grace period as time left
+    info = scheduler.describe(job)
+    assert info["eta_s"] is None and "pausing…" in jobs_cli._line(info)
+    scheduler._ended(job, units.PAUSED)
+    assert job.status == "queued" and job.outcome["done"] == 42
+    assert scheduler.describe(job)["progress"]["done"] == 42  # waiting: the units done are still shown
+    scheduler._schedule()
+    job.started = time.time() - 60
+    assert scheduler.describe(job)["progress"]["done"] == 42  # resumed, nothing new said yet
+    with log.open("a") as out:
+        out.write("[1/30] core 43\n[2/30] core 44\n")  # the resumed step counts only what is left
+    progress = scheduler.describe(job)["progress"]
+    assert (progress["done"], progress["total"]) == (44, 72)
+    left = scheduler.describe(job)["eta_s"]
+    assert 60 * 28 / 2 * 0.9 <= left <= 60 * 28 / 2 * 1.1  # the pace of this run: 2 units a minute, 28 left
+    scheduler._ended(job, 0)
+    assert job.status == "finished" and (job.outcome["done"], job.outcome["total"]) == (44, 72)

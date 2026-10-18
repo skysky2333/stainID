@@ -228,3 +228,38 @@ def test_past_names_are_reserved_and_an_admin_links_an_account_to_one(prepared):
     assert anna.get("/api/annotate").json()[0]["my_labels"] == 1  # the account sees Ann's history as its own
     other = annotator(client, "Other")
     assert client.put(f"/api/session/people/{other.account['id']}", json={"past_name": "Ann"}).status_code == 409  # one account per name
+
+
+def test_background_work_is_seen_only_by_the_account_that_asked_and_admins(client):
+    """/api/session/work/{id} is under the public /api/session: someone else's work answers 404, its result never leaks."""
+    from stainid.api import work
+
+    def asked_by(account_id, key):
+        token = store.ATTRIBUTION.set(account_id)  # as the app does for every request
+        try:
+            task = work.submit("test private", ("test private", key), lambda task: {"secret": key})
+        finally:
+            store.ATTRIBUTION.reset(token)
+        assert work.wait(task, 10)
+        return task.id
+
+    ann, ben, guest = annotator(client, "Ann"), annotator(client, "Ben"), TestClient(client.app)
+    admin_work = asked_by(client.get("/api/session").json()["account"]["id"], 1)
+    assert client.get(f"/api/session/work/{admin_work}").json()["result"] == {"secret": 1}
+    for other in (ann, guest):
+        assert other.get(f"/api/session/work/{admin_work}").status_code == 404
+    ann_work = asked_by(ann.account["id"], 2)
+    assert ann.get(f"/api/session/work/{ann_work}").json()["result"] == {"secret": 2}
+    assert ben.get(f"/api/session/work/{ann_work}").status_code == 404 and guest.get(f"/api/session/work/{ann_work}").status_code == 404
+    assert client.get(f"/api/session/work/{ann_work}").status_code == 200  # admins see all
+    guest_work = asked_by(None, 3)  # e.g. the tutorial's practice field, asked for without an account
+    assert guest.get(f"/api/session/work/{guest_work}").status_code == 200 and ann.get(f"/api/session/work/{guest_work}").status_code == 404
+
+
+def test_class_examples_only_for_people_in_a_set_of_the_study(prepared):
+    client = prepared
+    new_session(client, open=True)
+    outsider, member = annotator(client, "Olga"), annotator(client, "Ann", "plaques_together")
+    path = "/api/annotate/class-examples/6E10/none.jpg"
+    assert outsider.get(path).status_code == 403 and TestClient(client.app).get(path).status_code == 401
+    assert member.get(path).status_code == 404 and client.get(path).status_code == 404  # allowed in; there is no such picture

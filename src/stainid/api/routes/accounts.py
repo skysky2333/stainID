@@ -92,6 +92,19 @@ def may_label(request: Request, name: str) -> None:
         raise HTTPException(403, "this labelling set is not in your sets: add it with the key you were given")
 
 
+def may_see_project(request: Request) -> None:
+    """Annotators see a project's shared pictures (the class examples) only when they joined one of its sets."""
+    from stainid.api import session  # noqa: PLC0415
+
+    account = session.current_account(request)
+    if account is None:
+        raise HTTPException(401, "sign in first")
+    if account.admin and not account.must_change:
+        return
+    if not any(project == state.get_state().id for project, _, _ in accounts.sets_of(account.id)):
+        raise HTTPException(403, "none of your sets belongs to this study")
+
+
 def sets_of(account: accounts.Account, request: Request, here: str | None = None) -> list[dict]:
     """The labelling sets of the person (the ones they joined with a key, were added to, or, for an admin, opened), of
     every project, with their progress. `here`: the page's project (kept for older pages; it adds nothing)."""

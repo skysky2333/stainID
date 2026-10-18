@@ -61,6 +61,7 @@ class Task:
     status_code: int = 500
     event: threading.Event = field(default_factory=threading.Event)
     context: contextvars.Context = field(default_factory=contextvars.copy_context)  # the request's project (`state.CURRENT`)
+    viewers: set = field(default_factory=set)  # the accounts that asked for it (None: someone not signed in); see `may_see`
 
     def step(self, done: int, total: int | None = None) -> None:
         """Progress of the work: `done` of `total` steps."""
@@ -192,8 +193,10 @@ def submit(kind: str, key: Any, run: Callable[[Task], Any], priority: int = NOW,
             if task.state == "waiting" and priority < task.priority:
                 task.priority = priority
                 _COND.notify_all()
+            task.viewers.add(_asker())
             return task
         task = Task(kind, key, run, priority, label, admin)
+        task.viewers.add(_asker())
         _BY_KEY[key] = task
         _BY_ID[task.id] = task
         if alone:
@@ -204,6 +207,21 @@ def submit(kind: str, key: Any, run: Callable[[Task], Any], priority: int = NOW,
         _start_workers()
         _COND.notify_all()
         return task
+
+
+def _asker() -> str | None:
+    """The account of the request asking for work (set by the app for every request), None when nobody is signed in."""
+    from stainid.labels import store  # noqa: PLC0415
+
+    return store.ATTRIBUTION.get()
+
+
+def may_see(task: Task, account_id: str | None, admin: bool) -> bool:
+    """Whether this account may follow the task and read its result: admins every task; anyone else only work they
+    asked for themselves (someone not signed in: work asked for without an account, such as the tutorial's)."""
+    if admin:
+        return True
+    return not task.admin and account_id in task.viewers
 
 
 def within(seconds: float) -> Callable[[Task], bool]:

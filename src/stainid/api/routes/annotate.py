@@ -62,10 +62,10 @@ def busy(name: str, tile_id: str | None = None, person: str | None = None) -> di
 
 
 def viewer(request: Request) -> str | None:
-    """A signed-in person; on the tutorial's practice sessions (and the class examples it shows) anyone (`GUEST`)."""
+    """A signed-in person; on the tutorial's practice sessions anyone (`GUEST`)."""
     name = annotator_name(request)
     if name is None and not is_admin(request):
-        if practice.practising() or request.url.path.startswith("/api/annotate/class-examples/"):
+        if practice.practising():
             return GUEST
         raise HTTPException(401, "sign in first")
     return name

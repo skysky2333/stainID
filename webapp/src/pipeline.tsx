@@ -64,7 +64,7 @@ export function runningText(job: Job): string[] {
   const { done, total } = job.progress
   const since = job.elapsed_s ?? (job.started ? Date.now() / 1000 - job.started : 0)
   return [total ? `${done.toLocaleString()} of ${total.toLocaleString()} done` : 'running', `${elapsedText(since)} so far`,
-    job.overdue ? 'taking longer than expected' : job.eta_s ? `about ${duration(job.eta_s)} left` : 'no estimate']
+    job.stopping ? '' : job.overdue ? 'taking longer than expected' : job.eta_s ? `about ${duration(job.eta_s)} left` : 'no estimate']
 }
 
 /** Time a running job still needs, from its own pace so far (null before it has done anything). */
