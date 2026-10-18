@@ -1,12 +1,13 @@
-"""Who is using the app: the admin (password) and annotators (a name).
+"""Who is using the app: one sign-in for everyone, by account (`stainid.api.accounts`).
 
-The admin password guards the whole app; it is `admin` until changed and is stored hashed in ~/.stainid/admin.json.
-Annotators register with a name on the
-public /annotate pages; both identities travel in signed cookies, so the server attributes every annotation.
+Every person signs in on the same page with their name and password; their role decides what they see: an admin the
+whole control panel (and every labelling set), an annotator only the annotation pages and the sets they joined with a
+key. The tutorial needs no account. The account travels in a signed, HttpOnly cookie (`ACCOUNT_COOKIE`).
 
 A web app served from another address (see `stainid serve --allow-origin`) cannot use this server's cookies, so signing
-in also returns the same identities as a token, which it sends as `Authorization: Bearer <token>`, or as
-`?access_token=<token>` on the images and downloads a browser fetches by itself.
+in also returns the same identity as a token, which it sends as `Authorization: Bearer <token>`, or as
+`?access_token=<token>` on the images and downloads a browser fetches by itself. Scripts and agents use an account's API
+token (`Bearer sid_…`, `stainid accounts token NAME`).
 """
 from __future__ import annotations
 
@@ -15,17 +16,17 @@ import hmac
 import json
 import os
 import secrets
-from urllib.parse import quote, unquote
 
 from fastapi import HTTPException, Request
 
-from stainid.api import registry
+from stainid.api import accounts, registry
 from stainid.tables import write_text_atomic
 
-ADMIN_COOKIE = "stainid_admin"
-ANNOTATOR_COOKIE = "stainid_annotator"
-DEFAULT_PASSWORD = "admin"
+ACCOUNT_COOKIE = "stainid_account"
+DEFAULT_PASSWORD = "admin"  # the admin password until changed (earlier versions; the account `admin` keeps it)
 LOCAL_HOSTS = ("127.0.0.1", "::1", "localhost")
+GUEST = "guest"  # someone trying the tutorial without an account: only the practice sessions, where nothing is kept
+PREVIEW = GUEST  # (the name earlier code used for it)
 
 
 def allowed_origins(extra: list[str] = ()) -> list[str]:
@@ -48,6 +49,7 @@ def _signature(message: str) -> str:
 
 
 def _password_file():
+    """The admin password of earlier versions (read once, into the account `admin`)."""
     return registry.SETTINGS.parent / "admin.json"
 
 
@@ -59,79 +61,85 @@ def _hash(password: str, salt: str) -> str:
     return hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), 200_000).hex()
 
 
-def check_password(password: str) -> bool:
-    if default_password():
-        return hmac.compare_digest(password, DEFAULT_PASSWORD)
-    stored = json.loads(_password_file().read_text())
-    return hmac.compare_digest(_hash(password, stored["salt"]), stored["hash"])
-
-
-def set_password(password: str) -> None:
+def set_legacy_password(password: str) -> None:
+    """Tests of the migration: the admin password as earlier versions kept it."""
     salt = secrets.token_hex(16)
     _password_file().parent.mkdir(parents=True, exist_ok=True)
     write_text_atomic(_password_file(), json.dumps({"salt": salt, "hash": _hash(password, salt)}))
-    _password_file().chmod(0o600)
-
-
-def admin_token() -> str:
-    """Changes with the password, so changing it signs every admin out."""
-    stored = "default" if default_password() else json.loads(_password_file().read_text())["hash"]
-    return _signature(f"admin:{stored}")
 
 
 def is_local(request: Request) -> bool:
     return request.client is not None and request.client.host in LOCAL_HOSTS
 
 
-def _token_parts(request: Request) -> dict[str, str]:
-    """The identities in the request's token: {"admin": ..., "annotator": ...} (see `session_token`)."""
+def _bearer(request: Request) -> str:
     header = request.headers.get("authorization", "")
     token = header[7:].strip() if header[:7].lower() == "bearer " else ""
     if not token and request.method in ("GET", "HEAD"):
         token = request.query_params.get("access_token", "")
-    return dict(part.split(".", 1) for part in token.split(",") if "." in part)
+    return token
 
 
-def session_token(admin: bool, annotator: str | None) -> str:
-    """Who the caller is, for a web app served elsewhere: the admin and annotator credentials joined by a comma."""
-    parts = [f"admin.{admin_token()}"] if admin else []
-    return ",".join(parts + ([f"annotator.{sign_annotator(annotator)}"] if annotator else []))
+def session_token(account: accounts.Account | None) -> str:
+    """The signed-in account as a token, for a web app served elsewhere ("" when signed out)."""
+    return f"account.{accounts.session_value(account)}" if account is not None else ""
+
+
+def current_account(request: Request) -> accounts.Account | None:
+    """The account of the request: its session cookie, else its bearer token (a sign-in token or an API token)."""
+    state = request.scope.setdefault("state", {})
+    if "stainid_account" in state:
+        return state["stainid_account"]
+    found = accounts.from_session(request.cookies.get(ACCOUNT_COOKIE, ""))
+    if found is None:
+        token = _bearer(request)
+        if token.startswith(accounts.TOKEN_PREFIX):
+            found = accounts.from_token(token)
+        elif token.startswith("account."):
+            found = accounts.from_session(token[len("account."):])
+    state["stainid_account"] = found
+    return found
 
 
 def is_admin(request: Request) -> bool:
-    token = admin_token()
-    return hmac.compare_digest(request.cookies.get(ADMIN_COOKIE, ""), token) or hmac.compare_digest(_token_parts(request).get("admin", ""), token)
+    found = current_account(request)
+    return found is not None and found.admin and not found.must_change
 
 
 def require_admin(request: Request) -> None:
-    if not is_admin(request):
-        raise HTTPException(401, "admin sign-in required")
+    found = current_account(request)
+    if found is None:
+        raise HTTPException(401, "sign in first")
+    if found.must_change:
+        raise HTTPException(403, "choose a new password first")
+    if not found.admin:
+        raise HTTPException(403, "only admins can do this")
 
 
-def sign_annotator(name: str) -> str:
-    return f"{quote(name)}.{_signature(f'annotator:{name}')}"
+def require_account(request: Request) -> accounts.Account:
+    found = current_account(request)
+    if found is None:
+        raise HTTPException(401, "sign in first")
+    if found.must_change:
+        raise HTTPException(403, "choose a new password first")
+    return found
+
+
+def _practice(request: Request) -> bool:
+    return str(request.path_params.get("name", "")).startswith("practice-") or request.url.path.endswith("/session/tutorial")
 
 
 def annotator_name(request: Request) -> str | None:
-    return _annotator(request.cookies.get(ANNOTATOR_COOKIE, "")) or _annotator(_token_parts(request).get("annotator", ""))
-
-
-def _annotator(token: str) -> str | None:
-    if "." not in token:
-        return None
-    encoded, signature = token.rsplit(".", 1)
-    name = unquote(encoded)
-    return name if hmac.compare_digest(signature, _signature(f"annotator:{name}")) else None
-
-
-PREVIEW = "admin (preview)"  # the admin trying the tutorial without a name: only on the practice sessions, where nothing is kept
+    """The name the signed-in person's labels carry (`Account.handle`), None when nobody is signed in."""
+    found = current_account(request)
+    return found.handle if found is not None and not found.must_change else None
 
 
 def annotator(request: Request) -> str:
+    """The person labelling: the signed-in account's name; on the tutorial's practice sessions anyone (`GUEST`)."""
     name = annotator_name(request)
-    if name is None and is_admin(request) and (str(request.path_params.get("name", "")).startswith("practice-")
-                                               or request.url.path.endswith("/session/tutorial") and request.method == "GET"):
-        return PREVIEW
+    if name is None and _practice(request):
+        return GUEST
     if name is None:
-        raise HTTPException(401, "register with your name first")
+        raise HTTPException(401, "sign in first")
     return name

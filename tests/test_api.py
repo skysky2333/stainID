@@ -9,6 +9,7 @@ pytest.importorskip("fastapi")
 pytest.importorskip("httpx")
 
 from fastapi.testclient import TestClient  # noqa: E402
+from people import annotator, join  # noqa: E402
 
 from stainid.api import state  # noqa: E402
 from stainid.api.app import create_app  # noqa: E402
@@ -193,12 +194,13 @@ def test_admin_password_guards_the_app(client):
 def test_field_review_prefills_ai_and_confirms_on_finish(prepared):
     client = prepared
     assert new_session(client)["open"] is False
-    ann, ben = TestClient(client.app), TestClient(client.app)
-    assert ann.get("/api/annotate").status_code == 401
-    ann.post("/api/session/annotator", json={"name": "Ann"})
+    assert TestClient(client.app).get("/api/annotate").status_code == 401
+    ann = annotator(client, "Ann")
     assert ann.get("/api/annotate").json() == [] and ann.get("/api/annotate/plaques_together/next").status_code == 403
-    assert ann.post("/api/labels/sessions/plaques_together/open", json={"open": True}).status_code == 401
+    assert ann.post("/api/labels/sessions/plaques_together/open", json={"open": True}).status_code == 403  # admins only
     client.post("/api/labels/sessions/plaques_together/open", json={"open": True})
+    assert ann.get("/api/annotate/plaques_together/next").status_code == 403  # open, but not one of Ann's sets
+    join(client, ann, "plaques_together")
     assert ann.get("/api/annotate/plaques_together/next").json()["tile_id"] == TILE
 
     work = ann.get(f"/api/annotate/plaques_together/fields/{TILE}").json()
@@ -215,7 +217,7 @@ def test_field_review_prefills_ai_and_confirms_on_finish(prepared):
     assert sum(r.get("confirmed") for r in finished) == 11 and finished[-1]["task"] == "done"
     assert ann.get("/api/annotate/plaques_together/next").json()["tile_id"] is None
 
-    ben.post("/api/session/annotator", json={"name": "Ben"})
+    ben = annotator(client, "Ben", "plaques_together")
     assert ben.get(f"/api/annotate/plaques_together/fields/{TILE}").json()["mine"] == []
     ben.post(f"/api/annotate/plaques_together/fields/{TILE}/finish")
     overview = client.get("/api/labels/overview").json()
@@ -247,8 +249,7 @@ def test_session_named_from_title_opened_at_once_and_shows_who_labels(prepared):
     assert client.post("/api/labels/sessions", json={"title": "Plaques: round 1", "stain": "6E10", "tile_ids": [TILE]}).json()["name"] == "plaques_round_1_2"
 
     client.post("/api/labels/sessions/plaques_round_1_2/open", json={"open": True})
-    ann = TestClient(client.app)
-    ann.post("/api/session/annotator", json={"name": "Ann"})
+    ann = annotator(client, "Ann", "plaques_round_1_2")
     assert ann.get("/api/annotate").json()[0]["instructions"] == ""
     ann.post(f"/api/annotate/plaques_round_1_2/fields/{TILE}/finish")
     listed = {s["name"]: s for s in client.get("/api/labels/overview").json()["sessions"]}
@@ -261,8 +262,7 @@ def test_blind_queue_hides_ai_and_serves_crops(prepared):
     client = prepared
     new_session(client, name="q", kind="queue", rule="random", ai_view="positions", tools=["class"], tile_ids=None)
     client.post("/api/labels/sessions/q/open", json={"open": True})
-    ann = TestClient(client.app)
-    ann.post("/api/session/annotator", json={"name": "Ann"})
+    ann = annotator(client, "Ann", "q")
     item = ann.get("/api/annotate/q/next").json()["object"]
     assert item["tile_id"] == TILE and item["remaining"] == 12
     crop = ann.get(f"/api/annotate/q/object.jpg?tile_id={TILE}&x={item['x']}&y={item['y']}")
@@ -330,13 +330,13 @@ def test_tokens_for_a_web_app_served_elsewhere(client):
     assert remote.post("/api/project/open", params={"access_token": token}, json={"path": "."}).status_code == 401  # GET only
     assert remote.get("/api/cores", headers={"Authorization": "Bearer admin.forged"}).status_code == 401
 
-    both = remote.post("/api/session/annotator", json={"name": "Ann, Lee"}, headers=bearer).json()["token"]
-    remote.cookies.clear()
-    session = remote.get("/api/session", headers={"Authorization": f"Bearer {both}"}).json()
-    assert session["admin"] is True and session["annotator"] == "Ann, Lee"
-    signed_out = remote.delete("/api/session/admin", headers={"Authorization": f"Bearer {both}"}).json()["token"]
-    session = remote.get("/api/session", headers={"Authorization": f"Bearer {signed_out}"}).json()
+    other = TestClient(client.app)
+    ann = other.post("/api/session/register", json={"name": "Ann, Lee", "password": "correct horse"}).json()["token"]
+    other.cookies.clear()
+    session = other.get("/api/session", headers={"Authorization": f"Bearer {ann}"}).json()
     assert session["admin"] is False and session["annotator"] == "Ann, Lee"
+    assert other.get("/api/cores", headers={"Authorization": f"Bearer {ann}"}).status_code == 403
+    assert other.delete("/api/session/admin", headers=bearer).json()["token"] == ""
 
 
 def test_cross_origin_requests_only_for_allowed_origins(client, monkeypatch):

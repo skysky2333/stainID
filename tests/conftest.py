@@ -23,10 +23,14 @@ def own_app_settings(tmp_path_factory, monkeypatch):
     monkeypatch.delenv(registry.PROJECTS_DIR_ENV, raising=False)
     yield
     queue.reset()
+    from stainid.labels import sessions
+
+    sessions.ON_CREATE[:] = [hook for hook in sessions.ON_CREATE if not getattr(hook, "test_only", False)]
     try:
-        from stainid.api import state
+        from stainid.api import accounts, state
     except ImportError:  # pragma: no cover - without the app extra
         return
+    accounts.forget()
     state.reset()
 
 

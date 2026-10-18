@@ -7,7 +7,8 @@ import { ErrorNote, FilePicker, HelpBox, Loading, PageHead, PathLine, withError 
 import type { Theme } from '../hooks'
 import { useTheme } from '../hooks'
 import { useProject } from '../project'
-import { ServerChoice, useSession } from '../session'
+import { ApiTokens, PeopleSettings } from '../people'
+import { ChoosePassword, ServerChoice, useSession } from '../session'
 import { Advanced } from '../setup/parts'
 
 type PathSection = 'inputs' | 'models' | 'outputs'
@@ -40,7 +41,7 @@ export default function Settings() {
   const { info } = useProject()
   return (
     <>
-      <PageHead title="Settings" subtitle="How this study is set up, the admin password, and how the app looks.">
+      <PageHead title="Settings" subtitle="How this study is set up, who can use stainID, and how the app looks.">
         <a className="btn" href="/">Open another project…</a>
       </PageHead>
       <HelpBox id="settings">
@@ -49,10 +50,14 @@ export default function Settings() {
       </HelpBox>
       {info ? <StudySettings info={info} /> : <Loading label="Loading the settings…" />}
       <ClassSettings />
+      <PeopleSettings />
       <div className="grid grid-2 settings-more">
-        <AdminPassword />
+        <div id="password"><ChoosePassword title="Your password" current /></div>
         <Appearance />
       </div>
+      <Advanced title="API tokens for scripts" hint="let a script or agent use this server as you">
+        <ApiTokens />
+      </Advanced>
       <Advanced title="Server and other computers" hint="which stainID server this page uses">
         <ServerSettings />
       </Advanced>
@@ -213,43 +218,6 @@ function TmaSettings({ config, info, onChange }: { config: ProjectConfig; info: 
       <p className="muted small">Cores are named like <code>{config.tma.prefix}3_B-2</code>: TMA 3, column B, row 2. {info.help['tma.rows']} {info.help['tma.columns']}
         {' '}Set these before finding the cores; changing them later means finding the cores and the steps after it must run again.</p>
     </div>
-  )
-}
-
-function AdminPassword() {
-  const { session, reload } = useSession()
-  const [form, setForm] = useState({ current: '', new: '', repeat: '' })
-  const [error, setError] = useState<string | null>(null)
-  const [saved, setSaved] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const mismatch = form.repeat !== '' && form.new !== form.repeat
-  const change = async () => {
-    setSaved(false)
-    setSaving(true)
-    if (await withError(() => api.put('/api/session/admin/password', { current: form.current, new: form.new }), setError)) {
-      setSaved(true)
-      setForm({ current: '', new: '', repeat: '' })
-      reload()
-    }
-    setSaving(false)
-  }
-  return (
-    <form className="card" id="password" onSubmit={(e) => { e.preventDefault(); change() }}>
-      <h2>Admin password</h2>
-      <p className="muted small">Everything except the annotation pages needs this password, on this computer and on others.
-        {session.default_password ? ' It is still the default, admin.' : ''}</p>
-      <div className="grid" style={{ gap: 8 }}>
-        <label className="field">Current password<input type="password" autoComplete="current-password" value={form.current} onChange={(e) => setForm({ ...form, current: e.target.value })} /></label>
-        <label className="field">New password (at least 6 characters)<input type="password" autoComplete="new-password" value={form.new} onChange={(e) => setForm({ ...form, new: e.target.value })} /></label>
-        <label className="field">New password again<input type="password" autoComplete="new-password" value={form.repeat} onChange={(e) => setForm({ ...form, repeat: e.target.value })} /></label>
-      </div>
-      <div className="row" style={{ marginTop: 10 }}>
-        <button className="btn" type="submit" disabled={saving || !form.current || form.new.length < 6 || form.new !== form.repeat}>{saving ? 'Changing…' : 'Change password'}</button>
-        {mismatch && <span className="level-warning small">The two new passwords differ.</span>}
-        {saved && <span className="status-finished small">✓ Password changed.</span>}
-      </div>
-      <ErrorNote error={error} />
-    </form>
   )
 }
 

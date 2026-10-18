@@ -151,7 +151,7 @@ def client(synthetic_project, monkeypatch):
 
 
 def test_outline_session_from_set_up_to_scores(client):
-    from fastapi.testclient import TestClient
+    from people import annotator
 
     from stainid.api import state
     from stainid.segmentation import proposals, report
@@ -162,8 +162,7 @@ def test_outline_session_from_set_up_to_scores(client):
     assert created[0]["kind"] == "outline" and created[0]["ai_view"] == "full" and created[0]["benchmark"]["tmas"] == ["1"]
     assert client.jobs == [("6E10", name)]  # its candidates are found in the background
 
-    ann = TestClient(client.app)
-    ann.post("/api/session/annotator", json={"name": "Ann"})
+    ann = annotator(client, "Ann", name)
     detail = ann.get(f"/api/annotate/{name}").json()
     assert [(c["id"], c["scored"]) for c in detail["meta"]["outline_classes"]] == [("plaque", True), ("unsure", False)]
     assert detail["fields"] == [{"tile_id": TILE, "done_by_me": False, "annotators_done": 0, "open_by_others": 0, "prepared": True}]

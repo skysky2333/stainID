@@ -17,13 +17,15 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from stainid.api import state
+from stainid.api.routes import accounts as account_routes
 from stainid.api.routes import analysis, annotate, cohort, images, imageset, jobs, models, project, projects, session, setup, slides
 from stainid.api.routes import areas as area_routes
 from stainid.api.routes import cache as cache_routes
 from stainid.api.routes import classes as label_classes
 from stainid.api.routes import outline as outline_routes
 from stainid.api.routes import rounds as round_routes
-from stainid.api.session import allowed_origins, is_admin
+from stainid.api.session import allowed_origins, current_account
+from stainid.labels import store
 
 STATIC = Path(__file__).parent / "static"
 PUBLIC_API = re.compile(r"^/api/(session|annotate)(/|$)")
@@ -62,7 +64,7 @@ async def _lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     app = FastAPI(title="stainID", version="2.0", docs_url=None, redoc_url=None, openapi_url=None, lifespan=_lifespan)
-    for module in (projects, project, slides, setup, imageset, cohort, images, jobs, analysis, models, session, annotate, cache_routes, label_classes, outline_routes, round_routes, area_routes):
+    for module in (projects, project, slides, setup, imageset, cohort, images, jobs, analysis, models, session, annotate, cache_routes, label_classes, outline_routes, round_routes, area_routes, account_routes):
         app.include_router(module.router, prefix="/api")
 
     @app.exception_handler(state.UnknownProject)
@@ -72,10 +74,21 @@ def create_app() -> FastAPI:
 
     @app.middleware("http")
     async def admin_only(request: Request, call_next):
-        """Everything but sign-in and the annotation pages needs the admin password."""
-        if request.url.path.startswith("/api") and not PUBLIC_API.match(request.url.path) and not is_admin(request):
-            return JSONResponse({"detail": "admin sign-in required"}, status_code=401)
-        return await call_next(request)
+        """Everything but sign-in and the annotation pages needs an admin account (annotators: 403). Labels saved while
+        answering carry the account (`store.ATTRIBUTION`)."""
+        if not request.url.path.startswith("/api"):
+            return await call_next(request)
+        account = current_account(request)
+        if not PUBLIC_API.match(request.url.path):
+            if account is None:
+                return JSONResponse({"detail": "sign in first"}, status_code=401)
+            if not account.admin or account.must_change:
+                return JSONResponse({"detail": "choose a new password first" if account.must_change else "only admins can do this"}, status_code=403)
+        token = store.ATTRIBUTION.set(account.id if account is not None else None)
+        try:
+            return await call_next(request)
+        finally:
+            store.ATTRIBUTION.reset(token)
 
     origins = allowed_origins()
     if origins:  # a web app served from these addresses may use this server (`stainid serve --allow-origin`)

@@ -1126,7 +1126,10 @@ def _practice() -> dict | None:
 
 @router.post("/session/tutorial")
 def tutorial_done(body: Tutorial, person: str = Depends(annotator)) -> dict:
-    """Remember that this person finished (or skipped) the tutorial, or forget it (to see it again)."""
+    """Remember that this person finished (or skipped) the tutorial, or forget it (to see it again); someone trying it
+    without an account (`PREVIEW`) is not remembered."""
+    if person == PREVIEW:
+        return {"done": body.done}
     with _TUTORIALS:
         done = _tutorials()
         if body.done:

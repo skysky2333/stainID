@@ -5,6 +5,7 @@ import { api, apiUrl, appPath, enc } from '../api'
 import { Empty, ErrorNote, HelpBox, Loaded, Modal, PageHead, Progress, fmt, timeAgo, withError } from '../components'
 import { useFetch } from '../hooks'
 import { AI_VIEW_TEXT, ConfirmDialog, CopyButton, DetectionLine, KIND_TEXT, TOOL_TEXT, objectsOf, percent } from '../labelling'
+import { SessionAccessCard } from '../labels/access'
 import { SessionLabelsView } from '../labels/examine'
 import { FIELD_TEXT, FieldChoice, SessionFields } from '../labels/fields'
 import { AREAS_TITLE } from '../labels/markareas'
@@ -46,7 +47,8 @@ export default function Labels() {
             considered; people point at an object and press a key to change its call or outline, and click to add what it missed. <b>Mark bad
             areas</b>: core by core with a brush, for folds, artifacts, glass and blur (a sample of cores is enough).</li>
           <li><b>Try the tutorial</b> to see what annotators see first (nothing is saved).</li>
-          <li><b>Send the link</b>. People type their name and label in their browser — no account needed. Each person gets their own field, and their work is kept when they press Save.</li>
+          <li><b>Send the link and the set’s key</b> (a session → More → Who can label). People sign in or make an account, add the set with the key and label
+            in their browser. Each person gets their own field, and their work is kept when they press Save.</li>
           <li><b>Watch progress</b> here, field by field, then <Link to="/models">train a new model</Link> from the sessions you choose and compare it with the one in use.</li>
         </ol>
       </HelpBox>
@@ -289,6 +291,7 @@ function SessionMore({ s, onChanged, onError }: { s: SessionInfo; onChanged: () 
         <button className="btn small danger-outline" onClick={() => setConfirm('delete')}>Delete session</button>
       </div>
       {s.instructions && <p className="small secondary"><b>Note for labellers:</b> {s.instructions}</p>}
+      {!s.read_only && <SessionAccessCard name={s.name} />}
       {s.kind !== 'queue' && <SessionFields s={s} onChanged={onChanged} />}
       {examining && <SessionLabelsView name={s.name} title={s.title} onClose={() => setExamining(false)} />}
       <Advanced hint="settings and per-person counts">
@@ -333,8 +336,8 @@ function ShareCard({ share, error, link, anyOpen }: { share: Share | null; error
   return (
     <section className="card labels-section">
       <div className="row"><h2 style={{ margin: 0 }}>Link for labellers</h2><span className="spacer" />{share && <CopyButton text={link} />}</div>
-      <p className="small secondary">Anyone with this link sees the open sessions{anyOpen ? '' : ' (none is open right now)'}, types their name and starts.
-        The rest of stainID stays behind your admin password.</p>
+      <p className="small secondary">People sign in at this link (or make an account), then add a set with its key (a session → More → Who can label);
+        they see only the open sets they joined{anyOpen ? '' : ' (none is open right now)'}. The rest of stainID is for admins only.</p>
       {share ? <code className="path-box share-link">{link}</code> : !error && <p className="muted small">Finding this computer’s address…</p>}
       <ErrorNote error={error} />
       {share && !share.network && (

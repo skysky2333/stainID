@@ -15,7 +15,7 @@ import { FixField } from './fixfield'
 import type { AreaEvent } from './markareas'
 import { MarkAreas, PRACTICE_AREAS } from './markareas'
 import type { RoundEvent } from './rounds'
-import { Register, useSession } from '../session'
+import { useSession } from '../session'
 
 interface TutorialInfo { done: boolean; practice: { stain: string; tile_id: string; round2: string } | null }
 /** One step: done once the page reports one of `done` (`times` of them: "reject a few"). */
@@ -53,7 +53,7 @@ function stepsFor(typed: boolean, counted: string): Step[] {
 /** "Tutorial" in the header of the annotation pages: shows it again. */
 export function TutorialLink() {
   const { session } = useSession()
-  return session.annotator ? <Link className="small tutorial-link" to="/annotate/tutorial" title="Show the tutorial again">Tutorial</Link> : null
+  return <Link className="small tutorial-link" to="/annotate/tutorial" title={session.annotator ? 'Show the tutorial again' : 'Try it: no account needed'}>Tutorial</Link>
 }
 
 const areasDoneKey = (person: string | null | undefined) => `stainid.tutorial.areas.${person ?? ''}`
@@ -85,8 +85,7 @@ export function Tutorial() {
   const preview = params.get('preview') === '1' && session.admin
   const next = params.get('next')?.startsWith('/annotate') ? params.get('next')! : '/annotate'
   const areas = params.get('kind') === 'areas'
-  const info = useFetch<TutorialInfo>((session.annotator || preview) && !areas ? '/api/session/tutorial' : null)
-  if (!session.annotator && !preview) return <><PageHead title="Tutorial" subtitle="Type your name first." /><Register /></>
+  const info = useFetch<TutorialInfo>(!areas ? '/api/session/tutorial' : null)  // public: no account needed, nothing is kept
   if (areas) return <AreasCoached preview={preview} next={next} />
   return (
     <Loaded state={info} label="Opening the tutorial…">

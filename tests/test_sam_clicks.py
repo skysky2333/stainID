@@ -126,6 +126,7 @@ def app(synthetic_project, monkeypatch, on_cpu):
     pytest.importorskip("fastapi")
     pytest.importorskip("httpx")
     from fastapi.testclient import TestClient
+    from people import annotator
 
     from stainid.api import state
     from stainid.api.app import create_app
@@ -143,8 +144,7 @@ def app(synthetic_project, monkeypatch, on_cpu):
     made = admin.post("/api/segmentation/sessions", json={"stains": ["6E10"], "n_fields": 1})
     assert made.status_code == 200, made.text
     name = made.json()[0]["name"]
-    ann = TestClient(admin.app)
-    ann.post("/api/session/annotator", json={"name": "Ann"})
+    ann = annotator(admin, "Ann", name)
     ann.session_name = name
     yield ann
     state.reset()

@@ -75,6 +75,7 @@ pytest.importorskip("fastapi")
 pytest.importorskip("httpx")
 
 from fastapi.testclient import TestClient  # noqa: E402
+from people import annotator  # noqa: E402
 
 from stainid.api import state  # noqa: E402
 from stainid.api.app import create_app  # noqa: E402
@@ -104,9 +105,7 @@ def rounds_project(synthetic_project, monkeypatch):
     candidate_store.write_core(state.get_state().project, "6E10", "LIP-1_B-2", pd.DataFrame(rows))
     people = []
     for name in ("Ann", "Ben"):
-        person = TestClient(admin.app)
-        person.post("/api/session/annotator", json={"name": name})
-        people.append(person)
+        people.append(annotator(admin, name, every=True))
     yield admin, people, rows
     state.reset()
     decisions.forget()
@@ -117,9 +116,7 @@ def _ids(rows) -> list[str]:
 
 
 def _person(admin, name):
-    person = TestClient(admin.app)
-    person.post("/api/session/annotator", json={"name": name})
-    return person
+    return annotator(admin, name, every=True)
 
 
 def _log_lines() -> int:
@@ -419,16 +416,20 @@ def test_a_fix_the_field_session_takes_every_remaining_field_by_default(rounds_p
     assert one["fields"] == rounds.draw_fields([TILE, OTHER], 1, 3)  # the recorded seed reproduces the draw
 
 
-def test_the_admin_can_preview_the_tutorial_without_a_name(rounds_project):
+def test_the_tutorial_needs_no_account_and_admins_open_any_session(rounds_project):
     admin, (ann, _), _ = rounds_project
-    preview = admin.get("/api/session/tutorial").json()  # the admin, signed in, with no annotator name
+    guest = TestClient(admin.app)  # nobody signed in
+    preview = guest.get("/api/session/tutorial").json()
     assert preview["done"] is False and preview["practice"]["round2"] == "practice-2-6E10"
-    field = admin.get(f"/api/annotate/practice-2-6E10/fields/{TILE}")
+    field = guest.get(f"/api/annotate/practice-2-6E10/fields/{TILE}")
     assert field.status_code == 200 and field.json()["objects"]
-    assert _save(admin, "practice-2-6E10", TILE, [], submit=True).status_code == 200  # echoed back, nothing kept
-    # the preview opens only the practice: real sessions still need a name
+    assert _save(guest, "practice-2-6E10", TILE, [], submit=True).status_code == 200  # echoed back, nothing kept
+    assert guest.post("/api/session/tutorial", json={"done": True}).json() == {"done": True}  # and not remembered
+    assert guest.get("/api/session/tutorial").json()["done"] is False
+    # the practice only: real sessions need an account, and annotators must have joined them; admins open any
     made = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "open": True, "tile_ids": [TILE]}).json()
-    assert admin.get(f"/api/annotate/{made['name']}/fields/{TILE}").status_code == 401
+    assert guest.get(f"/api/annotate/{made['name']}/fields/{TILE}").status_code == 401
+    assert admin.get(f"/api/annotate/{made['name']}/fields/{TILE}").status_code == 200
     assert ann.get(f"/api/annotate/{made['name']}/fields/{TILE}").status_code == 200
 
 

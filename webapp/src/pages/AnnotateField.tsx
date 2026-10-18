@@ -48,7 +48,7 @@ export default function AnnotatePage() {
   const detail = useFetch<SessionDetail>(session.annotator ? `/api/annotate/${name}` : null)
   // someone new who followed a session's link: the tutorial first ("Mark bad areas": its own), then back here
   useFirstTutorial(!session.annotator ? 'objects' : !detail.data ? null : detail.data.meta.kind === 'areas' ? 'areas' : 'objects')
-  if (!session.annotator) return <><PageHead title="Help check tissue images" subtitle="Type your name to start." /><Register /></>
+  if (!session.annotator) return <><PageHead title="Help check tissue images" subtitle="Sign in to start, then add this set with the key you were given." /><Register /></>
   if (detail.error) return <SessionProblem error={detail.error} retry={detail.reload} />
   if (!detail.data) return <Loading label="Opening the session…" />
   const round = (detail.data.meta as Partial<RoundDetail>).round

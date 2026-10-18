@@ -77,6 +77,9 @@ def folder(root: Path, name: str) -> Path:
     return root / FOLDER / name
 
 
+ON_CREATE: list = []  # called with (root, name) when a session is made: the app gives it its join key (`api.routes.accounts`)
+
+
 def create(root: Path, name: str, **meta) -> dict:
     target = folder(root, name)
     if target.exists():
@@ -88,6 +91,11 @@ def create(root: Path, name: str, **meta) -> dict:
     target.mkdir(parents=True)
     full = {"name": name, **meta, "created": time.time(), "open": False}
     write_text_atomic(target / "meta.json", json.dumps(full, indent=1))
+    for hook in ON_CREATE:
+        try:
+            hook(root, name)
+        except Exception:  # noqa: BLE001 - a session outside the app (an import on the command line) gets its key when first shown
+            pass
     return full
 
 

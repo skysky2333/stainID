@@ -111,8 +111,8 @@ page:
      take out of the areas of folds, artifacts, empty glass and blur, or press Enter when a stain looks fine. A sample of cores is enough.
 2. **Choose where the fields come from**: every ready core, some TMAs, or squares you click on the cores. The same
    works for slides and images.
-3. **Copy the link and send it.** People open it in their browser and type their name. No account or password is
-   needed, and the rest of stainID stays behind the admin password.
+3. **Copy the link and the session's key, and send them.** People open the link, sign in or make an account, and add
+   the set with its key. Annotator accounts see only the sets they joined; the rest of stainID is for admins.
 
 What annotators see:
 
@@ -193,7 +193,7 @@ One stainID server serves a whole lab:
 - Anyone on the network opens `http://<the computer running stainID>:8765`.
 - Each study has its own address (`/p/<project>/…`), so people can work in different studies side by side.
 - Heavy steps take turns over all studies, so the computer stays usable.
-- Annotators only need the link. Everything else needs the admin password.
+- One sign-in for everyone: admins see everything, annotators only the labelling sets they joined with a key.
 
 The pictures the app makes for viewing are kept within a space limit per study (100 GB by default; Settings →
 Advanced). The least recently used pictures go first and are made again when someone needs them; study data and

@@ -40,8 +40,8 @@ const FAQ: [string, ReactNode][] = [
     until you run the step again with <b>Start over</b> (under Advanced); then make the results tables again.</>],
   ['How do other people label for me?', <>On <Link to="/labels">Labels</Link>, press <b>New labelling session</b>, pick a stain and a round
     (<b>Fix the field</b>: whole fields, correcting detection and adding what it missed; <b>Mark bad areas</b>: core by core with a brush), then send people the <b>Link for labellers</b>
-    (it ends in /annotate and names the study). They type their name and work in their own browser, with no password. Someone new first gets a short practice
-    tutorial. Each person is handed a field nobody else is on, so no one does the same work twice; you follow their progress and download the labels on the
+    (it ends in /annotate and names the study) with the session’s <b>key</b> (see “Sharing a set with a key”). They sign in, or make an account, and work in their own
+    browser. Someone new first gets a short practice tutorial. Each person is handed a field nobody else is on, so no one does the same work twice; you follow their progress and download the labels on the
     same page.</>],
   ['How does labelling work?', <>Each field starts with <b>step 1</b>: the <b>acceptance threshold</b> slider at detection’s own threshold. Moving it changes
     which objects start solid and which dotted grey; <b>Start editing</b> (or Enter, or your first edit) locks it, and only <b>Reset field</b> frees it again
@@ -84,8 +84,22 @@ const FAQ: [string, ReactNode][] = [
     <b>Detect</b> steps on the <Link to="/workflow">Run</Link> page for that stain first (at least <b>Find candidates</b> and <b>Decide</b>; <b>Run what’s left</b> runs them).</>],
   ['A Detect step says some cores are out of date.', <>Something those cores were made from changed after they ran: a setting, a model or an earlier
     step. (Areas people mark never make a step out of date: the analysis uses detection’s own.) Run the step again: it redoes only the out-of-date cores and keeps the rest.</>],
-  ['Who can sign in?', <>Everything except the annotation pages needs the admin password, from this computer or any other. It is <b>admin</b> until you
-    change it in <Link to="/settings">Settings</Link>.</>],
+  ['Who can sign in?', <>Everyone signs in on the same page with their name and password. <b>Admins</b> see all of stainID and every labelling set;
+    <b>annotators</b> only the labelling pages and the sets they added with a key. Anyone can make an annotator account; an admin promotes people,
+    resets forgotten passwords and removes accounts in <Link to="/settings">Settings → People</Link> (there is always at least one admin). The first admin is
+    <b>admin</b>, with the admin password of earlier versions (<b>admin</b> on a new server, until you change it). The tutorial needs no account.</>],
+  ['How to join a labelling set (annotators)', <>Open the link you were sent and <b>sign in</b>, or press <b>New here? Make an account</b> and choose your name
+    and a password (names are unique on the server). Then type the <b>key</b> you were given under <b>Add a set</b>: the set appears in <b>My labelling sets</b>
+    with its progress, and <b>Start</b> or <b>Continue</b> opens it. Sign in with the same name next time, on any computer, to carry on. Forgot your password?
+    Ask the person running the study: they give you a one-time password, and you choose a new one when you sign in with it.</>],
+  ['Sharing a set with a key (admins)', <>Every labelling session has its own key. On <Link to="/labels">Labels</Link>, open a session’s <b>More</b>: <b>Who can
+    label</b> shows the key (<b>Copy</b> it and send it with the link), the people who joined (<b>Remove</b> takes someone out) and <b>Joining on</b>. <b>New key</b>
+    makes the old key stop working; people who already joined keep their access. Turn joining off once everyone is in. Only people who joined a set (and
+    admins) can open it: the server checks on every request. Labels made before accounts existed keep their names; nobody can sign up under them, and in
+    Settings → People you link an account to such a name so it carries on that history.</>],
+  ['Can a script use the server?', <>Yes, with an API token of an account: Settings → API tokens for scripts, or <code>stainid accounts token NAME</code> on
+    the server. Send it as <code>Authorization: Bearer &lt;token&gt;</code>. A token can do what its account can; revoke it there, and removing the account
+    ends its tokens.</>],
   ['Is anything deleted?', <>No. <b>Start over</b> and uploads move old files aside with a date in their name; nothing is removed.
     “Remove from list” on the Projects page only takes a study off the list.</>],
   ['Can several people work at once?', <>Yes, in the same study or in different ones: each person picks a study on the <a href="/">Projects</a> page, and switching
