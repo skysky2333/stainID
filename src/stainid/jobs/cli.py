@@ -37,7 +37,7 @@ def add_parser(sub) -> None:
     s.add_argument("--grace", type=float, default=0.0, help="seconds it gets to reach a unit boundary when paused (default: its class's)")
     s.add_argument("--env", action="append", default=[], metavar="KEY=VALUE", help="extra environment for the command")
     s.add_argument("--after", action="append", default=[], metavar="ID", help="start only once this job has finished (repeat for several)")
-    s.add_argument("--time", default="", metavar="DURATION", help="how long it is expected to take (e.g. 90s, 20m, 5h): its size and backfill")
+    s.add_argument("--time", default="", metavar="DURATION", help="how long it is expected to take (e.g. 90s, 20m, 5h): shown as its size and expected run time")
     s.add_argument("--conflict", action="append", default=[], metavar="KEY",
                    help="never run at the same time as another job with this key (e.g. what both write)")
     s.add_argument("--io", choices=("light", "heavy"), default=None, help="io-heavy jobs are limited per disk (default: from the step)")

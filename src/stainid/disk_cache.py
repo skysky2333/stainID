@@ -90,6 +90,8 @@ KINDS: dict[str, str] = {
     "core_tiles": "Zoomable core pictures (older format)",
     "images": "Images at the analysis scale (image sets)",
     "sam_embeddings": "Prepared fields for click-to-outline",
+    "candidate_index": "Candidate positions and calls of every core (for matching labels)",
+    "label_overview": "The Labels page's counts per stain",
 }
 _KIND = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 _MARKER = f"{os.sep}data{os.sep}cache{os.sep}"

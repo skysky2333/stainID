@@ -94,7 +94,10 @@ def _versus_detection(project, stain: str, tiles: pd.DataFrame, core_id: str | N
         rows = rows[rows.core_id == str(core_id)]
     if rows.empty:
         return pd.DataFrame(columns=COLUMNS)
-    found = candidate_store.for_cores(project, stain, set(rows.core_id), ["candidate_id", "x_core", "y_core", "decision", "class", "subtype"])
+    if core_id is None:  # every core: the compact copies matching keeps, not each core's whole table
+        found = candidate_store.core_calls(project, stain, set(rows.core_id))
+    else:
+        found = candidate_store.for_cores(project, stain, set(rows.core_id), ["candidate_id", "x_core", "y_core", "decision", "class", "subtype"])
     found = found.drop_duplicates("candidate_id").set_index("candidate_id") if len(found) else found
     words = vocab.of(project, stain)
     out = []

@@ -36,6 +36,7 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
+import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -301,11 +302,19 @@ def _ring(polygon) -> np.ndarray | None:
     return values[: values.size // 2 * 2].reshape(-1, 2)
 
 
+_READ_BYTES = threading.local()  # the mask file read for its digest, so the layer made right after decodes it without a second read
+
+
 def _mask_digest(path: Path) -> str | None:
     """The stage-2 mask's content digest, kept until the file changes."""
-    if not path.exists():
+    def make() -> str:
+        data = path.read_bytes()
+        _READ_BYTES.last = (str(path), data)
+        return hashlib.sha1(data).hexdigest()
+
+    if cache.signature(path) is None:
         return None
-    return cache.memo(("exclusion mask digest", str(path)), [path], lambda: hashlib.sha1(path.read_bytes()).hexdigest())
+    return cache.memo(("exclusion mask digest", str(path)), [path], make)
 
 
 def digest(project, core_id: str, stain: str) -> str | None:
@@ -426,8 +435,8 @@ def agreement(auto: "Layer", people: Annotated) -> dict:
             "cells_analysed": int(analysed.sum()), "f1": round(2 * both / total, 3) if total else None}
 
 
-def _bits(path: Path) -> np.ndarray | None:
-    bits = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+def _bits(path: Path, data: bytes | None = None) -> np.ndarray | None:
+    bits = cv2.imread(str(path), cv2.IMREAD_UNCHANGED) if data is None else cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_UNCHANGED)
     if bits is None:
         return None
     return bits if bits.ndim == 2 else bits[..., 0]
@@ -436,6 +445,7 @@ def _bits(path: Path) -> np.ndarray | None:
 _LAYERS: OrderedDict[tuple, Layer] = OrderedDict()
 _LAYERS_LIMIT = 24
 _SHARES: OrderedDict[tuple, tuple[tuple, dict]] = OrderedDict()  # (project, stain, core) -> (made from, what was worked out)
+_SHARES_LIMIT = 100_000  # every core image and stain of a cohort (a pass over all of them must not push its own out)
 _LOCK = threading.Lock()
 
 
@@ -453,7 +463,9 @@ def _layer(project, core_id: str, stain: str, people: bool) -> Layer | None:
         if kept is not None and kept.digest == made_from:
             _LAYERS.move_to_end(key)
             return kept
-    bits = _bits(path)
+    last = getattr(_READ_BYTES, "last", None)
+    _READ_BYTES.last = None
+    bits = _bits(path, last[1] if last is not None and last[0] == str(path) else None)
     if bits is None:
         return None
     codes = codes_of(bits, stain)
@@ -572,35 +584,51 @@ def forget() -> None:
 
 # ---------------------------------------------------------------- objects in excluded areas
 
-def _known(project, stain: str, core_id: str) -> dict | None:
-    """What was worked out about one core's objects (candidate shares, codes at positions), kept until its layer or its
-    candidate table changes; None before stage 2."""
+def quick_stamp(project, stain: str) -> tuple:
+    """The stain's masks and candidate folders and the edit log: while none of them changed, no core's mask, candidates
+    or edits did (files are replaced whole, which changes their folder), so `_known` need not look at each core's files."""
     from stainid import candidates  # noqa: PLC0415
 
-    made_from = digest(project, core_id, stain)
+    return cache.signature(masks_folder(project, stain)), cache.signature(candidates.folder(project, stain)), cache.signature(_log(project))
+
+
+def _known(project, stain: str, core_id: str, quick: tuple | None = None) -> dict | None:
+    """What was worked out about one core's objects (candidate shares, codes at positions), kept until its layer or its
+    candidate table changes; None before stage 2. `quick` (`quick_stamp`, for passes over many cores): trusted while
+    the folders are as they were when the entry was made."""
+    from stainid import candidates  # noqa: PLC0415
+
+    key = (str(project.root), stain, str(core_id))
+    if quick is not None:
+        with _LOCK:
+            kept = _SHARES.get(key)
+        if kept is not None and len(kept) > 2 and kept[2] == quick:
+            return kept[1]
+    made_from = cache.signature(mask_path(project, core_id, stain))  # the file is replaced whole: its signature will do here
     if made_from is None:
         return None
     path = candidates.path(project, stain, core_id, "candidates")
     stamp = (made_from, edits_digest(project, core_id, stain), cache.signature(path))
-    key = (str(project.root), stain, str(core_id))
     with _LOCK:
         kept = _SHARES.get(key)
         if kept is None or kept[0] != stamp:
-            kept = (stamp, {})
-            _SHARES[key] = kept
+            kept = (stamp, {}, quick)
+        elif quick is not None:
+            kept = (stamp, kept[1], quick)
+        _SHARES[key] = kept
         _SHARES.move_to_end(key)
-        while len(_SHARES) > 4096:
+        while len(_SHARES) > _SHARES_LIMIT:
             _SHARES.popitem(last=False)
     return kept[1]
 
 
-def shares(project, stain: str, core_id: str, ids) -> dict[str, float]:
+def shares(project, stain: str, core_id: str, ids, quick: tuple | None = None) -> dict[str, float]:
     """The excluded share of these candidates of one core in people's final say (`final_say`, `Layer.fractions` of their stain
     outlines; a candidate the store no longer has by the cell at the position in its id); empty before stage 2. Only
     the candidates asked about are worked out (and kept until the layer or the store changes)."""
     from stainid import candidates  # noqa: PLC0415
 
-    known = _known(project, stain, core_id)
+    known = _known(project, stain, core_id, quick)
     if known is None:
         return {}
     ids = [str(c) for c in dict.fromkeys(ids)]
@@ -620,9 +648,9 @@ def shares(project, stain: str, core_id: str, ids) -> dict[str, float]:
     return {c: known[("share", c)] for c in ids if ("share", c) in known}
 
 
-def codes_at(project, stain: str, core_id: str, xs, ys) -> np.ndarray:
+def codes_at(project, stain: str, core_id: str, xs, ys, quick: tuple | None = None) -> np.ndarray:
     """People's final say at core-pixel positions (`final_say`; rounded to the pixel; `OUTSIDE` before stage 2)."""
-    known = _known(project, stain, core_id)
+    known = _known(project, stain, core_id, quick)
     points = [(round(float(x)), round(float(y))) for x, y in zip(xs, ys)]
     if known is None:
         return np.full(len(points), OUTSIDE, np.uint8)
@@ -646,16 +674,49 @@ def candidate_fractions(project, stain: str, core_id: str, frame: pd.DataFrame) 
     return pd.Series(layer.fractions(outline, frame.x_core, frame.y_core), index=frame.candidate_id.to_numpy(object))
 
 
+_DROPPED: OrderedDict[tuple, tuple[float, list]] = OrderedDict()  # (project, labels, tasks, inputs) -> (when, the rows dropped)
+DROPPED_FOR = 60.0  # seconds a result is used on the folders' signatures alone; then every core is looked at again
+
+
+def _drop_inputs(project, labels: pd.DataFrame) -> tuple:
+    """What `drop_excluded` depends on besides the labels: the masks and candidate folders of the stains, the edits and
+    the tile tables (files are replaced atomically, so their folders' signatures change with them)."""
+    from stainid import candidates  # noqa: PLC0415
+
+    stains = sorted(set(labels.stain.astype(str))) if "stain" in labels else []
+    return (tuple(cache.signature(masks_folder(project, s)) for s in stains),
+            tuple(cache.signature(candidates.folder(project, s)) for s in stains),
+            cache.signature(_log(project)), tuple(cache.signature(p) for p in _tile_paths(project)))
+
+
 def drop_excluded(project, labels: pd.DataFrame, tasks=("class", "outline")) -> pd.DataFrame:
     """The labels (as the log stores them) without those about objects in excluded areas by people's final say
     (`final_say`: their areas over detection's), what training, scoring and the model comparison read: a label naming a
     candidate goes when its excluded share is at least `EXCLUDED_AT`; one without (an object a person added, an older
-    label) when the cell at its position is excluded."""
+    label) when the cell at its position is excluded. The rows dropped are kept for the same labels and inputs (the
+    Labels page and the comparison ask several times, and a cohort has thousands of core images)."""
     if labels.empty or "task" not in labels:
         return labels
     about = labels.task.isin(list(tasks)).to_numpy()
     if not about.any():
         return labels
+    columns = [c for c in ("id", "task", "stain", "tile_id", "x", "y", "candidate", "time") if c in labels]
+    fingerprint = (len(labels), int(pd.util.hash_pandas_object(labels[columns].astype(str), index=True).sum()))
+    key = (str(project.root), fingerprint, tuple(tasks), _drop_inputs(project, labels))
+    with _LOCK:
+        kept = _DROPPED.get(key)
+    if kept is not None and time.monotonic() - kept[0] < DROPPED_FOR:
+        return labels.drop(index=kept[1]) if kept[1] else labels
+    drop = _to_drop(project, labels, about)
+    with _LOCK:
+        _DROPPED[key] = (time.monotonic(), drop)
+        _DROPPED.move_to_end(key)
+        while len(_DROPPED) > 16:
+            _DROPPED.popitem(last=False)
+    return labels.drop(index=drop) if drop else labels
+
+
+def _to_drop(project, labels: pd.DataFrame, about) -> list:
     from stainid import candidates  # noqa: PLC0415
     from stainid.labels import frames  # noqa: PLC0415
 
@@ -669,9 +730,19 @@ def drop_excluded(project, labels: pd.DataFrame, tasks=("class", "outline")) -> 
         except ValueError:
             continue
         by_core.setdefault((stain, core_id), []).append((index, cid))
-    for (stain, core_id), items in by_core.items():
-        found = shares(project, stain, core_id, [c for _, c in items])
-        drop += [i for i, c in items if found.get(c, 0.0) >= EXCLUDED_AT]
+    quick: dict[str, tuple] = {}
+
+    def stamp_of(stain: str) -> tuple:
+        if stain not in quick:
+            quick[stain] = quick_stamp(project, stain)
+        return quick[stain]
+
+    def named_drops(part):
+        (stain, core_id), items = part
+        found = shares(project, stain, core_id, [c for _, c in items], stamp_of(stain))
+        return [i for i, c in items if found.get(c, 0.0) >= EXCLUDED_AT]
+
+    jobs = []
     rest = rows[(named.str.len() == 0).to_numpy() & rows.x.notna().to_numpy()]
     if len(rest):
         tiles = _tiles(project)
@@ -681,9 +752,18 @@ def drop_excluded(project, labels: pd.DataFrame, tasks=("class", "outline")) -> 
         for tile_id, group in known.groupby("tile_id", sort=False):
             tile = boxes.loc[tile_id]
             x0, y0 = max(0, int(tile["x_px"]) - project.context_px), max(0, int(tile["y_px"]) - project.context_px)
-            codes = codes_at(project, str(tile["stain"]), str(tile["core_id"]), group.x.astype(float) + x0, group.y.astype(float) + y0)
-            drop += list(group.index[(codes != COUNTED) & (codes != OUTSIDE)])
-    return labels.drop(index=drop) if drop else labels
+            jobs.append((str(tile["stain"]), str(tile["core_id"]), group.index, group.x.astype(float).to_numpy() + x0, group.y.astype(float).to_numpy() + y0))
+
+    def position_drops(part):
+        stain, core_id, index, xs, ys = part
+        codes = codes_at(project, stain, core_id, xs, ys, stamp_of(stain))
+        return list(index[(codes != COUNTED) & (codes != OUTSIDE)])
+
+    for part in by_core.items():
+        drop += named_drops(part)
+    for part in jobs:
+        drop += position_drops(part)
+    return drop
 
 
 # ---------------------------------------------------------------- the AI reviewer's areas
