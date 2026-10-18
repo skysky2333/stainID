@@ -108,8 +108,8 @@ def point_at(page: Page, selector: str, near: tuple[float, float] | None = None)
         time.sleep(0.6)
 
 
-def objects_near_centre(page: Page, n: int) -> list[tuple[float, float]]:
-    """The middles of the `n` drawn objects closest to the picture's centre (screen px)."""
+def objects_near_centre(page: Page, n: int) -> list[tuple[float, float, float]]:
+    """The middles and sizes of the `n` drawn objects closest to the picture's centre (screen px)."""
     view = page.locator(".viewer").first.bounding_box()
     cx, cy = view["x"] + view["width"] * 0.5, view["y"] + view["height"] * 0.5
     found = []
@@ -118,7 +118,7 @@ def objects_near_centre(page: Page, n: int) -> list[tuple[float, float]]:
         if box and box["width"] >= 8:
             x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
             if view["x"] < x < view["x"] + view["width"] and view["y"] < y < view["y"] + view["height"]:
-                found.append((x, y))
+                found.append((x, y, box["width"] * box["height"]))
     return sorted(found, key=lambda q: (q[0] - cx) ** 2 + (q[1] - cy) ** 2)[:n]
 
 
@@ -132,6 +132,20 @@ def stroke(page: Page, selector: str, fx: float = 0.3, fy: float = 0.3, length: 
         page.mouse.move(x + view["width"] * length * k / 29, y + 18 * ((k % 10) / 9))
     page.mouse.up()
     time.sleep(0.5)
+
+
+def zoom_in_at(page: Page, x: float, y: float, steps: int) -> None:
+    """Zoom in with the wheel at this screen point, then pan it to the picture's middle (middle-button drag)."""
+    page.mouse.move(x, y)
+    for _ in range(steps):
+        page.mouse.wheel(0, -120)
+        time.sleep(0.15)
+    time.sleep(0.5)
+    view = page.locator(".viewer").first.bounding_box()
+    page.mouse.down(button="middle")
+    page.mouse.move(view["x"] + view["width"] * 0.5, view["y"] + view["height"] * 0.5, steps=8)
+    page.mouse.up(button="middle")
+    time.sleep(0.6)
 
 
 def zoom_in(page: Page, steps: int = 3) -> None:
@@ -165,6 +179,7 @@ def main() -> None:
         browser = playwright.chromium.launch()
         context = browser.new_context(viewport={"width": 1500, "height": 911}, color_scheme="light", device_scale_factor=1)
         context.add_init_script("localStorage.setItem('stainid.theme', JSON.stringify('light'))")
+        context.add_init_script(f"localStorage.setItem('stainid.tutorial.areas.{args.annotator}', '1')")  # Ann knows "Mark bad areas"
         request = context.request
         signed = request.post(f"{base}/api/session/admin", data={"password": args.password})
         if not signed.ok:
@@ -213,19 +228,37 @@ def main() -> None:
                 stroke(page, ".annotate-image .viewer", 0.25, 0.3, 0.3)
             if name == "annotate-split.jpg":
                 zoom_in(page, 3)
-                page.keyboard.press("s")
-                near = objects_near_centre(page, 1)
+                near = objects_near_centre(page, 8)
                 if near:
-                    page.mouse.click(*near[0])
+                    x, y, _ = max(near, key=lambda q: q[2])  # the largest object near the middle
+                    page.mouse.move(x, y)
+                    zoom_in_at(page, x, y, 3)
+                    near = objects_near_centre(page, 1)
+                    page.keyboard.press("s")
+                    page.mouse.click(*near[0][:2])
                     time.sleep(2.5)  # the preview of the two pieces
             if name == "annotate-merge.jpg":
                 zoom_in(page, 2)
-                page.keyboard.press("m")
-                for xy in objects_near_centre(page, 2):
-                    page.mouse.click(*xy)
-                    time.sleep(0.4)
+                near = objects_near_centre(page, 12)
+                pairs = [(a, b) for i, a in enumerate(near) for b in near[i + 1:]]
+                if pairs:
+                    a, b = min(pairs, key=lambda ab: (ab[0][0] - ab[1][0]) ** 2 + (ab[0][1] - ab[1][1]) ** 2)  # the closest two
+                    zoom_in_at(page, (a[0] + b[0]) / 2, (a[1] + b[1]) / 2, 3)
+                    page.keyboard.press("m")
+                    for x, y, _ in sorted(objects_near_centre(page, 2)):
+                        page.mouse.click(x, y)
+                        time.sleep(0.4)
             if name == "viewer-annotations.jpg":
-                page.locator("label.layer-toggle", has_text="Annotations").first.click()
+                page.locator("label.layer-toggle", has_text="Annotations").first.locator("input").check()
+                settle(page, 2.0)
+                mini = page.locator("svg.minimap").first.bounding_box()  # to the tiles in progress (Ann's field)
+                page.mouse.click(mini["x"] + mini["width"] * 0.62, mini["y"] + mini["height"] * 0.3)
+                settle(page, 1.0)
+                view = page.locator(".dz").first.bounding_box()
+                page.mouse.move(view["x"] + view["width"] * 0.5, view["y"] + view["height"] * 0.5)
+                for _ in range(3):
+                    page.mouse.wheel(0, -120)
+                    time.sleep(0.2)
                 settle(page, 2.0)
             if name == "areas.jpg":
                 page.wait_for_selector(".area-pending", timeout=120000)

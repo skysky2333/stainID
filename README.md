@@ -14,7 +14,7 @@ keeps; it finds every core or tissue region, looks at every tile of tissue, and 
 
 Other antibodies of the same kind work too (4G8 or NAB228 for amyloid, PHF-1 for tau), as do other chromogens.
 
-![The Run page: the flow chart of every step, with its state, counts, what it makes and how long it took](docs/images/workflow.png)
+![The Run page: the flow chart of every step, with its state, counts, what it makes and how long it took, and the one job queue](docs/images/workflow.png)
 
 *The Run page: every step as a flow chart, the data each hands on along the arrows. Screenshots show a synthetic demo
 project, not study data (see [The app](#the-app)).*
