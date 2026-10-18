@@ -389,22 +389,117 @@ def match_px(stain: str, pixel_size_um: float) -> float:
     return MATCH_UM.get(stain, DEFAULT_MATCH_UM) / max(1e-6, pixel_size_um)
 
 
-_LIGHT: OrderedDict[str, tuple[tuple, dict]] = OrderedDict()
-_LIGHT_LIMIT = 1200  # every core image of a cohort: a core's ids, positions and calls are a few MB
+_LIGHT: OrderedDict[str, tuple[tuple, dict | None]] = OrderedDict()
+_LIGHT_BYTES = 768 * 2**20  # every core image of a cohort fits: a core's ids, positions and calls are kB to a few MB
+_LIGHT_SIZE = [0]
+_INDEXED: set[tuple[str, str]] = set()  # (project, stain) whose index on disk was read into `_LIGHT` by this process
+_READ_THREADS = 8  # cores read at once when many are not known yet (the parquet reader lets go of the GIL)
+
+
+def _bytes(found: dict | None) -> int:  # (its KD-tree, made when first matched, is about as big again)
+    return 64 if found is None else found["ids"].nbytes + found["xy"].nbytes + found["codes"].nbytes + 64 * (1 + len(found["combos"]))
+
+
+def _keep_light(key: str, stamp, found: dict | None) -> None:
+    with _WHOLE_LOCK:
+        old = _LIGHT.pop(key, None)
+        if old is not None:
+            _LIGHT_SIZE[0] -= _bytes(old[1])
+        _LIGHT[key] = (stamp, found)
+        _LIGHT_SIZE[0] += _bytes(found)
+        while _LIGHT_SIZE[0] > _LIGHT_BYTES and len(_LIGHT) > 1:
+            _, (_, gone) = _LIGHT.popitem(last=False)
+            _LIGHT_SIZE[0] -= _bytes(gone)
+
+
+def _index_file(project: Project, stain: str) -> Path:
+    from stainid import disk_cache  # noqa: PLC0415
+
+    return disk_cache.path(project.root, "candidate_index", f"{stain}.npz")
+
+
+def _load_index(project: Project, stain: str) -> None:
+    """Read this stain's index of every core's compact candidates (written by `save_index`) into memory once, so a
+    cold server matches labels without opening every core's store file. Entries still carry their file's stamp:
+    `_light` uses one only while the file is unchanged."""
+    key = (str(project.root), stain)
+    if key in _INDEXED:
+        return
+    _INDEXED.add(key)
+    try:
+        file = _index_file(project, stain)
+        if not file.exists():
+            return
+        with np.load(file, allow_pickle=False) as data:
+            paths, stamps, offsets = data["paths"], data["stamps"], data["offsets"]
+            ids, xy, codes, combos = data["ids"], data["xy"], data["codes"], json.loads(str(data["combos"]))
+        from stainid import disk_cache  # noqa: PLC0415
+
+        disk_cache.used(file)
+    except (OSError, ValueError, KeyError):
+        return
+    for n, target in enumerate(paths):
+        start, end = int(offsets[n]), int(offsets[n + 1])
+        found = None if combos[n] is None else {"ids": ids[start:end], "xy": xy[start:end], "codes": codes[start:end],
+                                                "combos": [tuple(c) for c in combos[n]]}
+        with _WHOLE_LOCK:
+            known = str(target) in _LIGHT
+        if not known:
+            _keep_light(str(target), (int(stamps[n][0]), int(stamps[n][1])), found)
+
+
+def save_index(project: Project, stain: str) -> None:
+    """Write what `_light` knows of this stain's cores to the project's cache (`candidate_index`), atomically."""
+    from stainid import disk_cache  # noqa: PLC0415
+
+    prefix = str(folder(project, stain))
+    with _WHOLE_LOCK:
+        entries = [(k, v) for k, v in _LIGHT.items() if k.startswith(prefix) and v[0] is not None]
+    if not entries:
+        return
+    paths, stamps, offsets, combos = [], [], [0], []
+    ids, xy, codes = [], [], []
+    for key, (stamp, found) in entries:
+        paths.append(key)
+        stamps.append(stamp)
+        if found is None:
+            combos.append(None)
+            offsets.append(offsets[-1])
+            continue
+        ids.append(found["ids"])
+        xy.append(found["xy"])
+        codes.append(found["codes"])
+        combos.append([list(c) for c in found["combos"]])
+        offsets.append(offsets[-1] + len(found["ids"]))
+    import io  # noqa: PLC0415
+
+    buffer = io.BytesIO()
+    width = max([a.dtype.itemsize for a in ids] or [1])
+    np.savez(buffer, paths=np.array(paths), stamps=np.array(stamps, dtype=np.int64).reshape(-1, 2), offsets=np.array(offsets, dtype=np.int64),
+             ids=np.concatenate(ids).astype(f"S{width}") if ids else np.zeros(0, "S1"),
+             xy=np.concatenate(xy) if xy else np.zeros((0, 2), np.float32), codes=np.concatenate(codes) if codes else np.zeros(0, np.int32),
+             combos=np.array(json.dumps(combos)))
+    try:
+        disk_cache.write(_index_file(project, stain), buffer.getvalue())
+    except OSError:
+        pass
 
 
 def _light(project: Project, stain: str, core_id: str) -> dict | None:
     """One core's candidates as matching needs them, compactly: ids (bytes), positions (float32) and the call of each
-    as a code into the core's few (decision, class, subtype) combinations. Kept until the store file changes."""
+    as a code into the core's few (decision, class, subtype) combinations. Kept until the store file changes (also on
+    disk between restarts: `save_index`)."""
     target = path(project, stain, core_id)
     if target is None:
         return None
+    _load_index(project, stain)
     stamp = cache.signature(target)
     with _WHOLE_LOCK:
         kept = _LIGHT.get(str(target))
         if kept is not None and kept[0] == stamp:
             _LIGHT.move_to_end(str(target))
             return kept[1]
+    _READ[0] += 1
     frame = v2.read_core(project, stain, core_id, CALLS)  # the raw columns only: nothing parsed
     if not frame.empty and "candidate_id" not in frame:
         frame = frame.assign(candidate_id=[candidate_id(stain, core_id, a, b) for a, b in zip(frame.x_core, frame.y_core)])
@@ -418,12 +513,43 @@ def _light(project: Project, stain: str, core_id: str) -> dict | None:
         codes, uniques = pd.factorize(combos)
         found = {"ids": frame.candidate_id.to_numpy().astype("S"), "xy": np.c_[frame.x_core.to_numpy(), frame.y_core.to_numpy()].astype(np.float32),
                  "codes": codes.astype(np.int32), "combos": list(uniques)}
-    with _WHOLE_LOCK:
-        _LIGHT[str(target)] = (stamp, found)
-        _LIGHT.move_to_end(str(target))
-        while len(_LIGHT) > _LIGHT_LIMIT:
-            _LIGHT.popitem(last=False)
+    _keep_light(str(target), stamp, found)
     return found
+
+
+_READ = [0]  # core store files read by `_light` (to tell when the index on disk is worth writing again)
+SAVE_AFTER = 20  # a pass that read this many store files writes the index again
+
+
+def _lights(project: Project, stain: str, core_ids) -> dict[str, dict | None]:
+    """`_light` of many cores: the ones known and unchanged looked up (one listing of the folder, one stat per file),
+    the others read side by side; the index on disk written again when many were read."""
+    _load_index(project, stain)
+    base = folder(project, stain)
+    names = cache.names(base)
+    out: dict[str, dict | None] = {}
+    missing = []
+    for core_id in core_ids:
+        target = next((base / f"{core_id}{s}" for s in (".parquet", ".csv.gz") if f"{core_id}{s}" in names), None)
+        if target is None:
+            out[core_id] = None
+            continue
+        kept = _LIGHT.get(str(target))
+        if kept is not None and kept[0] == cache.signature(target):
+            out[core_id] = kept[1]
+        else:
+            missing.append(core_id)
+    before = _READ[0]
+    if len(missing) > 4:
+        from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
+
+        with ThreadPoolExecutor(_READ_THREADS) as pool:
+            out.update(zip(missing, pool.map(lambda c: _light(project, stain, c), missing)))
+    else:
+        out.update({c: _light(project, stain, c) for c in missing})
+    if _READ[0] - before >= SAVE_AFTER:
+        save_index(project, stain)
+    return out
 
 
 def _nearest(project: Project, stain: str, labels: pd.DataFrame, tiles: pd.DataFrame):
@@ -440,16 +566,37 @@ def _nearest(project: Project, stain: str, labels: pd.DataFrame, tiles: pd.DataF
         return
     radius = match_px(stain, project.pixel_size_um)
     core_of = boxes.core_id.astype(str).to_dict()
-    for core_id, group in placed.groupby(placed.tile_id.map(lambda t: core_of.get(t, t))):
-        if core_id not in have:
-            continue
-        found = _light(project, stain, core_id)
+    groups = [(c, g) for c, g in placed.groupby(placed.tile_id.map(lambda t: core_of.get(t, t))) if c in have]
+    light = _lights(project, stain, [c for c, _ in groups])
+    origins: dict[str, tuple] = {}
+    for core_id, group in groups:
+        found = light[core_id]
         if found is None:
             continue
-        origin = np.array([frames.field_origin(boxes.loc[t], project.context_px) if t in core_of else (0, 0) for t in group.tile_id], float)
+        origin = np.array([origins[t] if t in origins else origins.setdefault(t, frames.field_origin(boxes.loc[t], project.context_px) if t in core_of else (0, 0))
+                           for t in group.tile_id], float)  # one look-up per field, not per label
         points = np.c_[group.x.astype(float).to_numpy(), group.y.astype(float).to_numpy()] + origin
-        distance, index = cKDTree(found["xy"]).query(points, distance_upper_bound=radius)
+        tree = found.get("tree")
+        if tree is None:
+            tree = found["tree"] = cKDTree(found["xy"])  # made once per core (until its file changes)
+        distance, index = tree.query(points, distance_upper_bound=radius)
         yield found, group.index, np.where(np.isfinite(distance), index, -1)
+
+
+def core_calls(project: Project, stain: str, core_ids) -> pd.DataFrame:
+    """candidate_id, x_core, y_core, decision, class, subtype of every candidate of these cores, from the compact
+    copies matching keeps (`_light`, also on disk): a pass over a whole cohort without parsing its store tables."""
+    core_ids = sorted(set(core_ids) & cores(project, stain))
+    parts = []
+    for light in _lights(project, stain, core_ids).values():
+        if light is None or not len(light["ids"]):
+            continue
+        combos = np.array(light["combos"], dtype=object).reshape(-1, 3)
+        picked = combos[light["codes"]]
+        parts.append(pd.DataFrame({"candidate_id": light["ids"].astype(str), "x_core": light["xy"][:, 0].astype(float),
+                                   "y_core": light["xy"][:, 1].astype(float), "decision": picked[:, 0], "class": picked[:, 1], "subtype": picked[:, 2]}))
+    columns = ["candidate_id", "x_core", "y_core", "decision", "class", "subtype"]
+    return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=columns)
 
 
 def match(project: Project, stain: str, labels: pd.DataFrame, tiles: pd.DataFrame) -> pd.Series:

@@ -76,10 +76,57 @@ _DURATIONS: dict[str, deque] = {}
 _THREADS: list[threading.Thread] = []
 
 
+_SAVED: tuple[str, dict[str, list[float]]] | None = None  # durations of earlier servers (`durations_file`), read once
+_SAVED_AT = [0.0]
+
+
+def durations_file():
+    from stainid.api import registry  # noqa: PLC0415
+
+    return registry.SETTINGS.parent / "work_durations.json"
+
+
+def _saved() -> dict[str, list[float]]:
+    global _SAVED
+    path = str(durations_file())
+    if _SAVED is None or _SAVED[0] != path:
+        import json  # noqa: PLC0415
+
+        try:
+            found = json.loads(durations_file().read_text())
+            _SAVED = (path, {str(k): [float(x) for x in v][-20:] for k, v in found.items() if isinstance(v, list)})
+        except (OSError, ValueError, TypeError):
+            _SAVED = (path, {})
+    return _SAVED[1]
+
+
+def _save_durations() -> None:
+    """Keep the recent durations for the next server (a cold start would otherwise guess `GUESS_SECONDS` for work that
+    takes minutes), at most every 30 s."""
+    import json  # noqa: PLC0415
+
+    if time.monotonic() - _SAVED_AT[0] < 30:
+        return
+    _SAVED_AT[0] = time.monotonic()
+    merged = {**_saved(), **{k: list(v) for k, v in _DURATIONS.items()}}
+    try:
+        from stainid.tables import write_text_atomic  # noqa: PLC0415
+
+        write_text_atomic(durations_file(), json.dumps(merged))
+    except OSError:
+        pass
+
+
 def typical(kind: str) -> float:
-    """How long this kind of work took lately (median of the last 20), a guess before it ever ran."""
-    seen = _DURATIONS.get(kind)
+    """How long this kind of work took lately (median of the last 20; also from earlier servers), a guess before it
+    ever ran."""
+    seen = _DURATIONS.get(kind) or _saved().get(kind)
     return statistics.median(seen) if seen else GUESS_SECONDS
+
+
+def overdue(task: Task, now: float) -> bool:
+    """Running longer than this kind of work usually takes (and saying nothing about how far it is)."""
+    return task.state == "running" and task.started is not None and not (task.total and task.done) and now - task.started > typical(task.kind)
 
 
 def _left(task: Task, now: float) -> float:
@@ -89,6 +136,8 @@ def _left(task: Task, now: float) -> float:
     spent = now - task.started
     if task.total and task.done:
         return max(0.0, spent / task.done * (task.total - task.done))
+    if spent > expected:  # longer than usual: no promise of "half a second" for minutes on end; at least as long again as half of it
+        return max(1.0, spent * 0.5)
     return max(0.5, expected - spent)
 
 
@@ -109,7 +158,7 @@ def status(task: Task) -> dict:
         else:
             eta = _left(task, now) if task.state == "running" else 0.0
         out = {"id": task.id, "kind": task.kind, "label": task.label, "state": task.state, "ahead": len(ahead) if task.state == "waiting" else 0,
-               "running": len(_RUNNING), "done": task.done, "total": task.total, "eta_s": round(eta, 1)}
+               "running": len(_RUNNING), "done": task.done, "total": task.total, "eta_s": round(eta, 1), "overdue": overdue(task, now)}
     if task.state == "failed":
         out |= {"error": task.error, "status_code": task.status_code}
     return out
@@ -233,7 +282,8 @@ def _run_one(task: Task) -> None:
     with _COND:
         task.finished = time.monotonic()
         if task.state == "done":
-            _DURATIONS.setdefault(task.kind, deque(maxlen=20)).append(task.finished - (task.started or task.finished))
+            _DURATIONS.setdefault(task.kind, deque(_saved().get(task.kind, []), maxlen=20)).append(task.finished - (task.started or task.finished))
+            _save_durations()
         if task in _RUNNING:
             _RUNNING.remove(task)
         _COND.notify_all()

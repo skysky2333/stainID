@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -175,9 +176,20 @@ def open_project(path: Path | str) -> ProjectState:
         return state
 
 
+_WARMING = threading.Lock()  # one project's warm-up at a time: several at once take the GIL from the pages people wait for
+WARM_UP_AFTER = 2.0  # seconds the first page of a project opened has to itself before the warm-up starts
+
+
 def _warm_up(state: ProjectState) -> None:
     """Read what the step overview and the labels page need once, in the background, so the first page to ask for them
-    does not wait for the big tables to be read (see `stainid.cache`)."""
+    does not wait for the big tables to be read (see `stainid.cache`). One project at a time, after the requests that
+    opened it have had a head start."""
+    time.sleep(WARM_UP_AFTER)
+    with _WARMING:
+        _warm_up_now(state)
+
+
+def _warm_up_now(state: ProjectState) -> None:
     from stainid.labels import overview
     from stainid.workflows.steps import describe
 

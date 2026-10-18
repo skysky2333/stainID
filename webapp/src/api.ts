@@ -322,10 +322,13 @@ function setInFlight(change: number) {
 export interface Pending {
   id: string; kind: string; label: string; state: 'waiting' | 'running' | 'done' | 'failed'; ahead: number; running: number
   done: number; total: number; eta_s: number; error?: string
+  /** running longer than this kind of work usually takes: the page says so instead of a time */
+  overdue?: boolean
 }
 /** "Waiting: 2 ahead of you · about 20 s", "Preparing 3/10 · about 15 s": a pending request as people read it. */
 export function pendingText(p: Pending): string {
-  const eta = p.eta_s >= 1 ? `about ${p.eta_s < 90 ? `${Math.round(p.eta_s)} s` : `${Math.round(p.eta_s / 60)} min`}` : ''
+  const eta = p.overdue ? 'taking longer than usual'
+    : p.eta_s >= 1 ? `about ${p.eta_s < 90 ? `${Math.round(p.eta_s)} s` : `${Math.round(p.eta_s / 60)} min`}` : ''
   const what = p.state === 'waiting'
     ? (p.ahead > 0 ? `Waiting: ${p.ahead} ahead of you` : 'Waiting for a free worker')
     : `${p.label || 'Preparing'}${p.total > 0 ? ` ${Math.min(p.done + 1, p.total)}/${p.total}` : '…'}`

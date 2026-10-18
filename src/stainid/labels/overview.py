@@ -7,6 +7,9 @@ objects only (`ai`), is kept for comparison.
 """
 from __future__ import annotations
 
+import hashlib
+import json
+import threading
 from pathlib import Path
 
 import pandas as pd
@@ -19,6 +22,8 @@ from stainid.labels.tasks import positive
 from stainid.project import Project
 
 _CACHE: dict[tuple, tuple[tuple, dict]] = {}
+_MAKING: dict[tuple, threading.Lock] = {}  # one count at a time per project and stain (the warm-up and a page share it)
+_MAKING_LOCK = threading.Lock()
 SPLIT = "people disagree"  # an object people labelled differently, as many for one class as for another
 
 
@@ -132,11 +137,57 @@ def stain_overview(project: Project, stain: str, labels: pd.DataFrame, tiles: pd
     }
 
 
+def _saved_path(project: Project, stain: str) -> Path:
+    from stainid import disk_cache  # noqa: PLC0415
+
+    return disk_cache.path(project.root, "label_overview", f"{stain}.json")
+
+
+def _saved(project: Project, stain: str, digest: str) -> dict | None:
+    """The overview a server worked out before from the same inputs (it outlives restarts: a cold server answers at
+    once when nothing changed since)."""
+    from stainid import disk_cache  # noqa: PLC0415
+
+    path = _saved_path(project, stain)
+    try:
+        found = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    if found.get("digest") != digest:
+        return None
+    disk_cache.used(path)
+    return found.get("overview")
+
+
+def _save(project: Project, stain: str, digest: str, value: dict) -> None:
+    from stainid import disk_cache  # noqa: PLC0415
+
+    try:
+        disk_cache.write(_saved_path(project, stain), json.dumps({"digest": digest, "overview": value}).encode())
+    except (OSError, TypeError, ValueError):
+        pass
+
+
 def cached_stain_overview(project: Project, stain: str, root: Path, tiles: pd.DataFrame) -> dict:
-    """`stain_overview`, worked out again only when a label is saved or a pool field is (re)built."""
+    """`stain_overview`, worked out again only when a label is saved, a pool field is (re)built, detection writes this
+    stain's candidates or masks, or an area is edited; kept in memory and in the project's cache (`label_overview`)."""
     key = (str(project.root), stain)
     stamp = (store.signature(root), pool.signature(project, stain), added.signature(project, stain), len(tiles), vocab.of(project, stain),
              cache.signature(candidate_store.folder(project, stain)), excluded_areas.signature(project, stain))
-    if key not in _CACHE or _CACHE[key][0] != stamp:
-        _CACHE[key] = (stamp, stain_overview(project, stain, frames.in_field_frame(excluded_areas.drop_excluded(project, store.current(root)), tiles, project.context_px), tiles))
-    return _CACHE[key][1]
+    kept = _CACHE.get(key)
+    if kept is not None and kept[0] == stamp:
+        return kept[1]
+    with _MAKING_LOCK:
+        lock = _MAKING.setdefault(key, threading.Lock())
+    with lock:
+        kept = _CACHE.get(key)
+        if kept is not None and kept[0] == stamp:
+            return kept[1]
+        digest = hashlib.sha1(json.dumps([key, stamp], default=repr).encode()).hexdigest()
+        value = _saved(project, stain, digest)
+        if value is None:
+            labels = frames.in_field_frame(excluded_areas.drop_excluded(project, store.current(root)), tiles, project.context_px)
+            value = stain_overview(project, stain, labels, tiles)
+            _save(project, stain, digest, value)
+        _CACHE[key] = (stamp, value)
+        return value
