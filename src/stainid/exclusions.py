@@ -736,7 +736,7 @@ def _saved_drops(project, key: tuple) -> list | None:
         found = json.loads(path.read_text())
     except (OSError, ValueError):
         return None
-    if found.get("key") != repr(key):
+    if found.get("key") != repr(key) or found.get("code") != cache.code_stamp():
         return None
     disk_cache.used(path)
     return found["drop"]
@@ -748,7 +748,7 @@ def _save_drops(project, key: tuple, drop: list) -> None:
         path = _drops_file(project, key)
         from stainid import disk_cache  # noqa: PLC0415
 
-        write_text_atomic(path, json.dumps({"key": repr(key), "drop": [d.item() if hasattr(d, "item") else d for d in drop]}))
+        write_text_atomic(path, json.dumps({"key": repr(key), "code": cache.code_stamp(), "drop": [d.item() if hasattr(d, "item") else d for d in drop]}))
         disk_cache.wrote(path)
         old = sorted(path.parent.glob("excluded-labels-*.json"), key=lambda p: p.stat().st_mtime)[:-8]
         for stale in old:
