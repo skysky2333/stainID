@@ -317,16 +317,12 @@ function StainView({ base, image, masks, kind, brushRadius, hidden, objectsOn, t
     if (!m) { m = new BrushMasks(pyramid.width, pyramid.height, AREA_SCALE); masks.set(image.stain, m) }
     return m
   }
-  const canvas = useRef<HTMLCanvasElement | null>(null)
+  const host = useRef<HTMLDivElement | null>(null)
   const cursor = useRef<SVGCircleElement | null>(null)
-  const frame = useRef(0)
   const latestKind = useRef(kind)
   latestKind.current = kind
-  const redraw = () => {
-    if (frame.current) return
-    frame.current = requestAnimationFrame(() => { frame.current = 0; const m = masks.get(image.stain); if (m && canvas.current) m.draw(canvas.current, latestKind.current) })
-  }
-  useEffect(() => () => cancelAnimationFrame(frame.current), [])
+  /** Each type's area shown in `host` (brush.ts: its own canvases, changed dab by dab), the chosen type strong. */
+  const redraw = () => { const m = masksFor(); if (m) { m.attach(host.current); m.look(latestKind.current) } }
   useEffect(redraw, [tick, pyramid, kind])  // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {  // each type's current area from the server, under the strokes
     const m = masksFor()
@@ -335,7 +331,11 @@ function StainView({ base, image, masks, kind, brushRadius, hidden, objectsOn, t
     void m.setBase(current.data).then(() => { if (live) redraw() })
     return () => { live = false }
   }, [current.data, pyramid])  // eslint-disable-line react-hooks/exhaustive-deps
-  const setCanvas = useCallback((c: HTMLCanvasElement | null) => { canvas.current = c; if (c) { const m = masks.get(image.stain); if (m) m.draw(c, latestKind.current) } }, [masks, image.stain])
+  const setHost = useCallback((h: HTMLDivElement | null) => {
+    host.current = h
+    const m = masks.get(image.stain)
+    if (m) { m.attach(h); if (h) m.look(latestKind.current) }
+  }, [masks, image.stain])
   const clearing = useRef(false)
   const last = useRef<PaintPoint | null>(null)
   const showCursor = (p: PaintPoint | null) => {
@@ -383,21 +383,20 @@ function StainView({ base, image, masks, kind, brushRadius, hidden, objectsOn, t
         if (!m) return
         clearing.current = p.shift
         m.begin(p.x, p.y, latestBrush.current, kind, p.shift)
-        redraw()
       }}
       onMove={(p) => {
         showCursor(p)
         const m = masks.get(image.stain)
-        if (p && m?.painting) { m.extend(p.x, p.y); redraw() }
+        if (p && m?.painting) m.extend(p.x, p.y)  // the dab is drawn at once, onto the type's own canvas
       }}
       onRelease={() => {
         const m = masks.get(image.stain)
-        if (m?.end()) { redraw(); onStroke(clearing.current) }  // one step for Z
+        if (m?.end()) onStroke(clearing.current)  // one step for Z
         clearing.current = false
       }}
       over={(unit) => (
         <>
-          <canvas ref={setCanvas} className="area-pending" style={{ width: pyramid.width, height: pyramid.height, display: hidden ? 'none' : undefined }} />
+          <div ref={setHost} className="area-pending" style={{ width: pyramid.width, height: pyramid.height, display: hidden ? 'none' : undefined }} />
           <svg className="area-svg" width={pyramid.width} height={pyramid.height} viewBox={`0 0 ${pyramid.width} ${pyramid.height}`} data-unit={unit}>
             <circle ref={cursor} r={0} fill="none" style={{ display: 'none' }} />
           </svg>

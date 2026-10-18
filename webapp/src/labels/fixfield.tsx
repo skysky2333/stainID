@@ -320,7 +320,10 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     return () => { window.removeEventListener('keydown', on); window.removeEventListener('keyup', on) }
   }, [])
   const [fieldSize, setFieldSize] = useState<{ w: number; h: number } | null>(null)
-  const brush = useBrush(fieldSize, areas.data)  // the strokes since the last Save over each type's current area
+  // the strokes since the last Save over each type's current area, drawn on a canvas over the field once a frame (the
+  // chosen type strong while the brush is on, every type at the same strength once it is off)
+  const brush = useBrush(fieldSize, areas.data, excluding ? brushKind : '', excluding ? 0.3 : 0.55)
+  const ring = useRef<SVGCircleElement | null>(null)  // the brush under the mouse: moved directly, no React update per move
   const resetAfter = useRef<FieldAreas | null | undefined>(undefined)  // after Save: the current areas before it
   useEffect(() => {  // the server has the saved edit: the strokes are in the current areas now
     if (resetAfter.current === undefined || areas.data === resetAfter.current) return
@@ -804,8 +807,13 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     else { setDraft([[p.x, p.y]]); setByHand(false) }
   }
   const move = (p: ImagePoint) => {
+    if (excluding) {  // painting: the ring and the canvas change directly (at most once a frame), the page is not drawn again
+      const r = ring.current
+      if (r) { r.setAttribute('cx', String(p.x)); r.setAttribute('cy', String(p.y)); r.style.visibility = 'visible' }
+      brush.extend(p.x, p.y)
+      return
+    }
     setCursor([p.x, p.y])
-    if (excluding) { brush.extend(p.x, p.y); return }
     if (mode && stroke) { setStroke([...stroke, [p.x, p.y]]); return }
     if (dragging !== null && precise) { setPrecise({ ...precise, points: precise.points.map((q, i) => (i === dragging ? [p.x, p.y] : q)) }); return }
     if (!precise && !draft.length) {
@@ -952,6 +960,10 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
               {start && !start.locked && <span className="badge">Step 1: set the acceptance threshold</span>}</span>}
             focus={focus} cursor={excluding ? 'none' : mode ? 'crosshair' : precise ? 'crosshair' : target ? 'pointer' : 'copy'} onClick={click} onMove={move}
             onPress={press} onRelease={release} panLock={excluding || !!mode} onSize={setFieldSize}
+            paint={!hidden && fieldSize && (excluding || brush.dirty) ? (  // each type's area now: one merged region per type (brush.ts), from the first stroke
+              <div ref={brush.host} className="exclude-painted" style={{ position: 'absolute', left: 0, top: 0,
+                width: `${(100 * Math.ceil(fieldSize.w / BRUSH_SCALE) * BRUSH_SCALE) / fieldSize.w}%`, height: `${(100 * Math.ceil(fieldSize.h / BRUSH_SCALE) * BRUSH_SCALE) / fieldSize.h}%` }} />
+            ) : null}
             under={(_z, _s, rawUnit) => hidden ? null : <>
               {layers.excluded !== false && !excluding && excluded.data?.status === 'done' && excluded.data.width && excluded.data.height ? (  // excluded from analysis
                 <image href={apiUrl(`/api/annotate/${name}/fields/${enc(tile)}/excluded.png?v=${excluded.data.version ?? 0}`)} x={excluded.data.x} y={excluded.data.y}
@@ -1013,22 +1025,6 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
                   ))}
                   {precise.clicks.map((c, i) => <circle key={`c${i}`} cx={c[0]} cy={c[1]} r={3.8 * unit} fill={c[2] ? PALETTE.markers.spot_added : PALETTE.markers.spot_removed} stroke="#000" strokeWidth={unit} />)}
                 </>}
-                {(excluding || brush.dirty) && EXCLUDE_TYPES.filter((t) => brush.current[t.key]).map((t) => {  // each type's area now: one merged region
-                  const strength = !excluding ? 0.55 : t.key === brushKind ? 1 : 0.3  // the chosen type strong, the others faint
-                  return <g key={t.key} pointerEvents="none">
-                    <defs>
-                      <pattern id={`exclude-hatch-${t.key}`} width={9 * unit} height={9 * unit} patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-                        <rect width={9 * unit} height={9 * unit} fill={t.colour} fillOpacity={0.28 * strength} />
-                        <line x1={0} y1={0} x2={0} y2={9 * unit} stroke={t.colour} strokeOpacity={0.95 * strength} strokeWidth={2.4 * unit} />
-                      </pattern>
-                      <mask id={`exclude-mask-${t.key}`} maskUnits="userSpaceOnUse" x={0} y={0} width={size.w} height={size.h}>
-                        <image href={brush.current[t.key]} x={0} y={0} width={Math.ceil(size.w / BRUSH_SCALE) * BRUSH_SCALE} height={Math.ceil(size.h / BRUSH_SCALE) * BRUSH_SCALE}
-                          preserveAspectRatio="none" style={{ imageRendering: 'pixelated' }} />
-                      </mask>
-                    </defs>
-                    <rect className="exclude-painted" x={0} y={0} width={size.w} height={size.h} fill={`url(#exclude-hatch-${t.key})`} mask={`url(#exclude-mask-${t.key})`} />
-                  </g>
-                })}
                 {mode === 'merge' && chosenForMerge.map((k) => {  // chosen to merge
                   const s = byKey.get(k)
                   const poly = s ? outlineOf(s) : null
@@ -1040,7 +1036,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
                 ))}
                 {stroke && stroke.length > 1 && <polyline points={polygonPoints(stroke)} fill="none" stroke={mode === 'split' ? PALETTE.markers.split_b : PALETTE.markers.merge}
                   strokeWidth={2.4 * unit} strokeDasharray={`${6 * unit} ${4 * unit}`} pointerEvents="none" />}
-                {excluding && cursor && <circle cx={cursor[0]} cy={cursor[1]} r={brushPx} fill={shiftDown ? CLEARED.colour : brushType.colour} fillOpacity={0.15}
+                {excluding && <circle ref={ring} r={brushPx} fill={shiftDown ? CLEARED.colour : brushType.colour} fillOpacity={0.15} style={{ visibility: 'hidden' }}
                   stroke="#ffffff" strokeWidth={1.6 * unit} strokeDasharray={`${4 * unit} ${3 * unit}`} pointerEvents="none" />}
                 {pending && <circle className="sam-pending" cx={pending[0]} cy={pending[1]} r={10 * unit} fill="none" stroke="#fff" strokeWidth={2 * unit} />}
                 {draft.length > 0 && <>
@@ -1140,7 +1136,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
             const shown = layers.excluded !== false
             const found = shown && excluded.data?.status === 'done' ? excluded.data.kinds.filter((k) => k.fraction == null || k.fraction > 0) : []
             const theirs = shown ? [...new Set((people.data?.regions ?? []).map((r) => r.kind))] : []
-            const mine = brush.dirty ? EXCLUDE_TYPES.filter((t) => brush.current[t.key]) : []
+            const mine = brush.dirty ? EXCLUDE_TYPES.filter((t) => brush.types.includes(t.key)) : []
             if (!found.length && !theirs.length && !mine.length) return null
             return (
               <div className="card side-block">

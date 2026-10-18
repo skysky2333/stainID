@@ -1288,7 +1288,8 @@ details.side-details.compact > summary { font-weight: 500; }
 }
 .tutorial-coach h3 { text-transform: none; letter-spacing: 0; font-size: 1rem; color: var(--text-primary); }
 .outline-defaults { margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
-.viewer svg.viewer-under { will-change: transform; }  /* the field tool's objects: a layer of their own, not painted again on every mouse move */
+.viewer svg.viewer-under { will-change: transform; }
+.viewer-paint { position: absolute; inset: 0; pointer-events: none; will-change: transform; }  /* the brush's canvases (brush.ts) */  /* the field tool's objects: a layer of their own, not painted again on every mouse move */
 .look-swatch.hatched { background: repeating-linear-gradient(45deg, currentColor 0 2px, transparent 2px 5px); }
 
 /* "Mark bad areas" (labels/markareas.tsx): the stain tabs, the brush and the layers over the core picture */

@@ -57,7 +57,7 @@ function hatchOf(g: CanvasRenderingContext2D, kind: string): CanvasPattern | str
   const colour = colourOfType(kind)
   const tile = document.createElement('canvas')
   tile.width = tile.height = 4
-  const t = tile.getContext('2d')!
+  const t = ctx(tile)
   t.fillStyle = colour
   t.globalAlpha = 0.3
   t.fillRect(0, 0, 4, 4)
@@ -68,34 +68,51 @@ function hatchOf(g: CanvasRenderingContext2D, kind: string): CanvasPattern | str
   return made
 }
 
-/** The strokes since Save over each type's current area, on one picture (`width` × `height` picture px). */
+type Box = [number, number, number, number]  // x0, y0, x1, y1 in mask px
+/** The 2D context of a mask that is read back (for Z and Save): kept in memory. */
+const ctx = (c: HTMLCanvasElement) => c.getContext('2d', { willReadFrequently: true })!
+const grow = (a: Box | null, b: Box): Box => (a ? [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])] : b)
+
+/** The strokes since Save over each type's current area, on one picture (`width` × `height` picture px).
+
+    Painting stays smooth on a large picture: each type's area now is kept as its own hatched canvas (`shown`), changed
+    dab by dab (the brush's line stroked in with the type's hatch, or cut out of the others), and the page stacks these
+    canvases (`attach`) with the chosen type strong and the others faint (`look`, CSS opacity). Nothing is copied from
+    one canvas to another, encoded or read back while painting (copying a canvas that just changed copies all of it:
+    measured ~4 ms a draw on a 600 px mask, against well under 1 ms for a dab); the areas are put together again only
+    after a new base from the server, Z or Reset (`remake`). */
 export class BrushMasks {
   readonly w: number
   readonly h: number
   readonly scale: number
   private masks: Record<string, HTMLCanvasElement> = {}
   private base: Record<string, HTMLCanvasElement> = {}
-  private hasBase: Record<string, boolean> = {}
+  private shown: Record<string, HTMLCanvasElement> = {}
+  private present: Record<string, boolean> = {}
   private painted: Record<string, boolean> = {}
-  private stroke: { kind: string; erase: boolean; last: number[]; radius: number; box: number[]; before: Record<string, HTMLCanvasElement>; painted: Record<string, boolean> } | null = null
+  private stroke: { kind: string; erase: boolean; last: number[]; radius: number; box: Box | null; before: Record<string, HTMLCanvasElement>; painted: Record<string, boolean> } | null = null
   private undos: BrushStep[] = []
-  private scratch: HTMLCanvasElement
-  private layer: HTMLCanvasElement
 
   constructor(width: number, height: number, scale: number) {
     this.scale = scale
     this.w = Math.max(1, Math.ceil(width / scale))
     this.h = Math.max(1, Math.ceil(height / scale))
-    for (const k of MASKS) this.masks[k] = this.canvas()
-    for (const k of TYPES) this.base[k] = this.canvas()
-    this.scratch = this.canvas()
-    this.layer = this.canvas()
+    for (const k of MASKS) this.masks[k] = this.canvas(true)
+    for (const k of TYPES) {
+      this.base[k] = this.canvas(true)
+      const c = this.canvas(false)
+      c.dataset.kind = k
+      c.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:100%;image-rendering:pixelated;pointer-events:none'
+      this.shown[k] = c
+    }
   }
 
-  private canvas() {
+  /** `kept`: a mask that is read back (for Z and Save), kept in memory. */
+  private canvas(kept: boolean) {
     const c = document.createElement('canvas')
     c.width = this.w
     c.height = this.h
+    if (kept) ctx(c)
     return c
   }
 
@@ -104,36 +121,55 @@ export class BrushMasks {
   get painting() { return !!this.stroke }
   get steps() { return this.undos.length }
 
+  /** Each type's area now, put together again from its current area and the masks (after a new base, Z or Reset):
+   *  the current area, plus what was added to it, less what was taken out of it and what was given to another type. */
+  private remake() {
+    for (const k of TYPES) {
+      const g = this.shown[k].getContext('2d')!
+      g.globalCompositeOperation = 'source-over'
+      g.clearRect(0, 0, this.w, this.h)
+      g.drawImage(this.base[k], 0, 0)
+      g.drawImage(this.masks[k], 0, 0)
+      g.globalCompositeOperation = 'destination-out'
+      g.drawImage(this.masks[`-${k}`], 0, 0)
+      for (const j of TYPES) if (j !== k) g.drawImage(this.masks[j], 0, 0)
+      g.globalCompositeOperation = 'source-in'
+      g.fillStyle = hatchOf(g, k)
+      g.fillRect(0, 0, this.w, this.h)
+      g.globalCompositeOperation = 'source-over'
+    }
+  }
+
   /** Each type's current area from the server (`areas`), drawn onto the masks' grid; resolves once drawn. */
   setBase(areas: FieldAreas | null): Promise<void> {
     const jobs = TYPES.map((k) => new Promise<void>((done) => {
       const c = this.base[k]
-      const g = c.getContext('2d')!
+      const g = ctx(c)
       g.clearRect(0, 0, c.width, c.height)
-      this.hasBase[k] = false
+      this.present[k] = !!this.painted[k]
       const url = areas?.kinds?.[k]
       if (!areas || !url || areas.status !== 'done') { done(); return }
       const image = new Image()
       image.onload = () => {
         g.imageSmoothingEnabled = false
         g.drawImage(image, (areas.x ?? 0) / this.scale, (areas.y ?? 0) / this.scale, (areas.width ?? 0) / this.scale, (areas.height ?? 0) / this.scale)
-        this.hasBase[k] = true
+        this.present[k] = true
         done()
       }
       image.onerror = () => done()
       image.src = url
     }))
-    return Promise.all(jobs).then(() => undefined)
+    return Promise.all(jobs).then(() => this.remake())
   }
 
   /** One dab: painting `kind` adds to it (and takes the pixels off the other types and off what was taken out of
-   *  it); erasing takes the pixels out of `kind` (also out of what was added to it). */
+   *  it); erasing takes the pixels out of `kind` (also out of what was added to it). The areas shown change with it. */
   private dab(from: number[], to: number[]) {
     const s = this.stroke!
-    const line = (k: string, on: boolean) => {
-      const g = this.masks[k].getContext('2d')!
+    const line = (c: HTMLCanvasElement, on: boolean, style: string | CanvasPattern = '#ffffff') => {
+      const g = c.getContext('2d')!
       g.globalCompositeOperation = on ? 'source-over' : 'destination-out'
-      g.strokeStyle = '#ffffff'
+      g.strokeStyle = style
       g.lineCap = 'round'
       g.lineWidth = Math.max(1, (2 * s.radius) / this.scale)
       g.beginPath()
@@ -143,30 +179,34 @@ export class BrushMasks {
       g.globalCompositeOperation = 'source-over'
     }
     if (s.erase) {
-      line(`-${s.kind}`, true)
-      line(s.kind, false)
+      line(this.masks[`-${s.kind}`], true)
+      line(this.masks[s.kind], false)
+      line(this.shown[s.kind], false)
       this.painted[`-${s.kind}`] = true
     } else {
-      line(s.kind, true)
-      line(`-${s.kind}`, false)
-      for (const j of TYPES) if (j !== s.kind) line(j, false)
+      line(this.masks[s.kind], true)
+      line(this.masks[`-${s.kind}`], false)
+      const shown = this.shown[s.kind]
+      line(shown, false)  // a clean cut first, so the hatch is not laid twice where strokes cross
+      line(shown, true, hatchOf(shown.getContext('2d')!, s.kind))
+      for (const j of TYPES) if (j !== s.kind) { line(this.masks[j], false); line(this.shown[j], false) }
       this.painted[s.kind] = true
+      this.present[s.kind] = true
     }
     const r = s.radius / this.scale + 2
-    const xs = [from[0] / this.scale, to[0] / this.scale], ys = [from[1] / this.scale, to[1] / this.scale]
-    s.box = [Math.min(s.box[0], Math.min(...xs) - r), Math.min(s.box[1], Math.min(...ys) - r),
-      Math.max(s.box[2], Math.max(...xs) + r), Math.max(s.box[3], Math.max(...ys) + r)]
+    s.box = grow(s.box, [Math.min(from[0], to[0]) / this.scale - r, Math.min(from[1], to[1]) / this.scale - r,
+      Math.max(from[0], to[0]) / this.scale + r, Math.max(from[1], to[1]) / this.scale + r])
   }
 
   /** A stroke starts at this picture point (`radius` in picture px): adding to `kind`, or with `erase` taking out of it. */
   begin(x: number, y: number, radius: number, kind: string, erase: boolean) {
     const before: Record<string, HTMLCanvasElement> = {}
     for (const [k, c] of Object.entries(this.masks)) {  // a copy to take the touched part from when the stroke ends (for Z)
-      const copy = this.canvas()
-      copy.getContext('2d')!.drawImage(c, 0, 0)
+      const copy = this.canvas(true)
+      ctx(copy).drawImage(c, 0, 0)
       before[k] = copy
     }
-    this.stroke = { kind, erase, last: [x, y], radius, box: [Infinity, Infinity, -Infinity, -Infinity], before, painted: { ...this.painted } }
+    this.stroke = { kind, erase, last: [x, y], radius, box: null, before, painted: { ...this.painted } }
     this.dab([x, y], [x, y])
   }
 
@@ -182,10 +222,10 @@ export class BrushMasks {
   end(): BrushStep | null {
     const s = this.stroke
     this.stroke = null
-    if (!s) return null
+    if (!s || !s.box) return null
     const x = Math.max(0, Math.floor(s.box[0])), y = Math.max(0, Math.floor(s.box[1]))
     const w = Math.max(1, Math.min(this.w, Math.ceil(s.box[2])) - x), h = Math.max(1, Math.min(this.h, Math.ceil(s.box[3])) - y)
-    const data = Object.fromEntries(Object.entries(s.before).map(([k, c]) => [k, c.getContext('2d')!.getImageData(x, y, w, h)]))
+    const data = Object.fromEntries(Object.entries(s.before).map(([k, c]) => [k, ctx(c).getImageData(x, y, w, h)]))
     const step = { x, y, w, h, data, painted: s.painted }
     this.undos = [...this.undos.slice(-(UNDO_STEPS - 1)), step]
     return step
@@ -193,9 +233,10 @@ export class BrushMasks {
 
   /** Puts a step back (the field tool's own Z). */
   restore(step: BrushStep) {
-    for (const [k, data] of Object.entries(step.data)) this.masks[k]?.getContext('2d')!.putImageData(data, step.x, step.y)
+    for (const [k, data] of Object.entries(step.data)) { const c = this.masks[k]; if (c) ctx(c).putImageData(data, step.x, step.y) }
     this.painted = { ...step.painted }
     this.undos = this.undos.filter((u) => u !== step)
+    this.remake()
   }
 
   /** Z: the last stroke taken back; false when there is none. */
@@ -208,48 +249,31 @@ export class BrushMasks {
 
   /** Empty masks (after Save, once the server's current areas have the edit; or "Reset field"). */
   reset() {
-    for (const c of Object.values(this.masks)) c.getContext('2d')!.clearRect(0, 0, c.width, c.height)
+    for (const c of Object.values(this.masks)) ctx(c).clearRect(0, 0, c.width, c.height)
     this.painted = {}
     this.undos = []
+    this.remake()
   }
 
   /** Whether a type has any area now (detection's, saved edits or strokes since Save). */
-  has(kind: string) { return !!this.hasBase[kind] || !!this.painted[kind] }
+  has(kind: string) { return !!this.present[kind] }
+  /** The types with an area now. */
+  types(): string[] { return TYPES.filter((k) => this.present[k]) }
 
-  /** A type's area now, white on transparent on the masks' grid: its current area, plus what was added to it, less what
-   *  was taken out of it and what was given to another type. The canvas is reused by the next call. */
-  area(kind: string): HTMLCanvasElement {
-    const g = this.scratch.getContext('2d')!
-    g.globalCompositeOperation = 'source-over'
-    g.clearRect(0, 0, this.w, this.h)
-    g.drawImage(this.base[kind], 0, 0)
-    g.drawImage(this.masks[kind], 0, 0)
-    g.globalCompositeOperation = 'destination-out'
-    g.drawImage(this.masks[`-${kind}`], 0, 0)
-    for (const j of TYPES) if (j !== kind) g.drawImage(this.masks[j], 0, 0)
-    g.globalCompositeOperation = 'source-over'
-    return this.scratch
+  /** Puts the types' canvases into `host` (a positioned element the size of the picture), or takes them out (null). */
+  attach(host: HTMLElement | null) {
+    for (const k of TYPES) {
+      const c = this.shown[k]
+      if (host) { if (c.parentElement !== host) host.appendChild(c) } else c.remove()
+    }
   }
 
-  /** Draws every type's area now on `c` (the masks' size): each as a hatch in its colour, `chosen` at full strength and
-   *  the others at `others`. */
-  draw(c: HTMLCanvasElement, chosen: string, others = 0.35) {
-    if (c.width !== this.w || c.height !== this.h) { c.width = this.w; c.height = this.h }
-    const out = c.getContext('2d')!
-    out.clearRect(0, 0, this.w, this.h)
-    const t = this.layer.getContext('2d')!
-    for (const kind of [...TYPES.filter((k) => k !== chosen), chosen]) {
-      if (!this.has(kind)) continue
-      t.globalCompositeOperation = 'source-over'
-      t.clearRect(0, 0, this.w, this.h)
-      t.drawImage(this.area(kind), 0, 0)
-      t.globalCompositeOperation = 'source-in'
-      t.fillStyle = hatchOf(t, kind)
-      t.fillRect(0, 0, this.w, this.h)
-      t.globalCompositeOperation = 'source-over'
-      out.globalAlpha = kind === chosen ? 1 : others
-      out.drawImage(this.layer, 0, 0)
-      out.globalAlpha = 1
+  /** The chosen type at full strength (on top), the others at `others`. */
+  look(chosen: string, others = 0.35) {
+    for (const k of TYPES) {
+      const c = this.shown[k]
+      c.style.opacity = String(k === chosen ? 1 : others)
+      c.style.zIndex = k === chosen ? '1' : '0'
     }
   }
 
@@ -261,65 +285,60 @@ export class BrushMasks {
   }
 }
 
-function painted(c: HTMLCanvasElement): boolean {
-  const data = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data
-  for (let i = 3; i < data.length; i += 4) if (data[i] > 127) return true
-  return false
-}
-
-/** The field tool's brush: `BrushMasks` over one field (`size` in field px, masks at 1/`BRUSH_SCALE`), with each type's
- *  area now as a data URL (`current`) for the field's drawing. */
-export function useBrush(size: { w: number; h: number } | null, areas: FieldAreas | null) {
+/** The field tool's brush: `BrushMasks` over one field (`size` in field px, masks at 1/`BRUSH_SCALE`), shown in an
+ *  element the page lays over the field (`host`, a ref callback): no React update per pointer move. `types` (the
+ *  types with an area) and `dirty` change only when a stroke ends or the areas load. */
+export function useBrush(size: { w: number; h: number } | null, areas: FieldAreas | null, chosen: string, others: number) {
   const masks = useRef<BrushMasks | null>(null)
-  const [current, setCurrent] = useState<Record<string, string>>({})  // per type: its area now (data URL), with the strokes since Save
+  const target = useRef<HTMLElement | null>(null)
+  const [types, setTypes] = useState<string[]>([])
   const [dirty, setDirty] = useState(false)
 
-  const show = useCallback(() => {
+  const settle = useCallback(() => {  // after a stroke, a new base, Z or Reset: what the page lists
     const m = masks.current
     if (!m) return
-    const out: Record<string, string> = {}
-    for (const k of TYPES) {
-      if (!m.has(k)) continue
-      const c = m.area(k)
-      if (painted(c)) out[k] = c.toDataURL('image/png')
-    }
-    setCurrent(out)
+    setTypes((was) => { const now = m.types(); return now.join() === was.join() ? was : now })
     setDirty(m.dirty)
   }, [])
+  useEffect(() => { masks.current?.look(chosen, others) }, [chosen, others, types])
 
   useEffect(() => {  // empty masks the size of the field
     if (!size || masks.current) return
     masks.current = new BrushMasks(size.w, size.h, BRUSH_SCALE)
-    show()
-  }, [size, show])
+    masks.current.attach(target.current)
+    settle()
+  }, [size, settle])
 
   useEffect(() => {  // the current areas from the server
     const m = masks.current
     if (!m || !areas) return
     let live = true
-    void m.setBase(areas).then(() => { if (live) show() })
+    void m.setBase(areas).then(() => { if (live) settle() })
     return () => { live = false }
-  }, [areas, size, show])
+  }, [areas, size, settle])
 
+  const look = useRef({ chosen, others })
+  look.current = { chosen, others }
+  const host = useCallback((h: HTMLElement | null) => {
+    target.current = h
+    masks.current?.attach(h)
+    masks.current?.look(look.current.chosen, look.current.others)
+  }, [])
   const begin = useCallback((x: number, y: number, radius: number, kind: string, erase: boolean) => {
     masks.current?.begin(x, y, radius, kind, erase)
-    show()
-  }, [show])
-  const frame = useRef(0)
+  }, [])
   const extend = useCallback((x: number, y: number) => {
     const m = masks.current
-    if (!m?.painting) return
-    m.extend(x, y)
-    if (!frame.current) frame.current = requestAnimationFrame(() => { frame.current = 0; show() })  // at most once a frame
-  }, [show])
+    if (m?.painting) m.extend(x, y)
+  }, [])
   /** The stroke ends: the step to put back for Z, or null when no stroke was on. */
   const end = useCallback((): BrushStep | null => {
     const step = masks.current?.end() ?? null
-    if (step) show()
+    if (step) settle()
     return step
-  }, [show])
-  const restore = useCallback((step: BrushStep | null) => { if (step) { masks.current?.restore(step); show() } }, [show])
-  const reset = useCallback(() => { masks.current?.reset(); show() }, [show])
+  }, [settle])
+  const restore = useCallback((step: BrushStep | null) => { if (step) { masks.current?.restore(step); settle() } }, [settle])
+  const reset = useCallback(() => { masks.current?.reset(); settle() }, [settle])
   const pngs = useCallback(() => masks.current?.pngs() ?? {}, [])
-  return { current, dirty, painting: () => !!masks.current?.painting, begin, extend, end, restore, reset, pngs }
+  return { types, dirty, host, painting: () => !!masks.current?.painting, begin, extend, end, restore, reset, pngs }
 }
