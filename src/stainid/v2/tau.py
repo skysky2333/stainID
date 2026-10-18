@@ -36,7 +36,8 @@ def maps(field) -> dict:
     all empty for a tile with fewer than 100 valid tissue pixels (the network analysis refuses those)."""
     if "at8" not in field.memo:
         try:
-            summary, objects, network_maps = segment_at8_network(field.rgb, field.threshold, field.pixel_width_um, field.pixel_height_um, field.exclusion)
+            summary, objects, network_maps = segment_at8_network(field.rgb, field.threshold, field.pixel_width_um, field.pixel_height_um, field.exclusion,
+                                                                 statistics_mask=field.standard)
         except ValueError as error:
             if TOO_LITTLE_TISSUE not in str(error):
                 raise

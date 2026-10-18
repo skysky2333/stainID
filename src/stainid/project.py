@@ -75,7 +75,6 @@ DEFAULTS: dict = {
         "tile_manifest": "data/analysis/cohort_primary_tiles.csv",
         "whole_core_manifest": "data/analysis/cohort_whole_core_tiles.csv",
         "calibration": "data/analysis/slide_dab_calibration.csv",
-        "manual_exclusions": "data/annotations/cohort_manual_exclusions.json",
         "donor_metadata": "data/donor_metadata.csv",
         "tma_layout": "data/tma_layout.csv",
     },

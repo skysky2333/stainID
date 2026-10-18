@@ -18,11 +18,13 @@ CORE_QUANTILES = np.linspace(0, 1, 21)
 
 
 def _levels(field) -> dict:
-    """The legacy segmentation's background statistics, seed and extent thresholds and smoothed DAB for this field."""
+    """The legacy segmentation's background statistics, seed and extent thresholds and smoothed DAB for this field (the
+    statistics over its standard crop, `Field.standard`, as the segmentation takes them)."""
     if "amyloid" not in field.memo:
         valid = field.tissue & ~field.exclusion
         dab = field.dab
-        values = dab[valid] if valid.sum() >= 100 else dab[field.tissue] if field.tissue.any() else dab.ravel()
+        sample = valid & field.standard
+        values = dab[sample] if sample.sum() >= 100 else dab[valid] if valid.sum() >= 100 else dab[field.tissue] if field.tissue.any() else dab.ravel()
         median = float(np.median(values))
         sigma = max(1.4826 * float(np.median(np.abs(values - median))), 0.001)
         seed_threshold = max(0.035, float(field.threshold), median + 6.0 * sigma)
@@ -77,7 +79,7 @@ def deposit_row(field, region: Region) -> dict:
 
 def propose(field, settings: dict, shared: dict) -> list[Region]:
     _, objects, labels, _, _ = segment_amyloid_candidates(field.rgb, field.threshold, field.pixel_width_um, field.pixel_height_um,
-                                                          field.exclusion, split_touching=True)
+                                                          field.exclusion, split_touching=True, statistics_mask=field.standard)
     regions = label_regions(labels, "legacy", style="amyloid")
     occupancy = Occupancy(field.shape)
     for row in objects:

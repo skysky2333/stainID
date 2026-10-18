@@ -62,10 +62,12 @@ threshold = max(Otsu(pooled DAB OD), median + 6 × MAD, 0.01 OD)
 Every downstream rule is expressed relative to this threshold, so staining-intensity differences
 between slides do not change what counts as positive. Slides that already have a threshold keep it
 (`--redo` works it out again). The cohort's thresholds were calibrated again on 17 Oct 2026 on today's
-tiles without the excluded areas (`data/analysis/v2_audit/recalibration.csv`; the old ones are kept in
-`slide_dab_calibration.before_exclusions.csv`): leaving the excluded areas out moved no threshold by more
-than 3.5 %, but 15 of the 39 old rows were stale (made from an earlier, smaller sample), among them LIP-6
-6E10 (0.026 against 0.064 OD now) and LIP-1 AT8 (0.014 against 0.039).
+tiles without the excluded areas (`data/analysis/v2_audit/recalibration.csv`, the table in
+`slide_dab_calibration.excluded_out.csv`); they are not installed yet: `slide_dab_calibration.csv` is still the
+14 Oct table, and the new one replaces it at the next full re-run (the old one kept as
+`slide_dab_calibration.before_exclusions.csv`). Leaving the excluded areas out moves no threshold by more than
+3.5 %, but 15 of the 39 installed rows are stale (made from an earlier, smaller sample), among them LIP-6 6E10
+(0.026 installed against 0.064 OD recalibrated) and LIP-1 AT8 (0.014 against 0.039).
 
 ## 4. Exclusions
 
@@ -79,7 +81,6 @@ Applied before any measurement (`stainid.imaging.tissue`, `stainid.qc.exclusions
   matter, neuropil, vacuoles) for glass in fields that show none and undercounts their tissue;
 - linear folds and cut lines;
 - hematoxylin-dense fold bands (≥ 150 µm long, aspect ≥ 4);
-- manually drawn artifact polygons (`inputs.manual_exclusions`);
 - for AT8, chromogen rims along vacuoles and tissue edges;
 - hematoxylin-negative Cellpose objects (vacuoles), which are dropped as nuclei.
 

@@ -119,6 +119,9 @@ def test_owned_once_rules():
     # two whole objects in their own tiles are kept even when their outlines touch
     out = proposals.owned_once([row("A", 90, 50, 12), row("B", 108, 50, 12)], tiles, 32)
     assert len(out) == 2
+    # one object two tiles segmented slightly differently, whole in both, its centroids either side of the border: once
+    out = proposals.owned_once([row("A", 98, 50, 30, area=2800), row("B", 102, 50, 28, area=2500)], tiles, 32)
+    assert len(out) == 1 and out[0]["tile_id"] == "A"
     # a copy whose centroid lies in no tile of the image is dropped
     assert proposals.owned_once([row("B", 205, 50, 10, own=False)], tiles, 32) == []
 
@@ -248,3 +251,46 @@ def test_window_nuclei_keep_the_tiles_own_nuclei_and_add_the_neighbours():
         centres.add((int(round(xs.mean())), int(round(ys.mean()))))
     assert centres == {(200, 200), (600, 200), (200, 600), (600, 600)}  # four nuclei, four labels
     assert out[200, 200] == 1  # the tile's own label stands
+
+
+def _level_fields(wide_context: int, stain: str = "6E10"):
+    """A 300 px tile with a 50 px standard margin, cut `wide_context` px wide, where the tissue beyond the standard crop is
+    browner: the field as the wide window cuts it, the standard crop of the same tile, and the wide field with its levels
+    taken over all of it (as before)."""
+    rng = np.random.default_rng(3)
+    size = 300 + 2 * wide_context
+    rgb = np.clip(rng.normal((200, 190, 195), 6, (size, size, 3)), 0, 255).astype(np.uint8)
+    outer = np.ones((size, size), bool)
+    outer[wide_context - 50: wide_context + 350, wide_context - 50: wide_context + 350] = False
+    rgb[outer] = np.clip(rng.normal((185, 160, 150), 10, (int(outer.sum()), 3)), 0, 255).astype(np.uint8)
+    tile = {"tile_id": "T", "stain": stain, "pixel_width_um": PS, "pixel_height_um": PS, "context_px": 50}
+    inner = (slice(wide_context, wide_context + 300), slice(wide_context, wide_context + 300))
+    a, b = wide_context - 50, wide_context + 350
+    wide = Field(tile, rgb, inner, (0, 0), 0.05, PS, np.zeros((size, size), bool), None)
+    standard = Field(tile, rgb[a:b, a:b].copy(), (slice(50, 350), slice(50, 350)), (0, 0), 0.05, PS, np.zeros((400, 400), bool), None)
+    unscoped = Field({**tile, "context_px": wide_context}, rgb, inner, (0, 0), 0.05, PS, np.zeros((size, size), bool), None)
+    return wide, standard, unscoped
+
+
+def test_a_wider_window_moves_no_level_of_the_tile():
+    """The crop-wide levels (6E10 background median and spread, so its seed and extent levels; the stained level; the AT8
+    positive level) come from the standard crop: seeing further does not lower the extent level and join neighbouring
+    plaques that the standard crop keeps apart."""
+    from stainid.stains.tau.network import segment_at8_network
+    from stainid.v2.amyloid import _levels
+    from stainid.v2.tree import stained_level
+
+    wide, standard, unscoped = _level_fields(250)
+    got, want, moved = _levels(wide), _levels(standard), _levels(unscoped)
+    for key in ("background_median", "background_sigma", "seed_threshold", "extent_threshold"):
+        assert got[key] == pytest.approx(want[key], rel=0.01), key
+    assert abs(moved["background_median"] - want["background_median"]) > 0.1 * want["background_median"]  # the test sees a change
+    level = lambda f: stained_level(f, f.dab, 0.1, 0.25, f.tissue)  # noqa: E731
+    assert level(wide) == pytest.approx(level(standard), rel=0.01)
+    assert abs(level(unscoped) - level(standard)) > 0.1 * level(standard)
+
+    def positive(field):  # threshold 0: the positive level is the background median + 5 sigma
+        _, _, maps = segment_at8_network(field.rgb, 0.0, PS, PS, None, statistics_mask=field.standard)
+        return float(maps["positive"][field.inner].mean())
+
+    assert positive(wide) == pytest.approx(positive(standard), abs=0.005)
