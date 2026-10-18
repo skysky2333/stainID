@@ -61,7 +61,10 @@ tile and the project's 128 px context, `Field.standard`) — the 6E10 legacy seg
 (so its seed and extent levels), the stained levels of the coarse and unproposed searches, and the AT8 network's
 positive level and edge-guard trigger — and the fold and linear-artifact masks come from the standard crops too. Taken
 over the wide crop, the background moved the 6E10 extent level by up to 8% per tile and a lower level joined
-neighbouring deposits into one.
+neighbouring deposits into one. The 6E10 legacy split seeds are the h-maxima of each deposit's own extent component
+(`segmentation.component_h_maxima`), not of the whole crop, where a brighter deposit that the tissue background joins
+a deposit to could remove or add a seed depending on how far the crop reaches (and the reconstruction ran over the
+whole crop: per deposit it is about 2.5 times faster). This changed 1 of about 1,200 legacy deposits on 16 tiles.
 
 Only the objects that need the window pay for it (`proposals.whole_objects`): a tile whose window is wider than 384 px
 (6E10) is first detected over the tile and 384 px, and every candidate it keeps that comes within 176 px of that crop's
