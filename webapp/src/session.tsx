@@ -63,7 +63,7 @@ export function SignIn() {
         <SignInForm />
         {session.default_password && <p className="muted small">First time? Sign in as <b>admin</b> with the password <b>admin</b>, then change it in Settings.</p>}
         <p className="muted small">Here to label images? Sign in or make an account above, then add the set you were given a key for.
-          {' '}You can also <a href={appPath('/annotate/tutorial')}>try the tutorial</a> without an account.</p>
+          {' '}You can also <a href={appPath('/tutorials')}>try the tutorials</a> without an account.</p>
         <ServerSetting />
       </div>
     </main>
@@ -119,7 +119,7 @@ export function Annotator() {
   return (
     <span className="row small">
       <span className="muted">Signed in as</span><b>{session.account.name}</b>
-      <a className="link-btn" href={appPath('/annotate/account')}>Account</a>
+      <a className="link-btn" href={appPath('/account')}>Account</a>
       <button className="link-btn" onClick={() => signOut(reload)}>Sign out</button>
     </span>
   )

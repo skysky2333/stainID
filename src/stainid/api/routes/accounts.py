@@ -74,7 +74,8 @@ def remove_member(name: str, account_id: str) -> dict:
 
 
 def may_label(request: Request, name: str) -> None:
-    """Annotators only reach the sessions they joined (admins every one); checked on every annotation request."""
+    """Annotators only reach the sessions they joined; admins every one, and a session an admin opens joins their own
+    labelling sets (they label like anyone, under their account). Checked on every annotation request."""
     from stainid.api import session  # noqa: PLC0415
 
     account = session.current_account(request)
@@ -82,29 +83,29 @@ def may_label(request: Request, name: str) -> None:
         raise HTTPException(401, "sign in first")
     if account.must_change:
         raise HTTPException(403, "choose a new password first")
+    project = state.get_state().id
     if account.admin:
+        if not accounts.is_member(account.id, project, name):
+            accounts.add_member(account.id, project, name)
         return
-    if not accounts.is_member(account.id, state.get_state().id, name):
+    if not accounts.is_member(account.id, project, name):
         raise HTTPException(403, "this labelling set is not in your sets: add it with the key you were given")
 
 
 def sets_of(account: accounts.Account, request: Request, here: str | None = None) -> list[dict]:
-    """The labelling sets of the person, of every project, with their progress; for an admin also every session of the
-    project `here` (admins open any session)."""
+    """The labelling sets of the person (the ones they joined with a key, were added to, or, for an admin, opened), of
+    every project, with their progress. `here`: the page's project (kept for older pages; it adds nothing)."""
     from stainid.api.routes import annotate  # noqa: PLC0415
 
     joined: dict[str, dict[str, float]] = defaultdict(dict)
     for project, name, when in accounts.sets_of(account.id):
         joined[project][name] = when
-    if account.admin and here:
-        joined.setdefault(here, {})
     out = []
     for project, names in joined.items():
         try:
             with state.use_project(project):
                 current = state.get_state()
-                every = account.admin and project == here
-                rows = annotate.open_sessions(request, account.handle, None if every else set(names))
+                rows = annotate.open_sessions(request, account.handle, set(names))
                 title = current.project.name
         except (state.UnknownProject, OSError, ValueError):
             continue

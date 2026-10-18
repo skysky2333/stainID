@@ -1,6 +1,6 @@
 """The one palette of every colour the pages draw with (`palette.json`): the label classes by colour slot
 (`Vocabulary.colour_slots`), the inactive / unsure / unknown states, the bad-area types, the layers drawn over the
-tissue and the markers, all distinct (tests/test_palette.py). The web app imports the same file (webapp/src/palette.ts),
+tissue and the markers, all distinct, also from the white highlight and dark edge of drawn shapes (tests/test_review_consistency.py). The web app imports the same file (webapp/src/palette.ts),
 the server draws its pictures with it and serves it at /api/palette."""
 from __future__ import annotations
 

@@ -25,10 +25,11 @@ project, not study data (see [The app](#the-app)).*
   Word, CSV or even a photo, matches them to the slides, and tells you in plain words what does not fit.
 - **One button to run.** *Run everything* runs every step in the right order. You can stop at any time and continue
   later, and you can close the browser while it works.
-- **See what detection found.** Open any core and click any spot to see a full-resolution picture with every detection
-  drawn on it.
-- **Annotation built in.** Send colleagues a link. They correct stainID detection with one key per object, on their own fields,
-  after a short tutorial, with no account.
+- **See what detection found.** Open any core, zoom in to full resolution anywhere, and see every detection drawn on
+  it, with the areas the analysis leaves out.
+- **Annotation built in.** Send colleagues the address and a key. They sign in on the main page, try the two short
+  tutorials (open to anyone, without an account; nothing is kept), and correct stainID detection with one key per
+  object, or mark bad areas with a brush, on work nobody else is doing.
 - **Your staining, your models.** Train the detection models on the labels your team makes, compare the new model
   with the one in use, and switch only when it is better.
 - **Simple by default, with full control.** Every page asks only what it needs. Technical options sit under
@@ -207,16 +208,18 @@ All screenshots show a synthetic demo project: the tissue images, donors, labels
 
 | | |
 |---|---|
+| ![Sign in](docs/images/signin.png) | ![My labelling sets](docs/images/my-sets.png) |
+| **Sign in**: everyone signs in on the main page (the server's address); the tutorials need no account | **Home** after signing in: your labelling sets (Add a set with a key), and both tutorials; admins see the same, then the study's status |
 | ![Fix the field](docs/images/annotate.jpg) | ![Precise editing](docs/images/annotate-precise.jpg) |
-| **Fix the field** (at `/p/<project>/annotate`): every candidate of the field, solid in its class colour or dotted grey when rejected or removed; the object under the mouse lights up, its name beside it and its facts (class, detection's call and score, area, outline) in the side panel with the class keys and colours | **Precise editing** (click the object): only this object can change; a click adds a spot, Shift+click leaves one out, the white dots drag; a click beyond the faint frame keeps it |
+| **Fix the field** (a session's page, `/p/<project>/annotate/<session>`): every candidate of the field, solid in its class colour or dotted grey when rejected or removed; the object under the mouse lights up, its name beside it and its facts (class, detection's call and score, area, outline) in the side panel with the class keys and colours | **Precise editing** (click the object): only this object can change; a click adds a spot, Shift+click leaves one out, the white dots drag; a click beyond the faint frame keeps it |
 | ![The brush](docs/images/annotate-brush.jpg) | ![Mark bad areas](docs/images/areas.jpg) |
 | **The brush** (B in Fix the field): a drag adds to the chosen type of bad area, Shift-drag takes out of it; each type's area is one merged region, the chosen one strong | **Mark bad areas**: one core at a time with every stain image of it as a tab; the same brush, the types' areas as they stand (detection's with people's edits) |
 | ![Split](docs/images/annotate-split.jpg) | ![Merge](docs/images/annotate-merge.jpg) |
 | **Split** (S): a click on an object shows it cut in two, or draw a line across it; Enter keeps the pieces | **Merge** (M): click the objects that are one, Enter merges them (only objects that touch or nearly touch) |
 | ![Tutorial](docs/images/tutorial.jpg) | ![Annotations on the Cores view](docs/images/viewer-annotations.jpg) |
-| **Tutorial**: where a new annotator starts, on a practice field where nothing is saved; *Try the tutorial* on the Labels page shows it to the admin | **Annotations** on the Cores view: where people's labels differ from detection, their bad areas, the excluded areas, and the minimap with each tile's review status |
+| **Tutorial** (Fix the field; Mark bad areas has its own): offered on everyone's home, on a practice field where nothing is saved, whatever is clicked; *Try the tutorial* on the Labels page shows it to the admin | **Annotations** on the Cores view: where people's labels differ from detection, their bad areas, the excluded areas, and the minimap with each tile's review status |
 | ![Home](docs/images/home.png) | ![Models](docs/images/models.png) |
-| **Home**: your next step and overall progress | **Models**: download published models; train from labels, compare, switch; how detection's outlines match people's fixes |
+| **Home** (an admin's): your labelling sets first, then the next step and overall progress | **Models**: download published models; train from labels, compare, switch; how detection's outlines match people's fixes |
 | ![Core viewer](docs/images/viewer.jpg) | ![Labels](docs/images/labels.png) |
 | **Cores**: the whole core, zoomable, with every candidate drawn on it (rejected ones dotted grey), the minimap, the excluded areas and the Annotations layer | **Labels**: annotation rounds with their progress, agreement with detection, the link to share and *Try the tutorial* |
 | ![Excluded from analysis](docs/images/viewer-excluded.jpg) | |

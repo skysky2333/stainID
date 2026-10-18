@@ -126,7 +126,7 @@ def require_account(request: Request) -> accounts.Account:
 
 
 def _practice(request: Request) -> bool:
-    return str(request.path_params.get("name", "")).startswith("practice-") or request.url.path.endswith("/session/tutorial")
+    return str(request.path_params.get("name", "")).startswith("practice-") or request.url.path.endswith("/api/tutorial")
 
 
 def annotator_name(request: Request) -> str | None:

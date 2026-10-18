@@ -17,7 +17,6 @@ import { MarkAreas } from '../labels/markareas'
 import { ROUND_TITLE, RoundProgressLine, useFitScreen } from '../labels/rounds'
 import type { RoundDetail } from '../api'
 import { Register, useSession } from '../session'
-import { useFirstTutorial } from '../labels/tutorial'
 import type { ImagePoint } from '../viewer'
 import { RASTER_LAYERS, ZoomViewer } from '../viewer'
 
@@ -46,8 +45,6 @@ export default function AnnotatePage() {
   const { session } = useSession()
   const { name = '', tile } = useParams()
   const detail = useFetch<SessionDetail>(session.annotator ? `/api/annotate/${name}` : null)
-  // someone new who followed a session's link: the tutorial first ("Mark bad areas": its own), then back here
-  useFirstTutorial(!session.annotator ? 'objects' : !detail.data ? null : detail.data.meta.kind === 'areas' ? 'areas' : 'objects')
   if (!session.annotator) return <><PageHead title="Help check tissue images" subtitle="Sign in to start, then add this set with the key you were given." /><Register /></>
   if (detail.error) return <SessionProblem error={detail.error} retry={detail.reload} />
   if (!detail.data) return <Loading label="Opening the session…" />
@@ -55,12 +52,12 @@ export default function AnnotatePage() {
   if (round === 'areas' || detail.data.meta.kind === 'areas') return <MarkAreas detail={detail.data} />
   if (round === 1) return <><PageHead title={detail.data.meta.title} subtitle="Check detection’s calls" />
     <Empty><p style={{ marginTop: 0 }}>This kind of session is no longer used: its labels stay in the label log for training and evaluation.
-      Ask for a “Fix the field” session instead.</p><Link className="btn" to="/annotate">All sessions</Link></Empty></>
+      Ask for a “Fix the field” session instead.</p><Link className="btn" to="/">My labelling sets</Link></Empty></>
   if (round === 2 && tile) return <FixField key={tile} detail={detail.data} reload={detail.reload} tile={tile} />
   if (detail.data.meta.kind === 'queue') return <QuickCheck detail={detail.data} />
   if (detail.data.meta.kind === 'outline') return <><PageHead title={detail.data.meta.title} subtitle="Outline every object" />
     <Empty><p style={{ marginTop: 0 }}>This kind of session is no longer used: its outlines stay in the label log and still count in the segmentation
-      check’s scores. Outlines are now fixed in “Fix the field”.</p><Link className="btn" to="/annotate">All sessions</Link></Empty></>
+      check’s scores. Outlines are now fixed in “Fix the field”.</p><Link className="btn" to="/">My labelling sets</Link></Empty></>
   return tile ? <Workspace key={tile} detail={detail.data} reload={detail.reload} tile={tile} /> : <SessionOverview detail={detail.data} reload={detail.reload} />
 }
 
@@ -68,10 +65,10 @@ function SessionProblem({ error, retry }: { error: string; retry: () => void }) 
   const closed = /not open/.test(error)
   return (
     <>
-      <PageHead title={closed ? 'This session is closed' : 'This session could not be opened'} subtitle={<Link to="/annotate">← All sessions</Link>} />
+      <PageHead title={closed ? 'This session is closed' : 'This session could not be opened'} subtitle={<Link to="/">← My labelling sets</Link>} />
       <Empty>
         <p style={{ marginTop: 0 }}>{closed ? 'The person who runs it has closed it for now. Your work so far is saved.' : error.replace(/^\d{3}: /, '')}</p>
-        <div className="row" style={{ justifyContent: 'center' }}><button className="btn" onClick={retry}>Try again</button><Link className="btn" to="/annotate">All sessions</Link></div>
+        <div className="row" style={{ justifyContent: 'center' }}><button className="btn" onClick={retry}>Try again</button><Link className="btn" to="/">My labelling sets</Link></div>
       </Empty>
     </>
   )
@@ -110,7 +107,7 @@ function SessionOverview({ detail, reload }: { detail: SessionDetail; reload: ()
   }
   return (
     <div className="annotate-overview">
-      <PageHead title={meta.title} subtitle={<Link to="/annotate">← All sessions</Link>}>
+      <PageHead title={meta.title} subtitle={<Link to="/">← My labelling sets</Link>}>
         {left > 0 && <button className="btn primary big" disabled={finding || left === preparing} onClick={next}>{done ? 'Continue with the next field →' : 'Start with the first field →'}</button>}
       </PageHead>
       {meta.instructions && <div className="instructions">{meta.instructions}</div>}
@@ -346,7 +343,7 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
     <div className="annotate-page fit-page">
       <div className="annotate-top">
         <div className="annotate-heading">
-          <span className="row small"><Link to="/annotate">← All sessions</Link><Link to={`/annotate/${name}`}>All fields of this session</Link></span>
+          <span className="row small"><Link to="/">← My labelling sets</Link><Link to={`/annotate/${name}`}>All fields of this session</Link></span>
           <h1>{meta.title}</h1>
           <div className="muted small">{meta.stain} · {AI_VIEW_FOR_LABELLERS[meta.ai_view]}</div>
         </div>

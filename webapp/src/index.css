@@ -1168,6 +1168,11 @@ tr.significant-row td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
   html.fit-screen .annotator-shell > header { flex: none; }
   html.fit-screen .annotator-shell > main { flex: 1 1 auto; min-height: 0; padding: 10px 18px 12px; display: flex; flex-direction: column; overflow: hidden; }
   html.fit-screen .annotator-shell > main > * { flex: 1 1 auto; min-height: 0; }
+  /* the same inside the one app's layout (the sidebar beside it) */
+  html.fit-screen .layout { height: 100vh; height: 100dvh; min-height: 0; overflow: hidden; }
+  html.fit-screen .layout > .sidebar { height: 100vh; height: 100dvh; overflow-y: auto; }
+  html.fit-screen .layout > .main { height: 100vh; height: 100dvh; padding: 10px 18px 12px; display: flex; flex-direction: column; overflow: hidden; }
+  html.fit-screen .layout > .main > * { flex: 1 1 auto; min-height: 0; }
   .fit-page { display: flex; flex-direction: column; min-height: 0; }
   .fit-page > * { flex: none; }
   .fit-page .annotate-top { margin-bottom: 8px; gap: 6px 20px; }
@@ -1336,3 +1341,11 @@ details.side-details.compact > summary { font-weight: 500; }
 .threshold-preview .threshold-slider { margin-top: 6px; }
 .piece-mark { pointer-events: none; font-weight: 700; }
 .legend-sign { margin: 0 4px 0 -2px; font-size: 11px; line-height: 1; }
+
+/* everyone's home: the labelling sets, the tutorials, then (admins) the study */
+.home-labelling > h2 { margin: 4px 0 8px; font-size: 1.05rem; }
+.home-study { margin: 28px 0 10px; font-size: 1.05rem; }
+.tutorial-cards { margin-bottom: 8px; }
+.tutorial-card .btn { margin-top: 2px; }
+.tutorial-cards.compact .tutorial-card { padding: 12px 14px; }
+.tutorial-cards.compact .tutorial-card .btn { margin-top: 8px; }

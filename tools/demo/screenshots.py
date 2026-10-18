@@ -30,7 +30,9 @@ sessions; random passwords, kept nowhere), opens each page of the project the se
 - annotate-split.jpg / annotate-merge.jpg: splitting an object in two (S, the preview before Enter) and two objects
   chosen to merge (M) (neither saved);
 - areas.jpg: a "Mark bad areas" core, every stain image of it as a tab, with a stroke painted (not saved);
-- tutorial.jpg: the tutorial a new annotator (Dana) is sent to first.
+- tutorial.jpg: the "Fix the field" tutorial, as a new annotator (Dana) opens it from her home;
+- signin.png: the main page before signing in (everyone signs in there);
+- my-sets.png: an annotator's home after signing in (Ann): her labelling sets, Add a set, both tutorials.
 """
 from __future__ import annotations
 
@@ -57,7 +59,9 @@ SHOTS = {  # name: (path in the project, or None when chosen from the data, view
     "annotate-split.jpg": (None, 1500, 900),
     "annotate-merge.jpg": (None, 1500, 900),
     "areas.jpg": (None, 1500, 950),
-    "tutorial.jpg": ("/annotate", 1500, 900),
+    "tutorial.jpg": ("/tutorial", 1500, 900),
+    "signin.png": ("", 1200, 760),
+    "my-sets.png": ("/", 1400, 900),
     "results.png": ("/results", 1500, 911),
     "settings.png": ("/settings", 1500, 911),
 }
@@ -185,7 +189,6 @@ def main() -> None:
         def new_context():
             made = browser.new_context(viewport={"width": 1500, "height": 911}, color_scheme="light", device_scale_factor=1)
             made.add_init_script("localStorage.setItem('stainid.theme', JSON.stringify('light'))")
-            made.add_init_script(f"localStorage.setItem('stainid.tutorial.areas.{args.annotator}', '1')")  # Ann knows "Mark bad areas"
             return made
 
         context = new_context()
@@ -232,7 +235,9 @@ def main() -> None:
             path, width, height = SHOTS[name]
             if name == "tutorial.jpg":
                 page = as_person(args.newcomer)
-            elif name.startswith("annotate") or name == "areas.jpg":
+            elif name == "signin.png":
+                page = new_context().new_page()  # nobody signed in
+            elif name.startswith("annotate") or name in ("areas.jpg", "my-sets.png"):
                 page = as_person(args.annotator)
             else:
                 page = admin_page
@@ -248,7 +253,7 @@ def main() -> None:
                     continue
                 path = f"/annotate/{rounds['areas']}"
             page.set_viewport_size({"width": width, "height": height})
-            page.goto(f"{base}/" if name == "projects.png" else pages + path)
+            page.goto(f"{base}/projects" if name == "projects.png" else f"{base}/" if name == "signin.png" else pages + path)
             settle(page, 1.5)
             if name == "annotate.jpg":
                 zoom_in(page, 3)
@@ -306,7 +311,7 @@ def main() -> None:
             if name == "areas.jpg":
                 page.wait_for_selector(".area-pending", timeout=120000)
                 settle(page, 3.0)
-                for _ in range(5):
+                for _ in range(2):
                     page.keyboard.press("Shift+Tab")
                 stroke(page, ".dz", 0.3, 0.35, 0.2)
             if name == "workflow.png":

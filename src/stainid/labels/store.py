@@ -42,7 +42,11 @@ ATTRIBUTION: ContextVar[str | None] = ContextVar("stainid_account", default=None
 
 
 def append(root: Path, records: list[dict]) -> list[dict]:
-    """Add labels to the log; each carries the account id of the signed-in person (`account`) besides their name."""
+    """Add labels to the log; each carries the account id of the signed-in person (`account`) besides their name. Never
+    while practising (`stainid.practice`)."""
+    from stainid import practice  # noqa: PLC0415
+
+    practice.guard("the label log")
     path = log_path(root)
     account = ATTRIBUTION.get()
     path.parent.mkdir(parents=True, exist_ok=True)

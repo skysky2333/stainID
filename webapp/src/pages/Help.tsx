@@ -3,6 +3,8 @@ import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { PageHead } from '../components'
 import { GLOSSARY } from '../glossary'
+import { TutorialCards } from '../labels/tutorial'
+import { useSession } from '../session'
 
 const FAQ: [string, ReactNode][] = [
   ['What do I need to start?', <>Your slide scans (one per TMA and stain) and the TMA maps saying which donor sits at each core position, in whatever form your lab keeps
@@ -38,10 +40,10 @@ const FAQ: [string, ReactNode][] = [
     then train on <Link to="/models">Models</Link> and switch to the new model if it scores better. Then run the detection steps again with <b>Start over</b>.</>],
   ['A step says “Made with an older model”.', <>You switched to a different model after that step ran. Its results stay as they are
     until you run the step again with <b>Start over</b> (under Advanced); then make the results tables again.</>],
-  ['How do other people label for me?', <>On <Link to="/labels">Labels</Link>, press <b>New labelling session</b>, pick a stain and a round
-    (<b>Fix the field</b>: whole fields, correcting detection and adding what it missed; <b>Mark bad areas</b>: core by core with a brush), then send people the <b>Link for labellers</b>
-    (it ends in /annotate and names the study) with the session’s <b>key</b> (see “Sharing a set with a key”). They sign in, or make an account, and work in their own
-    browser. Someone new first gets a short practice tutorial. Each person is handed a field nobody else is on, so no one does the same work twice; you follow their progress and download the labels on the
+  ['How do other people label for me?', <>On <Link to="/labels">Labels</Link>, press <b>New labelling session</b> and pick what people should do
+    (<b>Fix the field</b>: whole fields of one stain, correcting detection and adding what it missed; <b>Mark bad areas</b>: core by core with every stain, with a brush), then send people the
+    address of stainID with the session’s <b>key</b> (see “Sharing a set with a key”). They sign in on the main page, or make an account, add the set with the key and work in their own
+    browser; their home offers both tutorials. Each person is handed a field nobody else is on, so no one does the same work twice; you follow their progress and download the labels on the
     same page.</>],
   ['How does labelling work?', <>Each field starts with <b>step 1</b>: the <b>acceptance threshold</b> slider at detection’s own threshold. Moving it changes
     which objects start solid and which dotted grey; <b>Start editing</b> (or Enter, or your first edit) locks it, and only <b>Reset field</b> frees it again
@@ -52,7 +54,7 @@ const FAQ: [string, ReactNode][] = [
     <b>Tab</b> / <b>Shift+Tab</b> a smaller or bigger outline (the same for the brush), a <b>click</b> on the object to edit the outline spot by spot (a click outside or Enter
     keeps it), <b>Space</b> to hide the drawings for a clean look, <b>S</b> to split an object in two (click it, Enter; or draw a line across objects),
     {' '}<b>M</b> to merge objects (click or drag over them, Enter), <b>B</b> the brush for bad areas (a drag adds to the chosen type’s area, Shift-drag
-    takes out of it, <b>Tab</b> / <b>Shift+Tab</b> a smaller or bigger brush), <b>Z</b> undo. Splits and merges are your labels: detection’s objects stay what the
+    takes out of it, <b>Tab</b> / <b>Shift+Tab</b> a smaller or bigger brush: it keeps its size on screen, so zoom in for a finer one), <b>Z</b> undo. Splits and merges are your labels: detection’s objects stay what the
     analysis counts. In <b>Fix the field</b>, clicking empty
     tissue outlines a missed object. Nothing is saved until <b>Save</b> or <b>Save and continue</b>; unsaved changes come back after a reload. The keys
     are always shown in the side panel.</>],
@@ -84,11 +86,12 @@ const FAQ: [string, ReactNode][] = [
     <b>Detect</b> steps on the <Link to="/workflow">Run</Link> page for that stain first (at least <b>Find candidates</b> and <b>Decide</b>; <b>Run what’s left</b> runs them).</>],
   ['A Detect step says some cores are out of date.', <>Something those cores were made from changed after they ran: a setting, a model or an earlier
     step. (Areas people mark never make a step out of date: the analysis uses detection’s own.) Run the step again: it redoes only the out-of-date cores and keeps the rest.</>],
-  ['Who can sign in?', <>Everyone signs in on the same page with their name and password. <b>Admins</b> see all of stainID and every labelling set;
-    <b>annotators</b> only the labelling pages and the sets they added with a key. Anyone can make an annotator account; an admin promotes people,
+  ['Who can sign in?', <>Everyone signs in on the main page with their name and password and lands on their home: their labelling sets, Add a set and
+    the tutorials. <b>Admins</b> label too (a session they open joins their sets, and their labels carry their own account) and also see the study’s pages
+    and every labelling set on Labels; <b>annotators</b> only the labelling pages and the sets they added with a key. Anyone can make an annotator account; an admin promotes people,
     resets forgotten passwords and removes accounts in <Link to="/settings">Settings → People</Link> (there is always at least one admin). The first admin is
     <b>admin</b>, with the admin password of earlier versions (<b>admin</b> on a new server, until you change it). The tutorial needs no account.</>],
-  ['How to join a labelling set (annotators)', <>Open the link you were sent and <b>sign in</b>, or press <b>New here? Make an account</b> and choose your name
+  ['How to join a labelling set (annotators)', <>Open stainID’s address and <b>sign in</b>, or press <b>New here? Make an account</b> and choose your name
     and a password (names are unique on the server). Then type the <b>key</b> you were given under <b>Add a set</b>: the set appears in <b>My labelling sets</b>
     with its progress, and <b>Start</b> or <b>Continue</b> opens it. Sign in with the same name next time, on any computer, to carry on. Forgot your password?
     Ask the person running the study: they give you a one-time password, and you choose a new one when you sign in with it.</>],
@@ -102,20 +105,34 @@ const FAQ: [string, ReactNode][] = [
     ends its tokens.</>],
   ['Is anything deleted?', <>No. <b>Start over</b> and uploads move old files aside with a date in their name; nothing is removed.
     “Remove from list” on the Projects page only takes a study off the list.</>],
-  ['Can several people work at once?', <>Yes, in the same study or in different ones: each person picks a study on the <a href="/">Projects</a> page, and switching
+  ['Can several people work at once?', <>Yes, in the same study or in different ones: each person picks a study on the <a href="/projects">Projects</a> page, and switching
     study in one browser changes nothing for anyone else. Steps that need a lot of computing take turns across all studies; a waiting step says which study it waits for.</>],
 ]
 
+/** The questions an annotator asks (the rest are about running the study). */
+const LABELLING_FAQ = new Set(['How does labelling work?', 'Which key is which type?', 'What happens to the bad areas people mark?',
+  'Which keys work on the Cores view and in Mark bad areas?', 'Who can sign in?', 'How to join a labelling set (annotators)'])
+
 export default function Help() {
+  const { session } = useSession()
+  const admin = session.admin
   const [filter, setFilter] = useState('')
   const words = filter.toLowerCase().split(/\s+/).filter(Boolean)
   const terms = Object.entries(GLOSSARY).filter(([k, v]) => words.every((w) => `${k} ${v}`.toLowerCase().includes(w)))
   return (
     <>
-      <PageHead title="Help" subtitle="How to go from slide scans to results, answers to common questions, and what the words mean." />
+      <PageHead title="Help" subtitle={admin ? 'The tutorials, how to go from slide scans to results, answers to common questions, and what the words mean.'
+        : 'The tutorials, answers to common questions, and what the words mean.'} />
       <div className="help-layout">
         <div className="grid">
           <div className="card">
+            <h2>Labelling: the two tasks and their tutorials</h2>
+            <p className="small secondary"><b>Fix the field</b>: one field of one stain at a time, with what detection found drawn on it; correct it (reject,
+              change types, fix outlines, split, merge, add what it missed) and save. <b>Mark bad areas</b>: one core at a time with every stain; paint
+              folds, artifacts, missing tissue and blur that should not be counted. Each tutorial practises on real images; nothing is saved.</p>
+            <TutorialCards compact />
+          </div>
+          {admin && <div className="card">
             <h2>Getting started</h2>
             <ol className="guide">
               <li><b>Create a project</b> for your study: the project menu at the top left → All projects → New study. All files for the study are kept
@@ -128,10 +145,10 @@ export default function Help() {
                 their labels train better models on <Link to="/models">Models</Link>.</li>
               <li><b>Use the <Link to="/results">Results</Link></b>: every measure plotted by diagnosis group, what it means, and the tables to download.</li>
             </ol>
-          </div>
+          </div>}
           <div className="card">
             <h2>Common questions</h2>
-            {FAQ.map(([q, a]) => <details key={q} className="faq"><summary>{q}</summary><p className="secondary">{a}</p></details>)}
+            {FAQ.filter(([q]) => admin || LABELLING_FAQ.has(q)).map(([q, a]) => <details key={q} className="faq"><summary>{q}</summary><p className="secondary">{a}</p></details>)}
           </div>
         </div>
         <div className="card">

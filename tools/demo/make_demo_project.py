@@ -20,9 +20,13 @@ she has not finished, fields finished by Ben and Carla, and the tutorial done by
 it). demo.json names the sessions and fields the screenshots open.
 
 Nothing is read from a real study: all values come from the random generator (fixed by --seed). The published model
-files (Cellpose-SAM, Segment Anything, Phikon, plaque CNNs) are small placeholder files, and the "slide scans" are
-low-resolution overview pictures, so the demo shows every page but the slide-reading and deep-learning steps cannot
-be re-run on it. About 1 GB on disk; a few minutes on 6 cores.
+files (Cellpose-SAM, Phikon, plaque CNNs) are small placeholder files, and the "slide scans" are low-resolution overview
+pictures, so the demo shows every page but the slide-reading and deep-learning steps cannot be re-run on it. Segment
+Anything (one-click outlines: the tutorial's "Add a missed object" and precise clicks) is the real published file when
+one is at hand (`--sam-weights`, else $STAINID_SAM_WEIGHTS, else this checkout's data/models/sam/): copied in (375 MB).
+Without it the demo has none, and clicks fall back to drawing by hand; get it later with
+`stainid download-models --which sam` in the demo folder (or "Get" on its Models page). About 1 GB on disk; a few
+minutes on 6 cores.
 
 This project is already set up; make_setup_demo.py makes one that is not, for trying the guided setup.
 """
@@ -894,7 +898,28 @@ def areas_session(project, tiles: pd.DataFrame, when: float) -> str:
 
 # ---------------------------------------------------------------- main
 
-def build(out: Path, seed: int, workers: int) -> None:
+SAM_FILE = "sam_vit_b_01ec64.pth"
+SAM_BYTES = 375_042_383  # the published ViT-B weights
+
+
+def sam_weights(project, given: Path | None) -> None:
+    """The real published Segment Anything weights, copied in when at hand (never a placeholder: a file that is not the
+    weights would make every click fail instead of falling back to drawing by hand)."""
+    import shutil  # noqa: PLC0415
+
+    here = Path(__file__).resolve().parents[2] / "data" / "models" / "sam" / SAM_FILE
+    for source in [given, Path(os.environ["STAINID_SAM_WEIGHTS"]) if os.environ.get("STAINID_SAM_WEIGHTS") else None, here]:
+        if source is not None and source.is_file() and source.stat().st_size == SAM_BYTES:
+            target = project.model("sam")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+            print(f"Segment Anything weights copied from {source}", flush=True)
+            return
+    print("No Segment Anything weights at hand (--sam-weights): one-click outlines fall back to drawing by hand. "
+          "Get them later with `stainid download-models --which sam` in the demo folder.", flush=True)
+
+
+def build(out: Path, seed: int, workers: int, sam: Path | None = None) -> None:
     if out.exists() and any(out.iterdir()):
         raise SystemExit(f"{out} is not empty; choose a new folder")
     out.mkdir(parents=True, exist_ok=True)
@@ -908,7 +933,6 @@ def build(out: Path, seed: int, workers: int) -> None:
     project = load_project(root)
     for folder in ("data/analysis/tile_nuclei", "data/jobs", "data/annotations"):
         (root / folder).mkdir(parents=True, exist_ok=True)
-    (root / "data" / "annotations" / "cohort_manual_exclusions.json").write_text("{}\n")
 
     jobs = [{"seed": int(rng.integers(1 << 31)), "stain": stain, "core_id": core["core_id"], "severity": core["severity"][stain],
              "shape_seed": core["shape_seed"], "neuron_density": core["neuron_density"], "root": str(root),
@@ -966,10 +990,11 @@ def build(out: Path, seed: int, workers: int) -> None:
     print("detections, outlines and pictures", flush=True)
     detection_outputs(root, cores, drawn, rng)
     slide_pictures(root, cores, drawn)
-    for path, kind in (("data/models/cellpose/cpsam_v2", "file"), ("data/models/sam/sam_vit_b_01ec64.pth", "file"),
-                       ("data/models/foundation/hf/README.txt", "file"), ("data/models/plaque_cnn/README.txt", "file")):
+    for path, kind in (("data/models/cellpose/cpsam_v2", "file"), ("data/models/foundation/hf/README.txt", "file"),
+                       ("data/models/plaque_cnn/README.txt", "file")):
         (root / path).parent.mkdir(parents=True, exist_ok=True)
         (root / path).write_text(PLACEHOLDER)
+    sam_weights(project, sam)
 
     print("candidate pools and labels", flush=True)
     labels = make_labels(root, project, cores, drawn, tiles, rng)
@@ -1000,8 +1025,10 @@ def main() -> None:
     parser.add_argument("out_dir", type=Path, help="new (empty) folder for the demo project")
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--workers", type=int, default=min(6, os.cpu_count() or 1), help="core images drawn at once (about 1.5 GB of memory each)")
+    parser.add_argument("--sam-weights", type=Path, default=None,
+                        help=f"the published Segment Anything file ({SAM_FILE}) to copy in, for one-click outlines")
     args = parser.parse_args()
-    build(args.out_dir, args.seed, args.workers)
+    build(args.out_dir, args.seed, args.workers, args.sam_weights)
 
 
 if __name__ == "__main__":

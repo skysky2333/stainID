@@ -1,5 +1,5 @@
 /* The one palette (src/stainid/palette.json, the same file the server draws with and serves at /api/palette): every
-   colour the pages draw with, all distinct (tests/test_palette.py). Label classes take their colour by slot
+   colour the pages draw with, all distinct, also from the white highlight and dark edge of drawn shapes (tests/test_review_consistency.py). Label classes take their colour by slot
    (classPalette.ts); the rest are named here. No runtime imports beyond the JSON: tests/js run this file in Node. */
 import colours from '../../src/stainid/palette.json' with { type: 'json' }
 

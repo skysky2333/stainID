@@ -3,7 +3,6 @@ stable ids, calls from stored features only, the thread skeleton round trip, the
 outdated detection, and the measures tables."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import cv2
@@ -270,7 +269,6 @@ def v2_project(tmp_path: Path) -> Path:
     pd.DataFrame(tiles).to_csv(analysis / "cohort_whole_core_tiles.csv", index=False)
     pd.DataFrame([{"tma": 1, "stain": s, "threshold_dab_od": 0.05} for s in ("NeuN", "6E10", "AT8")]).to_csv(analysis / "slide_dab_calibration.csv", index=False)
     (tmp_path / "data" / "annotations").mkdir()
-    (tmp_path / "data" / "annotations" / "cohort_manual_exclusions.json").write_text(json.dumps({}))
     config = {"name": "v2 synthetic", "field_context_px": 32, "models": _models(tmp_path)}
     (tmp_path / "stainid.yaml").write_text(yaml.safe_dump(config))
     return tmp_path

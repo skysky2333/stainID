@@ -222,6 +222,33 @@ class Key(BaseModel):
     key: str
 
 
+class TutorialDone(BaseModel):
+    kind: str = "objects"  # "objects" (Fix the field) or "areas" (Mark bad areas)
+    done: bool = True
+
+
+@router.get("/session/tutorials")
+def tutorials(request: Request) -> dict:
+    """Which tutorials the signed-in person went through or skipped (kept with their account, on every project);
+    nobody signed in: none (the page keeps a guest's in the browser)."""
+    account = session.current_account(request)
+    if account is None or account.must_change:
+        return {kind: False for kind in accounts.TUTORIALS} | {"kept": False}
+    return accounts.tutorials_done(account.id) | {"kept": True}
+
+
+@router.post("/session/tutorials")
+def tutorial_done(body: TutorialDone, request: Request) -> dict:
+    """Remember that the signed-in person finished (or skipped) a tutorial, or forget it; a guest: not kept."""
+    account = session.current_account(request)
+    if account is None or account.must_change:
+        return {kind: kind == body.kind and body.done for kind in accounts.TUTORIALS} | {"kept": False}
+    try:
+        return accounts.set_tutorial(account.id, body.kind, body.done) | {"kept": True}
+    except accounts.AccountError as error:
+        _error(error)
+
+
 @router.get("/session/sets")
 def my_sets(request: Request, here: str = "") -> list[dict]:
     """The labelling sets in the signed-in person's collection (every project), with their progress; an admin also sees

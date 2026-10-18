@@ -656,6 +656,9 @@ def feature_names(frame: pd.DataFrame) -> list[str]:
 
 def write_core(project: Project, stain: str, core_id: str, frame: pd.DataFrame) -> Path:
     """Write one core's store from parsed rows (outlines as point lists), through `candidates.write_table`."""
+    from stainid import practice  # noqa: PLC0415
+
+    practice.guard("the candidate store")
     target = folder(project, stain) / f"{core_id}.csv.gz"
     out = frame.copy()
     for column in POLYGONS:

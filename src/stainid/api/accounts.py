@@ -98,6 +98,7 @@ create table if not exists members (account text not null, project text not null
     primary key (account, project, session));
 create table if not exists join_keys (project text not null, session text not null, key text not null unique, enabled integer not null,
     created real not null, primary key (project, session));
+create table if not exists tutorials (account text not null, kind text not null, done real not null, primary key (account, kind));
 """
 _READY: set[str] = set()
 
@@ -375,7 +376,7 @@ def remove(account_id: str) -> None:
             raise AccountError("no such account", 404)
         if row["role"] == ADMIN and _admins(db) <= 1:
             raise AccountError("this is the only admin: make someone else an admin first", 409)
-        for table in ("tokens", "members"):
+        for table in ("tokens", "members", "tutorials"):
             db.execute(f"delete from {table} where account = ?", (account_id,))  # noqa: S608 - fixed table names
         db.execute("delete from accounts where id = ?", (account_id,))
     _changed()
@@ -509,10 +510,12 @@ def join(account_id: str, key: str, address: str = "") -> tuple[str, str]:
     _limited("join", keys, JOIN_TRIES)
     wanted = _normal_key(key)
     with _LOCK, _db() as db:
-        row = next((r for r in db.execute("select * from join_keys where enabled = 1") if hmac.compare_digest(_normal_key(r["key"]), wanted)), None)
+        row = next((r for r in db.execute("select * from join_keys") if hmac.compare_digest(_normal_key(r["key"]), wanted)), None)
         if row is None or not wanted:
             _failed("join", keys)
             raise AccountError("no labelling set has this key (it may have been replaced): check it with the person who sent it", 404)
+        if not row["enabled"]:  # the right key, but the person running the study closed joining this set
+            raise AccountError("joining this labelling set is switched off at the moment: ask the person running the study to switch it on", 403)
         db.execute("insert or ignore into members (account, project, session, joined) values (?, ?, ?, ?)", (account_id, row["project"], row["session"], time.time()))
     return row["project"], row["session"]
 
@@ -536,6 +539,28 @@ def sets_of(account_id: str) -> list[tuple[str, str, float]]:
     """(project id, session, when joined) of every set in the account's collection, latest first."""
     with _db() as db:
         return [(r["project"], r["session"], r["joined"]) for r in db.execute("select * from members where account = ? order by joined desc", (account_id,))]
+
+
+TUTORIALS = ("objects", "areas")  # "Fix the field" and "Mark bad areas"
+
+
+def tutorials_done(account_id: str) -> dict[str, bool]:
+    """Which tutorials the account went through (or skipped), on any project of the server."""
+    with _db() as db:
+        done = {r["kind"] for r in db.execute("select kind from tutorials where account = ?", (account_id,))}
+    return {kind: kind in done for kind in TUTORIALS}
+
+
+def set_tutorial(account_id: str, kind: str, done: bool) -> dict[str, bool]:
+    """Remember that the account finished (or skipped) a tutorial, or forget it (to be offered it again)."""
+    if kind not in TUTORIALS:
+        raise AccountError(f"no tutorial {kind}", 400)
+    with _db() as db:
+        if done:
+            db.execute("insert or replace into tutorials (account, kind, done) values (?, ?, ?)", (account_id, kind, time.time()))
+        else:
+            db.execute("delete from tutorials where account = ? and kind = ?", (account_id, kind))
+    return tutorials_done(account_id)
 
 
 def forget() -> None:

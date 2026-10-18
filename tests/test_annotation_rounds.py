@@ -274,7 +274,7 @@ def test_the_tutorial_practises_on_a_real_field_and_keeps_nothing(rounds_project
     from stainid.labels import store
 
     _, (ann, _), _ = rounds_project
-    first = ann.get("/api/session/tutorial").json()
+    first = ann.get("/api/tutorial").json()
     assert first["done"] is False and first["practice"]["tile_id"] == TILE and first["practice"]["round2"] == "practice-2-6E10"
     detail = ann.get("/api/annotate/practice-2-6E10").json()
     assert detail["meta"]["round"] == 2 and detail["fields"][0]["tile_id"] == TILE
@@ -288,8 +288,8 @@ def test_the_tutorial_practises_on_a_real_field_and_keeps_nothing(rounds_project
     again = ann.get("/api/annotate/practice-2-6E10/next").json()
     assert again["tile_id"] == TILE  # nor held or finished
     assert ann.get("/api/annotate/practice-1-6E10").status_code == 404  # round 1 has no practice any more
-    assert ann.post("/api/session/tutorial", json={"done": True}).json() == {"done": True}
-    assert ann.get("/api/session/tutorial").json()["done"] is True
+    assert ann.post("/api/tutorial", json={"done": True}).json() == {"done": True}
+    assert ann.get("/api/tutorial").json()["done"] is True
     assert ann.get("/api/annotate").json() == []  # practice sessions are not listed
 
 
@@ -419,13 +419,13 @@ def test_a_fix_the_field_session_takes_every_remaining_field_by_default(rounds_p
 def test_the_tutorial_needs_no_account_and_admins_open_any_session(rounds_project):
     admin, (ann, _), _ = rounds_project
     guest = TestClient(admin.app)  # nobody signed in
-    preview = guest.get("/api/session/tutorial").json()
+    preview = guest.get("/api/tutorial").json()
     assert preview["done"] is False and preview["practice"]["round2"] == "practice-2-6E10"
     field = guest.get(f"/api/annotate/practice-2-6E10/fields/{TILE}")
     assert field.status_code == 200 and field.json()["objects"]
     assert _save(guest, "practice-2-6E10", TILE, [], submit=True).status_code == 200  # echoed back, nothing kept
-    assert guest.post("/api/session/tutorial", json={"done": True}).json() == {"done": True}  # and not remembered
-    assert guest.get("/api/session/tutorial").json()["done"] is False
+    assert guest.post("/api/tutorial", json={"done": True}).json() == {"done": True}  # and not remembered
+    assert guest.get("/api/tutorial").json()["done"] is False
     # the practice only: real sessions need an account, and annotators must have joined them; admins open any
     made = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "open": True, "tile_ids": [TILE]}).json()
     assert guest.get(f"/api/annotate/{made['name']}/fields/{TILE}").status_code == 401

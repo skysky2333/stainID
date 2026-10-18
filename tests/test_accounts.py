@@ -137,7 +137,8 @@ def test_a_join_key_adds_the_set_and_a_new_key_stops_the_old_one(prepared):
     assert ben.post("/api/session/sets", json={"key": key}).status_code == 404  # the old key stops working
     assert ann.get("/api/annotate/plaques_together").status_code == 200  # Ann keeps her access
     client.put("/api/labels/sessions/plaques_together/access", json={"enabled": False})
-    assert ben.post("/api/session/sets", json={"key": fresh}).status_code == 404  # joining is off
+    off = ben.post("/api/session/sets", json={"key": fresh})
+    assert off.status_code == 403 and "switched off" in off.json()["detail"]  # joining is off: said so, not "replaced"
     client.put("/api/labels/sessions/plaques_together/access", json={"enabled": True})
     assert ben.post("/api/session/sets", json={"key": fresh}).status_code == 200
     client.delete(f"/api/labels/sessions/plaques_together/access/members/{ben.account['id']}")
@@ -206,7 +207,7 @@ def test_the_command_line_makes_api_tokens_for_scripts(client, capsys):
 
 def test_the_tutorial_works_without_an_account(prepared):
     guest = TestClient(prepared.app)
-    assert guest.get("/api/session/tutorial").status_code == 200
+    assert guest.get("/api/tutorial").status_code == 200
     assert guest.get("/api/annotate").status_code == 401  # but no real session
 
 

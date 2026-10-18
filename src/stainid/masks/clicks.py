@@ -190,16 +190,36 @@ class ClickOutliner:
                 "chosen": next((i for i, o in enumerate(options) if o[3]), 0)}
 
 
-def _key(checkpoint: Path) -> tuple[str, int]:
-    return checkpoint.name, checkpoint.stat().st_size
+def _key(checkpoint: Path) -> tuple[str, int, int]:
+    stat = checkpoint.stat()
+    return checkpoint.name, stat.st_size, stat.st_mtime_ns  # weights put in again (even of the same size): loaded again
+
+
+LOAD_RETRY_SECONDS = 30.0  # after weights that would not load, the next try waits this long (not until a restart)
+_LOAD_FAILED: dict[tuple, tuple[float, str]] = {}
+
+
+class NotLoaded(RuntimeError):
+    """The Segment Anything weights would not load (the detail is in the log); tried again after `LOAD_RETRY_SECONDS`."""
 
 
 def outliner(checkpoint: Path) -> ClickOutliner:
-    """The server's one model (loaded on first use), shared by every project with the same published weights."""
+    """The server's one model (loaded on first use), shared by every project with the same published weights. Weights
+    that would not load are tried again on a request after `LOAD_RETRY_SECONDS`, or at once when the file changes."""
     with _LOCK:
-        if _key(checkpoint) not in _MODELS:
-            _MODELS[_key(checkpoint)] = ClickOutliner(checkpoint)
-        return _MODELS[_key(checkpoint)]
+        key = _key(checkpoint)
+        if key not in _MODELS:
+            failed = _LOAD_FAILED.get(key)
+            if failed and time.monotonic() - failed[0] < LOAD_RETRY_SECONDS:
+                raise NotLoaded(failed[1])
+            try:
+                _MODELS[key] = ClickOutliner(checkpoint)
+            except Exception as error:
+                log.warning("Segment Anything weights %s would not load: %s: %s", checkpoint, type(error).__name__, error)
+                _LOAD_FAILED[key] = (time.monotonic(), f"{type(error).__name__}: {error}")
+                raise NotLoaded(f"{type(error).__name__}: {error}") from error
+            _LOAD_FAILED.pop(key, None)
+        return _MODELS[key]
 
 
 _CHOSEN: list = [None, -GPU_RETRY_SECONDS]  # the device a model would be loaded on, and when that was looked at
