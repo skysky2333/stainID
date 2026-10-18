@@ -8,6 +8,7 @@ import { Link } from 'react-router-dom'
 import type { QueueItem, QueueNext, QueuePictures, SessionDetail } from '../api'
 import { api, apiUrl, enc } from '../api'
 import { Empty, ErrorNote, Loading, Progress, fmt } from '../components'
+import { PALETTE } from '../palette'
 import type { ClassPick } from './classKeys'
 import { classText, resolveClass } from './classKeys'
 import { ClassChooser, ClassKeyHint, useClassKeys } from './classes'
@@ -235,7 +236,7 @@ export function QuickCheck({ detail }: { detail: SessionDetail }) {
             <div className="queue-crop">
               <img key={item.key} src={urls[0]} alt="the object to label" />
               <svg viewBox="0 0 100 100" aria-hidden="true">
-                <path d="M50 40 V46 M50 54 V60 M40 50 H46 M54 50 H60" stroke="#00e5ff" strokeWidth={0.9} />
+                <path d="M50 40 V46 M50 54 V60 M40 50 H46 M54 50 H60" stroke={PALETTE.markers.box} strokeWidth={0.9} />
               </svg>
               {picture === 'loading' && <div className="queue-busy"><Loading inline label="Loading the picture…" /></div>}
               {picture === 'failed' && (

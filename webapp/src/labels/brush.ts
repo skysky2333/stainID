@@ -19,21 +19,22 @@
    (it keeps detection's own). */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FieldAreas } from '../api'
+import { PALETTE, areaColour } from '../palette'
 
 export const BRUSH_SCALE = 4  // the field tool: masks at a quarter of the field picture in each direction
 export const AREA_SCALE = 8  // "Mark bad areas": core px per mask px (stainid.exclusions.SCALE)
 export const BRUSH_UM = { min: 5, max: 2000, start: 40 }  // brush diameter, µm
 export const BRUSH_STEP = 1.2  // Tab / Shift+Tab: the diameter this much smaller / bigger
 export const INCLUDE = 'include'
-/** The types of excluded area, with their colours (the same as the layer's, store_view.EXCLUDED_KINDS). */
+/** The types of excluded area, with their colours (the one palette's, which the layer's, store_view.EXCLUDED_KINDS, are too). */
 export const EXCLUDE_TYPES: { key: string; name: string; colour: string }[] = [
-  { key: '1', name: 'fold or tissue damage', colour: '#ffb000' },
-  { key: '2', name: 'artifact (scratch, bubble, debris, linear)', colour: '#a855f7' },
-  { key: '3', name: 'no tissue / empty', colour: '#9ca3af' },
-  { key: '4', name: 'out of focus or bad staining', colour: '#00e5ff' },
+  { key: '1', name: 'fold or tissue damage', colour: PALETTE.areas['1'] },
+  { key: '2', name: 'artifact (scratch, bubble, debris, linear)', colour: PALETTE.areas['2'] },
+  { key: '3', name: 'no tissue / empty', colour: PALETTE.areas['3'] },
+  { key: '4', name: 'out of focus or bad staining', colour: PALETTE.areas['4'] },
 ]
 /** Taking out (Shift-drag): the brush cursor's colour; the older "include" edits (cleared) in the history too. */
-export const CLEARED = { key: INCLUDE, name: 'taken out', colour: '#22c55e' }
+export const CLEARED = { key: INCLUDE, name: 'taken out', colour: PALETTE.areas.taken_out }
 const TYPES = EXCLUDE_TYPES.map((t) => t.key)
 const MASKS = [...TYPES, ...TYPES.map((k) => `-${k}`)]
 const UNDO_STEPS = 40
@@ -43,7 +44,7 @@ export function brushStep(um: number, bigger: boolean): number {
   return Math.round(Math.min(BRUSH_UM.max, Math.max(BRUSH_UM.min, bigger ? um * BRUSH_STEP : um / BRUSH_STEP)))
 }
 
-export const colourOfType = (kind: string) => (kind === INCLUDE ? CLEARED.colour : EXCLUDE_TYPES.find((t) => t.key === kind)?.colour ?? '#fff')
+export const colourOfType = areaColour
 
 /** The masks as they were in a box before a stroke (for Z). */
 export interface BrushStep { x: number; y: number; w: number; h: number; data: Record<string, ImageData>; painted: Record<string, boolean> }

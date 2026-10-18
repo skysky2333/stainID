@@ -37,6 +37,8 @@ KEEP_SECONDS = 300.0  # finished work stays known this long (its result is fetch
 NICE = 5  # pool threads run this much nicer than the request threads (Linux: per thread)
 URGENT, NOW, SOON, AHEAD = -1, 0, 1, 2  # a click / someone is waiting / someone will soon / made ahead
 GUESS_SECONDS = 5.0  # the estimate of a kind of work never seen yet
+PLAIN_ERROR = ("Something went wrong on the server. Try again in a moment; if it keeps happening, tell the person running stainID "
+               "(the details are in the server's log).")
 
 
 @dataclass
@@ -229,7 +231,8 @@ def _run_one(task: Task) -> None:
         task.state, task.error, task.status_code = "failed", str(error.detail), error.status_code
     except Exception as error:  # noqa: BLE001 - reported to the page that waits for it
         log.exception("background work %s %s failed", task.kind, task.key)
-        task.state, task.error, task.status_code = "failed", f"{type(error).__name__}: {error}", 500
+        # the admin's pages show what went wrong; annotators get a plain message (the detail is in the server log)
+        task.state, task.error, task.status_code = "failed", f"{type(error).__name__}: {error}" if task.admin else PLAIN_ERROR, 500
     with _COND:
         task.finished = time.monotonic()
         if task.state == "done":

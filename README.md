@@ -128,12 +128,12 @@ What annotators see:
   | **Q W E** | a named look-alike, not counted (6E10: CAA, staining inside a neuron; AT8: neuritic crown, tau in an astrocyte, thread) |
   | **`** (or 0) | unsure: dotted amber "?", left out of training and evaluation |
   | **Delete** | reject (not a plaque / tau / neuron): it turns dotted grey like detection's own rejects; a number key makes it solid again |
-  | **Tab** / **Shift+Tab** | a bigger or smaller outline: each object has three Segment Anything outlines ready |
+  | **Tab** / **Shift+Tab** | a smaller or bigger outline (with the brush on, a smaller or bigger brush): each object has three Segment Anything outlines ready |
   | **Click** an object | precise editing of that object only: click a spot to add it, Shift+click one to leave it out, drag the dots (Z one step back); a click beyond the faint frame around it, or Enter, keeps it, Esc cancels |
   | **Space** | hide / show everything drawn over the picture, for a clean look at the tissue |
   | **[** / **]** | step 1 of every field: the acceptance threshold (where objects start), until *Start editing* or the first edit locks it |
   | **S** / **M** | split an object in two (a click and Enter, or a line across objects) / merge objects (click or drag over them, Enter) |
-  | **B** | the brush: change the bad areas (1–4 the type while it is on; a drag adds to that type's area, Shift-drag takes out of it; Tab / Shift+Tab the brush size); they teach and test bad-area detection and their objects are left out of training and scoring — the analysis keeps detection's own areas |
+  | **B** | the brush: change the bad areas (1–4 the type while it is on; a drag adds to that type's area, Shift-drag takes out of it; Tab / Shift+Tab a smaller / bigger brush); they teach and test bad-area detection and their objects are left out of training and scoring — the analysis keeps detection's own areas |
   | **Z** | undo |
   | **Ctrl+S** / **Ctrl+Enter** | save / save and continue |
 
@@ -152,8 +152,8 @@ What annotators see:
   3–5 minutes, where nothing is saved), also when they arrive by a session's own link. The coach asks for one thing at
   a time; *Tutorial* at the top shows it again. *Try the tutorial* on the Labels page shows the admin the same practice.
 
-Both rounds write one shared set of answers, so no object is asked about twice, and labels made earlier are matched
-onto detection's candidates. The Labels page follows progress field by field and person by person. It also shows how
+Every session writes into one shared label log, so no object is asked about twice, and labels made earlier are
+matched onto detection's candidates (the candidate id first, the position only where a label names none). The Labels page follows progress field by field and person by person. It also shows how
 often people agree with detection, and the labels train a new model on the Models page. The classes and their types
 (e.g. *tau+ neuron · pretangle*) can be changed in Settings ([label classes](docs/label_classes.md)). The older kinds
 of session (whole-field review, a quick object queue, and *Outline every object* for the segmentation check) are under
@@ -213,7 +213,7 @@ All screenshots show a synthetic demo project: the tissue images, donors, labels
 | ![Home](docs/images/home.png) | ![Models](docs/images/models.png) |
 | **Home**: your next step and overall progress | **Models**: download published models; train from labels, compare, switch |
 | ![Core viewer](docs/images/viewer.jpg) | ![Labels](docs/images/labels.png) |
-| **Cores**: the whole core; click any spot for a full-resolution preview with every candidate drawn on it (rejected ones dotted grey) | **Labels**: annotation rounds with their progress, agreement with detection, the link to share and *Try the tutorial* |
+| **Cores**: the whole core, zoomable, with every candidate drawn on it (rejected ones dotted grey), the minimap, the excluded areas and the Annotations layer | **Labels**: annotation rounds with their progress, agreement with detection, the link to share and *Try the tutorial* |
 | ![Results](docs/images/results.png) | ![Projects](docs/images/projects.png) |
 | **Results**: download the main table, what every column means, plots by group | **Projects**: every study with its status; new study, open a folder, switch |
 | ![Settings](docs/images/settings.png) | |
@@ -302,6 +302,8 @@ Read in this order:
 
 1. [Adding new slides to a study](docs/guide_adding_slides.md): the guided setup, step by step, for people new to stainID.
 2. [Using the app](docs/webapp.md): every page, how steps are queued, annotation rounds, the segmentation check and training models.
+   [Architecture](docs/architecture.md): where each object (candidate, outline, class, excluded area) is stored, and who reads it.
+   [The job system](docs/job_system.md): the one prioritised, pausable queue every step runs through.
 3. [Label classes](docs/label_classes.md): the classes and types people label with, their keys, and how to change them.
 4. [Project files](docs/project.md): the project settings (`stainid.yaml`), the input tables and every output file.
    [Project kinds](docs/project_kinds.md): image sets, whole slides, imaging settings, dataset packages and scoring on

@@ -13,14 +13,15 @@ import { useFitScreen } from '../labels/rounds'
 import { CLASS_COLOURS, classColour } from '../classPalette'
 import type { Vocabulary } from '../labels/classKeys'
 import { objectsOf } from '../labelling'
+import { PALETTE } from '../palette'
 import type { ImagePoint } from '../viewer'
 import { ZoomViewer } from '../viewer'
 import type { OutlineClass, OutlineField, OutlineObject, OutlineReference, SamOptions, SamStatus } from './types'
 
 /* drawn on the tissue picture, so the same in light and dark mode */
-const UNSURE_COLOR = '#e2e8f0'
-const REFERENCE_COLOR = '#22d3ee'
-const BOX_COLOR = '#ffd21f'
+const UNSURE_COLOR = PALETTE.states.unsure
+const REFERENCE_COLOR = PALETTE.markers.reference
+const BOX_COLOR = PALETTE.markers.box
 const MAX_HANDLES = 240
 const MIN_HANDLE_SPACING = 9  // screen pixels between corners: closer, and the corners are only dragged after zooming in
 
@@ -236,7 +237,7 @@ function Outliner({ detail, reload, tile, field }: { detail: SessionDetail; relo
       if (key === 's' && samReady) { setTool('click'); setDraft([]) }
       else if (key === 'd') { setTool('draw'); setDraft([]) }
       else if (key === 'r') setShowCounted((v) => !v)
-      else if (e.key === 'Tab' && chosen) { e.preventDefault(); otherSize(e.shiftKey ? -1 : 1) }
+      else if (e.key === 'Tab' && chosen) { e.preventDefault(); otherSize(e.shiftKey ? 1 : -1) }  // Tab smaller, Shift+Tab bigger, as everywhere
       else if (e.key === 'Escape') { setDraft([]); setRedrawing(null); setSelected(null) }
       else if (e.key === 'Enter') closeDraft()
       else if (e.key === 'Backspace' || e.key === 'Delete') {
@@ -303,7 +304,7 @@ function Outliner({ detail, reload, tile, field }: { detail: SessionDetail; relo
               <path d={`M0 0H${size.w}V${size.h}H0Z M${box.x} ${box.y}v${box.height}h${box.width}v${-box.height}Z`} fill="#000" fillOpacity={0.28} fillRule="evenodd" />
               <rect x={box.x} y={box.y} width={box.width} height={box.height} fill="none" stroke={BOX_COLOR} strokeWidth={2 * unit} strokeDasharray={`${12 * unit} ${8 * unit}`} />
               {showCandidates && reference.data?.candidates?.map((ring, i) => (
-                <polygon key={`c${i}`} points={flatPoints(ring)} fill="none" stroke="#d0d4da" strokeWidth={2 * unit} strokeDasharray={`${5 * unit} ${4 * unit}`} />
+                <polygon key={`c${i}`} points={flatPoints(ring)} fill="none" stroke={PALETTE.states.inactive} strokeWidth={2 * unit} strokeDasharray={`${5 * unit} ${4 * unit}`} />
               ))}
               {showCounted && reference.data && <>
                 {reference.data.outlines.map((ring, i) => <g key={`s${i}`}>
@@ -327,7 +328,7 @@ function Outliner({ detail, reload, tile, field }: { detail: SessionDetail; relo
                   <circle key={i} cx={p[0]} cy={p[1]} r={3.5 * unit} fill="#fff" stroke="#000" strokeWidth={0.8 * unit} style={{ cursor: 'move' }}
                     onMouseDown={(e) => { if (e.button !== 0) return; e.stopPropagation(); setDragging({ index: i, points: editing }) }} />
                 ))}
-                {prompt?.clicks.map((c, i) => <circle key={`k${i}`} cx={c[0]} cy={c[1]} r={4 * unit} fill={c[2] ? '#4ade80' : '#f87171'} stroke="#000" strokeWidth={unit} />)}
+                {prompt?.clicks.map((c, i) => <circle key={`k${i}`} cx={c[0]} cy={c[1]} r={4 * unit} fill={c[2] ? PALETTE.markers.spot_added : PALETTE.markers.spot_removed} stroke="#000" strokeWidth={unit} />)}
               </>}
               {Object.entries(pending).map(([ref, p]) => <circle key={`p${ref}`} className="sam-pending" cx={p[0]} cy={p[1]} r={10 * unit} fill="none" stroke="#fff" strokeWidth={2 * unit} />)}
               {draft.length > 0 && <>

@@ -31,8 +31,8 @@ const FAQ: [string, ReactNode][] = [
     The main results table is <code>data/analysis/results_donor_region.csv</code>; download it and the others on <Link to="/results">Results</Link> (Downloads).</>],
   ['What does a measure in the results mean?', <>Open <Link to="/results">Results</Link> → <b>What the measures mean</b>: every column of the results tables with
     its unit and a plain explanation, and the column name used in the CSV file.</>],
-  ['How do I know the results are right?', <>Look at the cores and what was found in them on <Link to="/cohort">Cores</Link>, and ask colleagues to check detection’s calls
-    on <Link to="/labels">Labels</Link>: each stain shows how often detection agrees with people, and <Link to="/models">Models</Link> shows the cross-validated precision and
+  ['How do I know the results are right?', <>Look at the cores and what was found in them on <Link to="/cohort">Cores</Link>, and ask colleagues to fix detection on a few
+    fields on <Link to="/labels">Labels</Link> (<b>Fix the field</b>; <b>Mark bad areas</b> for folds and artifacts): each stain shows how often detection agrees with people, and <Link to="/models">Models</Link> shows the cross-validated precision and
     recall on all labels.</>],
   ['The detections look wrong for my staining.', <>Label objects on your own slides (an annotation round on <Link to="/labels">Labels</Link>; 100–200 objects is a good start),
     then train on <Link to="/models">Models</Link> and switch to the new model if it scores better. Then run the detection steps again with <b>Start over</b>.</>],
@@ -49,10 +49,10 @@ const FAQ: [string, ReactNode][] = [
     {' '}What stainID detection found is then on the picture: each type solid in its own colour, objects it rejected dotted grey.
     Point at an object and press one key: a <b>number</b> picks a counted type, a <b>letter</b> a named look-alike, <b>Del</b> rejects it (dotted grey,
     like detection’s own rejects; a number makes it solid again), <b>`</b> unsure (dotted amber with “?”, left out of training and evaluation).
-    <b>Tab</b> / <b>Shift+Tab</b> a bigger or smaller outline, a <b>click</b> on the object to edit the outline spot by spot (a click outside or Enter
+    <b>Tab</b> / <b>Shift+Tab</b> a smaller or bigger outline (the same for the brush), a <b>click</b> on the object to edit the outline spot by spot (a click outside or Enter
     keeps it), <b>Space</b> to hide the drawings for a clean look, <b>S</b> to split an object in two (click it, Enter; or draw a line across objects),
     {' '}<b>M</b> to merge objects (click or drag over them, Enter), <b>B</b> the brush for bad areas (a drag adds to the chosen type’s area, Shift-drag
-    takes out of it, <b>Tab</b> / <b>Shift+Tab</b> the brush size), <b>Z</b> undo. Splits and merges are your labels: detection’s objects stay what the
+    takes out of it, <b>Tab</b> / <b>Shift+Tab</b> a smaller or bigger brush), <b>Z</b> undo. Splits and merges are your labels: detection’s objects stay what the
     analysis counts. In <b>Fix the field</b>, clicking empty
     tissue outlines a missed object. Nothing is saved until <b>Save</b> or <b>Save and continue</b>; unsaved changes come back after a reload. The keys
     are always shown in the side panel.</>],
@@ -77,7 +77,7 @@ const FAQ: [string, ReactNode][] = [
     <b>Cores view</b>: <b>Space</b> hides or shows everything drawn (the minimap stays), <b>←</b> / <b>→</b> the previous or next core with the same stain and
     layers, <b>↑</b> / <b>↓</b> move the picture, scroll zooms, drag moves, click an object for its details; on the minimap a click or drag moves there and a
     double-click opens that tile for annotation. <b>Mark bad areas</b>: the brush of <b>Fix the field</b>, always on — <b>1</b>–<b>4</b> the area type, a drag
-    adds to that type’s area, Shift-drag takes out of it, <b>Tab</b> / <b>Shift+Tab</b> (or <b>+</b> / <b>−</b>) a smaller or bigger brush, the wheel zooms, the
+    adds to that type’s area, Shift-drag takes out of it, <b>Tab</b> / <b>Shift+Tab</b> (or <b>−</b> / <b>+</b>) a smaller or bigger brush, the wheel zooms, the
     middle button pans, <b>Z</b> undoes a stroke, <b>Space</b> hides the drawings, <b>]</b> / <b>[</b> the next or previous stain, <b>Enter</b> says this stain
     is fine and moves on (on the last stain it saves and opens the next core).</>],
   ['A labelling session says no core has detection’s candidates.', <>The annotation rounds show the candidates of the staged detection. Run the

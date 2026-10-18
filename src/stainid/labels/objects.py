@@ -2,9 +2,12 @@
 
 Labels about one object make one row, keyed as every reader keys objects (`store.object_keys` through
 `decisions.keys`: the candidate the label names, else the candidate at its position, else its field and rounded
-position), and counted by the one rule (each person's latest label, `store.latest_say`; the majority, `store.tally`). Positions are in each label's own frame (`labels.frames`), tile-frame imports already moved into the field
-picture. The AI's call and the object's radius come from the candidate pool at that position, else from the
-pipeline's published objects of the field; neither is known for an object nobody detected (a person added it).
+position), and counted by the one rule (each person's latest label, `store.latest_say`; the majority, `store.tally`).
+Positions are in each label's own frame (`labels.frames`), tile-frame imports already moved into the field picture.
+Detection's call and the object's radius come from the v2 candidate store, the one source of detection's calls
+(`candidate_store.calls_of`, the candidate the object is about); an object no candidate is about, on a core the store
+has, is one detection never proposed (its negative). Only for a core the store does not have (a project from before
+the v2 detection) are they read from the older candidate pool and the published outputs (`_legacy_ai`).
 """
 from __future__ import annotations
 
@@ -12,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 from stainid import cache
-from stainid.labels import frames, pool, store
+from stainid.labels import candidate_store, frames, pool, store
 from stainid.labels import vocabulary as vocab
 from stainid.labels.tasks import ai_value
 from stainid.labels.vocabulary import Vocabulary
@@ -56,10 +59,42 @@ def group(labels: pd.DataFrame, vocabulary: Vocabulary, keys: pd.Series | None =
     return pd.DataFrame(out, columns=GROUPED).sort_values(["tile_id", "x", "y"], kind="stable").reset_index(drop=True)
 
 
+def with_ai(project: Project, tiles: pd.DataFrame, objects: pd.DataFrame, stain: str) -> pd.DataFrame:
+    """The objects with detection's call (`ai_value`, as labels write it), its probability and the object's radius,
+    from the v2 store (`candidate_store.calls_of`) for the candidate each object is about. An object no candidate is
+    about, on a core the store has, is detection's negative (it never proposed it); None where the store has no
+    candidates for the core."""
+    if objects.empty:
+        return objects.assign(ai_value=[], ai_probability=[], radius_px=[])
+    calls = candidate_store.calls_of(project, stain, objects.object)
+    on_store = candidate_store.cores(project, stain)
+    core_of = tiles.drop_duplicates("tile_id").set_index("tile_id").core_id.astype(str).to_dict() if len(tiles) and "core_id" in tiles else {}
+    negative = candidate_store.negative_class(vocab.of(project, stain))
+    values, probabilities, radii = [], [], []
+    legacy = [i for i, tile in enumerate(objects.tile_id) if core_of.get(tile) not in on_store]
+    old = _legacy_ai(project, tiles, objects.iloc[legacy], stain) if legacy else {}
+    for i, (key, tile) in enumerate(zip(objects.object, objects.tile_id)):
+        if i in old:
+            values.append(old[i][0])
+            probabilities.append(old[i][1])
+            radii.append(old[i][2])
+            continue
+        if key in calls.index:
+            hit = calls.loc[key]
+            values.append(str(hit.value))
+            probabilities.append(None if pd.isna(hit.probability) else float(hit.probability))
+            radii.append(None if pd.isna(hit.radius_px) else float(hit.radius_px))
+            continue
+        values.append(negative)
+        probabilities.append(None)
+        radii.append(None)
+    return objects.assign(ai_value=values, ai_probability=probabilities, radius_px=radii)
+
+
 def _published(project: Project, tiles: pd.DataFrame, tile_id: str, stain: str) -> tuple[pd.DataFrame, bool]:
     """The pipeline's objects of one field (field-picture pixels) and whether detection has looked at the field at all,
     kept until its output file changes."""
-    tile = tiles[tiles.tile_id == tile_id]
+    tile = tiles[tiles.tile_id == tile_id] if len(tiles) else tiles
     if tile.empty:
         return pd.DataFrame(), False
     source = (project.output("neun") / "tiles" / f"{tile_id}_objects.csv" if stain == "NeuN"
@@ -68,37 +103,30 @@ def _published(project: Project, tiles: pd.DataFrame, tile_id: str, stain: str) 
                       lambda: (pipeline_objects(project, tile, stain), source.exists()))
 
 
-def with_ai(project: Project, tiles: pd.DataFrame, objects: pd.DataFrame, stain: str) -> pd.DataFrame:
-    """The objects with the AI's call, its probability and the object's radius. An object in a field detection has
-    looked at but where it found nothing is the AI's negative; None where detection has not run (or for a picture
-    outside the project's tiles with no candidate there)."""
-    if objects.empty:
-        return objects.assign(ai_value=[], ai_probability=[], radius_px=[])
+def _legacy_ai(project: Project, tiles: pd.DataFrame, objects: pd.DataFrame, stain: str) -> dict[int, tuple]:
+    """Detection's call on objects of cores the v2 store does not have (a project from before the v2 detection): the
+    older candidate pool at the position, else the published outputs; by the objects' place in the full table."""
     candidates = pool.all_objects(project, stain)
-    by_tile = {t: g.reset_index(drop=True) for t, g in candidates.groupby("tile_id")}
-    calls, probabilities, radii = [], [], []
-    for row in objects.itertuples():
+    by_tile = {t: g.reset_index(drop=True) for t, g in candidates.groupby("tile_id")} if len(candidates) else {}
+    out = {}
+    for place, row in zip(objects.index, objects.itertuples()):
         found = by_tile.get(row.tile_id)
         i = pool.nearest(found, row.x, row.y)
         if i is not None:
             hit = found.iloc[i]
-            calls.append(str(hit.ai_value))
-            probabilities.append(None if pd.isna(hit.ai_probability) else float(hit.ai_probability))
-            radii.append(None if pd.isna(hit.radius_px) else float(hit.radius_px))
+            out[place] = (str(hit.ai_value), None if pd.isna(hit.ai_probability) else float(hit.ai_probability),
+                          None if pd.isna(hit.radius_px) else float(hit.radius_px))
             continue
         published, analysed = _published(project, tiles, row.tile_id, stain)
         j = pool.nearest(published, row.x, row.y) if not published.empty else None
         if j is None:
-            calls.append(ai_value(stain, None) if analysed else None)
-            probabilities.append(None)
-            radii.append(None)
+            out[place] = (ai_value(stain, None) if analysed else None, None, None)
             continue
         hit = published.iloc[j]
         mature = hit.get("mature", True)
-        calls.append(ai_value(stain, hit.model_class, bool(mature) if pd.notna(mature) else True))
-        probabilities.append(None if pd.isna(hit.probability) else float(hit.probability))
-        radii.append(float(hit.radius_px) if np.isfinite(hit.radius_px) else None)
-    return objects.assign(ai_value=calls, ai_probability=probabilities, radius_px=radii)
+        out[place] = (ai_value(stain, hit.model_class, bool(mature) if pd.notna(mature) else True),
+                      None if pd.isna(hit.probability) else float(hit.probability), float(hit.radius_px) if np.isfinite(hit.radius_px) else None)
+    return out
 
 
 def labelled(project: Project, tiles: pd.DataFrame, labels: pd.DataFrame, stain: str) -> pd.DataFrame:

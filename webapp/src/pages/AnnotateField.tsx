@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import type { AddedState, FieldObjectLite, FieldWork, Label, SessionDetail } from '../api'
 import { api, apiUrl, enc } from '../api'
 import { Empty, ErrorNote, Loaded, Loading, PageHead, Progress, fmt } from '../components'
+import { PALETTE } from '../palette'
 import { useFetch, useStored } from '../hooks'
 import { AI_VIEW_FOR_LABELLERS } from '../labelling'
 import type { ClassPick } from '../labels/classKeys'
@@ -372,7 +373,7 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
                 title={<span className="row"><span className="muted small">{tile}</span>{done && <span className="badge status-done">finished</span>}</span>}
                 cursor={active?.id === 'label' ? 'pointer' : 'crosshair'} onClick={click} onMove={move}>
                 {(_zoom, _size, unit) => <>
-                  {layers.box && <rect x={data.box.x} y={data.box.y} width={data.box.width} height={data.box.height} fill="none" stroke="#ffd21f" strokeWidth={2 * unit} strokeDasharray={`${12 * unit} ${8 * unit}`} />}
+                  {layers.box && <rect x={data.box.x} y={data.box.y} width={data.box.width} height={data.box.height} fill="none" stroke={PALETTE.markers.box} strokeWidth={2 * unit} strokeDasharray={`${12 * unit} ${8 * unit}`} />}
                   {layers.outlines && all.map((o) => {
                     const k = rkey(o.x, o.y)
                     const v = pickOf(myClass(o.x, o.y)) ?? aiPick(objects.find((q) => rkey(q.x, q.y) === k))

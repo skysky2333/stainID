@@ -180,7 +180,7 @@ the sign-in as a token instead of a cookie.
 | Page | What it is for |
 |---|---|
 | **Home** | Your next step (the guided setup while the study is not set up, or new slides to add), a checklist of every step, cohort numbers and recent jobs. |
-| **Cores** | Every core of every TMA (or every image or slide); click one to see the whole core, then click any spot for a full-resolution preview (220–660 µm) with stainID detection's objects where detection has run and the DAB layer. Where the v2 detection has run, the preview reads its saved candidates: the counted objects with their exact outlines, and, as layers to switch on, the rejected ones (each with why, in plain words), the AT8 threads it saved and the stained areas no candidate covers. Only the preview is sent over the network, never the whole scan. The analysed fields themselves are reviewed on Labels. |
+| **Cores** | Every core of every TMA (or every image or slide); click one to open the whole core as a zoomable picture (tiles at every level, so only what is on screen is sent, never the whole scan) with stainID detection's objects. Where the v2 detection has run it reads the saved candidates: the counted objects with their exact outlines in their class's colour, and, as layers, the rejected ones (each with why, in plain words), the AT8 threads, the stained areas no candidate covers, *Excluded from analysis* (detection's areas, hatched by type: what the analysis leaves out) and the **Annotations** layer (where people's labels differ from detection: changed, rejected, unsure, added, split and merged objects, fixed outlines on hover, and people's bad areas; labels only, never what the analysis counts). The **minimap** shows the whole core with each analysed tile shaded by its review status (reviewed, in progress, not annotated; hatched where no tile was analysed) and the view as a rectangle; a click moves there, a double-click opens that tile for annotation. **Space** hides everything drawn for a clean look, **←** / **→** go to the previous or next core with the same stain and layers, **↑** / **↓** move the picture. The *Acceptance threshold* card previews what would be accepted at another threshold (never saved; the analysis uses detection's threshold). |
 | **Stain thresholds** | The DAB threshold of every slide and why it exists. |
 | **Labels** | Labelling progress per stain, how often people and detection agree, the labelling sessions (create, open, close, share the link, follow people, download) and all labels as CSV. |
 | **Models** | Every model with its status and settings, download buttons, training from all labels, and trained models compared with the current one. |
@@ -226,7 +226,7 @@ studies, image sets and whole-slide projects.
      empty glass and blur, or say a stain looks fine. A sample of cores is enough. The brush is the field tool's
      (`BrushMasks`, labels/brush.ts), always on and with the same keys: each type's current area over the whole core
      image (GET `…/cores/{core}/{stain}/areas`), a drag adds to the chosen type, Shift-drag takes out of it
-     (detection's part too: marking a part fine is no more than that), Tab / Shift+Tab (or + / −) the brush size in µm,
+     (detection's part too: marking a part fine is no more than that), Tab / Shift+Tab (or − / +) a smaller or bigger brush (µm),
      the wheel zooms, Z undoes a stroke, [ / ] the other stain, Enter this stain is done.
    - "Check detection's calls" (one object at a time) is no longer made. Its old sessions stay listed as history and
      their labels stay valid object labels for training and evaluation.
@@ -296,7 +296,7 @@ fields; and the *Tutorial* link. Pointing at an object also shows its name besid
 | Q W E R, T Y U … | a named look-alike, solid and not counted: 6E10 Q CAA, W staining inside a neuron; AT8 Q neuritic crown, W tau in an astrocyte, E thread |
 | ` (or 0) | unsure: dotted amber with a "?", left out of training and evaluation; that person is not asked again, but the others are |
 | Delete (Backspace) | the stain's single reject (not a plaque, not tau, not a neuron): it turns dotted grey and stays visible, the same as detection's own rejects (also an object the person added); a number key makes it solid again |
-| Tab / Shift+Tab (or + / −) | a bigger or smaller outline: the three Segment Anything outputs come with the object, so it changes at once (with the brush on: the brush size) |
+| Tab / Shift+Tab (or − / +) | a smaller or bigger outline: the three Segment Anything outputs come with the object, so it changes at once (with the brush on: a smaller or bigger brush, the same direction) |
 | [ / ] | step 1: the acceptance threshold down / up by 0.01 (until it locks) |
 | S | split mode, on and off (Esc leaves): a click on an object splits it in two (a watershed of its outline on its distance transform, the stain breaking ties; `labels/objectedit.py`) as a preview; a second click elsewhere on it moves the split, Enter keeps it, Esc drops it. Or drag a line: every object it crosses right through is cut along it. The pieces keep the object's type and the keys retype them |
 | M | merge mode, on and off (Esc leaves): click objects to add them to the merge or take them out (highlighted; "3 selected · Enter to merge"), or drag over objects to add every one the stroke touches; Enter merges them into one object, their outlines' union (bridged by a small closing where they do not touch), with the type of the largest piece |
@@ -309,7 +309,7 @@ fields; and the *Tutorial* link. Pointing at an object also shows its name besid
 | Ctrl+Enter (⌘Enter) | save and continue |
 
 In round 2, a click on empty tissue outlines a missed object with one click (Segment Anything). It is a new
-candidate, dotted grey, and Tab / Shift+Tab switch between its three sizes, until a class key makes it solid. *Draw an object by hand…* is the last resort. One click answers at once,
+candidate, dotted grey, and Tab / Shift+Tab switch to a smaller or bigger one of its three sizes, until a class key makes it solid. *Draw an object by hand…* is the last resort. One click answers at once,
 because the server makes the Segment Anything features of the session's fields ahead: on a GPU every field of the
 open sessions, and on the CPU the field someone has open and their next ones. They are kept in
 `data/cache/sam_embeddings/`, and the page says *Preparing one-click outlines…* until its field is ready.

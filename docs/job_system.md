@@ -15,7 +15,7 @@ points), `stainid.jobs.cli` (`stainid jobs …`), `stainid.api.jobs` (one projec
 
    | Class | What | Nice / CPUWeight / IOWeight | Grace to reach a unit boundary |
    |---|---|---|---|
-   | annotation | label-field preparation, applying area edits | 0 / 400 / 400 | 300 s |
+   | annotation | preparing what annotators open (field pictures, crops, Segment Anything features ahead) | 0 / 400 / 400 | 300 s |
    | pipeline | the main study's stages | 5 / 100 / 100 | 300 s |
    | models | training, model comparison, segmentation check | 10 / 50 / 50 | 120 s |
    | public | any project with a `dataset:` section (or `jobs: {class: public}` in its stainid.yaml) | 15 / 20 / 20 | 30 s |

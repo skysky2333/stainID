@@ -8,6 +8,7 @@ last. `/api/session` and `/api/projects` (the projects list) belong to the serve
 from __future__ import annotations
 
 import contextlib
+import logging
 import re
 from pathlib import Path
 
@@ -16,7 +17,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from stainid.api import state
+from stainid import palette
+from stainid.api import state, work
 from stainid.api.routes import analysis, annotate, cohort, images, imageset, jobs, models, project, projects, session, setup, slides
 from stainid.api.routes import areas as area_routes
 from stainid.api.routes import cache as cache_routes
@@ -26,7 +28,8 @@ from stainid.api.routes import rounds as round_routes
 from stainid.api.session import allowed_origins, is_admin
 
 STATIC = Path(__file__).parent / "static"
-PUBLIC_API = re.compile(r"^/api/(session|annotate)(/|$)")
+log = logging.getLogger(__name__)
+PUBLIC_API = re.compile(r"^/api/(session|annotate|palette)(/|$)")
 SCOPED = re.compile(r"^/api/projects/([A-Za-z0-9][A-Za-z0-9_.-]*)(/.+)$")
 
 
@@ -65,10 +68,22 @@ def create_app() -> FastAPI:
     for module in (projects, project, slides, setup, imageset, cohort, images, jobs, analysis, models, session, annotate, cache_routes, label_classes, outline_routes, round_routes, area_routes):
         app.include_router(module.router, prefix="/api")
 
+    @app.get("/api/palette")
+    def colours() -> dict:
+        """Every colour the pages draw with (`stainid.palette`; the web app bundles the same file)."""
+        return palette.palette()
+
     @app.exception_handler(state.UnknownProject)
     async def unknown_project(request: Request, error: state.UnknownProject) -> JSONResponse:
         return JSONResponse({"detail": "This project is not on this server's list (it may have been removed). Open it from the Projects page."},
                             status_code=404)
+
+    @app.exception_handler(Exception)
+    async def unexpected(request: Request, error: Exception) -> JSONResponse:
+        """An error nobody expected: logged with its detail; the admin sees what it was, annotators a plain message."""
+        log.error("%s %s failed", request.method, request.url.path, exc_info=error)
+        detail = f"{type(error).__name__}: {error}" if is_admin(request) else work.PLAIN_ERROR
+        return JSONResponse({"detail": detail}, status_code=500)
 
     @app.middleware("http")
     async def admin_only(request: Request, call_next):

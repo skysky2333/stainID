@@ -1149,7 +1149,7 @@ tr.significant-row td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 /* ---------- annotation rounds: a field at a time, nothing saved until Save (labels/rounds.tsx, checkcalls.tsx, fixfield.tsx) ---------- */
 .save-state.unsaved { color: var(--warning); font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
 .unsaved-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warning); flex: none; }
-.round-object .unsaved-mark { fill: var(--series-2); stroke: #000; }
+.round-object .unsaved-mark { stroke: #000; }
 .round-restored, .field-others { margin: 0 0 10px; }
 .round-answer { margin: -4px 0 10px; }
 .round-answer.unsaved b { color: var(--warning); }
@@ -1334,3 +1334,4 @@ details.side-details.compact > summary { font-weight: 500; }
 .lock-icon { color: var(--text-muted); flex: none; }
 .threshold-preview .threshold-slider { margin-top: 6px; }
 .piece-mark { pointer-events: none; font-weight: 700; }
+.legend-sign { margin: 0 4px 0 -2px; font-size: 11px; line-height: 1; }

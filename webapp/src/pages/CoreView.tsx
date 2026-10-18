@@ -9,7 +9,8 @@ import { useFetch, useStored } from '../hooks'
 import { useProject } from '../project'
 import { Advanced } from '../setup/parts'
 import { CLASS_STYLE, RASTER_LAYERS } from '../viewer'
-import { INACTIVE_GREY, MODEL_CLASSES, UNSURE_AMBER, classColour } from '../classPalette'
+import { INACTIVE_GREY, MODEL_CLASSES, UNKNOWN_COLOUR, UNSURE_AMBER, classColour } from '../classPalette'
+import { PALETTE, areaColour } from '../palette'
 import type { Vocabulary } from '../labels/classKeys'
 import { ThresholdSlider } from '../labels/threshold'
 
@@ -82,7 +83,9 @@ interface CoreThreads {
   pieces: number; length_mm: number; measured: ThreadTotals | null; rows: [number, number[]][]; error?: string; ahead?: number
 }
 interface Outline { area: number | null; rings: number[][] }
-interface Found { index: number; x: number; y: number; r: number; cls: string; color: string; p: number | null; area: number | null; outline?: Outline; reason?: string; candidate?: string }
+/** One object on the core picture. `cls` groups the legend: "rejected", "unproposed", the store's label class
+ *  ("label:<identity>/<subtype>", named and coloured as on every page) or, for the current outputs, detection's class. */
+interface Found { index: number; x: number; y: number; r: number; cls: string; label: string; color: string; p: number | null; area: number | null; outline?: Outline; reason?: string; candidate?: string }
 
 // exact outlines are drawn instead of circles wherever the Outline objects step has made them; every candidate is shown,
 // rejected ones dotted grey (stored under a new key, so the choice of hiding them made before applies no more)
@@ -90,23 +93,26 @@ const LAYER_DEFAULTS = { objects: true, rejected: true, outlines: true, threads:
 type Layers = typeof LAYER_DEFAULTS
 /* The colours of the objects on the core picture: saturated, and clear of DAB brown and haematoxylin blue, each drawn
    over a thin dark halo (deepzoom.tsx). Rejected candidates are dotted light grey. The names stay those of CLASS_STYLE. */
-const UNPROPOSED_COLOR = '#b98cff'  // stained areas no candidate covers: no label class
-/** An object's colour: its label type's, the same on every page (classPalette.ts; the store's class, else detection's
- *  class name mapped onto the label classes and types: a compact plaque is the compact colour); rejected candidates
- *  dotted light grey. */
-function objectColor(vocabulary: Vocabulary | undefined, cls: string, identity?: string): string {
-  if (cls === 'rejected') return INACTIVE_GREY
-  if (cls === 'unproposed') return UNPROPOSED_COLOR
+const UNPROPOSED_COLOR = PALETTE.overlays.unproposed  // stained areas no candidate covers: no label class
+/** An object's class as the legend groups it, its name and colour: the store's label class and type (the same name and
+ *  colour on every page, classPalette.ts), else detection's class name mapped onto the label classes (the current
+ *  outputs: a compact plaque is the compact colour); rejected candidates dotted light grey. */
+function objectClass(vocabulary: Vocabulary | undefined, cls: string, identity?: string, subtype?: string): { cls: string; label: string; color: string } {
+  if (cls === 'rejected') return { cls, label: CLASS_STYLE.rejected.label, color: INACTIVE_GREY }
+  if (cls === 'unproposed') return { cls, label: CLASS_STYLE.unproposed.label, color: UNPROPOSED_COLOR }
+  const known = identity && vocabulary?.classes.some((c) => c.id === identity)
   const mapped = MODEL_CLASSES[cls]
-  const id = identity && vocabulary?.classes.some((c) => c.id === identity) ? identity : mapped?.[0]
-  const type = mapped && mapped[0] === id ? mapped[1] || null : null
-  return vocabulary && id ? classColour(vocabulary, id, type) : CLASS_STYLE[cls]?.color ?? '#ffffff'
+  const id = known ? identity : mapped?.[0]
+  const type = known ? subtype || null : mapped && mapped[0] === id ? mapped[1] || null : null
+  if (!id) return { cls, label: CLASS_STYLE[cls]?.label ?? cls, color: CLASS_STYLE[cls]?.color ?? UNKNOWN_COLOUR }
+  return { cls: `label:${id}/${type ?? ''}`, label: className(vocabulary, id, type ?? undefined), color: vocabulary ? classColour(vocabulary, id, type) : UNKNOWN_COLOUR }
 }
+const objectColor = (vocabulary: Vocabulary | undefined, cls: string) => objectClass(vocabulary, cls).color
 /** A legend swatch drawn as the object is (dotted grey for rejected candidates). */
 const swatchOf = (color: string, dotted = false) => (dotted ? { background: 'transparent', border: `2px dotted ${color}`, boxShadow: '0 0 0 1px rgb(0 0 0 / 35%)' }
   : { background: color, boxShadow: '0 0 0 1px rgb(0 0 0 / 35%)' })
-const TILE_COLOR = 'rgb(30 30 30 / 55%)'
-const THREAD_COLOR = '#00e5ff'  // cyan over a dark halo: the shared mid blue of RASTER_LAYERS.threads vanished on haematoxylin
+const TILE_COLOR = `${PALETTE.overlays.tiles}8c`  // 55%
+const THREAD_COLOR = PALETTE.overlays.threads  // over a dark halo; a mid blue vanished on haematoxylin
 const TRACING = ['waiting', 'tracing']
 /** A thread's line on screen (px), by its measured width: thin, medium (1–2 µm) or thick (2 µm or more). */
 const threadLine = (widthUm: number) => (widthUm < 1 ? 1.2 : widthUm < 2 ? 1.9 : 2.8)
@@ -122,8 +128,8 @@ const REASON_TEXT: Record<string, string> = {
   'rule:fold': 'on a tissue fold',
 }
 const reasonText = (code: string) => REASON_TEXT[code] ?? code.replace(/^rule:/, '').replace(/_/g, ' ')
-/** The colours of people's areas (the brush's, labels/brush.ts EXCLUDE_TYPES), and of a part they marked as fine. */
-const AREA_COLOURS: Record<string, string> = { '1': '#ffb000', '2': '#a855f7', '3': '#9ca3af', '4': '#00e5ff', include: '#22c55e' }
+/** The colours of people's areas: the one palette's area types (the brush's), and of a part taken out of a type. */
+const AREA_COLOURS: Record<string, string> = { '1': areaColour('1'), '2': areaColour('2'), '3': areaColour('3'), '4': areaColour('4'), include: areaColour('include') }
 const AREA_NAMES: Record<string, string> = { '1': 'fold or tissue damage', '2': 'artifact', '3': 'no tissue', '4': 'out of focus or bad staining', include: 'taken out of a type (marked fine)' }
 /** The tile states of the minimap, with their fills. */
 const TILE_STATES: { id: TileState | 'not_analysed'; label: string; fill: string }[] = [
@@ -272,22 +278,22 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
     if (!data) return []
     const col = Object.fromEntries(data.columns.map((c, i) => [c, i]))
     const outlines = new Map((shapes.data?.rows ?? []).map(([x, y, area, rings]) => [`${x},${y}`, { area, rings }]))
-    return data.rows.map((r, index) => ({ index, x: Number(r[col.x]), y: Number(r[col.y]), r: Number(r[col.radius_px] ?? 6), cls: String(r[col.model_class]),
-      color: objectColor(vocabulary, String(r[col.model_class]), col.class === undefined ? undefined : String(r[col.class] ?? '')),
+    return data.rows.map((r, index) => ({ index, x: Number(r[col.x]), y: Number(r[col.y]), r: Number(r[col.radius_px] ?? 6),
+      ...objectClass(vocabulary, String(r[col.model_class]), col.class === undefined ? undefined : String(r[col.class] ?? ''),
+        col.subtype === undefined ? undefined : String(r[col.subtype] ?? '')),
       p: r[col.probability] === null ? null : Number(r[col.probability]), area: r[col.area_um2] === null ? null : Number(r[col.area_um2]),
       outline: outlines.get(`${r[col.x]},${r[col.y]}`), reason: col.reason === undefined ? undefined : String(r[col.reason] ?? ''),
       candidate: col.candidate_id === undefined ? undefined : String(r[col.candidate_id] ?? '') })).map((o) => {
       if (previewValue == null || detectionAt == null || Math.abs(previewValue - detectionAt) < 1e-9 || !o.candidate) return o
       const w = would.get(o.candidate)
       if (!w || !w.identity || w.p == null) return o  // a rule decides it: as detection called it
-      if (w.p < previewValue) return { ...o, cls: 'rejected', color: INACTIVE_GREY }
+      if (w.p < previewValue) return { ...o, ...objectClass(vocabulary, 'rejected') }
       if (o.cls !== 'rejected') return o
-      const cls = Object.entries(MODEL_CLASSES).find(([, [id, type]]) => id === w.identity && (type || '') === (w.subtype || ''))?.[0]
-        ?? Object.entries(MODEL_CLASSES).find(([, [id]]) => id === w.identity)?.[0] ?? w.identity
-      return { ...o, cls, color: vocabulary ? classColour(vocabulary, w.identity, w.subtype || null) : objectColor(vocabulary, cls) }
+      return { ...o, ...objectClass(vocabulary, 'accepted', w.identity, w.subtype) }
     })
   }, [found.data, shapes.data, vocabulary, previewValue, detectionAt, would])
   const colorOfClass = useMemo(() => Object.fromEntries(objects.map((o) => [o.cls, o.color])), [objects])
+  const labelOfClass = useMemo(() => Object.fromEntries(objects.map((o) => [o.cls, o.label])), [objects])
   const counts = useMemo(() => objects.reduce<Record<string, number>>((acc, o) => ({ ...acc, [o.cls]: (acc[o.cls] ?? 0) + 1 }), {}), [objects])
   const classes = Object.keys(counts).filter((c) => c !== 'rejected').sort()
   const showOutlines = layers.outlines && outlinesMade && !!shapes.data
@@ -375,7 +381,7 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
     if (o) {
       const a = layers.annotations && o.candidate ? byCandidate.get(o.candidate) : undefined
       pointing(a)
-      const own = [CLASS_STYLE[o.cls]?.label ?? o.cls, o.p === null ? null : `${Math.round(o.p * 100)}% sure`, o.area === null ? null : `${area(o.area)} µm²`,
+      const own = [o.label, o.p === null ? null : `${Math.round(o.p * 100)}% sure`, o.area === null ? null : `${area(o.area)} µm²`,
         showOutlines && o.outline?.area != null ? `outlined ${area(o.outline.area)} µm²` : null].filter(Boolean).join(' · ')
       return a && a.kind !== 'agree' ? [own, ...peopleLines(a)].join('\n') : own
     }
@@ -444,7 +450,7 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
                 <b>What detection found</b><span className="spacer" /><span className="muted">{(objects.length - (counts.rejected ?? 0)).toLocaleString()}</span></label>
               {classes.map((c) => (
                 <div key={c} className="layer-toggle indent">
-                  <span className="swatch" style={swatchOf(colorOfClass[c] ?? objectColor(vocabulary, c))} />{CLASS_STYLE[c]?.label ?? c}<span className="spacer" /><span className="muted">{counts[c].toLocaleString()}</span>
+                  <span className="swatch" style={swatchOf(colorOfClass[c] ?? objectColor(vocabulary, c))} />{labelOfClass[c] ?? c}<span className="spacer" /><span className="muted">{counts[c].toLocaleString()}</span>
                 </div>
               ))}
               {!!counts.rejected && (
@@ -460,7 +466,7 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
             </>
           )}
           <ExcludedToggle on={layers.excluded} onToggle={() => toggle('excluded')} state={excluded} />
-          {found.data?.source === 'v2' && <AnnotationsToggle on={layers.annotations} onToggle={() => toggle('annotations')} state={annotations} />}
+          {found.data?.source === 'v2' && <AnnotationsToggle on={layers.annotations} onToggle={() => toggle('annotations')} state={annotations} vocabulary={vocabulary} />}
           <label className="layer-toggle"><input type="checkbox" checked={layers.dab} onChange={() => toggle('dab')} />
             <span className="swatch" style={{ background: RASTER_LAYERS.dab.color }} />Stained area (brown above this slide’s threshold)</label>
           {(found.data?.tiles.length ?? 0) > 0 && <label className="layer-toggle"><input type="checkbox" checked={layers.tiles} onChange={() => toggle('tiles')} />
@@ -481,7 +487,7 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
         {pick && (
           <div className="card">
             <h3>Selected object</h3>
-            <p className="row" style={{ margin: '0 0 6px' }}><span className="swatch" style={swatchOf(pick.color, pick.cls === 'rejected')} /><b>{CLASS_STYLE[pick.cls]?.label ?? pick.cls}</b></p>
+            <p className="row" style={{ margin: '0 0 6px' }}><span className="swatch" style={swatchOf(pick.color, pick.cls === 'rejected')} /><b>{pick.label}</b></p>
             <dl className="facts">
               {pick.p !== null && <><dt>Detection score</dt><dd>{Math.round(pick.p * 100)}%</dd></>}
               {pick.reason && <><dt>Why</dt><dd>{reasonText(pick.reason)}</dd></>}
@@ -515,7 +521,7 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
 
 /** What a mark of the Annotations layer is about (for its tooltip and for clicking it). */
 interface AnnotationMark { object?: AnnotatedObject; at?: Found; added?: AddedObject; area?: PeopleArea; edit?: ObjectEdit }
-const EDIT_COLOUR = '#f472b6'  // the badge of a split (solid) or merged (dashed) object
+const EDIT_COLOUR = PALETTE.markers.edit  // the badge of a split (solid) or merged (dashed) object
 
 /** The page fits the window (no scrolling): the square picture takes the height left below the page's head, the side
  *  panel scrolls within the same height. Measured, so the head's height (wrapping, a note) does not matter; nothing on a
@@ -621,20 +627,34 @@ function Minimap({ core, stain, status, view, onJump, onOpen }: {
   )
 }
 
-/** The "Annotations" layer: where people's labels differ from detection (a small badge in the class they gave; grey
- *  dashed: not an object; white dashed: unsure), the objects they added that detection missed (dashed), their bad
- *  areas (outlines by type; dashed green: marked fine), and how they compare. Labels train and evaluate models only. */
-function AnnotationsToggle({ on, onToggle, state }: { on: boolean; onToggle: () => void; state: { data: CoreAnnotations | null; error: string | null; reload: () => void } }) {
+/** The "Annotations" layer: where people's labels differ from detection (a small round badge: solid in the class they
+ *  gave; dotted grey with an "×": not an object; dotted amber: unsure), the objects they added that detection missed
+ *  (dashed, with a "+"), splits and merges (a pink badge, solid / dashed), their bad areas (outlines by type; dashed:
+ *  taken out of a type), and how they compare. Each legend swatch is drawn as its mark is. Labels train and evaluate
+ *  models only. */
+function AnnotationsToggle({ on, onToggle, state, vocabulary }: {
+  on: boolean; onToggle: () => void; state: { data: CoreAnnotations | null; error: string | null; reload: () => void }; vocabulary?: Vocabulary
+}) {
   const data = state.data
   const c = data?.counts
   const agreement = data?.areas?.agreement
   const cells = agreement ? Math.max(1, agreement.cells_analysed ?? agreement.cells_auto_excluded) : 1  // shares of the analysed area
-  const rows: [string, number | undefined, React.CSSProperties][] = c ? [
-    ['agree with detection', c.agree, { background: 'transparent', border: '1px solid var(--border)' }],
-    ['changed class', c.changed, swatchOf('#ffb000')],
-    ['not an object (rejected)', c.rejected, swatchOf(INACTIVE_GREY, true)],
-    ['unsure', c.unsure, swatchOf('#ffffff', true)],
-    ['added (detection missed it)', c.added, swatchOf('#ffffff', true)],
+  const firstChanged = data?.objects.find((o) => o.kind === 'changed')
+  const changedColour = firstChanged ? classColour(vocabulary, firstChanged.identity, firstChanged.subtype || null) : UNKNOWN_COLOUR
+  const addedColour = data?.added[0] ? classColour(vocabulary, data.added[0].identity, data.added[0].subtype || null) : UNKNOWN_COLOUR
+  const badge = (colour: string, line: 'solid' | 'dotted' | 'dashed' = 'solid', sign = ''): React.CSSProperties => ({
+    borderRadius: '50%', width: 10, height: 10, boxShadow: '0 0 0 1px rgb(0 0 0 / 35%)',
+    ...(line === 'solid' ? { background: colour } : { background: 'transparent', border: `2px ${line} ${colour}` }),
+    ...(sign ? { position: 'relative' } : {}),
+  })
+  const rows: [string, number | undefined, React.CSSProperties, string?][] = c ? [
+    ['agree with detection (no mark)', c.agree, { background: 'transparent', border: '1px solid var(--border)' }],
+    ['changed class (badge in the class people gave)', c.changed, badge(changedColour)],
+    ['not an object (rejected)', c.rejected, badge(INACTIVE_GREY, 'dashed'), '×'],
+    ['unsure', c.unsure, badge(UNSURE_AMBER, 'dashed')],
+    ['added (detection missed it)', c.added, { background: 'transparent', border: `2px dashed ${addedColour}`, boxShadow: '0 0 0 1px rgb(0 0 0 / 35%)' }, '+'],
+    ['split', c.split, badge(EDIT_COLOUR)],
+    ['merged', c.merge, badge(EDIT_COLOUR, 'dashed')],
     ['outline fixed (shown when pointing at it)', c.outline_fixed, { background: 'transparent', border: '1.5px dashed var(--text-muted)' }],
   ] : []
   return (
@@ -643,15 +663,17 @@ function AnnotationsToggle({ on, onToggle, state }: { on: boolean; onToggle: () 
         <input type="checkbox" checked={on} onChange={onToggle} />
         <span className="swatch" style={{ background: 'transparent', border: '2px solid var(--text-muted)', borderRadius: '50%' }} />Annotations</label>
       {on && !data && !state.error && <div className="layer-toggle indent"><Loading inline label="Loading the annotations…" /></div>}
-      {on && data && rows.filter(([, n]) => n).map(([label, n, style]) => (
-        <div key={label} className="layer-toggle indent"><span className="swatch" style={style} />{label}<span className="spacer" /><span className="muted">{n!.toLocaleString()}</span></div>
+      {on && data && rows.filter(([, n]) => n).map(([label, n, style, sign]) => (
+        <div key={label} className="layer-toggle indent"><span className="swatch" style={style} />{sign && <b className="legend-sign" aria-hidden="true">{sign}</b>}{label}
+          <span className="spacer" /><span className="muted">{n!.toLocaleString()}</span></div>
       ))}
       {on && data && !rows.some(([, n]) => n) && <p className="layer-note small">Nobody has labelled objects of this core yet.</p>}
-      {on && agreement && (data?.areas?.regions.length ?? 0) > 0 && (
-        <div className="layer-toggle indent wrap" title="People's painted and cleared areas against detection's automatic excluded areas (a check on the fold and artifact finders; the analysis uses detection's)">
+      {on && (data?.areas?.regions.length ?? 0) > 0 && (
+        <div className="layer-toggle indent wrap" title="People's areas (outlined in each type's colour; dashed: taken out of a type), against detection's automatic excluded areas where those are made (a check on the fold and artifact finders; the analysis uses detection's)">
           <span className="swatch" style={{ background: 'transparent', border: `2px solid ${AREA_COLOURS['1']}` }} />
-          people’s areas: {agreement.f1 == null ? '' : `F1 ${agreement.f1.toFixed(2)} with detection’s; `}
-          {(100 * agreement.cleared_auto_cells / cells).toFixed(1)}% cleared, {(100 * agreement.painted_new_cells / cells).toFixed(1)}% added
+          people’s areas{agreement ? <>: {agreement.f1 == null ? '' : `F1 ${agreement.f1.toFixed(2)} with detection’s; `}
+            {(100 * agreement.cleared_auto_cells / cells).toFixed(1)}% taken out, {(100 * agreement.painted_new_cells / cells).toFixed(1)}% added</> : ''}
+          <span className="spacer" /><span className="muted">{data!.areas!.regions.length.toLocaleString()}</span>
         </div>
       )}
       {on && state.error && <div className="layer-toggle indent wrap"><ErrorNote error={state.error} />
@@ -769,7 +791,7 @@ function ExcludedToggle({ on, onToggle, state }: { on: boolean; onToggle: () => 
     <>
       <label className="layer-toggle" title="What the analysis leaves out of this core, as detection found it: folds, linear artifacts, empty glass, the AT8 edge guard, and tissue in no analysed tile">
         <input type="checkbox" checked={on} onChange={onToggle} />
-        <span className="swatch" style={hatchSwatch({ id: '', label: '', color: '#ff3b3b', hatch: '\\', fraction: null })} />Excluded from analysis</label>
+        <span className="swatch" style={hatchSwatch({ id: '', label: '', color: PALETTE.areas['1'], hatch: '\\', fraction: null })} />Excluded from analysis</label>
       {on && !data && !state.error && <div className="layer-toggle indent"><Loading inline label="Loading the excluded areas…" /></div>}
       {on && data?.status === 'not_made' && <p className="layer-note small">Not made for this core yet: the new detection’s “Find candidates”
         step maps them (<Link to="/workflow">Run</Link>).</p>}
@@ -841,7 +863,7 @@ function ObjectList({ objects, selected, onPick }: { objects: Found[]; selected:
           <tbody>
             {sorted.slice(page * size, (page + 1) * size).map((o) => (
               <tr key={o.index} className={`clickable${o.index === selected ? ' selected' : ''}`} onClick={() => onPick(o)}>
-                <td><span className="swatch" style={swatchOf(o.color, o.cls === 'rejected')} /> {CLASS_STYLE[o.cls]?.short ?? o.cls}</td>
+                <td><span className="swatch" style={swatchOf(o.color, o.cls === 'rejected')} /> {o.cls.startsWith('label:') ? o.label : CLASS_STYLE[o.cls]?.short ?? o.label}</td>
                 <td className="num">{o.p === null ? '—' : `${Math.round(o.p * 100)}%`}</td><td className="num">{o.area === null ? '—' : area(o.area)}</td>
               </tr>
             ))}

@@ -385,6 +385,33 @@ def ai_call(vocabulary: vocab.Vocabulary, decision: str, klass: str, subtype: st
     return found.id, sub if sub and found.subtype(sub) else ""
 
 
+def calls_of(project: Project, stain: str, candidate_ids) -> pd.DataFrame:
+    """Detection's call of each of these candidates as the v2 store has it, the one source of detection's calls on
+    every page: indexed by candidate id, `identity` and `subtype` (label-class ids, `ai_call`), `value` ("identity /
+    subtype" as labels write it), `probability` and `radius_px`. Ids not in the store are left out."""
+    ids = sorted({str(c) for c in candidate_ids if isinstance(c, str) and c})
+    columns = ["identity", "subtype", "value", "probability", "radius_px"]
+    if not ids:
+        return pd.DataFrame(columns=columns)
+    cores = set()
+    for c in ids:
+        try:
+            cores.add(v2.parse_id(c)[1])
+        except ValueError:
+            continue
+    found = for_cores(project, stain, cores, ["candidate_id", "x_core", "y_core", "decision", "class", "subtype", "probability", "radius_px", "area_um2"])
+    found = found[found.candidate_id.isin(set(ids))].drop_duplicates("candidate_id") if len(found) else found
+    if found.empty:
+        return pd.DataFrame(columns=columns)
+    words = vocab.of(project, stain)
+    calls = [ai_call(words, d, k, t) for d, k, t in zip(found.decision, found["class"], found.subtype)]
+    return pd.DataFrame({"identity": [c[0] for c in calls], "subtype": [c[1] for c in calls],
+                         "value": [f"{i} / {t}" if t else i for i, t in calls],
+                         "probability": pd.to_numeric(found.probability, errors="coerce").to_numpy(),
+                         "radius_px": [radius(r, project.pixel_size_um) for r in found.itertuples()]},
+                        index=pd.Index(found.candidate_id.astype(str), name="candidate_id"))
+
+
 def match_px(stain: str, pixel_size_um: float) -> float:
     return MATCH_UM.get(stain, DEFAULT_MATCH_UM) / max(1e-6, pixel_size_um)
 

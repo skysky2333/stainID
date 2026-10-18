@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import type { AiView, AreasOverview, ClassCount, LabelsOverview, Labeller, ReferenceLabels, SessionInfo, StainOverview, Vocabulary } from '../api'
+import type { AiView, AreasOverview, ClassCount, LabelsOverview, Labeller, ReferenceLabels, RoundProgress, SessionInfo, StainOverview, Vocabulary } from '../api'
 import { api, apiUrl, appPath, enc } from '../api'
 import { Empty, ErrorNote, HelpBox, Loaded, Modal, PageHead, Progress, fmt, timeAgo, withError } from '../components'
 import { useFetch } from '../hooks'
@@ -31,7 +31,7 @@ export default function Labels() {
 
   return (
     <>
-      <PageHead title="Labels" subtitle="Ask colleagues to check stainID detection’s calls on a few fields; their labels then train better models.">
+      <PageHead title="Labels" subtitle="Ask colleagues to fix detection on a few fields and mark bad areas on some cores; their labels train and test the models, never the analysis.">
         <a className="btn" href={apiUrl('/api/labels/export.csv')}>Download all labels</a>
         <a className="btn" href={appPath('/annotate/tutorial?preview=1')} target="_blank" rel="noreferrer"
           title="See exactly what annotators see first: the 4-minute practice on a field of this project (nothing is saved)">Try the tutorial</a>
@@ -196,9 +196,10 @@ function SessionRow({ s, link, onChanged }: { s: SessionInfo; link: string; onCh
         </div>
         <div className="muted small">{s.kind === 'areas' ? `Every stain · ${AREAS_TITLE}${s.order === 'random' ? ' · random order' : s.order ? ' · likely problems first' : ''}`
           : `${s.stain} · ${s.round ? `Round ${s.round} · ${ROUND_TITLE[s.round]}` : KIND_TEXT[s.kind]}`}
-          {(s.labels_needed ?? s.per_field) > 1 ? ` · ${s.labels_needed ?? s.per_field} people per ${s.kind === 'queue' ? 'object' : 'field'}` : ''}</div>
+          {(s.labels_needed ?? s.per_field) > 1 ? ` · ${s.labels_needed ?? s.per_field} people per ${s.kind === 'queue' ? 'object' : s.kind === 'areas' ? 'core' : 'field'}` : ''}</div>
         <SessionProgress s={s} />
-        <People people={s.labellers} fields={s.kind !== 'queue' ? s.fields ?? 0 : null} />
+        {s.kind === 'areas' ? <CorePeople progress={s.round_progress} labellers={s.labellers} />
+          : <People people={s.labellers} fields={s.kind !== 'queue' ? s.fields ?? 0 : null} />}
       </div>
       <div className="session-actions">
         {s.open && !s.read_only && <CopyButton text={link} />}
@@ -251,6 +252,21 @@ function SessionProgress({ s }: { s: SessionInfo }) {
   )
 }
 
+/** "Mark bad areas" goes core by core: each person with the cores they checked. */
+function CorePeople({ progress, labellers }: { progress?: RoundProgress; labellers: Labeller[] }) {
+  const people = progress?.people ?? []
+  if (!people.length) return <div className="muted small">Nobody has checked a core yet.</div>
+  const last = new Map(labellers.map((p) => [p.person, p.last_active]))
+  return (
+    <div className="people-chips">
+      {people.map((p) => (
+        <span key={p.person} className="person-chip"><b>{p.person}</b> {p.decided.toLocaleString()} of {progress!.total.toLocaleString()} cores
+          {last.get(p.person) ? <span className="muted"> · {timeAgo(last.get(p.person)!)}</span> : null}</span>
+      ))}
+    </div>
+  )
+}
+
 function People({ people, fields }: { people: Labeller[]; fields: number | null }) {
   if (!people.length) return <div className="muted small">Nobody has labelled yet.</div>
   return (
@@ -289,7 +305,10 @@ function SessionMore({ s, onChanged, onError }: { s: SessionInfo; onChanged: () 
         <button className="btn small danger-outline" onClick={() => setConfirm('delete')}>Delete session</button>
       </div>
       {s.instructions && <p className="small secondary"><b>Note for labellers:</b> {s.instructions}</p>}
-      {s.kind !== 'queue' && <SessionFields s={s} onChanged={onChanged} />}
+      {s.kind === 'areas' ? <p className="small secondary">{typeof s.cores === 'number' ? s.cores.toLocaleString() : (s.cores?.length ?? 0).toLocaleString()} cores, each with
+        all its stains; a core is handed to one person at a time{s.round_progress?.second_checks ? `, and ${s.round_progress.second_checks.toLocaleString()} also go to a second person` : ''}.
+        {' '}To check other cores, make a new session.</p>
+        : s.kind !== 'queue' && <SessionFields s={s} onChanged={onChanged} />}
       {examining && <SessionLabelsView name={s.name} title={s.title} onClose={() => setExamining(false)} />}
       <Advanced hint="settings and per-person counts">
         <table className="compact"><tbody>

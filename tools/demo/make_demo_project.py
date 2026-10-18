@@ -14,7 +14,7 @@ The v2 detection is written as if its stages had run: a candidate store per core
 simulated detector saw, accepted and rejected, with three outline sizes standing in for the Segment Anything masks; the
 objects it missed are left for people to add), stage manifests with the digests the stages would record (so the Run
 page shows every v2 stage done and up to date), the v2 results tables and finished runs of each step in the job store.
-On that store sit two AT8 annotation rounds, "Fix the field" and "Check detection's calls", with Ann's saved work on a field
+On that store sits an AT8 "Fix the field" session, with Ann's saved work on a field
 she has not finished, fields finished by Ben and Carla, and the tutorial done by the three of them (so a new name gets
 it). demo.json names the sessions and fields the screenshots open.
 

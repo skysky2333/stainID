@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from stainid import cache, disk_cache
+from stainid import cache, disk_cache, palette
 from stainid.api import pyramid
 from stainid.api.state import ProjectState
 from stainid.imaging.color import rgb_to_hed
@@ -127,7 +127,7 @@ def exclusion_overlay(state: ProjectState, tile_id: str) -> Path:
         mask = ~field_tissue_mask(rgb) | linear_artifact_mask(rgb)
         if tile["stain"] != "NeuN":
             mask |= fold_mask(rgb, state.project.pixel_size_um)
-        _rgba_png(mask, (90, 110, 255), 110, target)
+        _rgba_png(mask, palette.overlay("excluded"), 110, target)
     disk_cache.used(target)
     return target
 
@@ -140,7 +140,7 @@ def dab_overlay(state: ProjectState, tile_id: str) -> Path:
         cal = state.calibration()
         threshold = float(cal[(cal.tma == str(tile["tma"])) & (cal.stain == tile["stain"])].threshold_dab_od.iloc[0])
         rgb = field_rgb(state, tile_id)
-        _rgba_png(np.maximum(rgb_to_hed(rgb)[..., 2], 0) >= threshold, (255, 40, 40), 120, target)
+        _rgba_png(np.maximum(rgb_to_hed(rgb)[..., 2], 0) >= threshold, palette.overlay("dab"), 120, target)
     disk_cache.used(target)
     return target
 
@@ -159,7 +159,7 @@ def thread_overlay(state: ProjectState, tile_id: str) -> Path:
         nuclei = clean_nuclei(np.load(nuclei_path)["masks"], rgb) if nuclei_path.exists() else None
         valid = field_tissue_mask(rgb) & ~linear_artifact_mask(rgb) & ~fold_mask(rgb, state.project.pixel_size_um)
         skeleton = thread_network(rgb, valid, threshold, state.project.pixel_size_um, nuclei=nuclei)["skeleton"]
-        _rgba_png(cv2.dilate(skeleton.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool), (40, 110, 255), 235, target)
+        _rgba_png(cv2.dilate(skeleton.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool), palette.overlay("threads"), 235, target)
     disk_cache.used(target)
     return target
 
