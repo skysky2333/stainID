@@ -189,13 +189,15 @@ def test_the_donor_id_style_takes_0_to_8_digits(client):
 
 
 def test_estimates_use_what_a_core_image_took_and_scale_small_images(study, monkeypatch):
-    """A stage measured on this project (the v2 manifests record seconds per core image) is costed by that; without a
-    measurement an image set of small patches is not costed like 1.5 mm TMA cores."""
+    """A stage measured on this project (the v2 manifests record seconds per core image) is costed by what is left of
+    each stain at that pace, as many core images at once as it runs; without a measurement an image set of small
+    patches is not costed like 1.5 mm TMA cores."""
     rows = guide._rows
     monkeypatch.setattr(guide, "_rows", lambda path: [{}] * 3 if path == study.input("slides_table") else rows(path))  # three slides
     plain = guide.estimate(study, ["v2_proposals"])
-    monkeypatch.setattr(guide, "_measured", lambda project: {"v2_proposals": 0.9})
+    monkeypatch.setattr(guide, "_v2_left", lambda project: {"v2_proposals": 1200.0})  # 1,200 s of core images left, as measured
+    monkeypatch.setattr(guide, "parallel", lambda step: 16)  # 16 at once on this computer
     measured = guide.estimate(study, ["v2_proposals"])
-    assert measured["steps"][0]["seconds"] == int(measured["cores"] * 0.9) < plain["steps"][0]["seconds"]
+    assert measured["steps"][0]["seconds"] == 75 < plain["steps"][0]["seconds"]
     patch = {"native_width_px": "848", "native_height_px": "848", "pixel_width_um": "0.2738", "pixel_height_um": "0.2738"}
     assert abs(guide._image_area_um2([patch] * 3) - 232.2 ** 2) < 200  # a 232 µm patch: 3 % of a 1.5 mm core's area
