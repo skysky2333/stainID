@@ -28,6 +28,35 @@ ACTIVE = ("running", "queued")
 PROGRESS = re.compile(r"\[(\d+)/(\d+)\]")
 ERROR = re.compile(r"^[A-Za-z_.]*(Error|Exception): ")
 NOISE = re.compile(r"Warning|Matplotlib is building|^\s*warnings\.warn|SLF4J")
+PROGRESS_FILE_ENV = "STAINID_PROGRESS_FILE"  # where a job (an --exec script too) may say how far it is: see `progress_file`
+_FRACTION = re.compile(r"^\s*(\d+)\s*/\s*(\d+)\s*$")
+_TOTAL = re.compile(r"^\s*total\s+(\d+)\s*$", re.IGNORECASE)
+_UNIT_DONE = re.compile(r"^\s*(unit\s+)?done\b", re.IGNORECASE)
+
+
+def progress_file(log: Path | str) -> Path:
+    """The job's progress file, next to its log (its path is in $STAINID_PROGRESS_FILE). A script writes either
+    "done/total" lines (the last one counts, e.g. `echo 12/72 >> "$STAINID_PROGRESS_FILE"`), or a "total N" line and
+    then one "unit done" (or "done ...") line per finished unit."""
+    return Path(log).with_suffix(".progress")
+
+
+def _from_progress_file(path: Path) -> tuple[int, int] | None:
+    try:
+        text = path.read_text(errors="replace")
+    except OSError:
+        return None
+    fraction, total, units = None, 0, 0
+    for line in text.splitlines():
+        if (m := _FRACTION.match(line)) is not None:
+            fraction = (int(m.group(1)), int(m.group(2)))
+        elif (m := _TOTAL.match(line)) is not None:
+            total = int(m.group(1))
+        elif _UNIT_DONE.match(line):
+            units += 1
+    if fraction is not None:
+        return fraction
+    return (units, total) if units or total else None
 
 
 @dataclass
@@ -143,12 +172,15 @@ def progress(path: Path) -> dict:
             handle.seek(max(0, handle.seek(0, os.SEEK_END) - 20000))
             tail = handle.read().decode(errors="replace").splitlines()
     except OSError:
-        return {"done": 0, "total": 0, "last_line": "", "error": ""}
+        tail = []
     lines = [line for line in tail if line.strip() and not NOISE.search(line)]
     last = next((m for m in map(PROGRESS.search, reversed(lines)) if m), None)
     error = ERROR.sub("", next((line for line in reversed(lines) if ERROR.match(line)), ""))
-    return {"done": int(last.group(1)) if last else 0, "total": int(last.group(2)) if last else 0, "last_line": lines[-1] if lines else "",
-            "error": error}
+    done, total = (int(last.group(1)), int(last.group(2))) if last else (0, 0)
+    found = _from_progress_file(progress_file(path))  # what the job wrote in its progress file wins over its log
+    if found is not None:
+        done, total = found
+    return {"done": done, "total": total, "last_line": lines[-1] if lines else "", "error": error}
 
 
 def alive(pid: int | None, since: float | None = None) -> bool:

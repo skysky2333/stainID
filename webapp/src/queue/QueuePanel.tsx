@@ -3,7 +3,7 @@ import type { Job, QueueOverview } from '../api'
 import { api, queueText } from '../api'
 import { ErrorNote, Loaded, Progress, StatusBadge, withError } from '../components'
 import { useFetch } from '../hooks'
-import { duration } from '../pipeline'
+import { duration, runningText } from '../pipeline'
 
 /** The one job queue of this computer (every project's steps, downloads, public datasets), highest priority first:
  * each job's place, progress and time left, with Pause / Resume / Cancel / Move up, and one switch for all background work. */
@@ -63,8 +63,7 @@ function QueueRow({ job, onAct }: { job: Job; onAct: (job: Job, action: string, 
   const chunkText = chunks ? `${chunks.finished} of ${chunks.total} chunks done${chunks.running ? ` · ${chunks.running} running` : ''}` : ''
   const facts = running
     ? [job.stopping ? (job.stopping === 'cancel' ? 'Stopping…' : 'Pausing at the next unit…') : '', chunkText,
-       total ? `${done.toLocaleString()} of ${total.toLocaleString()} done` : 'Starting…',
-       job.eta_s ? `about ${duration(job.eta_s)} left` : ''].filter(Boolean).join(' · ')
+       ...runningText(job)].filter(Boolean).join(' · ')
     : [job.queue?.position ? `#${job.queue.position} in its class` : '', chunkText, queueText(job)].filter(Boolean).join(' · ')
   const sizeText = job.size ? `${job.size}${job.estimate_s ? ` · ~${duration(job.estimate_s)}` : ''}` : ''
   const sizeTitle = job.needs ? `Needs ${job.needs.cpus} processors${job.needs.gpus ? `, ${job.needs.gpus} GPU` : ''}, ${job.needs.ram_gb} GB`

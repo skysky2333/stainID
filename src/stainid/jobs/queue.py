@@ -42,7 +42,7 @@ import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from stainid.jobs import ACTIVE, APP, COMMAND_LINE, JOB_ENV, Job, JobStore, alive, new_id, policy, stop
+from stainid.jobs import ACTIVE, APP, COMMAND_LINE, JOB_ENV, PROGRESS_FILE_ENV, Job, JobStore, alive, new_id, policy, progress_file, stop
 from stainid.jobs.units import CONTROL_ENV, PAUSED, SINCE_ENV
 from stainid.tables import write_text_atomic
 
@@ -1058,7 +1058,8 @@ class Scheduler:
         return None if job.command else policy.STEP_SECONDS.get(job.workflow)
 
     def remaining(self, job: Job, now: float | None = None) -> float | None:
-        """Seconds a running job is expected to take still (from its progress, else its estimate)."""
+        """Seconds a running job is expected to take still: from its progress, else from its estimate while that has not
+        passed (None: no basis for one, or it runs longer than expected, see `overdue`; never a made-up "30 s")."""
         now = now or time.time()
         elapsed = now - (job.started or now)
         if job.request:  # asked to stop: by the end of its grace time at the latest
@@ -1069,7 +1070,21 @@ class Scheduler:
         if p["done"] and p["total"] and p["done"] < p["total"] and elapsed > 0:
             return elapsed / p["done"] * (p["total"] - p["done"])
         total = self.estimate(job)
-        return None if total is None else max(30.0, total - elapsed)
+        return None if total is None or total <= elapsed else total - elapsed
+
+    def overdue(self, job: Job, now: float | None = None) -> bool:
+        """A running job past the time it was expected to take, with no progress to estimate from."""
+        if job.status != "running" or job.request or not job.started:
+            return False
+        if job.children:
+            return any(self.overdue(self.jobs[c], now) for c in job.children if c in self.jobs)
+        from stainid.jobs import progress as log_progress
+
+        p = log_progress(Path(job.log_file)) if job.log_file else {"done": 0, "total": 0}
+        if p["done"] and p["total"] and p["done"] < p["total"]:
+            return False
+        total = self.estimate(job)
+        return total is not None and (now or time.time()) - job.started > total
 
     def size(self, job: Job) -> str:
         need = job_needs(job)
@@ -1396,7 +1411,7 @@ class Scheduler:
                 pass
             env["STAINID_PROJECT"] = job.project
         need = self.budget.clamp(job_needs(job))
-        env |= {JOB_ENV: job.id, CONTROL_ENV: self.files(job)["control"], "STAINID_JOB_CPUS": str(max(1, int(need.get("cpus") or 1))),
+        env |= {JOB_ENV: job.id, CONTROL_ENV: self.files(job)["control"], PROGRESS_FILE_ENV: str(progress_file(self.files(job)["log"])), "STAINID_JOB_CPUS": str(max(1, int(need.get("cpus") or 1))),
                 "STAINID_JOB_RAM_GB": str(need.get("ram_gb") or 0), QUEUE_ENV: str(self.dir)}
         if job.runs and job.runs[0][0]:
             env[SINCE_ENV] = str(job.runs[0][0])  # a later run: a step redoing everything keeps what it redid already
@@ -1434,7 +1449,8 @@ class Scheduler:
         out = {**asdict(job), "env": {}, "title": title_of(job), "class": job_class(job), "class_title": CLASS_TITLES[job_class(job)],
                "rank": RANK[job_class(job)], "needs": job_needs(job), "progress": progress, "queue": None, "eta_s": None,
                "estimate_s": round(estimate) if estimate is not None else None, "size": policy.size_of(job_needs(job), estimate),
-               "io": policy.io_of(job, job_needs(job)), "children": list(job.children)}
+               "io": policy.io_of(job, job_needs(job)), "children": list(job.children),
+               "elapsed_s": round(time.time() - job.started) if job.status == "running" and job.started else None, "overdue": self.overdue(job)}
         if job.children:
             out["chunks"] = progress.get("chunks")
             out["running_chunks"] = [c.title for c in chunks if c.status == "running"][:4]
