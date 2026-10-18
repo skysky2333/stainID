@@ -63,16 +63,16 @@ def test_the_comparison_is_worked_out_once_per_stain_until_the_labels_change(rou
     name = _session(admin)
     ann.get(f"/api/annotate/{name}/fields/{TILE}")
     _save(ann, name, TILE, [{"task": "class", "candidate": rows[1]["candidate_id"], "value": "not a plaque"}])
+    time.sleep(2.7)  # past the cache's racy window (cache.RACY_SECONDS): the log's signature is trusted
+    first = compare.versus_detection(project, "6E10", tiles, CORE)  # worked out (here or by a warm-up in the background)
     made = []
     real = compare._versus_detection
     monkeypatch.setattr(compare, "_versus_detection", lambda *a, **k: made.append(1) or real(*a, **k))
-    time.sleep(2.7)  # past the cache's racy window (cache.RACY_SECONDS): the log's signature is trusted
-    first = compare.versus_detection(project, "6E10", tiles, CORE)
     again = compare.versus_detection(project, "6E10", tiles, CORE)
     every = compare.versus_detection(project, "6E10", tiles)
-    assert len(made) == 1 and first.equals(again) and len(every) == len(first)
+    assert not made and first.equals(again) and len(every) == len(first)  # every core, and again: from what was kept
     _save(ann, name, TILE, [{"task": "class", "candidate": rows[2]["candidate_id"], "value": "plaque"}])
-    assert len(compare.versus_detection(project, "6E10", tiles, CORE)) == 2 and len(made) == 2  # a new label: worked out again
+    assert len(compare.versus_detection(project, "6E10", tiles, CORE)) == 2 and made  # a new label: worked out again
 
 
 def test_detection_s_calls_on_the_labels_page_come_from_the_store(rounds_project):
