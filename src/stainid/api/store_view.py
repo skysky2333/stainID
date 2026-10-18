@@ -14,7 +14,7 @@ from stainid import candidates, palette
 from stainid import exclusions as excluded_areas
 
 COLUMNS = ["candidate_id", "x_core", "y_core", "radius_px", "area_um2", "probability", "decision", "reason", "class", "subtype",
-           "m_from_ring", "outline", "sam_outline", "sam_status", "outline_default"]
+           "m_from_ring", "outline", "sam_outline", "sam_status", "outline_default", "sam_area_um2"]
 
 
 def setting(project) -> str:
@@ -67,19 +67,21 @@ def _polygon_um2(flat: list[int], pixel_um: float) -> float:
 
 def outline_rows(project, core_id: str, stain: str, outline: str = "default") -> list[list]:
     """Each candidate's outline: [x, y, area µm², rings]. `outline`: "default" the outline the stain draws
-    (`candidates.outline_rings`), "stain" the candidate's own outline (as the stain's segmentation found it), "sam0" /
+    (`candidates.outline_rings`, with the area the measures use: `candidates.shown_area_um2`), "stain" the candidate's own outline (as the stain's segmentation found it), "sam0" /
     "sam1" / "sam2" the small / medium / large Segment Anything output (its own area), else the candidate's own outline
     where Segment Anything gave none."""
     if outline not in OUTLINE_CHOICES:
         raise ValueError(f"outline must be one of {', '.join(OUTLINE_CHOICES)}")
     sam = outline.startswith("sam")
     frame = candidates.read_core(project, stain, core_id, [*COLUMNS, "sam_masks"] if sam else COLUMNS)
+    shown = candidates.shown_area_um2(frame).to_numpy(float) if outline == "default" and not frame.empty else None
     rows = []
-    for row in frame.to_dict("records"):
+    for number, row in enumerate(frame.to_dict("records")):
         area = float(row["area_um2"])
         own = candidates.points(row.get("outline"))
         if outline == "default":
             rings = candidates.outline_rings(row)
+            area = float(shown[number]) if np.isfinite(shown[number]) else area  # the drawn outline's, as the measures
         elif outline == "stain":
             rings = [own] if own else []
         else:

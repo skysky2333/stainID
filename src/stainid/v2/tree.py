@@ -160,6 +160,9 @@ def stained_level(field_, smooth: np.ndarray, level: float, contrast: float, val
     """`level` × the slide threshold, raised to the median of `smooth` over `valid` tissue + `contrast` × the threshold
     where the background is darker (a pale halo stands out from its tissue, not from glass)."""
     out = float(level) * field_.threshold
+    standard = getattr(field_, "standard", None)  # the standard crop's tissue (a wider detection window moves no level)
+    if standard is not None and (valid & standard).sum() >= 100:
+        valid = valid & standard
     if float(contrast) > 0 and valid.sum() >= 100:
         out = max(out, float(np.median(smooth[valid])) + float(contrast) * field_.threshold)
     return out

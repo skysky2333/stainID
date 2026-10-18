@@ -20,7 +20,7 @@ from stainid.v2.params import digest as params_digest
 
 # Bump a stage's version when its code changes what it writes: every output of that stage becomes outdated.
 READ = object()  # "read the manifest from its file": the default of the `expected` functions' known-manifest arguments
-VERSIONS = {"proposals": 4, "outlines": 2, "calls": 2, "candidates": 2}
+VERSIONS = {"proposals": 5, "outlines": 2, "calls": 2, "candidates": 2}
 STAGES = ("proposals", "outlines", "calls", "candidates")
 
 

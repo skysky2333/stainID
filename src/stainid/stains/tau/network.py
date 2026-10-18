@@ -137,11 +137,14 @@ def segment_at8_network(
     tangle_boxes: list[dict[str, float]] | None = None,
     edge_guard_um: float = 25.0,
     hole_rim_um: float = 5.0,
+    statistics_mask: np.ndarray | None = None,
 ) -> tuple[
     dict[str, float | int],
     list[dict[str, float | int | bool | str]],
     dict[str, np.ndarray],
 ]:
+    """`statistics_mask`: the pixels the background median and spread (so the positive level) and the edge-guard
+    trigger (its positive share and enrichment at the tissue edge) are taken over; all of the image when None."""
     tissue = field_tissue_mask(rgb)
     pixel_area_um2 = pixel_width_um * pixel_height_um
     pixel_size_um = np.sqrt(pixel_area_um2)
@@ -155,9 +158,15 @@ def segment_at8_network(
         raise ValueError("AT8 network analysis requires at least 100 tissue pixels")
 
     dab = np.maximum(rgb_to_hed(rgb)[..., 2], 0.0).astype(np.float32)
-    background_median = float(np.median(dab[base_valid]))
+    scope = (
+        np.ones(tissue.shape, dtype=bool)
+        if statistics_mask is None or (base_valid & statistics_mask).sum() < 100
+        else statistics_mask
+    )
+    sample = base_valid & scope
+    background_median = float(np.median(dab[sample]))
     background_mad = float(
-        np.median(np.abs(dab[base_valid] - background_median))
+        np.median(np.abs(dab[sample] - background_median))
     )
     background_sigma = max(1.4826 * background_mad, 0.001)
     threshold = max(
@@ -176,16 +185,18 @@ def segment_at8_network(
         preliminary_positive, max(2, round(1.0 / pixel_area_um2))
     )
     edge_probe = _external_tissue_edge_guard(tissue, 15.0 / pixel_size_um)
+    scoped_positive = preliminary_positive & scope
+    scoped_probe = edge_probe & scope
     edge_positive_fraction = float(
-        preliminary_positive[edge_probe].sum()
-        / max(1, preliminary_positive.sum())
+        scoped_positive[scoped_probe].sum()
+        / max(1, scoped_positive.sum())
     )
-    edge_density = float(preliminary_positive[edge_probe].mean()) if edge_probe.any() else 0.0
-    interior = base_valid & ~edge_probe
-    interior_density = float(preliminary_positive[interior].mean()) if interior.any() else 0.0
+    edge_density = float(scoped_positive[scoped_probe].mean()) if scoped_probe.any() else 0.0
+    interior = base_valid & ~edge_probe & scope
+    interior_density = float(scoped_positive[interior].mean()) if interior.any() else 0.0
     edge_positive_enrichment = edge_density / max(interior_density, 1e-9)
     edge_guard_triggered = bool(
-        preliminary_positive.sum() * pixel_area_um2 >= 20.0
+        scoped_positive.sum() * pixel_area_um2 >= 20.0
         and edge_positive_fraction >= 0.25
         and edge_positive_enrichment >= 4.0
     )

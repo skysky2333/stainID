@@ -383,7 +383,9 @@ def plain(stain_report: dict) -> str:
 
 def truths(project: Project, stains: list[str] | None = None, names: list[str] | None = None) -> list[Truth]:
     """Every source of outlines: the checks (outline sessions) and the imported raters with polygons."""
-    labels = store.current(project.output("reviews"))
+    from stainid import exclusions  # noqa: PLC0415
+
+    labels = exclusions.drop_excluded(project, store.current(project.output("reviews")))  # people's final say, as training
     words = lambda meta: vocab.of(project, meta["stain"])  # noqa: E731
     found = [check_truth(labels, m, words(m)) for m in outline_sessions(project, stains, names)]
     found += [t for t in (imported_truth(labels, m, words(m)) for m in imported_sessions(project, stains, names)) if t.fields]
