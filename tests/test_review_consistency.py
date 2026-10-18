@@ -127,8 +127,8 @@ def test_annotators_never_see_a_raw_server_error(rounds_project, monkeypatch):
     assert "Unpickling" not in answer.text and "pickle" not in answer.text
     # an error nobody expected: a plain message for annotators (the detail goes to the log)
     monkeypatch.setattr(sam_embeddings, "field_picture", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("cuda: device-side assert")))
-    plain = TestClient(admin.app, raise_server_exceptions=False)
-    plain.post("/api/session/annotator", json={"name": "Ann"})
+    plain = TestClient(admin.app, raise_server_exceptions=False)  # Ann in another browser, which shows server errors as answers
+    plain.cookies = ann.cookies
     seen = plain.post(f"/api/annotate/{name}/fields/{TILE}/segment", json={"points": [[100, 100, 1]]})
     assert seen.status_code == 500 and "cuda" not in seen.text and "Something went wrong" in seen.json()["detail"]
 

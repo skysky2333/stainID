@@ -1,11 +1,12 @@
 import { useEffect } from 'react'
 import { Link, NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import type { Job, ProjectsInfo, Session } from './api'
-import { api, projectId, projectPath, remote } from './api'
+import { projectId, projectPath, remote } from './api'
 import { ActivityBar, ErrorNote, Loading } from './components'
 import { useFetch, useTheme } from './hooks'
 import { ProjectProvider, ProjectSwitcher, useProject } from './project'
-import { AdminSignIn, Annotator, ServerSetting, SessionContext, useSession } from './session'
+import { Annotator, ChoosePassword, ServerSetting, SessionContext, SignIn, signOut, useSession } from './session'
+import { AccountPage } from './pages/AnnotateHome'
 import AnnotateField from './pages/AnnotateField'
 import AnnotateHome from './pages/AnnotateHome'
 import { Tutorial, TutorialLink } from './labels/tutorial'
@@ -41,7 +42,7 @@ const NAV: { section: string; links: NavItem[] }[] = [
     ['/models', 'Models', 'Get, train and choose the detection models'],
   ] },
 ]
-const FOOT_NAV: NavItem[] = [['/settings', 'Settings', 'Study settings, admin password, appearance'], ['/help', 'Help', 'Getting started, common questions, glossary']]
+const FOOT_NAV: NavItem[] = [['/settings', 'Settings', 'Study settings, people and passwords, appearance'], ['/help', 'Help', 'Getting started, common questions, glossary']]
 
 const belongs = (pathname: string, to: string) => (to === '/' ? pathname === '/' : pathname === to || pathname.startsWith(`${to}/`))
 
@@ -58,9 +59,12 @@ export default function App() {
   if (!session.data) return <main className="main">{session.error ? <><ErrorNote error={session.error} /><ServerSetting open={remote} /></> : <Loading />}</main>
   const annotating = pathname === '/annotate' || pathname.startsWith('/annotate/')
   const admin = session.data.admin
+  const account = session.data.account
   let page
-  if (annotating) page = <AnnotatorShell />  // in a project, or (old links) the project opened last
-  else if (!admin) page = <AdminSignIn />
+  if (account?.must_change) page = <NewPassword />  // an admin reset the password: a new one first
+  else if (annotating) page = <AnnotatorShell />  // in a project, or (old links) the project opened last; the tutorial needs no account
+  else if (!account) page = <SignIn />  // one sign-in page for everyone
+  else if (!admin) page = <Navigate to="/annotate" replace />  // annotators: only the annotation pages
   else if (projectId) page = <ProjectProvider><Shell /></ProjectProvider>
   else if (pathname === '/' || pathname === '/projects') page = <Projects />
   else page = <ToLastProject />
@@ -76,7 +80,19 @@ function ToLastProject() {
   return <main className="main">{projects.error ? <ErrorNote error={projects.error} /> : <Loading />}</main>
 }
 
-/** The public annotation pages (/annotate): anyone with the link, for sessions the admin has started. */
+function NewPassword() {
+  const { session } = useSession()
+  return (
+    <main className="main" style={{ display: 'grid', placeItems: 'center', minHeight: '80vh' }}>
+      <div style={{ width: 420, maxWidth: '100%' }}>
+        <p className="secondary">Welcome back, <b>{session.account?.name}</b>. Your password was reset: choose your own to carry on.</p>
+        <ChoosePassword />
+      </div>
+    </main>
+  )
+}
+
+/** The annotation pages (/annotate): the person's labelling sets, the tutorial (public) and the labelling itself. */
 function AnnotatorShell() {
   return (
     <div className="annotator-shell">
@@ -90,6 +106,7 @@ function AnnotatorShell() {
         <Routes>
           <Route path="/annotate" element={<AnnotateHome />} />
           <Route path="/annotate/tutorial" element={<Tutorial />} />
+          <Route path="/annotate/account" element={<AccountPage />} />
           <Route path="/annotate/:name" element={<AnnotateField />} />
           <Route path="/annotate/:name/:tile" element={<AnnotateField />} />
         </Routes>
@@ -100,7 +117,7 @@ function AnnotatorShell() {
 
 function Shell() {
   const { info, error } = useProject()
-  const { reload } = useSession()
+  const { session: { account }, reload } = useSession()
   const { pathname } = useLocation()
   useEffect(() => { document.title = [pageLabel(pathname), info?.name, 'stainID'].filter(Boolean).join(' · ') }, [pathname, info?.name])
   if (error && !info) {
@@ -129,8 +146,8 @@ function Shell() {
         </nav>
         <div className="sidebar-foot">
           <nav className="nav-group" aria-label="Settings and help">{FOOT_NAV.map((item) => <SideLink key={item[0]} item={item} />)}</nav>
-          <span className="row signed-in">Signed in as admin<span className="spacer" />
-            <button className="link-btn" onClick={async () => { await api.del('/api/session/admin'); reload() }}>Sign out</button></span>
+          <span className="row signed-in">Signed in as {account?.name ?? 'admin'}<span className="spacer" />
+            <button className="link-btn" onClick={() => signOut(reload)}>Sign out</button></span>
         </div>
       </aside>
       <main className="main">

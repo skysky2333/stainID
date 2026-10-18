@@ -164,7 +164,18 @@ export interface ModelInfo {
   size_mb?: number; modified?: string; bundle?: Record<string, unknown>
 }
 
-export interface Session { admin: boolean; annotator: string | null; default_password: boolean; local: boolean; project: string | null; allowed_origins?: string[] }
+export interface Session {
+  admin: boolean; annotator: string | null; default_password: boolean; local: boolean; project: string | null; allowed_origins?: string[]
+  /** the signed-in account (one sign-in for everyone; `role` decides what they see), null when nobody is signed in */
+  account: Account | null
+}
+export interface Account { id: string; name: string; role: 'admin' | 'annotator'; must_change: boolean; past_name: string; handle: string; created: number }
+/** A labelling set in someone's collection ("my sets"), of any project on the server. */
+export interface MySet extends OpenSession { project: string; project_name: string; joined: number | null; link: string }
+/** Who may label a session: its join key and its members (Labels → a session → More). */
+export interface SessionAccess { key: string | null; enabled: boolean; members: { id: string; name: string; handle: string; role: string; joined: number }[] }
+export interface People { people: Account[]; past_names: { name: string; account: string | null; account_name: string | null }[] }
+export interface ApiToken { id: string; label: string; created: number; last_used: number | null }
 export type AiView = 'full' | 'positions' | 'none'
 export interface StainOverview {
   stain: string; fields: number; fields_prepared: number; fields_reviewed: number; fields_with_labels: number

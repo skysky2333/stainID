@@ -18,9 +18,24 @@ stainid serve --cache-min-free 80G         # free space every drive keeps: below
 The app opens on the **Projects** page (see [Projects](#projects)), or on the project given with `--project`. If
 stainID is already running, starting it again just opens the browser.
 
-**Admin password.** The app asks for the admin password; it is `admin` until you change it under *Settings → Admin
-password*. The app listens on your network (so annotators can reach the annotation pages), but everything except
-those pages needs the password, and while it is still `admin` you can only sign in on the computer running stainID.
+**Accounts.** Everyone signs in on the same page with a name and a password, and their **role** decides what they
+see: an **admin** gets every page and can open every labelling set; an **annotator** gets only the annotation pages
+(*My labelling sets*, *Add a set* with a key, the tutorial). Every admin-only request is refused for annotators (403)
+by the server, not only hidden in the page. Anyone can make an annotator account on the sign-in page; admins add
+people, promote and demote them, reset forgotten passwords (a one-time password; the person chooses a new one when
+signing in with it) and remove accounts under *Settings → People*. There is always at least one admin: the last one
+cannot be demoted or removed. Names are unique on the server (case does not matter); passwords are kept as scrypt
+hashes with a salt of their own; sign-ins and join keys are rate-limited. Accounts belong to the server
+(`~/.stainid/accounts.sqlite`), so one account works in every project.
+
+The first admin is the account **admin** with the admin password of earlier versions: after an update, sign in with
+the name `admin` and the password you used before (`admin` on a new server, until you change it under *Settings →
+Your password*). The tutorial needs no account: anyone can try it, and nothing is kept.
+
+**API tokens.** Scripts and agents use a token of an account instead of a password: *Settings → API tokens for
+scripts*, or `stainid accounts token NAME` on the server (printed once; `stainid accounts list | add | reset | role`
+manage accounts there too). Send it as `Authorization: Bearer <token>` (or `?access_token=<token>` on a plain GET). A
+token can do what its account can; revoking it, or removing the account, ends it.
 
 **Several people at once.** Anyone on your network can open `http://<the computer running stainID>:8765` in their
 browser. Each person signs in (or, on the annotation pages, gives a name) and picks a project. People in the same
@@ -172,8 +187,7 @@ for static files. Two things are needed:
    *Back to …* returns to the default. For a copy everyone uses, set it once in that copy's `config.js` (next to
    `index.html`): `window.STAINID_SERVER = 'http://analysis-pc:8765'`, no rebuild needed.
 
-Sign-in then works as usual (the default password still only works on the computer running stainID); the page keeps
-the sign-in as a token instead of a cookie.
+Sign-in then works as usual; the page keeps the sign-in as a token instead of a cookie.
 
 ## Other pages
 
@@ -185,7 +199,7 @@ the sign-in as a token instead of a cookie.
 | **Labels** | Labelling progress per stain, how often people and detection agree, the labelling sessions (create, open, close, share the link, follow people, download) and all labels as CSV. |
 | **Models** | Every model with its status and settings, download buttons, training from all labels, and trained models compared with the current one. |
 | **Results** | The main results table (download), every other table, plots by group and region, and the meaning of every column. |
-| **Settings** | Study name, TMA layout, diagnostic groups and every file location, with a folder picker. Also leads to the Projects page to open or create another project, changes the admin password and (folded away) chooses the server. |
+| **Settings** | Study name, TMA layout, diagnostic groups and every file location, with a folder picker. Also leads to the Projects page to open or create another project, manages the people with accounts (*People*), your password, API tokens for scripts, and (folded away) chooses the server. |
 | **Help** | Getting started, common questions and a glossary. Words with a dotted underline show their definition on hover. |
 
 ## Labels
@@ -242,11 +256,21 @@ studies, image sets and whole-slide projects.
 - the session ID, a note for labellers, and *Also ask for the type*;
 - the older kinds of session (see below).
 
-**Sharing.** *Link for labellers* on the Labels page (`http://<this computer>:8765/p/<project>/annotate`) opens every
-open session of the study. The link names the project, so people label in the right study whatever others have open.
-People type their name, with no account or password, and can stop and continue later under the same name. Nothing else
-in stainID is reachable without the admin password. Links without a project (`…:8765/annotate`) open the project
-opened last.
+**Sharing a set with a key (admins).** Every labelling session gets a **join key** when it is made: ten characters
+from an alphabet without look-alikes (`k7mq2-xr9ta`, about 50 bits; wrong keys are rate-limited). The key names both
+the project and the session. Open a session's *More* on the Labels page: *Who can label* shows the key (*Copy*), the
+people who joined (*Remove*), and *Joining on*. *New key* stops the old key at once; people who joined keep their
+access. Send people *Link for labellers* (`http://<this computer>:8765/p/<project>/annotate`) and the key. Only the
+members of a set, and admins, can open it: the server checks membership on every annotation request. Labels, claims on
+fields, look-ahead holds and fair share are by account (labels carry the account id, `account`, besides the name).
+
+**How to join a labelling set (annotators).** Open the link and sign in, or *Make an account* with your name and a
+password. Type the key under *Add a set*: the set joins *My labelling sets* (sets of every project on the server, with
+their progress), and *Start* or *Continue* opens it. Sign in again next time, on any computer, to carry on.
+
+**Past names.** Labels made before accounts existed keep their names, and those names are reserved: nobody can sign
+up as one. Under *Settings → People*, link an account to such a name (*Past labels as*): the account then labels under
+that name and sees its history as its own.
 
 **The first time.** A name that has not been through the tutorial goes there first, from the list of sessions or from
 a session's own link (and back there afterwards; `/api/session/tutorial` names the practice field). It is a practice on a real field
@@ -255,8 +279,9 @@ nothing is saved (about 3–5 minutes): step 1, the acceptance threshold (move i
 editing*), reject (Del), bring types back (numbers), unsure (`), a clean look (Space), precise editing, split (S) and
 merge (M), the brush (B), saving. A coach asks for one thing at a time and
 waits until it is done. *Skip tutorial* is always there, and *Tutorial* at the top shows it again. Who finished it is
-kept in `outputs.reviews/tutorials.json`. **Try the tutorial** on the Labels page opens the same practice for the
-admin, without a name, in a new tab: what annotators see, with nothing saved or remembered.
+kept in `outputs.reviews/tutorials.json`. The tutorial is public: someone without an account can try it, and nothing
+is saved or remembered. **Try the tutorial** on the Labels page opens the same practice in a new tab: what
+annotators see.
 
 **Step 1: the acceptance threshold.** Every field opens with a slider at the top of the panel, *Acceptance
 threshold*, at detection's own threshold for the stain's model (marked on the track). Dragging it (or [ and ] in steps

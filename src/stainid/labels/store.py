@@ -16,6 +16,7 @@ from __future__ import annotations
 import fcntl
 import json
 import time
+from contextvars import ContextVar
 from pathlib import Path
 
 import numpy as np
@@ -37,11 +38,18 @@ def object_id(task: str, tile_id: str, x: float, y: float) -> str:
     return f"{task}:{tile_id}:{round(x)}:{round(y)}"
 
 
+ATTRIBUTION: ContextVar[str | None] = ContextVar("stainid_account", default=None)  # the signed-in account (set by the app)
+
+
 def append(root: Path, records: list[dict]) -> list[dict]:
+    """Add labels to the log; each carries the account id of the signed-in person (`account`) besides their name."""
     path = log_path(root)
+    account = ATTRIBUTION.get()
     path.parent.mkdir(parents=True, exist_ok=True)
     now = time.time()
     stamped = [{**{k: None for k in COLUMNS}, "confirmed": False, "deleted": False, "session": "", **r, "time": r.get("time") or now} for r in records]
+    if account:
+        stamped = [r if r.get("account") else {**r, "account": account} for r in stamped]
     with path.open("a", encoding="utf-8") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
         handle.write("".join(json.dumps(r) + "\n" for r in stamped))

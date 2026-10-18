@@ -149,7 +149,7 @@ def client(synthetic_project, monkeypatch):
 def test_an_older_outline_session_stays_readable_and_scored(client):
     """Outline sessions are no longer made or worked on (outline accuracy comes from "Fix the field"): one from an older
     project keeps its labels, is listed and is scored against detection's candidates."""
-    from fastapi.testclient import TestClient
+    from people import annotator
 
     from stainid.api import state
     from stainid.labels import sessions, store
@@ -171,8 +171,7 @@ def test_an_older_outline_session_stays_readable_and_scored(client):
     records.append(outline.complete_record(meta, "Ann", TILE, True))
     store.append(reviews, records)
 
-    ann = TestClient(client.app)
-    ann.post("/api/session/annotator", json={"name": "Ann"})
+    ann = annotator(client, "Ann", name)
     assert ann.get(f"/api/annotate/{name}/outline/{TILE}").status_code == 404  # its outlining page is retired
     listed = client.get("/api/labels/overview").json()["sessions"]
     assert [(s["kind"], s["fields_covered"], s["labels"]) for s in listed] == [("outline", 1, 6)]

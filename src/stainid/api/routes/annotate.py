@@ -84,6 +84,9 @@ def session_meta(name: str, request: Request) -> dict:
     meta = sessions.meta(root(), name)
     if not meta["open"] and not is_admin(request):
         raise HTTPException(403, "this labelling session is not open at the moment")
+    from stainid.api.routes import accounts as access  # noqa: PLC0415 - who may label it: admins, and the people who joined it
+
+    access.may_label(request, name)
     return meta
 
 
@@ -772,9 +775,22 @@ class Marks(BaseModel):
 
 @router.get("/annotate")
 def list_open(request: Request, person: str | None = Depends(viewer)) -> list[dict]:
+    """The sessions of this project the person may label: every one for an admin, else the ones they joined."""
+    from stainid.api import accounts  # noqa: PLC0415
+    from stainid.api.session import current_account  # noqa: PLC0415
+
+    account = current_account(request)
+    joined = None if is_admin(request) else {n for p, n, _ in accounts.sets_of(account.id) if p == get_state().id} if account else set()
+    return open_sessions(request, person, joined)
+
+
+def open_sessions(request: Request, person: str | None, only: set[str] | None = None) -> list[dict]:
+    """The open sessions (an admin: every one) of the request's project, or of them the ones in `only`, with progress."""
     labels = store.current(root())
     out = []
     for name in sessions.names(root()):
+        if only is not None and name not in only:
+            continue
         meta = sessions.meta(root(), name)
         if not meta["open"] and not is_admin(request):
             continue

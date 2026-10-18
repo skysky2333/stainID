@@ -11,6 +11,7 @@ pytest.importorskip("fastapi")
 pytest.importorskip("httpx")
 
 from fastapi.testclient import TestClient  # noqa: E402
+from people import annotator  # noqa: E402
 
 from stainid.api import state  # noqa: E402
 from stainid.api.app import create_app  # noqa: E402
@@ -81,8 +82,7 @@ def test_sessions_take_only_ready_fields_and_list_where_each_stands(client):
     assert [(f["tile_id"], f["state"], f["core_label"]) for f in fields] == [(READY, "preparing", "B-2")]
     _prepare(READY)
     client.post("/api/labels/sessions/auto/open", json={"open": True})
-    ann = TestClient(client.app)
-    ann.post("/api/session/annotator", json={"name": "Ann"})
+    ann = annotator(client, "Ann", "auto")
     assert client.get("/api/labels/sessions/auto/fields").json()[0]["state"] == "not_started"
     ann.post("/api/annotate/auto/labels", json={"records": [{"task": "class", "tile_id": READY, "x": 100.0, "y": 200.0, "value": "diffuse plaque"}]})
     assert client.get("/api/labels/sessions/auto/fields").json()[0] | {"state": "in_progress", "working": ["Ann"], "done_by": []} == \
@@ -105,8 +105,7 @@ def test_every_label_belongs_to_a_session_and_each_can_be_examined(client):
     store.append(root, [{"id": f"class:{READY}:100:200", "source": "import: reference_6e10", "stain": "6E10", "task": "class", "tile_id": READY,
                          "x": 100.0, "y": 200.0, "value": "compact plaque"}])
     client.post("/api/labels/sessions", json={"name": "round_1", "title": "Round 1", "stain": "6E10", "tile_ids": [READY], "open": True})
-    ann = TestClient(client.app)
-    ann.post("/api/session/annotator", json={"name": "Ann"})
+    ann = annotator(client, "Ann", "round_1")
     ann.post("/api/annotate/round_1/labels", json={"records": [{"task": "class", "tile_id": READY, "x": 100.0, "y": 200.0, "value": "diffuse plaque"}]})
     sets = client.get("/api/labels/sets", params={"stain": "6E10"}).json()
     assert [(s["name"], s["title"], s["classes"]) for s in sets] == [("round_1", "Round 1", {"plaque · diffuse": 1}),

@@ -127,6 +127,7 @@ def app(synthetic_project, monkeypatch, on_cpu):
     pytest.importorskip("httpx")
     import pandas as pd
     from fastapi.testclient import TestClient
+    from people import annotator
     from test_annotation_rounds import _store_row
 
     from stainid.api import state
@@ -148,8 +149,7 @@ def app(synthetic_project, monkeypatch, on_cpu):
     made = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "open": True, "tile_ids": [TILE]})  # "Fix the field"
     assert made.status_code == 200, made.text
     name = made.json()["name"]
-    ann = TestClient(admin.app)
-    ann.post("/api/session/annotator", json={"name": "Ann"})
+    ann = annotator(admin, "Ann", name)
     ann.session_name = name
     yield ann
     state.reset()

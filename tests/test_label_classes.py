@@ -233,6 +233,7 @@ pytest.importorskip("fastapi")
 pytest.importorskip("httpx")
 
 from fastapi.testclient import TestClient  # noqa: E402
+from people import annotator  # noqa: E402
 
 from stainid.api import state  # noqa: E402
 from stainid.api.app import create_app  # noqa: E402
@@ -263,9 +264,7 @@ def client(synthetic_project, monkeypatch):
 
 
 def _annotator(client) -> TestClient:
-    ann = TestClient(client.app)
-    ann.post("/api/session/annotator", json={"name": "Ann"})
-    return ann
+    return annotator(client, "Ann", every=True)
 
 
 def test_quick_check_answers_carry_identity_and_type(client):

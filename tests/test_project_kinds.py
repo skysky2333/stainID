@@ -335,7 +335,6 @@ def test_package_import_setup_and_scoring_through_the_app(client, tmp_path):
     remapped = client.put(f"{base}/labels/imported/class-map", json={"class_map": {**imported["class_map"], "diffuse": "diffuse plaque"}}).json()
     assert remapped["placed"]["expert2"] == 15
     # imported sessions are read-only
-    client.post("/api/session/annotator", json={"name": "Ann"})
     name = "import-synthetic_points-expert1"
     session = sessions.meta(project.output("reviews"), name)
     refused = client.post(f"{base}/annotate/{name}/labels", json={"records": [{"task": "class", "tile_id": session["fields"][0], "x": 5, "y": 5,
