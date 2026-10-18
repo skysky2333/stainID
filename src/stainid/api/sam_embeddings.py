@@ -40,7 +40,9 @@ NEXT_FIELDS = 2  # fields made ahead for a person, after the one they are on
 KEEP = 24  # windows kept in memory (2 MB each)
 KEEP_FIELDS = 2  # field pictures kept in memory (16 MB each)
 EVERY = 60.0  # seconds between two looks at a session's fields
-RETRY_SECONDS = 60.0
+RETRY_SECONDS = 30.0  # a field whose features failed is tried again after this long
+PLAIN_FAILED = ("One-click outlines are not working on this field right now (Segment Anything could not start). Draw the outline by hand "
+                "for now; it is tried again in a moment. The details are in the server's log.")
 
 _MEMORY: OrderedDict[tuple[str, tuple[int, int]], clicks.Embedding] = OrderedDict()
 _FIELDS: OrderedDict[tuple[str, str], tuple[tuple | None, np.ndarray]] = OrderedDict()
@@ -279,7 +281,7 @@ def status(state: ProjectState, tile_id: str) -> dict:
         return {"ready": True, "state": "ready"}
     failed = _FAILED.get((str(state.root), tile_id))
     if failed and time.monotonic() - failed[1] < RETRY_SECONDS:
-        return {"ready": False, "state": "failed", "error": failed[0]}
+        return {"ready": False, "state": "failed", "error": PLAIN_FAILED}  # the detail (failed[0]) is in the log
     _ask(state, tile_id, NOW)
     return {"ready": False, "state": "preparing"}
 

@@ -17,8 +17,9 @@ interface ProjectContextValue {
 
 const Context = createContext<ProjectContextValue | null>(null)
 
-export function ProjectProvider({ children }: { children: ReactNode }) {
-  const { data, error, reload } = useFetch<ProjectInfo>('/api/project')
+/** The page's project (`fetch` false: none to read — an annotator's pages, which need only the labelling routes). */
+export function ProjectProvider({ children, fetch = true }: { children: ReactNode; fetch?: boolean }) {
+  const { data, error, reload } = useFetch<ProjectInfo>(fetch ? '/api/project' : null)
   const value = useMemo<ProjectContextValue>(() => {
     const groups = data?.groups ?? []
     const byCode = Object.fromEntries(groups.map((g, i) => [g.code, { ...g, slot: g.color ?? i + 1 }]))
@@ -56,7 +57,7 @@ export function ProjectSwitcher() {
   const { pathname } = useLocation()
   const projects = list.data?.projects.filter((p) => p.exists) ?? []
   const others = projects.filter((p) => p.id !== projectId)
-  const go = (id: string) => { if (id) location.assign(id === ALL ? '/' : projectPath(id, samePage(pathname))) }
+  const go = (id: string) => { if (id) location.assign(id === ALL ? '/projects' : projectPath(id, samePage(pathname))) }
   return (
     <div className="project-chip" title={info?.root}>
       <span className="muted small">Project</span>

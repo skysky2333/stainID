@@ -17,10 +17,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
-from stainid import cache
+from stainid import cache, practice
 from stainid.api import label_crops, pyramid, queue_pictures, render, sam_embeddings, work
 from stainid.api.routes.images import OVERLAYS
-from stainid.api.session import annotator, annotator_name, is_admin, require_admin
+from stainid.api.session import GUEST, annotator, annotator_name, is_admin, require_admin
 from stainid.api.state import get_state
 from stainid.api.util import fast_json
 from stainid.labels import added, frames, outline, overview, pool, readiness, rounds, sessions, store
@@ -53,6 +53,8 @@ def busy(name: str, tile_id: str | None = None, person: str | None = None) -> di
     """Who has which field of this project's session open (seen in the last 15 minutes)."""
     now = time.time()
     session = (get_state().id, name)
+    if tile_id and person:
+        practice.guard("who is on which field")
     with _BUSY_LOCK:
         if tile_id and person:
             _BUSY.setdefault((session, tile_id), {})[person] = now
@@ -60,10 +62,12 @@ def busy(name: str, tile_id: str | None = None, person: str | None = None) -> di
 
 
 def viewer(request: Request) -> str | None:
-    """A registered annotator, or the admin (who may look without registering)."""
+    """A signed-in person; on the tutorial's practice sessions anyone (`GUEST`)."""
     name = annotator_name(request)
     if name is None and not is_admin(request):
-        raise HTTPException(401, "register with your name first")
+        if practice.practising():
+            return GUEST
+        raise HTTPException(401, "sign in first")
     return name
 
 

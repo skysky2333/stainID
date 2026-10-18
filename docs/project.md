@@ -43,7 +43,6 @@ inputs:
   core_images: data/analysis/core_images.csv                     # stainid tiles
   whole_core_manifest: data/analysis/cohort_whole_core_tiles.csv # stainid tiles (every tile of every core)
   calibration: data/analysis/slide_dab_calibration.csv           # stainid calibrate
-  manual_exclusions: data/annotations/cohort_manual_exclusions.json
   donor_metadata: data/donor_metadata.csv
   tma_layout: data/tma_layout.csv
 
@@ -82,7 +81,6 @@ steps.
 |---|---|
 | `tma_layout.csv` | the guided setup's Map screen (from your Excel, Word or CSV maps), or you (template on the *Attach TMA map* card) |
 | `donor_metadata.csv` | optional: the guided setup's Donors screen (from your case sheet), or you; only used by your own downstream statistics |
-| `manual_exclusions` | you, optional |
 | `slides.csv` | *Register slides* |
 | core table (`core_manifest`) | *Find cores*, then updated by *Attach TMA map*, *Export cores* and *Check core quality* |
 | tiles (`whole_core_manifest`), `core_images` | *Cut cores into tiles* |
@@ -126,9 +124,6 @@ found by *Find cores* already listed.
 | `pixel_width_um`, `pixel_height_um` | pixel size |
 | `selection_order` | the order detection works through a core (100 + 100 × row + column) |
 | `preview_tissue_fraction` | share of the tile that is tissue, on the core preview |
-
-**`manual_exclusions`**: JSON mapping each core image path to a list of polygons (`polygon_core_px`,
-core-image pixel coordinates) to drop before measurement.
 
 ## Outputs
 

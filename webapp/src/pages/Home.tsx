@@ -8,9 +8,11 @@ import { useFetch } from '../hooks'
 import { MAIN_STAGES, NowRunning, OPTIONAL, STAGE, groupState, isActive, progressText, stepState } from '../pipeline'
 import { useProject } from '../project'
 import { Advanced, ScreenMark } from '../setup/parts'
+import { LabellingHome } from './AnnotateHome'
 import { JobsTable } from './Workflow'
 
-/** Home: where the study stands, the one thing to do next, what runs now, the study in numbers and the latest runs. */
+/** An admin's home: their labelling sets first (admins label too, like anyone), then where the study stands, the one
+ *  thing to do next, what runs now, the study in numbers and the latest runs. */
 export default function Home() {
   const { info } = useProject()
   const steps = useFetch<Step[]>('/api/steps', 5000)
@@ -21,10 +23,17 @@ export default function Home() {
 
   return (
     <>
-      <PageHead title={info?.name ?? 'stainID'} subtitle="Where this study stands and what to do next." />
+      <PageHead title={info?.name ?? 'stainID'} subtitle="Your labelling sets, where this study stands and what to do next." />
+      <section className="home-labelling">
+        <h2>My labelling sets</h2>
+        <LabellingHome admin />
+      </section>
+      <h2 className="home-study">The study</h2>
       <HelpBox id="home" title="New here? How stainID works">
         <ol>
-          <li><b>Set up</b>: stainID reads your slide scans, finds the cores and takes your TMA maps and donor sheet; you confirm what it found.</li>
+          <li><b>Set up</b>: {info?.kind && info.kind !== 'tma'
+            ? 'stainID reads your images and groups them; you confirm what it found.'
+            : 'stainID reads your slide scans, finds the cores and takes your TMA maps and donor sheet; you confirm what it found.'}</li>
           <li><b>Run</b>: the analysis finds nuclei, neurons, plaques and tau in every core. It runs in the background, for hours on a big study.</li>
           <li><b>Check</b>: look at any core with the detections drawn on top, to see by eye that they are right.</li>
           <li><b>Results</b>: one table row per donor and brain region, what every column means, and plots by group.</li>

@@ -42,7 +42,7 @@ export default function Settings() {
   return (
     <>
       <PageHead title="Settings" subtitle="How this study is set up, who can use stainID, and how the app looks.">
-        <a className="btn" href="/">Open another project…</a>
+        <a className="btn" href="/projects">Open another project…</a>
       </PageHead>
       <HelpBox id="settings">
         Most studies only need the study name and the diagnostic groups; the TMA layout is usually filled in by the guided setup.

@@ -23,7 +23,10 @@ import { PALETTE, areaColour } from '../palette'
 
 export const BRUSH_SCALE = 4  // the field tool: masks at a quarter of the field picture in each direction
 export const AREA_SCALE = 8  // "Mark bad areas": core px per mask px (stainid.exclusions.SCALE)
-export const BRUSH_UM = { min: 5, max: 2000, start: 40 }  // brush diameter, µm
+/** The brush diameter in screen px: the ring keeps its size on screen at every zoom, so zooming in gives a finer brush
+ *  on the tissue. A stroke is kept in tissue units as painted (its dabs at the zoom of the moment it started). */
+export const BRUSH_PX = { min: 4, max: 400, start: 36 }
+export const BRUSH_KEY = 'stainid.brush.screen'  // the size, kept in this browser: one for Fix the field and Mark bad areas
 export const BRUSH_STEP = 1.2  // Tab / Shift+Tab: the diameter this much smaller / bigger
 export const INCLUDE = 'include'
 /** The types of excluded area, with their colours (the one palette's, which the layer's, store_view.EXCLUDED_KINDS, are too). */
@@ -39,9 +42,10 @@ const TYPES = EXCLUDE_TYPES.map((t) => t.key)
 const MASKS = [...TYPES, ...TYPES.map((k) => `-${k}`)]
 const UNDO_STEPS = 40
 
-/** The brush diameter after Tab (smaller) or Shift+Tab (bigger), within `BRUSH_UM`. */
-export function brushStep(um: number, bigger: boolean): number {
-  return Math.round(Math.min(BRUSH_UM.max, Math.max(BRUSH_UM.min, bigger ? um * BRUSH_STEP : um / BRUSH_STEP)))
+/** The brush diameter (screen px) after Tab (smaller) or Shift+Tab (bigger), within `BRUSH_PX`. */
+export function brushStep(px: number, bigger: boolean): number {
+  const next = Math.round(bigger ? Math.max(px + 1, px * BRUSH_STEP) : Math.min(px - 1, px / BRUSH_STEP))
+  return Math.min(BRUSH_PX.max, Math.max(BRUSH_PX.min, next))
 }
 
 export const colourOfType = areaColour

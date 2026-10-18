@@ -3,6 +3,7 @@ estimate of how long running everything that is left takes."""
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from stainid import cache
@@ -83,15 +84,44 @@ def _tile_area_um2(rows: list[dict]) -> float | None:
     return _median([area(r) for r in rows[:5000]])
 
 
-def _measured(project: Project) -> dict[str, float]:
-    """Seconds per core image the v2 stages took on this project (median over the cores done; the slowest stain)."""
+def _v2_left(project: Project) -> dict[str, float]:
+    """Of the v2 stages: the seconds of work left (core images not done and up to date, each stain at the seconds per
+    core image its manifests record), as one process would take them; None-less: only stages with a measurement."""
     try:
-        from stainid.v2.run import seconds_per_core  # noqa: PLC0415
+        from stainid.v2.run import cached_status, seconds_per_core  # noqa: PLC0415
 
-        found = seconds_per_core(project)
+        seconds, found = seconds_per_core(project), cached_status(project)
     except Exception:  # noqa: BLE001 - no measurement: the estimate uses the defaults
         return {}
-    return {step: max(found[stage].values()) for step, stage in MEASURED.items() if found.get(stage)}
+    out = {}
+    for step, stage in MEASURED.items():
+        pace = seconds.get(stage) or {}
+        if not pace:
+            continue
+        slowest = max(pace.values())
+        out[step] = sum((c.get("total", 0) - c.get("done", 0)) * pace.get(stain, slowest) for stain, c in (found.get(stage) or {}).items())
+    return out
+
+
+def parallel(step: str) -> int:
+    """Core images a step works on at once on this computer, its chunks together (`jobs.arrays`): the proposals about
+    2 processors and 2.2 GB each, the calls 4 processors each, the outlines one per GPU."""
+    cpus = os.cpu_count() or 2
+    if step == "v2_outlines":
+        try:
+            return max(1, len([n for n in os.listdir("/proc/driver/nvidia/gpus") if not n.startswith(".")]))
+        except OSError:
+            return 1
+    if step == "v2_calls":
+        return max(1, cpus // 4)
+    if step == "v2_proposals":
+        try:
+            with open("/proc/meminfo") as handle:
+                total_gb = next(int(line.split()[1]) for line in handle if line.startswith("MemTotal")) / 2**20
+        except (OSError, StopIteration, ValueError):
+            total_gb = 16.0
+        return max(1, min(cpus // 2, int((total_gb - 4.0) / 2.2)))
+    return 1
 
 
 def estimate(project: Project, remaining: list[str]) -> dict:
@@ -120,7 +150,7 @@ def estimate(project: Project, remaining: list[str]) -> dict:
     core_area = measured_area or (3.14159 / 4 * diameter ** 2)
     core_scale = min(4.0, max(0.01, core_area / (3.14159 / 4 * REFERENCE_CORE_UM ** 2)))  # per-core times scale with the tissue
     tile_scale = min(1.0, max(0.05, (_tile_area_um2(tile_rows) or TILE_UM ** 2) / TILE_UM ** 2))
-    measured = _measured(project)
+    measured = _v2_left(project)
     device = best_device()
     units = {"dearray": slides, "export": slides, "qc": biological, "tiles": biological, "images": biological, "calibrate": slides,
              "neun": tiles / 3, "fields": biological * 2 / 3, "summarize": 1,
@@ -129,11 +159,13 @@ def estimate(project: Project, remaining: list[str]) -> dict:
     for step in remaining:
         if step == "nuclei":
             seconds = tiles * NUCLEI_SECONDS[device] * tile_scale
-        elif step in measured:
-            seconds = units.get(step, 0) * measured[step]
+        elif step in measured:  # what is left, at this project's measured pace, as many at once as the step runs
+            seconds = measured[step] / parallel(step)
         elif step in SECONDS:
             per_core = step in ("qc", "tiles", "images", "fields", "v2_proposals", "v2_calls", "v2_outlines")
             seconds = units.get(step, 0) * SECONDS[step] * (core_scale if per_core else tile_scale if step == "neun" else 1.0)
+            if step in MEASURED:  # per core image and process: the step runs several at once
+                seconds /= parallel(step)
         else:
             continue
         steps.append({"id": step, "seconds": int(seconds)})

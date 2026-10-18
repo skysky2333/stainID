@@ -129,6 +129,9 @@ def _measured_row(project: Project, stain: str, tile: dict, field, loader, x: fl
 
 def _write(project: Project, stain: str, tile_id: str, rows: list[dict]) -> None:
     """Adds rows to the field's file (one row per rounded position; a newer measurement replaces an older one)."""
+    from stainid import practice  # noqa: PLC0415
+
+    practice.guard("the added objects")
     target = path(project, stain, tile_id)
     target.parent.mkdir(parents=True, exist_ok=True)
     with (target.parent / ".lock").open("w") as lock:

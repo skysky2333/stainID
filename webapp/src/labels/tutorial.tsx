@@ -1,14 +1,15 @@
-/* The tutorial a new annotator goes through before real work (about 3–5 minutes): "Fix the field" on a practice field of
-   the project (a 6E10 one when there is one), where nothing is saved (`practice-2-<stain>` sessions on the server), with a coach that
-   asks for one thing at a time and waits until the person has done it. Skip at any time; "Tutorial" in the header
-   shows it again. Finishing (or skipping) is remembered for the person's name. Someone new is sent here from the list
-   of sessions and from a session's own link (`?next=` brings them back there afterwards). The admin can open it from
-   the Labels page without a name (`?preview=1`): the same pages, nothing remembered. `?kind=areas` is the short tutorial
-   of "Mark bad areas" (labels/markareas.tsx) on a practice core (`practice-areas`), remembered in this browser. */
+/* The two tutorials (/tutorial), offered on everyone's home and on Help (`TutorialCards`): "Fix the field" (about 3–5
+   minutes) on a practice field of the project (a 6E10 one when there is one), and `?kind=areas`, "Mark bad areas", on a
+   practice core (labels/markareas.tsx). Nothing is saved: the practice sessions (`practice-2-<stain>`, `practice-areas`)
+   keep nothing on the server, whatever is clicked. A coach asks for one thing at a time and waits until the person has
+   done it. Skip at any time (back to `?next=`, else home). Finishing or skipping is kept with the person's account
+   (`/api/session/tutorials`); someone trying it without an account keeps it in this browser. The practice field and its
+   session are both asked of the page's project (`/api/tutorial` is a project route), so the field is always one of the
+   session's. The admin can open either from the Labels page (`?preview=1`): the same pages, nothing remembered. */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import type { SessionDetail } from '../api'
-import { api } from '../api'
+import type { MySet, SessionDetail } from '../api'
+import { api, appBase, projectPath } from '../api'
 import { Empty, ErrorNote, Loaded, Loading, PageHead } from '../components'
 import { useFetch } from '../hooks'
 import { FixField } from './fixfield'
@@ -17,7 +18,9 @@ import { MarkAreas, PRACTICE_AREAS } from './markareas'
 import type { RoundEvent } from './rounds'
 import { useSession } from '../session'
 
-interface TutorialInfo { done: boolean; practice: { stain: string; tile_id: string; round2: string } | null }
+interface TutorialInfo { done: boolean; practice: { stain: string; tile_id: string; round2: string } | null; project?: string }
+export type TutorialKind = 'objects' | 'areas'
+interface Done { objects: boolean; areas: boolean; kept: boolean }
 /** One step: done once the page reports one of `done` (`times` of them: "reject a few"). */
 interface Step { title: string; text: string; done: RoundEvent[]; times?: number }
 
@@ -37,12 +40,12 @@ function stepsFor(typed: boolean, counted: string): Step[] {
     { title: 'Undo', text: 'Pressed the wrong key? Press Z to undo your last change. Z takes back changes you have not saved yet.', done: ['undo'] },
     { title: 'A clean look', text: 'Press Space to hide everything drawn over the picture and see the tissue alone. Press Space again to bring it back.', done: ['overlays'] },
     { title: 'Precise editing', text: 'For an outline that is not right: click the object. It is zoomed in on, and everything else is locked until you leave. (To change its type you only point at it: no click needed.)', done: ['precise-in'] },
-    { title: 'Fix it spot by spot', text: 'Click a spot to add it, Shift+click one to leave it out, or drag one of the white dots. Z takes one step back.', done: ['precise-edit'] },
+    { title: 'Fix it spot by spot', text: 'Click a spot to add it, Shift+click one to leave it out, or drag one of the white dots (on a server without one-click outlines, dragging the dots is the way). Z takes one step back.', done: ['precise-edit'] },
     { title: 'Leave precise editing', text: 'Click outside the faint frame around the object (or press Enter) to keep the outline: the view goes back to where you were (Esc would cancel the edit).', done: ['precise-out'] },
     { title: 'Split an object', text: 'Two objects outlined as one? Press S for split, then click the object: a split into two shows. Click elsewhere on it to move the split, press Enter to keep it (Esc drops it). You can also drag a line right across objects to cut each one along it. The pieces keep the type; the keys retype them.', done: ['split'] },
     { title: 'Merge objects', text: 'One object outlined in pieces? Press M for merge, click the pieces (or drag over them) — the panel counts them — and press Enter. They become one object with the type of the largest. Press M or Esc to leave.', done: ['merge'] },
     { title: 'Bigger or smaller outline', text: 'Point at an object and press Shift+Tab for a bigger outline, Tab for a smaller one (the same keys size the brush). Each object has three sizes ready, so it changes at once.', done: ['mask'] },
-    { title: 'Add a missed object', text: `Click on tissue where detection missed an object: its outline appears as a new candidate (dotted grey with a diamond). Then press ${counted} to make it solid.`, done: ['added'] },
+    { title: 'Add a missed object', text: `Click on tissue where detection missed an object: its outline appears as a new candidate (dotted grey with a diamond). Then press ${counted} to make it solid. (Where one-click outlines are not available, the click starts an outline by hand: click its corners, then the first one.)`, done: ['added'] },
     { title: 'Mark a bad area', text: 'Hatched areas are what the analysis leaves out: folds, artifacts, empty glass, found by detection. Press B for the brush: 1–4 choose the type (fold, artifact, no tissue, out of focus), and that type’s area shows as one region — detection’s with everyone’s edits. Drag to add to it (a stroke touching a detected fold extends that fold); Shift-drag takes a part out, detection’s too. Tab makes the brush smaller, Shift+Tab bigger; the wheel still zooms. Your areas teach and test the bad-area detection; the analysis keeps detection’s own. Press B again when done.', done: ['exclude'] },
     { title: 'Save your work', text: 'Nothing you do is saved yet: the panel says how many unsaved changes you have, and a small orange dot marks each object you changed. Press Save (or Ctrl+S) to keep them — you stay on this field. (In this practice, Save only pretends.)', done: ['save'] },
     { title: 'Save and continue', text: 'When the field looks right, press “Save and continue”. Everything you left as it is counts as checked by you, the field is done, nobody else is asked to do it again, and your next field opens.', done: ['finish'] },
@@ -50,32 +53,64 @@ function stepsFor(typed: boolean, counted: string): Step[] {
   return typed ? steps : steps.filter((s) => s.title !== 'Change the type')
 }
 
-/** "Tutorial" in the header of the annotation pages: shows it again. */
-export function TutorialLink() {
-  const { session } = useSession()
-  return <Link className="small tutorial-link" to="/annotate/tutorial" title={session.annotator ? 'Show the tutorial again' : 'Try it: no account needed'}>Tutorial</Link>
+const guestKey = (kind: TutorialKind) => `stainid.tutorial.${kind}`
+function guestDone(kind: TutorialKind) {
+  try { return localStorage.getItem(guestKey(kind)) === '1' } catch { return false }
 }
 
-const areasDoneKey = (person: string | null | undefined) => `stainid.tutorial.areas.${person ?? ''}`
-function areasDone(person: string | null | undefined) {
-  try { return localStorage.getItem(areasDoneKey(person)) === '1' } catch { return false }
+/** Which tutorials this person went through or skipped: kept with their account, a guest's in this browser. */
+export function useTutorialsDone() {
+  const server = useFetch<Done>('/api/session/tutorials')
+  const kept = !!server.data?.kept
+  return { objects: kept ? server.data!.objects : guestDone('objects'), areas: kept ? server.data!.areas : guestDone('areas'), loaded: !!server.data || !!server.error }
 }
 
-/** Someone new (their name has not been through the tutorial yet): to the tutorial first, before real work, and back
- *  here afterwards. `kind`: what the page is (`null` while not known yet); a "Mark bad areas" session sends them to its
- *  own short tutorial, once in this browser. */
-export function useFirstTutorial(kind: 'objects' | 'areas' | null = 'objects') {
-  const { session } = useSession()
-  const navigate = useNavigate()
-  const { pathname } = useLocation()
-  const info = useFetch<TutorialInfo>(session.annotator && kind === 'objects' ? '/api/session/tutorial' : null)
-  useEffect(() => {
-    if (kind === 'areas' && session.annotator && !areasDone(session.annotator)) {
-      navigate(`/annotate/tutorial?kind=areas&next=${encodeURIComponent(pathname)}`, { replace: true })
-    } else if (kind === 'objects' && info.data && !info.data.done && info.data.practice) {
-      navigate(`/annotate/tutorial${pathname !== '/annotate' ? `?next=${encodeURIComponent(pathname)}` : ''}`, { replace: true })
-    }
-  }, [kind, info.data, navigate, pathname, session.annotator])
+/** Remember that this person finished or skipped a tutorial (`done` false: offer it again). */
+export async function rememberTutorial(kind: TutorialKind, done = true) {
+  try { if (done) localStorage.setItem(guestKey(kind), '1'); else localStorage.removeItem(guestKey(kind)) } catch { /* a private window */ }
+  await api.post('/api/session/tutorials', { kind, done })
+}
+
+const TUTORIALS: { kind: TutorialKind; title: string; text: string; minutes: string }[] = [
+  { kind: 'objects', title: 'Fix the field', minutes: '3–5 minutes', text: 'The main task: correct what detection found on a field — reject, change types, fix outlines, split, merge, add what it missed.' },
+  { kind: 'areas', title: 'Mark bad areas', minutes: '2 minutes', text: 'The brush: paint folds, artifacts, missing tissue and blur that should not be counted, core by core with every stain.' },
+]
+
+/** The address of a tutorial: in the page's project, else in the project of the person's first set (each project
+ *  practises on its own images), else the project the server opened last. */
+export function tutorialPath(kind: TutorialKind, sets?: MySet[] | null, next?: string) {
+  const query = [kind === 'areas' ? 'kind=areas' : '', next ? `next=${encodeURIComponent(next)}` : ''].filter(Boolean).join('&')
+  const page = `/tutorial${query ? `?${query}` : ''}`
+  if (appBase || !sets?.length) return { to: page, href: `${appBase}${page}` }
+  return { to: null, href: projectPath(sets[0].project, page) }
+}
+
+/** Both tutorials, offered on everyone's home and on Help: what each is for, and whether this person has done it. */
+export function TutorialCards({ sets, compact = false }: { sets?: MySet[] | null; compact?: boolean }) {
+  const done = useTutorialsDone()
+  return (
+    <div className={`grid grid-2 tutorial-cards${compact ? ' compact' : ''}`}>
+      {TUTORIALS.map((t) => {
+        const { to, href } = tutorialPath(t.kind, sets)
+        const label = done[t.kind] ? 'See it again' : 'Start the tutorial'
+        return (
+          <div key={t.kind} className="card tutorial-card">
+            <div className="row"><b>Tutorial: {t.title}</b><span className="spacer" />
+              {done.loaded && (done[t.kind] ? <span className="status-finished small">✓ done</span> : <span className="muted small">{t.minutes}</span>)}</div>
+            {!compact && <p className="small secondary" style={{ margin: '4px 0 8px' }}>{t.text} Nothing is saved.</p>}
+            {to ? <Link className={`btn${done[t.kind] ? '' : ' primary'}`} to={to}>{label}</Link>
+              : <a className={`btn${done[t.kind] ? '' : ' primary'}`} href={href}>{label}</a>}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+/** Where to go back to after a tutorial: `?next=` when it is an address of this app, else home. */
+function nextOf(params: URLSearchParams) {
+  const next = params.get('next') ?? ''
+  return next.startsWith('/') && !next.startsWith('//') ? next : '/'
 }
 
 export function Tutorial() {
@@ -83,9 +118,9 @@ export function Tutorial() {
   const { search } = useLocation()
   const params = new URLSearchParams(search)
   const preview = params.get('preview') === '1' && session.admin
-  const next = params.get('next')?.startsWith('/annotate') ? params.get('next')! : '/annotate'
+  const next = nextOf(params)
   const areas = params.get('kind') === 'areas'
-  const info = useFetch<TutorialInfo>(!areas ? '/api/session/tutorial' : null)  // public: no account needed, nothing is kept
+  const info = useFetch<TutorialInfo>(!areas ? '/api/tutorial' : null)  // public: no account needed, nothing is kept
   if (areas) return <AreasCoached preview={preview} next={next} />
   return (
     <Loaded state={info} label="Opening the tutorial…">
@@ -93,7 +128,7 @@ export function Tutorial() {
         : <><PageHead title="Tutorial" subtitle="Nothing to practise on yet." />
           <Empty><p style={{ marginTop: 0 }}>The practice field appears once detection has proposed objects on this project’s images (the v2 detection’s
             “Find candidates” and “Decide” steps on the Run page).</p>
-            <Link className="btn" to={preview ? '/' : '/annotate'}>{preview ? 'Back' : 'All sessions'}</Link></Empty></>}
+            <Link className="btn" to={next}>Back</Link></Empty></>}
     </Loaded>
   )
 }
@@ -115,7 +150,7 @@ function Coached({ practice, preview, next }: { practice: NonNullable<TutorialIn
 
   const remember = useCallback(async () => {
     if (preview) return  // the admin looking: nothing is remembered
-    try { await api.post('/api/session/tutorial', { done: true }) } catch (e) { setError((e as Error).message) }
+    try { await rememberTutorial('objects') } catch (e) { setError((e as Error).message) }
   }, [preview])
   useEffect(() => { if (finished) void remember() }, [finished, remember])
   const at = useRef(0)
@@ -157,7 +192,7 @@ function Coached({ practice, preview, next }: { practice: NonNullable<TutorialIn
   return (
     <div className="tutorial">
       {!field.data ? <Loading label="Opening the practice field…" />
-        : <FixField key="practice-field" detail={field.data} reload={() => undefined} tile={practice.tile_id} onEvent={onEvent} coach={coach}
+        : <FixField key="practice-field" detail={field.data} reload={() => undefined} tile={field.data.meta.fields[0] ?? practice.tile_id} onEvent={onEvent} coach={coach}
           onFinished={() => setIndex(steps.length)} />}
     </div>
   )
@@ -180,7 +215,6 @@ const AREA_STEPS: AreaStep[] = [
 
 function AreasCoached({ preview, next }: { preview: boolean; next: string }) {
   const navigate = useNavigate()
-  const { session } = useSession()
   const detail = useFetch<SessionDetail>(`/api/annotate/${PRACTICE_AREAS}`)
   const [index, setIndex] = useState(0)
   const [cheer, setCheer] = useState(false)
@@ -188,8 +222,8 @@ function AreasCoached({ preview, next }: { preview: boolean; next: string }) {
   const finished = index >= AREA_STEPS.length
   const remember = useCallback(() => {
     if (preview) return  // the admin looking: nothing is remembered
-    try { localStorage.setItem(areasDoneKey(session.annotator), '1') } catch { /* a private window: shown again next time */ }
-  }, [preview, session.annotator])
+    void rememberTutorial('areas').catch(() => undefined)
+  }, [preview])
   useEffect(() => { if (finished) remember() }, [finished, remember])
   const at = useRef(0)
   at.current = index
@@ -226,7 +260,7 @@ function AreasCoached({ preview, next }: { preview: boolean; next: string }) {
     <div className="tutorial">
       {detail.error ? <><PageHead title="Tutorial" subtitle="Nothing to practise on yet." />
         <Empty><p style={{ marginTop: 0 }}>The practice core appears once the project has analysed cores.</p><ErrorNote error={detail.error} />
-          <Link className="btn" to={preview ? '/' : '/annotate'}>{preview ? 'Back' : 'All sessions'}</Link></Empty></>
+          <Link className="btn" to={next}>Back</Link></Empty></>
         : !detail.data ? <Loading label="Opening the practice core…" />
           : <MarkAreas detail={detail.data} onEvent={onEvent} coach={coach} onFinished={() => setIndex((i) => Math.max(i, AREA_STEPS.length))} />}
     </div>

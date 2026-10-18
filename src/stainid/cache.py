@@ -137,15 +137,36 @@ def _refresh(key: Hashable, lock: threading.Lock, signatures: tuple, make: Calla
     threading.Thread(target=work, name="stainid-refresh", daemon=True).start()
 
 
+def code_stamp() -> str:
+    """Changes whenever stainID's code does (a new version, an update): values kept on disk by other code are not used."""
+    global _CODE
+    if _CODE is None:
+        import hashlib  # noqa: PLC0415
+
+        root = Path(__file__).parent
+        digest = hashlib.sha1()
+        for path in sorted(root.rglob("*.py")):
+            try:
+                found = path.stat()
+            except OSError:
+                continue
+            digest.update(f"{path.relative_to(root)}:{found.st_mtime_ns}:{found.st_size};".encode())
+        _CODE = digest.hexdigest()[:16]
+    return _CODE
+
+
+_CODE: str | None = None
+
+
 def _load(path: Path, key: Hashable, signatures: tuple) -> Any:
     import pickle  # noqa: PLC0415
 
     try:
         with open(path, "rb") as handle:
-            saved_key, saved_signatures, value = pickle.load(handle)  # noqa: S301 - a file this app wrote in its own cache
+            saved_key, code, saved_signatures, value = pickle.load(handle)  # noqa: S301 - a file this app wrote in its own cache
     except Exception:  # noqa: BLE001 - missing, unreadable or from another version: made again
         return None
-    if saved_key != repr(key) or saved_signatures != signatures:
+    if saved_key != repr(key) or code != code_stamp() or saved_signatures != signatures:
         return None
     _note("used", path)
     return value
@@ -158,7 +179,7 @@ def _save(path: Path, key: Hashable, signatures: tuple, value: Any) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         part = path.with_name(f".{path.name}.{os.getpid()}.part")
         with open(part, "wb") as handle:
-            pickle.dump((repr(key), signatures, value), handle, protocol=pickle.HIGHEST_PROTOCOL)
+            pickle.dump((repr(key), code_stamp(), signatures, value), handle, protocol=pickle.HIGHEST_PROTOCOL)
         os.replace(part, path)
         _note("wrote", path)
     except Exception:  # noqa: BLE001 - only a quicker start lost

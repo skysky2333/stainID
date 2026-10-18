@@ -34,7 +34,7 @@ import { RASTER_LAYERS, ZoomViewer } from '../viewer'
 import type { ClassPick } from './classKeys'
 import { resolveClass, roleOf } from './classKeys'
 import type { RoundEvent } from './rounds'
-import { BRUSH_SCALE, BRUSH_UM, CLEARED, EXCLUDE_TYPES, INCLUDE, brushStep, useBrush } from './brush'
+import { BRUSH_KEY, BRUSH_PX, BRUSH_SCALE, CLEARED, EXCLUDE_TYPES, INCLUDE, brushStep, useBrush } from './brush'
 import type { Slider } from './fieldStart'
 import { SLIDER_STEP, acceptedAt, lock, moveTo, slider, sliderText, startPick, unlock } from './fieldStart'
 import { LockIcon, ThresholdSlider } from './threshold'
@@ -303,7 +303,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   const sam = meta.segment_anything && field.segment_anything
   // the brush (B): bad areas painted on a mask, saved with the field's other changes as people's areas
   const [excluding, setExcluding] = useState(false)
-  const [brushUm, setBrushUm] = useStored<number>('stainid.round2.brush', BRUSH_UM.start)
+  const [brushSize, setBrushSize] = useStored<number>(BRUSH_KEY, BRUSH_PX.start)  // the brush's diameter on screen (px)
   const [brushKind, setBrushKind] = useStored<string>('stainid.round2.brush.type', '1')  // the type painted (keys 1–4 with the brush on)
   // what the analysis leaves out over the field: its part of detection's automatic layer, as on the Cores view
   const excluded = useFetch<FieldExcluded>(`/api/annotate/${name}/fields/${enc(tile)}/excluded`)
@@ -531,7 +531,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     answering: !!target && !draft.length && !excluding,
     onSize: (bigger) => {  // the brush: Tab smaller, Shift+Tab bigger (the outline keys rest while it is on)
       if (!excluding) return false
-      setBrushUm(brushStep(brushUm, bigger))
+      setBrushSize(brushStep(brushSize, bigger))
       tell('brush-size')
       return true
     },
@@ -587,13 +587,13 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [precise, draft.length, excluding, start])  // eslint-disable-line react-hooks/exhaustive-deps
-  const brushPx = brushUm / (field.pixel_size_um || 0.27) / 2  // the brush's radius in field pixels
+  const brushRadius = (unit: number) => (brushSize / 2) * unit  // in field px at this zoom (`unit`: field px per screen px): constant on screen
   const press = (p: ImagePoint, event: React.MouseEvent) => {
     if (event.button !== 0) return  // the left button paints (Shift: takes out) or draws a line; the middle one pans
     if (mode) { setStroke([[p.x, p.y]]); return }
     if (!excluding) return
     lockStart()
-    brush.begin(p.x, p.y, brushPx, brushKind, event.shiftKey)  // Shift: out of the chosen type's area
+    brush.begin(p.x, p.y, brushRadius(p.unit), brushKind, event.shiftKey)  // Shift: out of the chosen type's area
   }
   const release = () => {
     if (mode) {
@@ -730,8 +730,9 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
       onEvent?.('add')
       setHovered(key)
       setError(null)
-    } catch (e) {
-      setError((e as Error).message)
+    } catch (e) {  // one-click outlines not working here: this click is the first corner of an outline drawn by hand
+      setError(`${(e as Error).message} This click is the first corner: click the object's other corners, then the first one (or Enter).`)
+      setDraft([at])
     } finally {
       setPending(null)
     }
@@ -809,7 +810,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   const move = (p: ImagePoint) => {
     if (excluding) {  // painting: the ring and the canvas change directly (at most once a frame), the page is not drawn again
       const r = ring.current
-      if (r) { r.setAttribute('cx', String(p.x)); r.setAttribute('cy', String(p.y)); r.style.visibility = 'visible' }
+      if (r) { r.setAttribute('cx', String(p.x)); r.setAttribute('cy', String(p.y)); r.setAttribute('r', String(brushRadius(p.unit))); r.style.visibility = 'visible' }
       brush.extend(p.x, p.y)
       return
     }
@@ -923,7 +924,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     <div className="annotate-page round-page fit-page">
       <div className="annotate-top">
         <div className="annotate-heading">
-          <span className="row small"><Link to="/annotate">← All sessions</Link><Link to={`/annotate/${name}`}>All fields of this session</Link></span>
+          <span className="row small"><Link to="/">← My labelling sets</Link><Link to={`/annotate/${name}`}>All fields of this session</Link></span>
           <h1>{meta.title}</h1>
           <div className="muted small">{meta.stain} · {ROUND_TITLE[2]} · field {position + 1} of {fields.length}</div>
         </div>
@@ -1036,7 +1037,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
                 ))}
                 {stroke && stroke.length > 1 && <polyline points={polygonPoints(stroke)} fill="none" stroke={mode === 'split' ? PALETTE.markers.split_b : PALETTE.markers.merge}
                   strokeWidth={2.4 * unit} strokeDasharray={`${6 * unit} ${4 * unit}`} pointerEvents="none" />}
-                {excluding && <circle ref={ring} r={brushPx} fill={shiftDown ? CLEARED.colour : brushType.colour} fillOpacity={0.15} style={{ visibility: 'hidden' }}
+                {excluding && <circle ref={ring} r={brushRadius(unit)} fill={shiftDown ? CLEARED.colour : brushType.colour} fillOpacity={0.15} style={{ visibility: 'hidden' }}
                   stroke="#ffffff" strokeWidth={1.6 * unit} strokeDasharray={`${4 * unit} ${3 * unit}`} pointerEvents="none" />}
                 {pending && <circle className="sam-pending" cx={pending[0]} cy={pending[1]} r={10 * unit} fill="none" stroke="#fff" strokeWidth={2 * unit} />}
                 {draft.length > 0 && <>
@@ -1085,7 +1086,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
             </ul>
           </div>}
           {excluding && <div className="card side-block exclude-bar" role="status">
-            <b>Excluding</b> · <span className="look-swatch" style={{ borderColor: brushType.colour, background: brushType.colour }} /> {brushType.name} · brush <b>{brushUm} µm</b>
+            <b>Excluding</b> · <span className="look-swatch" style={{ borderColor: brushType.colour, background: brushType.colour }} /> {brushType.name} · brush <b>{brushSize} px</b> on screen (zoom in for a finer one)
             {' '}· <span className="kbd">B</span> to exit
             <ul className="class-legend small" style={{ marginTop: 6 }}>{EXCLUDE_TYPES.map((t) => (
               <li key={t.key} className={t.key === brushKind ? 'waiting' : ''}><span className="kbd key-slot">{t.key}</span>
@@ -1169,7 +1170,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
           </div>
           <div className="side-foot small">
             <button className={`btn small help-toggle${help ? ' chosen' : ''}`} aria-expanded={help} onClick={() => setHelp(!help)} title="How this page works">?</button>
-            {!onFinished && <Link to="/annotate/tutorial">Tutorial</Link>}
+            {!onFinished && <Link to="/tutorial">Tutorial</Link>}
             <span className="spacer" />
             <span className="muted">{tile}</span>
           </div>

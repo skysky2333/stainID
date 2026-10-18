@@ -3,7 +3,6 @@ the corner of four, small objects near a tile edge, and a pale diffuse plaque th
 reported as unproposed."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import cv2
@@ -42,7 +41,6 @@ def border_project(tmp_path: Path, draw, size: int = 2 * TILE, context: int = 32
     pd.DataFrame(tiles).to_csv(analysis / "cohort_whole_core_tiles.csv", index=False)
     pd.DataFrame([{"tma": 1, "stain": stain, "threshold_dab_od": 0.05}]).to_csv(analysis / "slide_dab_calibration.csv", index=False)
     (tmp_path / "data" / "annotations").mkdir()
-    (tmp_path / "data" / "annotations" / "cohort_manual_exclusions.json").write_text(json.dumps({}))
     (tmp_path / "stainid.yaml").write_text(yaml.safe_dump({"name": "borders", "field_context_px": context}))
     return tmp_path
 

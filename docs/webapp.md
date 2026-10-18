@@ -18,9 +18,14 @@ stainid serve --cache-min-free 80G         # free space every drive keeps: below
 The app opens on the **Projects** page (see [Projects](#projects)), or on the project given with `--project`. If
 stainID is already running, starting it again just opens the browser.
 
-**Accounts.** Everyone signs in on the same page with a name and a password, and their **role** decides what they
-see: an **admin** gets every page and can open every labelling set; an **annotator** gets only the annotation pages
-(*My labelling sets*, *Add a set* with a key, the tutorial). Every admin-only request is refused for annotators (403)
+**Accounts.** Everyone signs in on the main page (the server's root address) with a name and a password, and lands
+on their home: *My labelling sets*, *Add a set* with a key, and both tutorials. One menu for everyone: its labelling
+items (Home, Tutorials, Help, Account) for all, the study's pages only for **admins**, whose Home shows their sets
+first and then where the study stands. Admins label too: a session an admin opens joins their sets, and their labels
+carry their own account like anyone's; they can open every labelling set from the Labels page. An **annotator** gets
+only the labelling pages. Addresses of the earlier separate annotation pages (`/annotate`, `/annotate/tutorial`,
+`/annotate/account`) lead to the same pages of the one app; a session's link (`/p/<project>/annotate/<name>`) stays a
+deep link, and someone not signed in goes to the main page first and back there after signing in. Every admin-only request is refused for annotators (403)
 by the server, not only hidden in the page. Anyone can make an annotator account on the sign-in page; admins add
 people, promote and demote them, reset forgotten passwords (a one-time password; the person chooses a new one when
 signing in with it) and remove accounts under *Settings → People*. There is always at least one admin: the last one
@@ -240,7 +245,7 @@ studies, image sets and whole-slide projects.
      empty glass and blur, or say a stain looks fine. A sample of cores is enough. The brush is the field tool's
      (`BrushMasks`, labels/brush.ts), always on and with the same keys: each type's current area over the whole core
      image (GET `…/cores/{core}/{stain}/areas`), a drag adds to the chosen type, Shift-drag takes out of it
-     (detection's part too: marking a part fine is no more than that), Tab / Shift+Tab (or − / +) a smaller or bigger brush (µm),
+     (detection's part too: marking a part fine is no more than that), Tab / Shift+Tab (or − / +) a smaller or bigger brush (its size on screen: it stays the same as you zoom, so zooming in paints finer; strokes are kept in tissue units),
      the wheel zooms, Z undoes a stroke, [ / ] the other stain, Enter this stain is done.
    - "Check detection's calls" (one object at a time) is no longer made. Its old sessions stay listed as history and
      their labels stay valid object labels for training and evaluation.
@@ -260,7 +265,7 @@ studies, image sets and whole-slide projects.
 from an alphabet without look-alikes (`k7mq2-xr9ta`, about 50 bits; wrong keys are rate-limited). The key names both
 the project and the session. Open a session's *More* on the Labels page: *Who can label* shows the key (*Copy*), the
 people who joined (*Remove*), and *Joining on*. *New key* stops the old key at once; people who joined keep their
-access. Send people *Link for labellers* (`http://<this computer>:8765/p/<project>/annotate`) and the key. Only the
+access. Send people *Link for labellers* (the main page, `http://<this computer>:8765/`) and the key. Only the
 members of a set, and admins, can open it: the server checks membership on every annotation request. Labels, claims on
 fields, look-ahead holds and fair share are by account (labels carry the account id, `account`, besides the name).
 
@@ -272,15 +277,20 @@ their progress), and *Start* or *Continue* opens it. Sign in again next time, on
 up as one. Under *Settings → People*, link an account to such a name (*Past labels as*): the account then labels under
 that name and sees its history as its own.
 
-**The first time.** A name that has not been through the tutorial goes there first, from the list of sessions or from
-a session's own link (and back there afterwards; `/api/session/tutorial` names the practice field). It is a practice on a real field
+**The tutorials.** Everyone's home, the Tutorials page and Help offer both: *Fix the field* and *Mark bad areas*;
+nobody is sent into one. *Fix the field* (`/tutorial`; `/api/tutorial`, a project route like the practice session it
+opens, names the practice field, so the field is always one of that session's) is a practice on a real field
 of the project (a 6E10 field with several plaque types, detection rejects and a detected fold or artifact), where
 nothing is saved (about 3–5 minutes): step 1, the acceptance threshold (move it, watch objects switch, *Start
 editing*), reject (Del), bring types back (numbers), unsure (`), a clean look (Space), precise editing, split (S) and
 merge (M), the brush (B), saving. A coach asks for one thing at a time and
-waits until it is done. *Skip tutorial* is always there, and *Tutorial* at the top shows it again. Who finished it is
-kept in `outputs.reviews/tutorials.json`. The tutorial is public: someone without an account can try it, and nothing
-is saved or remembered. **Try the tutorial** on the Labels page opens the same practice in a new tab: what
+waits until it is done. *Skip tutorial* is always there and goes back home. Who finished or skipped each tutorial is kept with
+their account (`/api/session/tutorials`, on every project; the `tutorials.json` of earlier releases counts too); a guest's
+in the browser. The tutorials are public: someone without an account can try them. **Nothing of a practice is
+kept, whatever is clicked**: a request on a practice session (`practice-2-<stain>`, `practice-areas`) runs with
+`stainid.practice.PRACTISING` set, the practice routes answer as if saved, and every store refuses to write
+underneath (the label log, the sessions, the candidate and added-object stores, the holds and claims: 403 instead);
+`tests/test_practice_keeps_nothing.py` calls every write endpoint for a practice session and checks every store. **Try the tutorial** on the Labels page opens the same practice in a new tab: what
 annotators see.
 
 **Step 1: the acceptance threshold.** Every field opens with a slider at the top of the panel, *Acceptance
@@ -356,9 +366,9 @@ A tile's labels are written all at once (`routes.rounds.save_tile`) or not at al
 - A field that enough people finished (*People who must finish each field*) is not handed to anyone else.
 - What others decide meanwhile shows within seconds ("checked by Ben").
 
-**One set of answers.** Both rounds, every session and every person write class labels on the same candidates, keyed by
-candidate id (`labels.decisions`). A candidate that enough people decided leaves every round-1 list at once and shows
-as checked in round 2. Labels made before the rounds (earlier sessions, imported label sets) are matched onto the
+**One set of answers.** Every session and every person write class labels on the same candidates, keyed by
+candidate id (`labels.decisions`). A candidate that enough people decided shows as checked in every "Fix the field"
+session (and leaves the lists of the old "Check detection's calls" sessions). Labels made before the rounds (earlier sessions, imported label sets) are matched onto the
 candidates by position, so nothing anyone labelled is asked again. The decisions train the models like any other label
 ([Training a model](#training-a-model)).
 

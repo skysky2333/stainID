@@ -3,7 +3,7 @@
    chosen type strong; detection's own areas, what the analysis uses, never change here) and detection's objects
    faintly, for context. The brush is always on and is the field tool's (`BrushMasks`, labels/brush.ts): 1–4 choose
    the type, whose current area (detection's with everyone's saved edits) is drawn as one merged region; a drag adds to
-   it, Shift-drag takes out of it (detection's part too); Tab / Shift+Tab (or + / −) the brush size, the wheel zooms, the
+   it, Shift-drag takes out of it (detection's part too); Tab / Shift+Tab (or − / +) a smaller / bigger brush (its size on screen: zoom in for a finer one), the wheel zooms, the
    middle button pans, Z takes back a stroke, Space hides everything drawn over the tissue, [ / ] the other stain.
    Enter says "this stain is done" and goes to the next stain; after the last one the core is
    saved (every stain looked at, an edit for each stain painted on) and the next core opens. People's areas teach and
@@ -18,7 +18,7 @@ import { ErrorNote, Loading, Progress, withError } from '../components'
 import { DeepZoom } from '../deepzoom'
 import type { Mark, PaintPoint, Pyramid } from '../deepzoom'
 import { useFetch, useStored } from '../hooks'
-import { AREA_SCALE, BRUSH_UM, BrushMasks, CLEARED, EXCLUDE_TYPES, brushStep, colourOfType } from './brush'
+import { AREA_SCALE, BRUSH_KEY, BRUSH_PX, BrushMasks, CLEARED, EXCLUDE_TYPES, brushStep, colourOfType } from './brush'
 import { useFitScreen, useLeaveGuard } from './rounds'
 
 export const AREAS_TITLE = 'Mark bad areas'
@@ -70,8 +70,8 @@ export function MarkAreas({ detail, onEvent, coach, onFinished }: {
   const top = (
     <div className="annotate-top">
       <div className="annotate-heading">
-        <span className="row small"><Link to="/annotate">← All sessions</Link>
-          {!practice && <Link to={`/annotate/tutorial?kind=areas&next=${enc(`/annotate/${name}`)}`} title="The short tutorial of this page again">Tutorial</Link>}</span>
+        <span className="row small"><Link to="/">← My labelling sets</Link>
+          {!practice && <Link to={`/tutorial?kind=areas&next=${enc(`/annotate/${name}`)}`} title="The short tutorial of this page again">Tutorial</Link>}</span>
         <h1>{meta.title}</h1>
         <div className="muted small">{AREAS_TITLE}{next?.core_id ? ` · core ${next.core_id}` : ''}</div>
       </div>
@@ -84,7 +84,7 @@ export function MarkAreas({ detail, onEvent, coach, onFinished }: {
       <div className="annotate-page round-page fit-page">{top}
         <div className="card empty-state">
           <p style={{ marginTop: 0 }}><b>{next.taken ? 'The other cores are open with someone else right now.' : 'Every core of this session has been checked — thank you!'}</b></p>
-          <div className="row">{next.taken > 0 && <button className="btn" onClick={() => void ask()}>Look again</button>}<Link className="btn primary" to="/annotate">All sessions</Link></div>
+          <div className="row">{next.taken > 0 && <button className="btn" onClick={() => void ask()}>Look again</button>}<Link className="btn primary" to="/">My labelling sets</Link></div>
         </div>
       </div>
     )
@@ -118,7 +118,7 @@ function CoreTask({ name, core, after, afterStains, practice, onEvent, coach, on
   const [at, setAt] = useState(0)
   const [looked, setLooked] = useState<Set<string>>(() => new Set())
   const [kind, setKind] = useState('1')
-  const [brushUm, setBrushUm] = useStored<number>('stainid.round2.brush', BRUSH_UM.start)  // the field tool's brush size too
+  const [brushSize, setBrushSize] = useStored<number>(BRUSH_KEY, BRUSH_PX.start)  // diameter on screen (px); the field tool's too
   const [hidden, setHidden] = useState(false)
   const [objectsOn, setObjectsOn] = useStored('stainid.areas.objects', true)
   const [tick, setTick] = useState(0)  // the strokes changed (undo, a stroke ended)
@@ -185,7 +185,7 @@ function CoreTask({ name, core, after, afterStains, practice, onEvent, coach, on
     setTick((t) => t + 1)
     tell('undo')
   }
-  const size = (bigger: boolean) => { setBrushUm(brushStep(brushUm, bigger)); tell('size') }
+  const size = (bigger: boolean) => { setBrushSize(brushStep(brushSize, bigger)); tell('size') }
   const latest = useRef({ fine, undo, go, at, hidden, size })
   latest.current = { fine, undo, go, at, hidden, size }
 
@@ -235,7 +235,7 @@ function CoreTask({ name, core, after, afterStains, practice, onEvent, coach, on
             <span className="small muted area-tabs-keys"><span className="kbd">[</span> <span className="kbd">]</span> switch stains</span>
           </div>
           {image && <StainView key={image.stain} base={`${base}/${enc(image.stain)}`} image={image} masks={masks.current} kind={kind}
-            brushRadius={brushUm / (task.data.pixel_size_um || 0.27) / 2} hidden={hidden} objectsOn={objectsOn} tick={tick}
+            brushRadius={brushSize / 2} hidden={hidden} objectsOn={objectsOn} tick={tick}
             onStroke={(erase) => { setTick((t) => t + 1); tell(erase ? 'clear' : 'paint') }} />}
         </div>
         <aside className="annotate-side round-side" aria-label="The brush, the keys and this core">
@@ -250,9 +250,9 @@ function CoreTask({ name, core, after, afterStains, practice, onEvent, coach, on
               <div className="area-type is-clear"><span className="kbd">Shift</span><span className="swatch" style={{ background: CLEARED.colour }} />drag: take it out of the
                 {' '}{EXCLUDE_TYPES.find((t) => t.key === kind)?.name} area, detection’s part too</div>
             </div>
-            <p className="small secondary area-size" style={{ margin: '6px 0 0' }}>Brush <b>{brushUm} µm</b> · <span className="kbd">Tab</span> smaller,
+            <p className="small secondary area-size" style={{ margin: '6px 0 0' }}>Brush <b>{brushSize} px</b> · <span className="kbd">Tab</span> smaller,
               {' '}<span className="kbd">Shift</span>+<span className="kbd">Tab</span> bigger</p>
-            <p className="small muted" style={{ margin: '4px 0 0' }}>The hatched region is the type’s area as it stands: detection’s with everyone’s edits. A drag adds to
+            <p className="small muted" style={{ margin: '4px 0 0' }}>The brush keeps its size on screen: zoom in for a finer one. The hatched region is the type’s area as it stands: detection’s with everyone’s edits. A drag adds to
               it (one region, however many strokes; another type’s pixels become this type), Shift-drag takes out of it.</p>
           </div>
           <div className="card side-block">
@@ -267,7 +267,7 @@ function CoreTask({ name, core, after, afterStains, practice, onEvent, coach, on
           <div className="card side-block key-help small">
             <h3>Keys</h3>
             <div><span className="kbd">1</span>–<span className="kbd">4</span> type · drag adds to it · <span className="kbd">Shift</span>-drag takes out of it</div>
-            <div><span className="kbd">Tab</span> / <span className="kbd">Shift</span>+<span className="kbd">Tab</span> (or <span className="kbd">+</span> <span className="kbd">−</span>) brush size · wheel: zoom · middle button: move</div>
+            <div><span className="kbd">Tab</span> / <span className="kbd">Shift</span>+<span className="kbd">Tab</span> (or <span className="kbd">−</span> / <span className="kbd">+</span>) a smaller / bigger brush · wheel: zoom · middle button: move</div>
             <div><span className="kbd">Z</span> undo a stroke · <span className="kbd">Space</span> hide the overlays</div>
             <div><span className="kbd">Enter</span> this stain is done · <span className="kbd">[</span> <span className="kbd">]</span> other stain</div>
             <label className="layer-toggle" style={{ marginTop: 6 }}><input type="checkbox" checked={objectsOn} onChange={(e) => setObjectsOn(e.target.checked)} />Show detection’s objects (faint)</label>
@@ -294,7 +294,8 @@ function prefetchTiles(where: string, p: Pyramid) {
 }
 
 /** One stain image of the core: each type's area now (detection's with everyone's saved edits and the strokes since
- *  Save; the chosen type strong), detection's objects faintly, and the brush (`brushRadius` in core px). */
+ *  Save; the chosen type strong), detection's objects faintly, and the brush (`brushRadius` in screen px: the same size
+ *  on screen at every zoom; a stroke is painted in core px at the zoom it started). */
 function StainView({ base, image, masks, kind, brushRadius, hidden, objectsOn, tick, onStroke }: {
   base: string; image: AreaImage; masks: Map<string, BrushMasks>; kind: string; brushRadius: number; hidden: boolean; objectsOn: boolean; tick: number
   onStroke: (erase: boolean) => void
@@ -346,7 +347,7 @@ function StainView({ base, image, masks, kind, brushRadius, hidden, objectsOn, t
     c.style.display = ''
     c.setAttribute('cx', String(p.x))
     c.setAttribute('cy', String(p.y))
-    c.setAttribute('r', String(brushRadius))
+    c.setAttribute('r', String(brushRadius / p.s))
     c.setAttribute('stroke-width', String(1.6 / p.s))
     c.setAttribute('stroke', p.shift || clearing.current ? CLEARED.colour : colourOfType(kind))
   }
@@ -382,7 +383,7 @@ function StainView({ base, image, masks, kind, brushRadius, hidden, objectsOn, t
         const m = masksFor()
         if (!m) return
         clearing.current = p.shift
-        m.begin(p.x, p.y, latestBrush.current, kind, p.shift)
+        m.begin(p.x, p.y, latestBrush.current / p.s, kind, p.shift)
       }}
       onMove={(p) => {
         showCursor(p)
@@ -398,7 +399,7 @@ function StainView({ base, image, masks, kind, brushRadius, hidden, objectsOn, t
         <>
           <div ref={setHost} className="area-pending" style={{ width: pyramid.width, height: pyramid.height, display: hidden ? 'none' : undefined }} />
           <svg className="area-svg" width={pyramid.width} height={pyramid.height} viewBox={`0 0 ${pyramid.width} ${pyramid.height}`} data-unit={unit}>
-            <circle ref={cursor} r={0} fill="none" style={{ display: 'none' }} />
+            <circle ref={cursor} r={brushRadius * unit} strokeWidth={1.6 * unit} fill="none" style={{ display: 'none' }} />
           </svg>
         </>
       )} />

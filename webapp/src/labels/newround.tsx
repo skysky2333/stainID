@@ -91,7 +91,7 @@ export function NewRoundSession({ stains, onClose, onCreated, onOlder }: {
           </div>
           <p className="small muted" style={{ margin: '6px 0 0' }}>{areas
             ? 'Every stain of a core in one go. A sample is enough: the areas people mark teach and test the bad-area detection; the analysis keeps detection’s own areas. About 1 core in 10 also goes to a second person, to see how well people agree.'
-            : 'People work one field at a time: a field someone is on, or has finished, is not handed to anyone else. Both rounds share one set of answers.'}</p>
+            : 'People work one field at a time: a field someone is on, or has finished, is not handed to anyone else. Every session’s answers on a candidate count together, whoever gave them.'}</p>
         </fieldset>
         {areas ? <AreasScope scope={scope.data} overview={areasNow} where={where} setWhere={setWhere} tmas={tmas} setTmas={setTmas}
           count={fieldCount} setCount={setFieldCount} order={order} setOrder={setOrder} words={words} tmaName={info?.kind === 'tma' || !info?.kind ? tmaName : (t) => t} /> : (

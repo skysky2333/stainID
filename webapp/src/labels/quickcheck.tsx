@@ -212,7 +212,7 @@ export function QuickCheck({ detail }: { detail: SessionDetail }) {
     <div className="annotate-page">
       <div className="annotate-top">
         <div className="annotate-heading">
-          <Link to="/annotate" className="small">← All sessions</Link>
+          <Link to="/" className="small">← My labelling sets</Link>
           <h1>{meta.title}</h1>
           <div className="muted small">{meta.stain} · one object at a time{meta.ai_view === 'full' ? ' · detection’s call is shown' : ' · decide for yourself'}</div>
         </div>
@@ -271,7 +271,7 @@ export function QuickCheck({ detail }: { detail: SessionDetail }) {
       ) : (
         <Empty><p style={{ marginTop: 0 }}><b>Nothing left for you in this queue right now. Thank you!</b></p>
           {history.length > 0 && <p className="small secondary">Pressed a wrong key? <button className="btn small" onClick={undo}><span className="kbd">Z</span> Undo last</button></p>}
-          <div className="row" style={{ justifyContent: 'center' }}><button className="btn" onClick={() => void ask()}>Check again</button><Link className="btn" to="/annotate">All sessions</Link></div></Empty>
+          <div className="row" style={{ justifyContent: 'center' }}><button className="btn" onClick={() => void ask()}>Check again</button><Link className="btn" to="/">My labelling sets</Link></div></Empty>
       )}
     </div>
   )

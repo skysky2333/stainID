@@ -14,7 +14,7 @@ have are registered on this router.
 Practice sessions (`practice-2-<stain>`) are made up on the fly for the tutorial a new annotator goes through: one
 real field of the store, shown exactly like a round session, but nothing anyone does
 there is saved: answers are echoed back and never reach the label store, decisions of others are not shown, nothing is
-held. Who finished the tutorial is kept in `<reviews>/tutorials.json` (`/api/session/tutorial`).
+held. Who finished the tutorial is kept in `<reviews>/tutorials.json` (`/api/tutorial`).
 """
 from __future__ import annotations
 
@@ -1115,17 +1115,32 @@ class Tutorial(BaseModel):
     done: bool = True
 
 
-@router.get("/session/tutorial")
+@router.get("/tutorial")
 def tutorial(request: Request, person: str = Depends(annotator)) -> dict:
-    """Whether this person has been through the tutorial, and where it practises: a 6E10 field (`PRACTICE_STAIN`, for
-    everyone) with several plaque types, detection rejects and a detected fold or artifact, else the stain of the first
-    open round session, else the first stain with candidates (`practice_tile`); the "Mark bad areas" practice is
-    `practice-areas`. Finding the practice field reads a few cores the first time: in the background then (`work`)."""
-    practice = work.answer("tutorial", ("tutorial", str(get_state().root)), lambda task: _practice(), work.NOW, "Finding a practice field",
+    """Whether this person has been through the tutorial of this project, and where it practises: a field of this
+    project (a project route, `/api/projects/<id>/tutorial`, like the practice session the page then opens, so the
+    field is always one of that session's): a 6E10 field (`PRACTICE_STAIN`) with several plaque types, detection
+    rejects and a detected fold or artifact, else the stain of the first open round session, else the first of the
+    project's stains with candidates (`practice_tile`); the "Mark bad areas" practice is `practice-areas`. Finding the
+    practice field reads a few cores the first time: in the background then (`work`)."""
+    state = get_state()
+    practice = work.answer("tutorial", ("tutorial", state.id, str(state.root)), lambda task: _practice(), work.NOW, "Finding a practice field",
                            fresh=work.within(15))
     if isinstance(practice, Response):
         return practice
-    return {"done": person in _tutorials() and person != PREVIEW, "practice": practice}
+    return {"done": _done(request, person), "practice": practice, "project": state.id}
+
+
+def _done(request: Request, person: str) -> bool:
+    """Whether the signed-in person went through "Fix the field": kept with their account (`/api/session/tutorials`);
+    the record of earlier releases (`tutorials.json` of the project, by name) counts too."""
+    from stainid.api import accounts  # noqa: PLC0415
+    from stainid.api.session import current_account  # noqa: PLC0415
+
+    account = current_account(request)
+    if account is None or person == PREVIEW:
+        return False
+    return accounts.tutorials_done(account.id)["objects"] or person in _tutorials()
 
 
 def _practice() -> dict | None:
@@ -1133,7 +1148,9 @@ def _practice() -> dict | None:
     metas = [sessions.meta(root(), n) for n in sessions.names(root())]
     stains = [PRACTICE_STAIN] if candidate_store.cores(state.project, PRACTICE_STAIN) else []  # amyloid first, for everyone
     stains += [m["stain"] for m in metas if rounds.is_round(m) and m.get("open")]
-    stains += [s for s in STAINS if candidate_store.cores(state.project, s)]
+    tiles = state.labelling_tiles
+    own = sorted(set(tiles.stain.astype(str))) if not tiles.empty else []  # an image set's or public dataset's own stains
+    stains += [s for s in [*STAINS, *own] if candidate_store.cores(state.project, s)]
     for stain in dict.fromkeys(stains):
         tile = practice_tile(stain)
         if tile:
@@ -1141,18 +1158,20 @@ def _practice() -> dict | None:
     return None
 
 
-@router.post("/session/tutorial")
-def tutorial_done(body: Tutorial, person: str = Depends(annotator)) -> dict:
-    """Remember that this person finished (or skipped) the tutorial, or forget it (to see it again); someone trying it
-    without an account (`PREVIEW`) is not remembered."""
-    if person == PREVIEW:
+@router.post("/tutorial")
+def tutorial_done(body: Tutorial, request: Request, person: str = Depends(annotator)) -> dict:
+    """Remember that this person finished (or skipped) "Fix the field", or forget it (to see it again), with their
+    account (`/api/session/tutorials`); someone trying it without an account (`PREVIEW`) is not remembered."""
+    from stainid.api import accounts  # noqa: PLC0415
+    from stainid.api.session import current_account  # noqa: PLC0415
+
+    account = current_account(request)
+    if account is None or person == PREVIEW:
         return {"done": body.done}
-    with _TUTORIALS:
-        done = _tutorials()
-        if body.done:
-            done[person] = time.time()
-        else:
+    accounts.set_tutorial(account.id, "objects", body.done)
+    if not body.done and person in _tutorials():  # seen again: the earlier release's record goes too
+        with _TUTORIALS:
+            done = _tutorials()
             done.pop(person, None)
-        _tutorials_path().parent.mkdir(parents=True, exist_ok=True)
-        write_text_atomic(_tutorials_path(), json.dumps(done, indent=1))
+            write_text_atomic(_tutorials_path(), json.dumps(done, indent=1))
     return {"done": body.done}

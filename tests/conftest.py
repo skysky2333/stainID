@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import cv2
@@ -68,7 +67,6 @@ def synthetic_project(tmp_path: Path, monkeypatch) -> Path:
                 "plaque_area_um2": 300.0, "dense_core_fraction": 0.2, "equivalent_diameter_um": 20.0} for i in range(8)]
     pd.DataFrame(plaques).to_csv(parts / "LIP-1_B-2_6E10_objects.csv", index=False)
     (tmp_path / "data" / "annotations").mkdir()
-    (tmp_path / "data" / "annotations" / "cohort_manual_exclusions.json").write_text(json.dumps({}))
     (tmp_path / "stainid.yaml").write_text(yaml.safe_dump({"name": "synthetic"}))
     monkeypatch.setenv("STAINID_PROJECT", str(tmp_path))
     return tmp_path

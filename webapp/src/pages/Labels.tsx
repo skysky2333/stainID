@@ -27,16 +27,16 @@ export default function Labels() {
   const [notice, setNotice] = useState<string | null>(null)
   const linkFor = (name = '') => {
     const base = share.data?.network && share.data.links[0] ? share.data.links[0] : `${location.origin}${appPath('/annotate')}`
-    return name ? `${base}/${name}` : base
+    return name ? `${base}/${name}` : `${new URL(base).origin}/`  // the main page: everyone signs in there
   }
 
   return (
     <>
       <PageHead title="Labels" subtitle="Ask colleagues to fix detection on a few fields and mark bad areas on some cores; their labels train and test the models, never the analysis.">
         <a className="btn" href={apiUrl('/api/labels/export.csv')}>Download all labels</a>
-        <a className="btn" href={appPath('/annotate/tutorial?preview=1')} target="_blank" rel="noreferrer"
+        <a className="btn" href={appPath('/tutorial?preview=1')} target="_blank" rel="noreferrer"
           title="See exactly what annotators see first: the 4-minute practice on a field of this project (nothing is saved)">Try the tutorial</a>
-        <a className="btn" href={appPath('/annotate/tutorial?kind=areas&preview=1')} target="_blank" rel="noreferrer"
+        <a className="btn" href={appPath('/tutorial?kind=areas&preview=1')} target="_blank" rel="noreferrer"
           title="The short practice of “Mark bad areas” on a core of this project (nothing is saved)">Bad-areas tutorial</a>
         <button className="btn primary" onClick={() => setCreating(true)}>New labelling session</button>
       </PageHead>

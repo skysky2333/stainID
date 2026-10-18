@@ -165,6 +165,8 @@ def test_one_palette_of_distinct_colours_everywhere(rounds_project):
     every = {f"classes[{i}]": c for i, c in enumerate(colours["classes"])}
     every |= {f"{group}.{k}": v for group, d in colours.items() if isinstance(d, dict) for k, v in d.items()}
     assert len({v.lower() for v in every.values()}) == len(every)  # no two the same
+    every |= {"highlight": "#ffffff", "edge": "#000000"}  # the white highlight and dark edge of drawn shapes: nothing may look like them
+    assert "#ffffff" not in [c.lower() for c in colours["classes"]]
     names = sorted(every)
     near = min((float(np.linalg.norm(_lab(every[a]) - _lab(every[b]))), a, b) for i, a in enumerate(names) for b in names[i + 1:])
     assert near[0] >= 15, near  # and none hard to tell apart (CIE Lab)

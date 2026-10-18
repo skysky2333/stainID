@@ -27,6 +27,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from stainid import practice
 from stainid.labels import store
 from stainid.labels import vocabulary as vocab
 from stainid.labels.vocabulary import Vocabulary
@@ -81,6 +82,7 @@ ON_CREATE: list = []  # called with (root, name) when a session is made: the app
 
 
 def create(root: Path, name: str, **meta) -> dict:
+    practice.guard("the sessions")
     target = folder(root, name)
     if target.exists():
         raise FileExistsError(target)
@@ -104,6 +106,7 @@ def meta(root: Path, name: str) -> dict:
 
 
 def update(root: Path, name: str, **changes) -> dict:
+    practice.guard("the sessions")
     updated = {**meta(root, name), **changes}
     write_text_atomic(folder(root, name) / "meta.json", json.dumps(updated, indent=1))
     return updated
@@ -111,6 +114,7 @@ def update(root: Path, name: str, **changes) -> dict:
 
 def remove(root: Path, name: str) -> Path:
     """Moves the session aside (into sessions/.deleted); its labels stay in the label store."""
+    practice.guard("the sessions")
     target = root / FOLDER / ".deleted" / f"{name}-{time.strftime('%Y%m%d-%H%M%S')}"
     target.parent.mkdir(parents=True, exist_ok=True)
     return Path(shutil.move(folder(root, name), target))
@@ -232,6 +236,7 @@ class Reservations:
             return {k: people[person][1] for k, people in self._held.get(session, {}).items() if person in people and people[person][0] > now}
 
     def hold(self, session: tuple, person: str, keys: list[str]) -> None:
+        practice.guard("the holds")
         now = self.clock()
         until = now + self.seconds
         with self._lock:
@@ -246,6 +251,7 @@ class Reservations:
                     people[person] = (until, self._handed)
 
     def release(self, session: tuple, person: str, keys: list[str]) -> None:
+        practice.guard("the holds")
         with self._lock:
             objects = self._held.get(session, {})
             for key in keys:
