@@ -11,8 +11,9 @@ changes:
 
 (add `--projects-dir` with a folder holding the demo project and a project made by make_setup_demo.py for a Projects
 page with more than one study). The script refuses a project that is not the synthetic demo (it reads the demo's
-demo.json). It signs in as admin, opens each page of the project the server was started with (at /p/<project>/...) in
-the light theme and writes:
+demo.json). It signs in as admin, makes accounts for the demo's annotator and a newcomer (members of the demo's
+sessions; random passwords, kept nowhere), opens each page of the project the server was started with (at
+/p/<project>/...) in the light theme, the annotation pages signed in as those people, and writes:
 
 - projects.png, home.png, workflow.png (the Run page with its flow chart), models.png, labels.png, results.png,
   settings.png;
@@ -177,9 +178,14 @@ def main() -> None:
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
-        context = browser.new_context(viewport={"width": 1500, "height": 911}, color_scheme="light", device_scale_factor=1)
-        context.add_init_script("localStorage.setItem('stainid.theme', JSON.stringify('light'))")
-        context.add_init_script(f"localStorage.setItem('stainid.tutorial.areas.{args.annotator}', '1')")  # Ann knows "Mark bad areas"
+
+        def new_context():
+            made = browser.new_context(viewport={"width": 1500, "height": 911}, color_scheme="light", device_scale_factor=1)
+            made.add_init_script("localStorage.setItem('stainid.theme', JSON.stringify('light'))")
+            made.add_init_script(f"localStorage.setItem('stainid.tutorial.areas.{args.annotator}', '1')")  # Ann knows "Mark bad areas"
+            return made
+
+        context = new_context()
         request = context.request
         signed = request.post(f"{base}/api/session/admin", data={"password": args.password})
         if not signed.ok:
@@ -192,11 +198,41 @@ def main() -> None:
         if not demo.exists():
             raise SystemExit(f"{root} is not the synthetic demo (no demo.json): screenshots are only taken of the demo")
         rounds = json.loads(demo.read_text())["rounds"]
-        page = context.new_page()
+        admin_page = context.new_page()
+        signed_in: dict[str, Page] = {}
+
+        def as_person(person: str) -> Page:
+            """A browser of this person (an annotator account made here, a member of the demo's sessions)."""
+            if person in signed_in:
+                return signed_in[person]
+            password = secrets.token_urlsafe(12)
+            made = request.post(f"{base}/api/session/people", data={"name": person, "password": password})
+            reset = None
+            if made.status == 409:  # made by an earlier run: a one-time password, then a new one
+                found = next(a for a in request.get(f"{base}/api/session/people").json()["people"] if a["name"] == person)
+                reset = request.post(f"{base}/api/session/people/{found['id']}/reset").json()["password"]
+            elif not made.ok:
+                raise SystemExit(f"could not make an account for {person}: {made.text()}")
+            browser_of = new_context()
+            signed = browser_of.request.post(f"{base}/api/session/login", data={"name": person, "password": reset or password})
+            if not signed.ok:
+                raise SystemExit(f"{person} could not sign in: {signed.text()}")
+            if reset:
+                browser_of.request.put(f"{base}/api/session/password", data={"current": reset, "new": password})
+            account = signed.json()["account"]["id"]
+            for session in {rounds.get("fix"), rounds.get("areas")} - {None}:
+                request.post(f"{api}/labels/sessions/{session}/access/members", data={"account": account})
+            signed_in[person] = browser_of.new_page()
+            return signed_in[person]
+
         for name in wanted:
             path, width, height = SHOTS[name]
-            person = args.newcomer if name == "tutorial.jpg" else args.annotator
-            request.post(f"{base}/api/session/annotator", data={"name": person})
+            if name == "tutorial.jpg":
+                page = as_person(args.newcomer)
+            elif name.startswith("annotate") or name == "areas.jpg":
+                page = as_person(args.annotator)
+            else:
+                page = admin_page
             if name == "viewer.jpg":
                 path = viewer_target(page, api, args.stain)
             if name.startswith("annotate"):
