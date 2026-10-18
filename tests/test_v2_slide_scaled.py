@@ -44,9 +44,12 @@ def test_a_pale_slide_keeps_its_dense_core_in_the_scaled_inputs(tmp_path):
     assert plaque.s_max_dab_od == pytest.approx(plaque.m_max_dab_od / 0.02)
 
 
-def test_training_uses_scaled_inputs_by_default_for_6e10(tmp_path):
+def test_training_takes_absolute_inputs_until_decided_and_scaled_ones_when_asked(tmp_path):
     root = border_project(tmp_path, lambda rgb: None)
     project = load_project(root)
+    # absolute by default until the model comparison is decided (v2.training.<stain>.slide_scaled)
+    assert not slide_scaled(project, "6E10") and not slide_scaled(project, "NeuN") and not slide_scaled(project, "AT8")
+    project.config["v2"] = {"training": {s: {"slide_scaled": True} for s in ("NeuN", "6E10", "AT8")}}
     assert slide_scaled(project, "6E10") and slide_scaled(project, "NeuN") and slide_scaled(project, "AT8")
     names = ["deposit_area_um2", "max_dab_od", "core_fraction", "circularity"]
     data = pd.DataFrame({"tma": ["1", "1"], "deposit_area_um2": [500.0, 900.0], "max_dab_od": [0.2, 0.4], "core_fraction": [0.1, 0.2],

@@ -33,7 +33,6 @@ HELP = {
     "inputs.core_manifest": "Core table (made by Find cores).",
     "inputs.tma_layout": "TMA map: donor, region and group per core position.",
     "inputs.donor_metadata": "Optional: one row per donor with age, sex, APOE and other covariates.",
-    "inputs.manual_exclusions": "Optional: hand-drawn regions to ignore (folds, bubbles).",
     "inputs.core_images": "Core image table (made by Cut cores into tiles).",
     "inputs.whole_core_manifest": "Every tile of tissue in each core (made by Cut cores into tiles).",
     "inputs.calibration": "Stain thresholds (made by Calibrate).",

@@ -398,9 +398,10 @@ def owned_once(rows: list[dict], tiles: list[dict], context: int = 128, cell: in
     """Each object of the core image once. A tile keeps the candidates whose centroid lies in it or within its margin
     (`own_margin`), so an object across a tile edge is kept by every tile that segmented it, each copy cut at that tile's
     crop. Of the copies (rows of different tiles whose outlines are the same object, `same_copy`) the most complete stays:
-    not cut by its crop, then centroid in its own tile, then the largest, then the first tile, then position. Two
-    complete copies whose centroids both lie in their own tiles are distinct objects. A copy whose centroid lies in no
-    tile of the image is dropped. The kept row moves to the tile holding its centroid (`tile_id`, `x_tile`, `x_field`…)."""
+    not cut by its crop, then centroid in its own tile, then the largest, then the first tile, then position. Copies are
+    found the same way when both are whole with their centroids in their own tiles: two tiles' windows can segment one
+    object slightly differently, its centroid then lying on either side of their border (objects that only touch are
+    never copies). A copy whose centroid lies in no tile of the image is dropped. The kept row moves to the tile holding its centroid (`tile_id`, `x_tile`, `x_field`…)."""
     order = {t["tile_id"]: i for i, t in enumerate(tiles)}
 
     def home(x: float, y: float) -> dict | None:
@@ -423,8 +424,7 @@ def owned_once(rows: list[dict], tiles: list[dict], context: int = 128, cell: in
             other = rows[j]
             if other["tile_id"] == row["tile_id"]:
                 continue
-            both_whole = row["_own"] and other["_own"] and not row.get("touches_crop_edge") and not other.get("touches_crop_edge")
-            if not both_whole and same_copy(row, other):
+            if same_copy(row, other):
                 copy = True
                 break
         if copy or (not row["_own"] and home(row["x_core"], row["y_core"]) is None):

@@ -58,14 +58,16 @@ DEFAULTS: dict = {
         "shrink_min_um2": 100.0,
         # advanced: the outline the viewer and the annotation pages show first for an object ("stain": the candidate's own
         # outline from the stain; "sam": Segment Anything's default output, the stain outline where it fell back). Both are
-        # always stored; areas in the measures come from the stain outline either way. 6E10: SAM clips diffuse plaques to
-        # their dense part; NeuN: SAM is as good or better; AT8: mixed.
+        # always stored; the measures take each object's area from the outline drawn by this setting
+        # (`candidates.shown_area_um2`). 6E10: SAM clips diffuse plaques to their dense part; NeuN: SAM is as good or
+        # better; AT8: mixed.
         "default_outline": {"NeuN": "sam", "6E10": "stain", "AT8": "stain"},
     },
     # model training (not a detection stage: changing it re-runs nothing). slide_scaled: a new model takes its DAB
     # intensities in slide thresholds and the measures cut at absolute OD floors at levels relative to the threshold
-    # (`s_` inputs, stainid.v2.scaled) instead of absolute OD, so pale slides (LIP-6) are not rejected for being pale
-    "training": {"NeuN": {"slide_scaled": True}, "6E10": {"slide_scaled": True}, "AT8": {"slide_scaled": True}},
+    # (`s_` inputs, stainid.v2.scaled) instead of absolute OD. Off (absolute inputs, as the active models) until the
+    # model comparison (absolute against scaled, leave-one-TMA-out) has been decided
+    "training": {"NeuN": {"slide_scaled": False}, "6E10": {"slide_scaled": False}, "AT8": {"slide_scaled": False}},
     "rules": {
         # edge_band: a candidate found only by the new sources lying mostly within 5 µm of a tissue edge or hole (brown rims)
         "NeuN": {"excluded_fraction": 0.5, "near_profile": True, "pale_nucleus": True, "profile_shape": True, "edge_band": 0.5,

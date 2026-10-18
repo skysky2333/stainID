@@ -45,6 +45,19 @@ class Field:
         return self.inner[1].start - margin <= x < self.inner[1].stop + margin and self.inner[0].start - margin <= y < self.inner[0].stop + margin
 
     @cached_property
+    def standard(self) -> np.ndarray:
+        """The standard crop within this field: the tile and the project's context margin (`tile["context_px"]`). The
+        crop-wide levels (the legacy segmentations' background median and spread, the AT8 edge-guard trigger, the stained
+        levels) are taken over it, so a wider detection window shows more of each object at the levels the standard
+        crop sets, and does not move them (a lower extent level joins neighbouring plaques). All of the field for a
+        field cut with the standard margin."""
+        context = int(self.tile.get("context_px", 128))
+        out = np.zeros(self.shape, bool)
+        out[max(0, self.inner[0].start - context): self.inner[0].stop + context,
+            max(0, self.inner[1].start - context): self.inner[1].stop + context] = True
+        return out
+
+    @cached_property
     def hed(self) -> np.ndarray:
         return rgb_to_hed(self.rgb)
 

@@ -53,9 +53,15 @@ and every object is detected whole, once: a tile keeps the candidates whose cent
 and of the copies of one object (rows of different tiles whose outlines overlap with IoU ≥ 0.3, or one lying half
 inside the other; `proposals.owned_once`) the most complete stays — not cut by its crop, then centroid in its own tile,
 then the largest — and it belongs to the tile holding its centroid (`tile_id`, `x_tile`, `x_field` are of that tile).
-Two whole objects whose centroids lie in their own tiles are never merged. With the project's 128 px context alone, a
+Two tiles' windows can segment one object slightly differently, its centroid then on either side of their border:
+such whole copies are found by the same overlap rule; objects that only touch are never copies. With the project's 128 px context alone, a
 plaque wider than that was cut at every crop and kept in pieces (2–4 at a corner of four tiles), some with straight
-crop edges.
+crop edges. The window only lets a tile see further: every crop-wide level is taken over the tile's standard crop (the
+tile and the project's 128 px context, `Field.standard`) — the 6E10 legacy segmentation's background median and spread
+(so its seed and extent levels), the stained levels of the coarse and unproposed searches, and the AT8 network's
+positive level and edge-guard trigger — and the fold and linear-artifact masks come from the standard crops too. Taken
+over the wide crop, the background moved the 6E10 extent level by up to 8% per tile and a lower level joined
+neighbouring deposits into one.
 
 The window changes only what detection sees. The tiles, their ids, the tissue areas (each tile's own area), the
 calibration and the nuclei stay as they are: the linear-artifact and fold masks are made per tile on its standard crop
@@ -123,8 +129,8 @@ The current models take DAB intensities in absolute OD, and some measures are cu
 also stores slide-scaled inputs for every stain (`s_<name>`, `stainid.v2.scaled`): 6E10 as above; NeuN mean DAB, the
 80th percentile around the nucleus, the context DAB and the stained area above 0.35 × threshold without the 0.012 OD
 floor; AT8 the soma's DAB 90th percentile, the background median and the context DAB (its contrast and soma DAB are
-already in thresholds). New models of every stain train on them by default (`v2.training.<stain>.slide_scaled`); an
-AT8 model so trained also cuts mature tangles on the scaled 90th percentile (`mature_feature` in the bundle). The
+already in thresholds). A new model trains on them when `v2.training.<stain>.slide_scaled` is set (off for every
+stain until the model comparison, absolute against scaled, has been decided); an AT8 model so trained also cuts mature tangles on the scaled 90th percentile (`mature_feature` in the bundle). The
 current models keep reading the legacy `m_` inputs until a new one is made active.
 
 The current 6E10 model takes absolute DAB OD and dense-core / seed measures cut at absolute OD. The LIP-6 6E10 slide is
@@ -133,10 +139,10 @@ core: the October 2026 audit found 5,099 of the cohort's 11,060 large (≥ 300 �
 on LIP-6 (41 % of its large plaques; 1.5–7 % elsewhere), and LIP-6's median diffuse-plaque density 0.6 /mm² against
 6–31 /mm² on the other TMAs. Shape features of the ragged outlines of diffuse plaques (low circularity and solidity)
 pull them down too. The next 6E10 model is trained on the annotation rounds' labels with the slide-scaled inputs
-(`v2.training.6E10.slide_scaled`, on by default; `stainid.training.train.with_scaled`): every input with an `s_`
+(when `v2.training.6E10.slide_scaled` is set; `stainid.training.train.with_scaled`): every input with an `s_`
 version is replaced by it, and the bundle records `slide_scaled: true` and the `s_` names, which stage 4 reads from the
 store like any other input. Labels on candidates without `s_` columns (the old pool) get their intensities from the
-OD over their TMA's threshold and leave the core measures to the model's imputer. Set `slide_scaled: false` to train
+OD over their TMA's threshold and leave the core measures to the model's imputer. Without the setting, models train
 on the legacy inputs.
 
 ## Stage 4: calls
@@ -168,7 +174,8 @@ NeuN `sam`, 6E10 `stain`, AT8 `stain`: SAM clips diffuse plaques to their dense 
 and mixed on AT8). The assembled store records it per row (`outline_default`); the viewer's outline layer
 (`candidates.outline_rings`) and the annotation pages (`labels.candidate_store.masks`: the three SAM masks small → large,
 then the stain outline as "mask 3", shown first where the setting is `stain` or SAM fell back) follow it. Changing it
-re-assembles the store only; areas in the measures come from the stain outline either way.
+re-assembles the store only; the measures take each object's area from the outline this setting draws
+(`candidates.shown_area_um2`), so what is drawn is what is measured.
 
 ## Stage 5: measures and the mapping to the current tables
 
