@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import PlainTextResponse, Response
 from pydantic import BaseModel
 
+from stainid import disk_cache
 from stainid.api import work
 from stainid.api.state import get_state
 from stainid.jobs import ACTIVE, NOISE
@@ -23,7 +24,7 @@ def described():
     of core images) answers "preparing" instead of keeping the page waiting; parallel requests share one count."""
     state = get_state()
     return work.answer("steps", ("steps", str(state.root)), lambda task: describe(state.project), work.NOW, "Looking at where the study stands",
-                       fresh=work.within(3), alone=True)
+                       fresh=work.within(3), alone=True, saved=disk_cache.answer_file(state.root, "steps.json"))
 
 
 @router.get("/steps")

@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
 
+from stainid.api import work
 from stainid.api.state import get_state, reload_project
 from stainid.training.train import activate, trained_models
 
@@ -96,13 +97,17 @@ def _fixed_stains() -> list[str]:
 
 
 @router.get("/models/outline-fixes")
-def outline_fixes() -> dict:
+def outline_fixes():
     """Per stain with candidates: the outlines people fixed in "Fix the field" against each of detection's outlines
-    (`labels.outline_fixes`), the evidence for the stain's default outline (never changed here)."""
+    (`labels.outline_fixes`), the evidence for the stain's default outline (never changed here). Worked out in the
+    background (a whole cohort's comparison); a server started again answers with the last one meanwhile."""
+    from stainid import disk_cache
     from stainid.labels import outline_fixes as fixes
 
     state = get_state()
-    return {"stains": [fixes.summary(state.project, s, state.tiles) for s in _fixed_stains()]}
+    return work.answer("outline fixes", ("outline fixes", str(state.root)),
+                       lambda task: {"stains": [fixes.summary(state.project, s, state.tiles) for s in _fixed_stains()]}, work.NOW,
+                       "Comparing the outlines people fixed", fresh=work.within(10), saved=disk_cache.answer_file(state.root, "outline-fixes.json"))
 
 
 @router.get("/models/outline-fixes.csv")

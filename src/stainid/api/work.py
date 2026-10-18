@@ -15,6 +15,7 @@ starts at once. The same work asked twice (the same `key`) is done once.
 from __future__ import annotations
 
 import contextvars
+import json
 import logging
 import os
 import statistics
@@ -24,10 +25,11 @@ import uuid
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 log = logging.getLogger(__name__)
 
@@ -251,12 +253,59 @@ def pending(task: Task, then: str = "retry") -> JSONResponse:
 
 
 def answer(kind: str, key: Any, run: Callable[[Task], Any], priority: int = NOW, label: str = "", then: str = "retry",
-           seconds: float | None = None, admin: bool = False, fresh: Callable[[Task], bool] | None = None, alone: bool = False):
-    """`run`'s result when it is done within `seconds` (default `WAIT_SECONDS`), else a 202 `pending` answer."""
+           seconds: float | None = None, admin: bool = False, fresh: Callable[[Task], bool] | None = None, alone: bool = False,
+           saved: Path | None = None):
+    """`run`'s result when it is done within `seconds` (default `WAIT_SECONDS`), else a 202 `pending` answer.
+    `saved`: a file every result is also kept in (JSON); while new work is not done within `SAVED_WAIT`, the request
+    gets that last result instead of waiting: a server started again, or a busy one, answers at once with what it knew,
+    and the page's next poll gets the new one."""
+    if saved is not None:
+        run = _keeping(run, saved)
+        if saved.exists():
+            seconds = SAVED_WAIT if seconds is None else min(seconds, SAVED_WAIT)
     task = submit(kind, key, run, priority, label, admin, fresh, alone)
     if wait(task, WAIT_SECONDS if seconds is None else seconds):
         return outcome(task)
+    if saved is not None:
+        last = _last(saved)
+        if last is not None:
+            return last
     return pending(task, then)
+
+
+SAVED_WAIT = 0.3  # how long a request with a saved answer waits for new work before taking the saved one
+
+
+def _keeping(run: Callable[[Task], Any], saved: Path) -> Callable[[Task], Any]:
+    def run_and_keep(task: Task) -> Any:
+        result = run(task)
+        if not isinstance(result, Response):
+            try:
+                from fastapi.encoders import jsonable_encoder  # noqa: PLC0415
+
+                from stainid.tables import write_text_atomic  # noqa: PLC0415
+
+                saved.parent.mkdir(parents=True, exist_ok=True)
+                from stainid import disk_cache  # noqa: PLC0415
+
+                write_text_atomic(saved, json.dumps(jsonable_encoder(result)))
+                disk_cache.wrote(saved)
+            except (OSError, TypeError, ValueError):
+                pass
+        return result
+
+    return run_and_keep
+
+
+def _last(saved: Path) -> Any:
+    from stainid import disk_cache  # noqa: PLC0415
+
+    try:
+        found = json.loads(saved.read_text())
+    except (OSError, ValueError):
+        return None
+    disk_cache.used(saved)
+    return found
 
 
 def _start_workers() -> None:
