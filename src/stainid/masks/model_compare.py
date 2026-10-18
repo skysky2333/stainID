@@ -595,6 +595,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--out", required=True)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--threads", type=int, default=2, help="processor threads (the queue's budget)")
+    parser.add_argument("--panel-only", action="store_true", help="write the panel (panel.csv) and stop: no model is run")
     args = parser.parse_args(argv)
 
     torch.set_num_threads(args.threads)
@@ -614,6 +615,9 @@ def main(argv: list[str] | None = None) -> None:
                       "cores": sorted(frame[frame.stain == stain].core_id.unique().tolist()),
                       "groups": frame[frame.stain == stain].group.value_counts().to_dict()} for stain in args.stains.split(",")}
     print("panel: " + json.dumps(counts), flush=True)
+    if args.panel_only:
+        (out / "panel.json").write_text(json.dumps(counts, indent=1))
+        return
 
     total = len(frame) * len(names)
     done = [0]
