@@ -292,3 +292,47 @@ def test_a_wider_window_moves_no_level_of_the_tile():
         return float(maps["positive"][field.inner].mean())
 
     assert positive(wide) == pytest.approx(positive(standard), abs=0.005)
+
+
+def _scattered_plaques(rgb):
+    # centred on a corner of four tiles and longer than any tile's first window reaches past it: each crop cuts it,
+    # and it is seen whole in a local window
+    cv2.ellipse(rgb, (800, 800), (560, 140), 0, 0, 360, BROWN, -1)
+    cv2.ellipse(rgb, (1300, 700), (90, 40), 20, 0, 360, (150, 110, 80), -1)  # a paler lobe joined to it
+    rng = np.random.default_rng(3)
+    for x, y in rng.integers(40, 1560, size=(40, 2)):
+        if abs(y - 800) > 200:
+            cv2.circle(rgb, (int(x), int(y)), int(rng.integers(6, 25)), BROWN, -1)
+
+
+def test_objects_cut_by_the_first_window_are_the_whole_windows_objects(tmp_path, monkeypatch):
+    """Detecting each tile over a first window and the objects it cuts again in local windows around them gives the
+    candidates (outlines and features), tile measures and unproposed regions of detecting each tile over its whole
+    window."""
+    replaced = []
+    original = proposals.whole_objects
+
+    def counting(*args, **kwargs):
+        rows, stats = original(*args, **kwargs)
+        replaced.append(stats["replaced"])
+        return rows, stats
+
+    monkeypatch.setattr(proposals, "whole_objects", counting)
+    found = {}
+    for whole in (True, False):
+        root = border_project(tmp_path / str(whole), _scattered_plaques, size=4 * TILE)
+        config = yaml.safe_load((root / "stainid.yaml").read_text())
+        config["v2"] = {"proposals": {"whole_objects": whole}}
+        (root / "stainid.yaml").write_text(yaml.safe_dump(config))
+        found[whole] = propose(root)
+    assert sum(replaced) >= 4  # the test sees local windows: every tile around the corner cut the plaque
+    for got, want in zip(found[True], found[False]):
+        assert len(got) == len(want)
+        got, want = got.reset_index(drop=True), want.reset_index(drop=True)
+        for column in want.columns:
+            if pd.api.types.is_numeric_dtype(want[column]):
+                assert np.allclose(got[column].astype(float), want[column].astype(float), rtol=1e-6, equal_nan=True), column
+            else:
+                assert (got[column].astype(str) == want[column].astype(str)).all(), column
+    big = covering(found[True][0], 800, 800)
+    assert len(big) == 1 and big.iloc[0].area_um2 >= 0.95 * np.pi * 560 * 140 * PS ** 2

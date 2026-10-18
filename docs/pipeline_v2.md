@@ -61,7 +61,22 @@ tile and the project's 128 px context, `Field.standard`) — the 6E10 legacy seg
 (so its seed and extent levels), the stained levels of the coarse and unproposed searches, and the AT8 network's
 positive level and edge-guard trigger — and the fold and linear-artifact masks come from the standard crops too. Taken
 over the wide crop, the background moved the 6E10 extent level by up to 8% per tile and a lower level joined
-neighbouring deposits into one.
+neighbouring deposits into one. The 6E10 legacy split seeds are the h-maxima of each deposit's own extent component
+(`segmentation.component_h_maxima`), not of the whole crop, where a brighter deposit that the tissue background joins
+a deposit to could remove or add a seed depending on how far the crop reaches (and the reconstruction ran over the
+whole crop: per deposit it is about 2.5 times faster). This changed 1 of about 1,200 legacy deposits on 16 tiles.
+
+Only the objects that need the window pay for it (`proposals.whole_objects`): a tile whose window is wider than 384 px
+(6E10) is first detected over the tile and 384 px, and every candidate it keeps that comes within 176 px of that crop's
+edge is detected again in a local window around it (its box and 256 px, grown by 512 px on each side the object still
+comes within 176 px of, or its centroid within 260 px of, up to the tile's window; corners on the window's pixel
+parity), at the tile's own crop-wide levels (`Field.reference`). The cut candidate gives way to the local regions
+covering at least a quarter of it whose centroid the tile keeps. The margins hold everything a candidate's measures look
+at (the 140 µm review patch reaches 256 px from the centroid, the 45 µm nuclei ring 165 px from the outline, the 4 µm
+smoothing about 45 px), so this is the whole window's result: on four 6E10 cores the same 9,826 candidates and outlines,
+tile measures and unproposed regions as the 1024 px windows, in 215–385 s per core instead of 875–1,300 s. The tissue areas come from the
+standard crop in every case (`Field.tissue_area`: a hole is filled when the standard crop encloses it), as do the fold
+and linear-artifact masks.
 
 The window changes only what detection sees. The tiles, their ids, the tissue areas (each tile's own area), the
 calibration and the nuclei stay as they are: the linear-artifact and fold masks are made per tile on its standard crop
