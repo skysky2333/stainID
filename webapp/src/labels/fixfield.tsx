@@ -38,7 +38,7 @@ import { BRUSH_KEY, BRUSH_PX, BRUSH_SCALE, CLEARED, EXCLUDE_TYPES, INCLUDE, brus
 import type { Slider } from './fieldStart'
 import { SLIDER_STEP, acceptedAt, lock, moveTo, slider, sliderText, startPick, unlock } from './fieldStart'
 import { LockIcon, ThresholdSlider } from './threshold'
-import { CHOICE_IDS, CHOICE_NAMES, ClassLegend, LookLegend, MaskSwitch, ROUND_TITLE, RoundProgressLine, SaveButtons, SaveState, callText, changesText, draftKey, lookOf, maskName,
+import { BackToSets, CHOICE_IDS, CHOICE_NAMES, ClassLegend, LookLegend, MaskSwitch, ROUND_TITLE, RoundProgressLine, SaveButtons, SaveState, callText, changesText, draftKey, lookOf, maskName,
   polygonArea, polygonPoints, readDraft, simplifyPolygon, stepMask, unsureClass, useCandidateKeys, useFitScreen, useLeaveGuard, useLive, useSaveKeys,
   writeDraft } from './rounds'
 
@@ -954,7 +954,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     <div className="annotate-page round-page fit-page">
       <div className="annotate-top">
         <div className="annotate-heading">
-          <span className="row small"><Link to="/">← My labelling sets</Link><Link to={`/annotate/${name}`}>All fields of this session</Link></span>
+          <span className="row small"><BackToSets />{!(meta as { practice?: boolean }).practice && <Link to={`/annotate/${name}`}>All fields of this session</Link>}</span>
           <h1>{meta.title}</h1>
           <div className="muted small">{meta.stain} · {ROUND_TITLE[2]} · field {position + 1} of {fields.length}</div>
         </div>

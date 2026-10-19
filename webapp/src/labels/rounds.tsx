@@ -6,6 +6,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { RoundLive, RoundProgress } from '../api'
 import { api } from '../api'
+import { Link } from 'react-router-dom'
+import { useSession } from '../session'
 import { Progress } from '../components'
 import type { ClassPick, KeyMap, Vocabulary } from './classKeys'
 import { classText, keyGroups, keyName } from './classKeys'
@@ -22,6 +24,13 @@ export const ROUND_TEXT: Record<1 | 2, string> = {
 export type RoundEvent = 'hover' | 'class' | 'subtype' | 'unsure' | 'remove' | 'undo' | 'mask' | 'add' | 'added' | 'precise-in' | 'precise-edit'
   | 'precise-out' | 'save' | 'finish' | 'keep' | 'exclude' | 'overlays' | 'threshold' | 'start' | 'reset' | 'split-mode' | 'split-preview' | 'split'
   | 'merge-mode' | 'merge-pick' | 'merge' | 'brush-size'
+/** The way back from a labelling page: the person's sets, or, for a guest on a practice page (no account, no sets),
+ *  the sign-in. */
+export function BackToSets() {
+  const { session } = useSession()
+  return session.account ? <Link to="/">← My labelling sets</Link> : <Link to="/">Sign in</Link>
+}
+
 export const LIVE_MS = 3000  // how often a round page renews its hold on the field and asks for the progress
 export const TIER_TEXT: Record<number, string> = {
   0: 'Shown because detection is unsure about it (its score is near the cut-off).',
