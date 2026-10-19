@@ -300,6 +300,10 @@ def test_a_job_that_asks_for_more_memory_than_jobs_can_ever_have_is_capped_and_r
     assert big.needs["ram_gb"] == 39.0
     assert big.warning == "asks for 40 GB of memory; at most 39 GB can be given to jobs on this computer: it runs with 39 GB of memory"
     assert scheduler.store.load(scheduler.store.path(big.id)).warning == big.warning  # kept with the record
+    from stainid.jobs.cli import _line
+
+    shown = scheduler.describe(big)  # what `jobs list` and the Run page show (app-started jobs alike)
+    assert shown["warning"] == big.warning and "Warning: it asks for 40 GB of memory" in _line(shown)
     scheduler._schedule()
     assert big.status == "running"
     # queued while the computer had more, then other programs took memory: capped again once the queue is idle

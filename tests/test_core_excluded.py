@@ -91,6 +91,21 @@ def test_excluded_areas(client, synthetic_project):
     assert tuple(rgba[15, 15, :3][::-1]) == palette.area("3")
 
 
+def test_a_core_images_tissue_is_kept_on_disk_for_a_server_started_again(client, synthetic_project, monkeypatch):
+    """The bad-areas practice took nearly a minute to open after a restart: each core image (15,000 px) was decoded
+    again for its tissue. The tissue is kept on disk by the image's signature."""
+    from stainid.imaging import core_images
+
+    project = state.get_state().project
+    image, _ = exclusions._image_of(project, CORE, "AT8")
+    first = exclusions._tissue(project, image, None)
+    assert first is not None and list((synthetic_project / "data" / "cache" / "tissue").glob("*.png"))
+    exclusions.forget()  # a server started again: nothing in memory
+    monkeypatch.setattr(core_images, "read_bgr", lambda *args: (_ for _ in ()).throw(AssertionError("the core image was read again")))
+    assert np.array_equal(exclusions._tissue(project, image, None), first)
+    assert exclusions._tissue(project, image, (7, 9)).shape == (7, 9)  # on another grid: from the kept one
+
+
 def test_tissue_in_no_tile_is_drawn_as_not_analysed(client, synthetic_project, monkeypatch):
     """What the analysis does not count is drawn: tissue outside every analysed tile, and a core image with no tiles."""
     write_mask(synthetic_project)

@@ -449,7 +449,8 @@ STEPS = (
          "or rule only needs the quick steps after it. Cores already done and up to date are skipped.",
          ("tiles", "calibration", "nuclei"), ("v2_proposals",), ("v2", "proposals"),
          (Option("stain", "Stains", "stains", list(STAINS), choices=tuple(STAINS)),
-          Option("workers", "Cores at once", "number", 0, "0 = as many as the memory and processors allow (about 2 GB each).", advanced=True),
+          Option("workers", "Cores at once", "number", 0, "0 = three at once, their tiles spread over every processor the job is given; "
+                 "N = N cores with about 2 processors each.", advanced=True),
           Option("redo", "Redo all", "bool", False, "Redo every core, not only new and out-of-date ones.", advanced=True), *SHARD),
          heavy=True, view="/cohort", duration="about 3–10 minutes per core image (several at once)", status=lambda p: _v2_status(p, "proposals"),
          kinds=("tma", "images", "slides")),

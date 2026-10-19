@@ -9,9 +9,10 @@ nuclei come from Find nuclei (never re-run here). Nothing here applies a model: 
 from __future__ import annotations
 
 import gc
-import threading
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -20,11 +21,11 @@ from PIL import Image
 from scipy.spatial import cKDTree
 
 from stainid import candidates as store
+from stainid.imaging import shared_arrays
 from stainid.imaging.core_images import open_image
 from stainid.imaging.shared import shared_pictures
 from stainid.imaging.tissue import core_glass_darkness
 from stainid.nuclei import nucleus_centroids
-from stainid.pipelines.cohort_v1 import context_crop
 from stainid.v2 import amyloid, manifest, neun, tau
 from stainid.v2.context import context_features_many
 from stainid.v2.field import Field
@@ -427,34 +428,6 @@ def _overlap(a: tuple, b: tuple) -> tuple[int, int, int, int] | None:
     return (x0, y0, x1, y1) if x1 > x0 and y1 > y0 else None
 
 
-def automatic_masks(image, tiles: list[dict], context: int, pixel_size: dict, size: tuple[int, int], workers: int = 1) -> tuple[np.ndarray, np.ndarray]:
-    """Detection's linear-artifact and fold masks of the whole core image, each tile's own area from its standard crop
-    (the tile and the project's context margin; the masks the calibration and the tile measures use): a wider detection
-    window cuts them from here, so they do not depend on the window."""
-    linear, fold = np.zeros(size, bool), np.zeros(size, bool)
-    cutting = threading.Lock()
-
-    def one(tile: dict) -> None:
-        x, y = int(tile["x_px"]), int(tile["y_px"])
-        with cutting:
-            rgb, inner = context_crop(image, x, y, int(tile["width_px"]), int(tile["height_px"]), context)
-        field = Field({**tile, "context_px": context}, rgb, inner, (x - inner[1].start, y - inner[0].start), float("nan"),
-                      pixel_size[tile["tile_id"]], np.zeros(rgb.shape[:2], bool), None)
-        with shared_pictures(rgb):
-            h, w = inner[0].stop - inner[0].start, inner[1].stop - inner[1].start
-            linear[y: y + h, x: x + w] = field.linear[inner]
-            fold[y: y + h, x: x + w] = field.fold[inner]
-        field.release()
-
-    if workers > 1 and len(tiles) > 1:
-        with ThreadPoolExecutor(min(workers, len(tiles)), thread_name_prefix="stainid-masks") as pool:
-            list(pool.map(one, tiles))
-    else:
-        for tile in tiles:
-            one(tile)
-    return linear, fold
-
-
 def window_nuclei(tile: dict, tiles: list[dict], window: tuple[int, int, int, int], context: int, size: tuple[int, int],
                   load) -> np.ndarray | None:
     """Cellpose labels over a detection window wider than the tile's nuclei crop: the tile's own nuclei (its standard
@@ -631,94 +604,251 @@ def expected(project, stain: str, core_id: str, tiles: list[dict], threshold: fl
                          inputs_of(project, stain, core_id, tiles, threshold, nuclei_names))
 
 
-def propose_core(project, stain: str, core_id: str, tiles: list[dict], threshold: float, nuclei_names: frozenset,
-                 tiles_at_once: int = 1) -> dict:
-    """Run stage 2 on one core image and write its outputs; returns counts and timing. `tiles_at_once` tiles are worked on
-    in threads at once (they share the decoded core image; each needs about 0.7 GB more); the outputs keep the tile
-    order and do not depend on it."""
-    started = time.time()
-    p = params(project)["proposals"]
-    settings, shared = p[stain], {k: v for k, v in p.items() if k not in ("NeuN", "6E10", "AT8")}
-    nuclei_dir = project.output("nuclei")
-    context = project.context_px  # the tiles' nuclei crops and field pictures
-    window = detection_context(project, settings)  # how far each tile's detection reaches (the largest object)
-    pixel_size = {t["tile_id"]: float(np.sqrt(float(t["pixel_width_um"]) * float(t["pixel_height_um"]))) for t in tiles}
-    rows, summaries, unproposed, thread_rows = [], [], [], []
+def decode_core(path, shared: bool = False) -> tuple[np.ndarray, float | None, str | None]:
+    """A core image decoded once: its RGB picture (as `image.crop(box).convert("RGB")` cuts it; read-only), the glass
+    darkness (`core_glass_darkness`) and, `shared`, the shared-memory file holding the picture (tile processes map it;
+    the caller removes it, `shared_arrays.remove`)."""
+    with open_image(path) as image:
+        image.load()
+        glass = core_glass_darkness(image)
+        shape = (image.height, image.width, 3)
+        if shared:
+            file, rgb = shared_arrays.create("core.rgb", shape, np.uint8)
+        else:
+            file, rgb = None, np.empty(shape, np.uint8)
+        for y0 in range(0, image.height, 1024):  # in strips: no second whole copy of the picture
+            y1 = min(image.height, y0 + 1024)
+            strip = image.crop((0, y0, image.width, y1))
+            rgb[y0:y1] = np.asarray(strip if strip.mode == "RGB" else strip.convert("RGB"))
+    rgb = np.asarray(rgb)
+    rgb.flags.writeable = False
+    return rgb, glass, file
 
-    def load_nuclei(tile: dict) -> np.ndarray | None:
-        nuclei_path = nuclei_dir / f"{tile['tile_id']}.npz"
-        if f"{tile['tile_id']}.npz" in nuclei_names or nuclei_path.exists():
-            with np.load(nuclei_path) as loaded:
+
+def core_spec(project, stain: str, tiles: list[dict], threshold: float, nuclei_names: frozenset) -> dict:
+    """What working on any tile of a core image needs besides the picture (plain values: a tile process gets a copy)."""
+    p = params(project)["proposals"]
+    settings = p[stain]
+    names = {f"{t['tile_id']}.npz" for t in tiles}
+    return {
+        "stain": stain, "tiles": tiles, "threshold": threshold,
+        "nuclei_dir": str(project.output("nuclei")), "nuclei_names": frozenset(names & set(nuclei_names)),
+        "context": project.context_px,  # the tiles' nuclei crops and field pictures
+        "window": detection_context(project, settings),  # how far each tile's detection reaches (the largest object)
+        "pixel_size": {t["tile_id"]: float(np.sqrt(float(t["pixel_width_um"]) * float(t["pixel_height_um"]))) for t in tiles},
+        "settings": settings, "shared": {k: v for k, v in p.items() if k not in ("NeuN", "6E10", "AT8")},
+        "smooth_px": float(p["smooth_px"]), "background_um": float(p["local_background_um"]),
+        "whole_objects": bool(p.get("whole_objects", True)),
+    }
+
+
+class CoreWork:
+    """Working on the tiles of one core image (`spec` from `core_spec`): the decoded picture, and with a detection window
+    wider than the standard crop, detection's linear-artifact and fold masks of the whole core image (`automatic`, made
+    tile by tile by `standard_masks` before any tile is detected). The same in the process that decoded the image and in
+    a tile process that maps it from shared memory, so the outputs do not depend on where a tile is worked on."""
+
+    def __init__(self, spec: dict, image: np.ndarray, glass: float | None, automatic: tuple[np.ndarray, np.ndarray] | None):
+        self.spec, self.image, self.glass, self.automatic = spec, image, glass, automatic
+        self.size = image.shape[:2]
+        self.wide = spec["window"] > spec["context"]
+
+    def crop(self, box: tuple[int, int, int, int]) -> np.ndarray:
+        """The picture over (x0, y0, x1, y1) core px (inside the image), as its own read-only array."""
+        rgb = np.array(self.image[box[1]: box[3], box[0]: box[2]])
+        rgb.flags.writeable = False
+        return rgb
+
+    def load_nuclei(self, tile: dict) -> np.ndarray | None:
+        path = Path(self.spec["nuclei_dir"]) / f"{tile['tile_id']}.npz"
+        if f"{tile['tile_id']}.npz" in self.spec["nuclei_names"] or path.exists():
+            with np.load(path) as loaded:
                 return loaded["masks"]
         return None
 
-    with open_image(project.root / tiles[0]["image_path"]) as image:
-        image.load()
-        glass = core_glass_darkness(image)
-        size = (image.height, image.width)
-        mask = np.zeros(((size[0] + MASK_SCALE - 1) // MASK_SCALE, (size[1] + MASK_SCALE - 1) // MASK_SCALE), np.uint8)
-        wide = window > context
-        whole_objects_on = bool(p.get("whole_objects", True))
-        local_counts: dict = {}
-        automatic = automatic_masks(image, tiles, context, pixel_size, size, tiles_at_once) if wide else None
-        cutting = threading.Lock()
+    def standard_masks(self, tile: dict) -> None:
+        """Detection's linear-artifact and fold masks of a tile's own area, from its standard crop (the tile and the
+        project's context margin; the masks the calibration and the tile measures use), into `automatic`: a wider
+        detection window cuts them from there, so they do not depend on the window."""
+        context = self.spec["context"]
+        x, y, w, h = int(tile["x_px"]), int(tile["y_px"]), int(tile["width_px"]), int(tile["height_px"])
+        box = _crop_box(tile, context, self.size)
+        rgb = self.crop(box)
+        inner = (slice(y - box[1], y - box[1] + h), slice(x - box[0], x - box[0] + w))
+        field = Field({**tile, "context_px": context}, rgb, inner, (box[0], box[1]), float("nan"), self.spec["pixel_size"][tile["tile_id"]],
+                      np.zeros(rgb.shape[:2], bool), None)
+        with shared_pictures(rgb):
+            h, w = inner[0].stop - inner[0].start, inner[1].stop - inner[1].start
+            self.automatic[0][y: y + h, x: x + w] = field.linear[inner]
+            self.automatic[1][y: y + h, x: x + w] = field.fold[inner]
+        field.release()
 
-        def cut_field(tile: dict, box: tuple[int, int, int, int], reference: Field | None = None) -> Field:
-            """The field of a tile over `box` (core px): the image there, detection's masks of the standard crops, the
-            nuclei of the tiles it covers; `reference`: the tile's own field, whose crop-wide levels a local window takes."""
-            x, y, w, h = int(tile["x_px"]), int(tile["y_px"]), int(tile["width_px"]), int(tile["height_px"])
-            with cutting:
-                rgb = np.asarray(image.crop(box).convert("RGB"))
-            raw = window_nuclei(tile, tiles, box, context, size, load_nuclei) if wide else load_nuclei(tile)
-            inner = (slice(y - box[1], y - box[1] + h), slice(x - box[0], x - box[0] + w))
-            field = Field({**tile, "context_px": context}, rgb, inner, (box[0], box[1]), threshold, pixel_size[tile["tile_id"]],
-                          np.zeros(rgb.shape[:2], bool), raw, glass, smooth_px=float(p["smooth_px"]),
-                          background_um=float(p["local_background_um"]), reference=reference)
-            if automatic is not None:  # detection's masks as the standard crops make them (calibration, tile measures)
-                field.__dict__["linear"] = automatic[0][box[1]: box[3], box[0]: box[2]]
-                field.__dict__["fold"] = automatic[1][box[1]: box[3], box[0]: box[2]]
-            return field
+    def cut_field(self, tile: dict, box: tuple[int, int, int, int], reference: Field | None = None) -> Field:
+        """The field of a tile over `box` (core px): the image there, detection's masks of the standard crops, the nuclei
+        of the tiles it covers; `reference`: the tile's own field, whose crop-wide levels a local window takes."""
+        s = self.spec
+        x, y, w, h = int(tile["x_px"]), int(tile["y_px"]), int(tile["width_px"]), int(tile["height_px"])
+        rgb = self.crop(box)
+        raw = window_nuclei(tile, s["tiles"], box, s["context"], self.size, self.load_nuclei) if self.wide else self.load_nuclei(tile)
+        inner = (slice(y - box[1], y - box[1] + h), slice(x - box[0], x - box[0] + w))
+        field = Field({**tile, "context_px": s["context"]}, rgb, inner, (box[0], box[1]), s["threshold"], s["pixel_size"][tile["tile_id"]],
+                      np.zeros(rgb.shape[:2], bool), raw, self.glass, smooth_px=s["smooth_px"], background_um=s["background_um"],
+                      reference=reference)
+        if self.automatic is not None:  # detection's masks as the standard crops make them (calibration, tile measures)
+            field.__dict__["linear"] = np.asarray(self.automatic[0][box[1]: box[3], box[0]: box[2]])
+            field.__dict__["fold"] = np.asarray(self.automatic[1][box[1]: box[3], box[0]: box[2]])
+        return field
 
-        def window_box(tile: dict, reach: int) -> tuple[int, int, int, int]:
-            x, y, w, h = int(tile["x_px"]), int(tile["y_px"]), int(tile["width_px"]), int(tile["height_px"])
-            return max(0, x - reach), max(0, y - reach), min(size[1], x + w + reach), min(size[0], y + h + reach)
+    def window_box(self, tile: dict, reach: int) -> tuple[int, int, int, int]:
+        x, y, w, h = int(tile["x_px"]), int(tile["y_px"]), int(tile["width_px"]), int(tile["height_px"])
+        return max(0, x - reach), max(0, y - reach), min(self.size[1], x + w + reach), min(self.size[0], y + h + reach)
 
-        def one(tile: dict) -> tuple[dict, np.ndarray]:
-            # the tile is detected over a first window; the objects that window may cut are detected again whole in
-            # local windows around them (`whole_objects`), within the tile's whole detection window
-            first = min(window, max(context, FIRST_WINDOW)) if whole_objects_on else window
-            field = cut_field(tile, window_box(tile, first))
-            whole = None
-            if window > first:
-                def whole(rows: list[dict]) -> list[dict]:
-                    found, counts = whole_objects(rows, field, window_box(tile, window), lambda box: cut_field(tile, box, field),
-                                                  stain, settings, shared)
-                    for key, value in counts.items():
-                        local_counts[key] = local_counts.get(key, 0) + value
-                    return found
+    def tile(self, tile: dict) -> tuple[dict, np.ndarray, dict]:
+        """One tile's outputs (`process_tile`), its piece of the mask picture and the local-window counts. The tile is
+        detected over a first window; the objects that window may cut are detected again whole in local windows around
+        them (`whole_objects`), within the tile's whole detection window."""
+        s = self.spec
+        window = s["window"]
+        first = min(window, max(s["context"], FIRST_WINDOW)) if s["whole_objects"] else window
+        field = self.cut_field(tile, self.window_box(tile, first))
+        counts: dict = {}
+        whole = None
+        if window > first:
+            def whole(rows: list[dict]) -> list[dict]:
+                found, made = whole_objects(rows, field, self.window_box(tile, window), lambda box: self.cut_field(tile, box, field),
+                                            s["stain"], s["settings"], s["shared"])
+                counts.update(made)
+                return found
 
-            with shared_pictures(field.rgb):  # the stain separation and tissue mask of the field, made once for every step
-                result = process_tile(field, stain, settings, shared, whole)
-                piece = mask_piece(field, stain)
-            field.release()
-            field = whole = None
-            gc.collect()
-            return result, piece
+        with shared_pictures(field.rgb):  # the stain separation and tissue mask of the field, made once for every step
+            result = process_tile(field, s["stain"], s["settings"], s["shared"], whole)
+            piece = mask_piece(field, s["stain"])
+        field.release()
+        field = whole = None
+        gc.collect()
+        return result, piece, counts
 
-        if tiles_at_once > 1 and len(tiles) > 1:
-            with ThreadPoolExecutor(min(tiles_at_once, len(tiles)), thread_name_prefix="stainid-tile") as pool:
-                done = list(pool.map(one, tiles))
+
+# ---------------------------------------------------------------- tile processes
+
+_WORK: dict = {}  # in a tile process: the CoreWork of the core images it worked on last, by their picture's file
+_WORK_MAX = 4
+
+
+THREAD_VARIABLES = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS")
+
+
+def _tile_process_start(threads: int) -> None:
+    import cv2 as _cv2  # noqa: PLC0415
+
+    from stainid.imaging import parallel  # noqa: PLC0415
+
+    _cv2.setNumThreads(threads)
+    parallel.threads(threads)
+    try:  # the BLAS / OpenMP pools too, should a library have started before the variables applied
+        from threadpoolctl import threadpool_limits  # noqa: PLC0415
+
+        threadpool_limits(threads)
+    except ImportError:
+        pass
+
+
+def tile_pool(processes: int, threads: int = 1):
+    """`processes` tile processes for `propose_core(pool=)` (spawned; several core images may share one pool at once),
+    each with `threads` threads for OpenCV, the filter threads (`stainid.imaging.parallel`) and the BLAS / OpenMP
+    libraries alike, so the pool uses `processes` x `threads` processors and oversubscribes none."""
+    from concurrent.futures import ProcessPoolExecutor  # noqa: PLC0415
+    from multiprocessing import get_context  # noqa: PLC0415
+
+    for key in THREAD_VARIABLES:
+        os.environ[key] = str(threads)  # the processes inherit them when they start (spawned on demand)
+    return ProcessPoolExecutor(processes, mp_context=get_context("spawn"), initializer=_tile_process_start, initargs=(threads,))
+
+
+def _work_in_process(spec: dict, files: dict) -> CoreWork:
+    shared_arrays.forget_removed()  # core images done: let their memory go
+    for gone in [key for key in _WORK if not os.path.exists(key)]:
+        del _WORK[gone]
+    work = _WORK.pop(files["image"], None)
+    if work is None:
+        h, w = files["size"]
+        image = np.asarray(shared_arrays.attach(files["image"], (h, w, 3), np.uint8))
+        automatic = None
+        if files.get("linear"):
+            automatic = (shared_arrays.attach(files["linear"], (h, w), bool, writable=True),
+                         shared_arrays.attach(files["fold"], (h, w), bool, writable=True))
+        work = CoreWork(spec, image, files["glass"], automatic)
+    _WORK[files["image"]] = work
+    while len(_WORK) > _WORK_MAX:
+        _WORK.pop(next(iter(_WORK)))
+    return work
+
+
+def _masks_task(spec: dict, files: dict, index: int) -> None:
+    _work_in_process(spec, files).standard_masks(spec["tiles"][index])
+
+
+def _tile_task(spec: dict, files: dict, index: int) -> tuple[dict, np.ndarray, dict]:
+    return _work_in_process(spec, files).tile(spec["tiles"][index])
+
+
+# ---------------------------------------------------------------- one core image
+
+def propose_core(project, stain: str, core_id: str, tiles: list[dict], threshold: float, nuclei_names: frozenset,
+                 tiles_at_once: int = 1, pool=None) -> dict:
+    """Run stage 2 on one core image and write its outputs; returns counts and timing. The core image is decoded once.
+    With `pool` (`tile_pool`) its tiles are worked on in those processes, which map the decoded image from shared memory
+    (each tile process needs about 1 GB; one core image keeps all of them busy); else `tiles_at_once` tiles are worked
+    on in threads at once (each needs about 0.7 GB more; Python holds one thread at a time for much of the work). The
+    outputs keep the tile order and depend on neither."""
+    from functools import partial  # noqa: PLC0415
+
+    started = time.time()
+    spec = core_spec(project, stain, tiles, threshold, nuclei_names)
+    image, glass, image_file = decode_core(project.root / tiles[0]["image_path"], shared=pool is not None)
+    size = image.shape[:2]
+    files = {"image": image_file, "size": size, "glass": glass}
+    try:
+        automatic = None
+        if spec["window"] > spec["context"]:
+            if pool is not None:
+                files["linear"], linear = shared_arrays.create("core.linear", size, bool)
+                files["fold"], fold = shared_arrays.create("core.fold", size, bool)
+                automatic = (linear, fold)
+            else:
+                automatic = (np.zeros(size, bool), np.zeros(size, bool))
+        work = CoreWork(spec, image, glass, automatic)
+        indices = range(len(tiles))
+        if pool is not None:
+            if automatic is not None:
+                list(pool.map(partial(_masks_task, spec, files), indices))
+            done = list(pool.map(partial(_tile_task, spec, files), indices))
+        elif tiles_at_once > 1 and len(tiles) > 1:
+            with ThreadPoolExecutor(min(tiles_at_once, len(tiles)), thread_name_prefix="stainid-tile") as threads:
+                if automatic is not None:
+                    list(threads.map(work.standard_masks, tiles))
+                done = list(threads.map(work.tile, tiles))
         else:
-            done = map(one, tiles)
-        for tile, (result, piece) in zip(tiles, done):
-            rows += result["rows"]
-            summaries.append(result["summary"])
-            unproposed += result["unproposed"]
-            thread_rows += result["threads"]
-            my, mx = int(tile["y_px"]) // MASK_SCALE, int(tile["x_px"]) // MASK_SCALE
-            h, w = min(piece.shape[0], mask.shape[0] - my), min(piece.shape[1], mask.shape[1] - mx)
-            mask[my: my + h, mx: mx + w] = piece[:h, :w]
-    rows = owned_once(rows, tiles, context)
+            if automatic is not None:
+                for tile in tiles:
+                    work.standard_masks(tile)
+            done = [work.tile(tile) for tile in tiles]
+    finally:
+        work = automatic = image = None
+        shared_arrays.remove(*(f for f in (files.get("image"), files.get("linear"), files.get("fold")) if f))
+    rows, summaries, unproposed, thread_rows, local_counts = [], [], [], [], {}
+    mask = np.zeros(((size[0] + MASK_SCALE - 1) // MASK_SCALE, (size[1] + MASK_SCALE - 1) // MASK_SCALE), np.uint8)
+    for tile, (result, piece, counts) in zip(tiles, done):
+        rows += result["rows"]
+        summaries.append(result["summary"])
+        unproposed += result["unproposed"]
+        thread_rows += result["threads"]
+        for key, value in counts.items():
+            local_counts[key] = local_counts.get(key, 0) + value
+        my, mx = int(tile["y_px"]) // MASK_SCALE, int(tile["x_px"]) // MASK_SCALE
+        h, w = min(piece.shape[0], mask.shape[0] - my), min(piece.shape[1], mask.shape[1] - mx)
+        mask[my: my + h, mx: mx + w] = piece[:h, :w]
+    rows = owned_once(rows, tiles, spec["context"])
     counts = pd.Series([r["tile_id"] for r in rows], dtype=object).value_counts()
     for summary in summaries:
         summary["candidate_count"] = int(counts.get(summary["tile_id"], 0))

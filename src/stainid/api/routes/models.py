@@ -96,6 +96,9 @@ def _fixed_stains() -> list[str]:
     return [s for s in STAINS if candidate_store.cores(get_state().project, s)]
 
 
+QUICK_WAIT = 0.5  # how long the outline-fixes page waits for a new comparison before it shows "preparing"
+
+
 @router.get("/models/outline-fixes")
 def outline_fixes():
     """Per stain with candidates: the outlines people fixed in "Fix the field" against each of detection's outlines
@@ -107,7 +110,8 @@ def outline_fixes():
     state = get_state()
     return work.answer("outline fixes", ("outline fixes", str(state.root)),
                        lambda task: {"stains": [fixes.summary(state.project, s, state.tiles) for s in _fixed_stains()]}, work.NOW,
-                       "Comparing the outlines people fixed", fresh=work.within(10), saved=disk_cache.answer_file(state.root, "outline-fixes.json"))
+                       "Comparing the outlines people fixed", fresh=work.within(10), saved=disk_cache.answer_file(state.root, "outline-fixes.json"),
+                       seconds=QUICK_WAIT)  # a cohort's comparison: the page shows "preparing" at once instead of waiting
 
 
 @router.get("/models/outline-fixes.csv")

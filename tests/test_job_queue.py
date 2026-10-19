@@ -204,6 +204,9 @@ def test_the_class_of_a_step_follows_the_project(tmp_path):
     (tmp_path / "stainid.yaml").write_text(yaml.safe_dump({"name": "public", "dataset": {"id": "x"}}))
     assert queue.class_of(load_project(tmp_path), "v2_proposals") == "public"
     assert queue.needs_of("v2_proposals", {"workers": 6})["cpus"] == 12 and queue.needs_of("nuclei", {"device": "cpu"})["gpus"] == 0
+    # stage 2's tile processes: their threads, 1.3 GB each and 1.4 GB per core image in flight; the older layout as before
+    assert {k: queue.needs_of("v2_proposals", {"processes": 16, "threads": 2})[k] for k in ("cpus", "ram_gb")} == {"cpus": 32, "ram_gb": 26.0}
+    assert {k: queue.needs_of("v2_proposals", {"processes": 0, "workers": 4})[k] for k in ("cpus", "ram_gb")} == {"cpus": 8, "ram_gb": 11.0}
     assert isinstance(Job(id="x", workflow="w", options={}, argv=[]).needs, dict)
 
 

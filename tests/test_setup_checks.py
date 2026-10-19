@@ -169,6 +169,27 @@ def test_the_guided_setup_from_slides_to_checks(client, tmp_path):
     assert overview["estimate"]["seconds"] > 0 and overview["remaining"][0]["id"] == "dearray"
 
 
+def test_a_server_started_again_answers_the_setup_at_once_with_the_last_count(client, monkeypatch):
+    """A cold count of a large project took minutes after a restart and held up Home: the last count is kept on disk and
+    given at once while a new one is made on a thread of its own."""
+    import threading
+    import time
+
+    from stainid.api import work
+    from stainid.setup import guide
+
+    first = client.get("/api/setup").json()
+    with work._COND:  # the server starts again: no work in memory, only what was kept on disk
+        work._BY_KEY.clear()
+        work._BY_ID.clear()
+    release, real = threading.Event(), guide.screens
+    monkeypatch.setattr(guide, "screens", lambda *args: release.wait(20) and real(*args))  # a slow cold count
+    started = time.monotonic()
+    again = client.get("/api/setup")
+    assert again.status_code == 200 and time.monotonic() - started < 2 and again.json() == first
+    release.set()
+
+
 def test_step_summaries_count_in_plain_words(client):
     screens = {s["id"]: s for s in client.get("/api/setup").json()["screens"]}
     assert screens["cores"]["summary"] == "Register slides first" and screens["map"]["summary"] == "Register slides first"

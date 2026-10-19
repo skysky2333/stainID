@@ -3,6 +3,7 @@ stable ids, calls from stored features only, the thread skeleton round trip, the
 outdated detection, and the measures tables."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import cv2
@@ -483,3 +484,38 @@ def test_tiles_at_once_and_filter_threads_do_not_change_the_outputs(v2_project):
     one = outputs(1, 1)
     assert len(one) == 3 * 4 + 1  # proposals, tiles, unproposed and a mask per stain, AT8 threads
     assert outputs(3, 3) == one
+
+
+def test_tile_processes_write_what_one_process_writes(v2_project, capsys):
+    """Stage 2 with the tiles worked on in tile processes (the decoded image and the core-wide masks in shared memory),
+    run as the runner does (several core images sharing the pool), writes exactly what one process writes, and leaves
+    no shared memory behind."""
+    from stainid.imaging import shared_arrays
+
+    project = load_project(v2_project)
+    root = store.root(project)
+    calibration, nuclei = run.proposal_inputs(project)
+    jobs = run.todo(project, "proposals", ["NeuN", "6E10", "AT8"])
+
+    def saved() -> dict:
+        files = sorted(p for kind in ("proposals", "tiles", "unproposed", "threads", "masks") for p in (root / kind).rglob("*.*"))
+        return {str(p.relative_to(root)): p.read_bytes() for p in files}
+
+    for core, stain, tiles, _ in jobs:
+        proposals.propose_core(project, stain, core, tiles, calibration[(tiles[0]["tma"], stain)], nuclei)
+    one = saved()
+    before = set(shared_arrays.folder().glob(f"{shared_arrays.PREFIX}{os.getpid()}-*"))
+    run.run_proposals(project, ["NeuN", "6E10", "AT8"], redo=True, workers=2, processes=2, threads=2)
+    assert "2 tile processes (2 threads each)" in capsys.readouterr().out
+    assert saved() == one
+    assert set(shared_arrays.folder().glob(f"{shared_arrays.PREFIX}{os.getpid()}-*")) == before
+
+
+def test_tile_processes_fit_the_queue_jobs_budget(monkeypatch):
+    """Stage 2 starts as many tile processes as the processors and the memory its queue job was given allow."""
+    monkeypatch.setenv("STAINID_JOB_CPUS", "24")
+    monkeypatch.setenv("STAINID_JOB_RAM_GB", "34")
+    assert run.default_processes(3) == int((34 - 1 - 3 * run.CORE_GB) / run.PROCESS_GB) == 22
+    assert run.default_processes(3, threads=2) == 12
+    monkeypatch.setenv("STAINID_JOB_RAM_GB", "200")
+    assert run.default_processes(3) == 24

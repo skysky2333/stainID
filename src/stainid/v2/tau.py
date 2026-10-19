@@ -70,9 +70,16 @@ def faint_rings(field, minimum: float, below: float = LEGACY_CONTRAST, ring_um: 
             if minimum <= ring["contrast"] < below]
 
 
+def _allowed(field) -> np.ndarray:
+    """Tissue outside detection's excluded areas, made once per field (every candidate's measurements cut it)."""
+    if "tau_allowed" not in field.memo:
+        field.memo["tau_allowed"] = field.tissue & ~field.exclusion
+    return field.memo["tau_allowed"]
+
+
 def tau_row(field, kind: str, center: tuple[float, float], soma: np.ndarray, origin: tuple[int, int]) -> dict:
     """The legacy tau candidate measurements of a soma mask (local, at `origin`) with a margin around it."""
-    tissue = field.tissue & ~field.exclusion
+    tissue = _allowed(field)
     features = _local_features(field.dab, field.hematoxylin, tissue, field.nuclei, center, soma, origin, field.threshold, field.pixel_size_um)
     x0, y0 = origin
     features["edge_fraction"] = float(field.edge_band[y0: y0 + soma.shape[0], x0: x0 + soma.shape[1]][soma].mean())

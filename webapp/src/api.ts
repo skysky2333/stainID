@@ -138,6 +138,8 @@ export interface Job {
   needs?: { cpus: number; gpus: number; ram_gb: number; network: boolean; io?: string }; eta_s?: number | null; typical_s?: number | null
   /** a running job: seconds since it started; `overdue`: past the time it was expected to take (no progress to go by) */
   elapsed_s?: number | null; overdue?: boolean
+  /** it asked for more than this computer can ever give jobs and was given the most there is (said plainly) */
+  warning?: string
   /** small or big (from what it needs and how long it should take), its expected run time, and for a job array its chunks */
   size?: 'small' | 'big'; estimate_s?: number | null; io?: 'light' | 'heavy'
   children?: string[]; chunks?: { total: number; finished: number; running: number; queued: number; paused: number; failed: number } | null

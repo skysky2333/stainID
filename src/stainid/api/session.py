@@ -27,6 +27,23 @@ DEFAULT_PASSWORD = "admin"  # the admin password until changed (earlier versions
 LOCAL_HOSTS = ("127.0.0.1", "::1", "localhost")
 GUEST = "guest"  # someone trying the tutorial without an account: only the practice sessions, where nothing is kept
 PREVIEW = GUEST  # (the name earlier code used for it)
+GUEST_COOKIE = "stainid_guest"  # each guest's own anonymous id (HttpOnly), so one guest's work is not another's
+GUEST_DAYS = 30
+
+
+def guest_id(request: Request) -> str | None:
+    """The anonymous id of a guest (someone not signed in), from their cookie; None without a valid one."""
+    value = request.cookies.get(GUEST_COOKIE, "")
+    return value if len(value) == 32 and all(c in "0123456789abcdef" for c in value) else None
+
+
+def asker(request: Request) -> str | None:
+    """Who asks, for work ownership (`work.ASKER`): the account's id, else the guest's anonymous id ("guest:…")."""
+    account = current_account(request)
+    if account is not None:
+        return account.id
+    guest = guest_id(request)
+    return f"guest:{guest}" if guest else None
 
 
 def allowed_origins(extra: list[str] = ()) -> list[str]:

@@ -15,8 +15,7 @@ def work_status(task_id: str, request: Request):
     """Where a slow request's background work stands (`stainid.api.work`): pending (202, with the queue position and an
     estimate), its result once done, or its error."""
     task = work.find(task_id)
-    account = session.current_account(request)
-    if task is None or not work.may_see(task, account.id if account is not None else None, session.is_admin(request)):
+    if task is None or not work.may_see(task, session.asker(request), session.is_admin(request)):
         raise HTTPException(404, "this work is not known (any more): ask again")  # someone else's work: as if it did not exist
     if task.state in ("waiting", "running"):
         return work.pending(task, "result")
