@@ -74,9 +74,9 @@ def test_the_grid_has_one_row_per_candidate(tmp_path, monkeypatch):
     found["sam2.1_hiera_t"] = _found(frame, 1)
     found["pathosam_vit_b"] = _found(frame, 0)
     written = mc.grid(SimpleNamespace(root=tmp_path), tiles, frame, found, mc.score(frame, found), tmp_path)
-    assert sorted(p.name for p in written) == ["grid_6E10_sam2_01.png", "grid_6E10_sam_01.png", "grid_NeuN_sam2_01.png", "grid_NeuN_sam_01.png"]
-    sheet = Image.open(tmp_path / "grid_NeuN_sam_01.png")
-    assert sheet.size == (mc.LABEL_W + mc.CELL * 4, 22 + mc.CELL * 2)  # raw | stain | SAM-B | PS-B (PathoSAM on both sheets), two NeuN rows
+    assert sorted(p.name for p in written) == ["grid_6E10_01.png", "grid_NeuN_01.png"]
+    sheet = Image.open(tmp_path / "grid_NeuN_01.png")
+    assert sheet.size == (mc.LABEL_W + mc.CELL * 5, 22 + mc.CELL * 2)  # raw | stain | SAM-B | S2-t | PS-B, two NeuN rows
 
 
 def test_results_of_an_earlier_pass_are_kept_for_the_same_candidates(tmp_path):
@@ -92,6 +92,5 @@ def test_results_of_an_earlier_pass_are_kept_for_the_same_candidates(tmp_path):
 
 def test_every_official_size_is_listed_and_the_sheets_split_by_family():
     assert {m["family"] for m in mc.MODELS.values()} == {"SAM", "SAM 2", "PathoSAM"} and len(mc.MODELS) == 10
-    sheets = mc.sheets_of(list(mc.MODELS))
-    assert sheets["sam"] == ["sam_vit_b", "sam_vit_l", "sam_vit_h", "pathosam_vit_b", "pathosam_vit_l", "pathosam_vit_h"]
-    assert sheets["sam2"][:4] == ["sam2.1_hiera_t", "sam2.1_hiera_s", "sam2.1_hiera_b+", "sam2.1_hiera_l"]
+    assert mc.columns_of(["pathosam_vit_b", "sam2.1_hiera_t", "sam_vit_b"]) == ["sam_vit_b", "sam2.1_hiera_t", "pathosam_vit_b"]
+    assert set(mc.COLOURS) == set(mc.MODELS)
