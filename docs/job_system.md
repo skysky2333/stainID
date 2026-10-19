@@ -36,6 +36,16 @@ looked at, and which jobs make room for which. Code: `Scheduler._schedule`, one 
    - Processors and GPUs are the computer's (`stainid jobs budget --cpus 24` limits them, in
      `~/.stainid/queue/budget.json`). A GPU that a program outside the queue uses (1.5 GB or more) is not handed out.
    - At most 2 io-heavy jobs run per disk. A GPU job is held back by its GPU, not its disk.
+   - **Processors are measured**, as memory is: a running job counts what it declared for its first minute, then the
+     processors it used over the last minute (its systemd unit's cpu.stat, else its processes' times) plus 25%, at
+     least 0.5 and never more than it declared. A job that declares 24 processors and uses 2 thus leaves 29.5 of 32
+     to the jobs waiting. GPUs are counted as declared: they are not shared.
+   - When the running jobs then use more processors than there are for a minute (one grows into what it declared),
+     the lowest-class jobs (the newest first) are asked to pause until the rest fit; they queue again at their place.
+     The oldest job of the highest class running is never paused for this. Between jobs of different classes the
+     systemd CPU weights keep the higher class ahead while it lasts.
+   - The Run page and `stainid jobs list` / `budget` show both, e.g. "Processors: 6 in use, 34 declared, 9 counted of
+     32" (counted: what the running jobs take from the budget).
 2. **Memory is measured.**
    - Memory for jobs = the computer's total, less what the app uses now, less a 4 GB headroom for the app to grow, less
      a 3 GB system reserve. On 53 GB with the app at 3 GB, that is 43 GB.
@@ -112,7 +122,9 @@ looked at, and which jobs make room for which. Code: `Scheduler._schedule`, one 
   - random mixes of jobs, classes, dependencies, conflicts and failures always drain;
   - no job that fits stays waiting;
   - an idle GPU gets a waiting public GPU job;
-  - a high job needing memory pauses the right low jobs, and they resume.
+  - a high job needing memory pauses the right low jobs, and they resume;
+  - a job that declares many processors and uses few blocks no one, and when a job grows into what it declared the
+    lowest class pauses.
 
 ## Units: pause, resume, crash
 

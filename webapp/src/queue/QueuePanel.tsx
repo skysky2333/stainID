@@ -24,7 +24,9 @@ export function QueuePanel() {
               <div className="row">
                 <h2 className="queue-title">Queue</h2>
                 <span className="muted small">
-                  {used.cpus} of {budget.cpus} processors · {used.gpus} of {budget.gpus} GPUs · {data.memory
+                  <span title="In use: measured over the last minute. Declared: what the running jobs asked for. A new job starts on what is in use (with a margin), never more than declared.">
+                    {used.cpus_now !== undefined ? `Processors: ${used.cpus_now} in use, ${used.cpus_declared} declared of ${budget.cpus}` : `${used.cpus} of ${budget.cpus} processors`}
+                  </span> · {used.gpus} of {budget.gpus} GPUs · {data.memory
                     ? `RAM: ${Math.round(data.memory.used_gb)} of ${Math.round(data.memory.total_gb)} GB used · ${Math.round(data.memory.free_for_jobs_gb)} free for jobs`
                     : `${Math.round(used.ram_gb)} of ${Math.round(budget.ram_gb)} GB in use`}
                 </span>
@@ -67,7 +69,7 @@ function QueueRow({ job, onAct }: { job: Job; onAct: (job: Job, action: string, 
     : [job.queue?.position ? `#${job.queue.position} in its class` : '', chunkText, !chunks && total ? `${done.toLocaleString()} of ${total.toLocaleString()} done` : '',
        queueText(job)].filter(Boolean).join(' · ')
   const sizeText = job.size ? `${job.size}${job.estimate_s ? ` · ~${duration(job.estimate_s)}` : ''}` : ''
-  const sizeTitle = job.needs ? `Needs ${job.needs.cpus} processors${job.needs.gpus ? `, ${job.needs.gpus} GPU` : ''}, ${job.needs.ram_gb} GB`
+  const sizeTitle = job.needs ? `Needs ${job.needs.cpus} processors${job.cpus_now != null ? ` (uses ${job.cpus_now} now)` : ''}${job.needs.gpus ? `, ${job.needs.gpus} GPU` : ''}, ${job.needs.ram_gb} GB`
     + `${job.io === 'heavy' ? ', heavy disk use' : ''}${job.needs.network ? ', network only' : ''}` : ''
 
   return (

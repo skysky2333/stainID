@@ -136,6 +136,7 @@ export interface Job {
   /** the shared queue: the job's project, priority class, what it needs, what was asked of it, estimates */
   project_name?: string; class?: string; class_title?: string; rank?: number; paused_by?: string; stopping?: string
   needs?: { cpus: number; gpus: number; ram_gb: number; network: boolean; io?: string }; eta_s?: number | null; typical_s?: number | null
+  cpus_now?: number | null
   /** a running job: seconds since it started; `overdue`: past the time it was expected to take (no progress to go by) */
   elapsed_s?: number | null; overdue?: boolean
   /** it asked for more than this computer can ever give jobs and was given the most there is (said plainly) */
@@ -148,7 +149,7 @@ export interface Job {
 export interface QueueClass { id: string; title: string; rank: number; jobs: Job[] }
 export interface QueueOverview {
   classes: QueueClass[]; recent: Job[]; paused_all: boolean; led: boolean
-  budget: { cpus: number; gpus: number; ram_gb: number }; used: { cpus: number; gpus: number; ram_gb: number }
+  budget: { cpus: number; gpus: number; ram_gb: number }; used: { cpus: number; gpus: number; ram_gb: number; cpus_declared?: number; cpus_now?: number }
   /** the computer's memory as measured (GB), when the queue looks at it */
   memory?: { total_gb: number; used_gb: number; app_gb: number; jobs_gb: number; free_for_jobs_gb: number } | null
   /** jobs the watchdog reports: waiting long although what they need is (or can be made) free */

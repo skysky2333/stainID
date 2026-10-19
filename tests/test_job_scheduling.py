@@ -404,3 +404,59 @@ def test_any_mix_of_jobs_with_dependencies_drains_completely(tmp_path, started, 
             work[late.id] = rng.randint(1, 3)
     states = {j.status for j in scheduler.jobs.values()}
     assert states <= {"finished", "failed", "skipped"}, (round_, [(j.title, j.status, j.waiting) for j in scheduler.jobs.values() if j.status not in queue.FINAL])
+
+
+def _using(scheduler, job, cpus, minutes=10):
+    """The job has run `minutes` and used `cpus` processors on average over the last minute."""
+    now = time.time()
+    job.started = now - minutes * 60
+    scheduler._cpu_seen[job.id] = (job.started, [(now - 60, 1000.0), (now, 1000.0 + 60 * cpus)])
+
+
+def test_processors_are_counted_as_used_so_a_job_that_declares_many_and_uses_few_blocks_no_one(tmp_path, started, monkeypatch):
+    scheduler = queue.Scheduler(tmp_path / "q", budget=queue.Budget(32, 0, 999))
+    _memory(scheduler, monkeypatch, total=200, available=180, app=1)
+    check = _command(scheduler, "cohort check", "models", 8)
+    rebuild = _command(scheduler, "rebuild", "pipeline", 24)
+    scheduler._schedule()
+    assert check.status == "running" and rebuild.status == "running"
+    test = _command(scheduler, "scaling test", "models", 28)
+    scheduler._schedule()
+    assert test.status == "queued" and "28 processors (0 free)" in test.waiting  # both just started: they count what they declared
+    _using(scheduler, check, 1.0)
+    _using(scheduler, rebuild, 1.0)
+    scheduler._schedule()
+    assert test.status == "running"  # 32 - 2 x max(0.5, 1.25) = 29.5 free
+    used = scheduler.overview()["used"]
+    assert used["cpus_declared"] == 60 and used["cpus_now"] == 2.0 and used["cpus"] == 28 + 2.5
+    from stainid.jobs.cli import _resources
+
+    assert _resources(scheduler.overview()).startswith("Processors: 2 in use, 60 declared, 30.5 counted of 32")
+    # a job never counts more than it declared, however much it uses
+    _using(scheduler, check, 20.0)
+    assert scheduler._holds(check)["cpus"] == 8 and scheduler._holds(check)["cpus_now"] == 20.0
+
+
+def test_when_a_job_grows_into_what_it_declared_the_lowest_class_pauses(tmp_path, started, monkeypatch):
+    scheduler = queue.Scheduler(tmp_path / "q", budget=queue.Budget(32, 0, 999))
+    _memory(scheduler, monkeypatch, total=200, available=180, app=1)
+    main = _command(scheduler, "main study", "pipeline", 24)
+    scheduler._schedule()
+    _using(scheduler, main, 2.0)
+    models = _command(scheduler, "model check", "models", 20)
+    public = _command(scheduler, "public run", "public", 8)
+    scheduler._schedule()
+    assert models.status == "running" and public.status == "running"
+    _using(scheduler, models, 20.0, minutes=5)
+    _using(scheduler, public, 8.0, minutes=4)
+    _using(scheduler, main, 24.0)  # the main study grows into its 24: 52 processors wanted of 32
+    scheduler._schedule()
+    assert not any(j.request for j in (main, models, public))  # not at once: it has to last a minute
+    scheduler._cpu_over_since = time.time() - queue.CPU_OVER_S - 1
+    scheduler._schedule()
+    assert public.request == "preempt" and models.request == "preempt" and not main.request  # lowest class first, until 24 fit
+    scheduler._ended(public, PAUSED)
+    scheduler._ended(models, PAUSED)
+    _using(scheduler, main, 24.0)
+    scheduler._schedule()
+    assert public.status == "running" and models.status == "queued"  # 8 fit next to the 24 again; 20 do not
