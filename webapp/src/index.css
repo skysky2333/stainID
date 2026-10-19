@@ -1339,6 +1339,14 @@ details.side-details.compact > summary { font-weight: 500; }
 .threshold-mark { position: absolute; top: -3px; width: 2px; height: 22px; margin-left: -1px; background: var(--warning); border-radius: 1px; pointer-events: none; }
 .lock-icon { color: var(--text-muted); flex: none; }
 .threshold-preview .threshold-slider { margin-top: 6px; }
+/* the Users page */
+.users-set { display: inline-block; padding: 1px 6px; margin: 1px 4px 1px 0; border: 1px solid var(--border); border-radius: 8px; white-space: nowrap; }
+.users-manage { padding: 6px 4px 10px; }
+.users-manage h4 { margin: 10px 0 4px; font-size: 13px; }
+.users-sets { margin: 0 0 6px; padding-left: 18px; }
+.users-table tr.users-disabled td b { text-decoration: line-through; }
+.users-add { margin-bottom: 12px; gap: 8px; }
+.users-secret code { font-size: 14px; user-select: all; }
 .piece-mark { pointer-events: none; font-weight: 700; }
 .legend-sign { margin: 0 4px 0 -2px; font-size: 11px; line-height: 1; }
 

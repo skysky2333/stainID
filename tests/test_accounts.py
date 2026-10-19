@@ -76,7 +76,8 @@ def test_admins_manage_people_and_there_is_always_an_admin(client):
     ann = TestClient(client.app)
     ann.post("/api/session/login", json={"name": "Ann", "password": PASSWORD})
     assert ann.get("/api/cores").status_code == 200
-    assert client.put(f"/api/session/people/{first['id']}", json={"role": "annotator"}).json()["role"] == "annotator"
+    assert client.put(f"/api/session/people/{first['id']}", json={"role": "annotator"}).status_code == 409  # never oneself
+    assert ann.put(f"/api/session/people/{first['id']}", json={"role": "annotator"}).json()["role"] == "annotator"
     assert ann.put(f"/api/session/people/{ann_id}", json={"role": "annotator"}).status_code == 409  # now Ann is the last
 
 

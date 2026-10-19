@@ -178,7 +178,7 @@ export interface Account { id: string; name: string; role: 'admin' | 'annotator'
 /** A labelling set in someone's collection ("my sets"), of any project on the server. */
 export interface MySet extends OpenSession { project: string; project_name: string; joined: number | null; link: string }
 /** Who may label a session: its join key and its members (Labels → a session → More). */
-export interface SessionAccess { key: string | null; enabled: boolean; members: { id: string; name: string; handle: string; role: string; joined: number }[] }
+export interface SessionAccess { key: string | null; enabled: boolean; project?: string; members: { id: string; name: string; handle: string; role: string; joined: number }[] }
 export interface People { people: Account[]; past_names: { name: string; account: string | null; account_name: string | null }[] }
 export interface ApiToken { id: string; label: string; created: number; last_used: number | null }
 export type AiView = 'full' | 'positions' | 'none'

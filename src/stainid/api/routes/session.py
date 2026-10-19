@@ -124,6 +124,18 @@ def change_password(body: NewPassword, request: Request, response: Response) -> 
     return _signed_in(account, request, response)
 
 
+@router.post("/session/sign-out-elsewhere")
+def sign_out_elsewhere(request: Request, response: Response) -> dict:
+    """End the person's other sign-ins (other browsers and computers); this one stays signed in. API tokens are not
+    sign-ins: they keep working until revoked."""
+    account = session.require_account(request)
+    try:
+        account = accounts.sign_out_elsewhere(account.id)
+    except accounts.AccountError as error:
+        _error(error)
+    return _signed_in(account, request, response)
+
+
 @router.put("/session/admin/password")
 def change_admin_password(body: NewPassword, request: Request, response: Response) -> dict:
     return change_password(body, request, response)
@@ -151,43 +163,60 @@ def people() -> dict:
 
 
 @router.post("/session/people", dependencies=admin)
-def add_person(body: Person) -> dict:
+def add_person(body: Person, request: Request) -> dict:
     try:
-        return accounts.register(body.name, body.password, body.role, by_admin=True).to_api()
+        made = accounts.register(body.name, body.password, body.role, by_admin=True)
     except accounts.AccountError as error:
         _error(error)
+    accounts.audit(session.current_account(request), "add", made, f"role {made.role}")
+    return made.to_api()
+
+
+def _not_self(request: Request, account_id: str, what: str) -> None:
+    if session.current_account(request).id == account_id:
+        raise HTTPException(409, f"you cannot {what} your own account: ask another admin")
 
 
 @router.put("/session/people/{account_id}", dependencies=admin)
-def change_person(account_id: str, body: Change) -> dict:
+def change_person(account_id: str, body: Change, request: Request) -> dict:
+    if body.role is not None and body.role != accounts.ADMIN:
+        _not_self(request, account_id, "demote")
     try:
         account = accounts.get(account_id)
         if account is None:
             raise accounts.AccountError("no such account", 404)
         if body.role is not None:
+            before = account.role
             account = accounts.set_role(account_id, body.role)
+            accounts.audit(session.current_account(request), "role", account, f"{before} → {account.role}")
         if body.past_name is not None:
             account = accounts.link_past_name(account_id, body.past_name)
+            accounts.audit(session.current_account(request), "past name", account, body.past_name or "unlinked")
         return account.to_api()
     except accounts.AccountError as error:
         _error(error)
 
 
 @router.post("/session/people/{account_id}/reset", dependencies=admin)
-def reset_person(account_id: str) -> dict:
+def reset_person(account_id: str, request: Request) -> dict:
     """A one-time password to give the person; they choose a new one when they sign in with it."""
     try:
-        return {"password": accounts.reset_password(account_id)}
+        password = accounts.reset_password(account_id)
     except accounts.AccountError as error:
         _error(error)
+    accounts.audit(session.current_account(request), "reset password", accounts.get(account_id))
+    return {"password": password}
 
 
 @router.delete("/session/people/{account_id}", dependencies=admin)
-def remove_person(account_id: str) -> dict:
+def remove_person(account_id: str, request: Request) -> dict:
+    _not_self(request, account_id, "remove")
+    target = accounts.get(account_id)
     try:
         accounts.remove(account_id)
     except accounts.AccountError as error:
         _error(error)
+    accounts.audit(session.current_account(request), "remove", None, "labels kept", target_name=target.name if target else account_id)
     return {"ok": True}
 
 

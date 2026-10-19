@@ -3,8 +3,11 @@
 Every account has a name (unique on the server, case does not matter), a password (scrypt with its own salt; never kept
 as text) and a role: `admin` (the control panel, every session) or `annotator` (only the annotation pages, and only the
 labelling sets they joined). Everyone signs in on the same page; what they see follows from their role. Signing up makes
-an annotator; an admin promotes, demotes, resets passwords and removes people (Settings → People), and there is always
-at least one admin. The admin password of earlier versions becomes the account `admin` (same password).
+an annotator; an admin adds people (with a one-time password), promotes, demotes, resets passwords, disables and
+removes them on the **Users** page (`api.routes.users`), and there is always at least one admin who can sign in. A disabled
+account cannot sign in and its sessions and tokens stop working; removing an account never touches its labels (they keep
+the name and account id they carry). Every admin action on accounts is kept in an audit log (`audit`, `audit_log`). The
+admin password of earlier versions becomes the account `admin` (same password).
 
 Labelling sets are shared with a **join key** per session (`stainid-ab3k-9xqe` style: 10 characters of an alphabet
 without look-alikes, about 50 bits): whoever enters it adds that session (of that project) to their sets. A new key
@@ -65,6 +68,8 @@ class Account:
     past_name: str
     generation: int
     created: float
+    disabled: bool = False
+    last_sign_in: float | None = None
 
     @property
     def admin(self) -> bool:
@@ -77,7 +82,7 @@ class Account:
 
     def to_api(self) -> dict:
         return {"id": self.id, "name": self.name, "role": self.role, "must_change": self.must_change, "past_name": self.past_name,
-                "handle": self.handle, "created": self.created}
+                "handle": self.handle, "created": self.created, "disabled": self.disabled, "last_sign_in": self.last_sign_in}
 
 
 # ---------------------------------------------------------------- the store
@@ -99,7 +104,10 @@ create table if not exists members (account text not null, project text not null
 create table if not exists join_keys (project text not null, session text not null, key text not null unique, enabled integer not null,
     created real not null, primary key (project, session));
 create table if not exists tutorials (account text not null, kind text not null, done real not null, primary key (account, kind));
+create table if not exists audit (id integer primary key autoincrement, time real not null, actor text not null, actor_name text not null,
+    action text not null, target text not null default '', target_name text not null default '', detail text not null default '');
 """
+_COLUMNS = {"disabled": "integer not null default 0", "last_sign_in": "real"}  # added to `accounts` by later releases
 _READY: set[str] = set()
 
 
@@ -111,6 +119,10 @@ def _db() -> sqlite3.Connection:
     if str(path) not in _READY:
         with _LOCK:
             connection.executescript(_SCHEMA)
+            have = {r["name"] for r in connection.execute("pragma table_info(accounts)")}
+            for column, kind in _COLUMNS.items():
+                if column not in have:
+                    connection.execute(f"alter table accounts add column {column} {kind}")
             path.chmod(0o600)
             _migrate_admin(connection)
             _READY.add(str(path))
@@ -145,7 +157,8 @@ def _key_of(name: str) -> str:
 def _account(row) -> Account | None:
     if row is None:
         return None
-    return Account(row["id"], row["name"], row["role"], bool(row["must_change"]), row["past_name"], row["generation"], row["created"])
+    return Account(row["id"], row["name"], row["role"], bool(row["must_change"]), row["past_name"], row["generation"], row["created"],
+                   bool(row["disabled"]), row["last_sign_in"])
 
 
 def _hash_password(password: str, salt: str | None = None) -> tuple[str, str, str]:
@@ -299,9 +312,14 @@ def sign_in(name: str, password: str, address: str = "") -> Account:
         if row is None or not _password_ok(row, password):
             _failed("login", keys)
             raise AccountError("wrong name or password", 403)
+        if row["disabled"]:
+            raise AccountError("this account is disabled: ask the person running the study", 403)
         if row["kdf"] != "scrypt":  # an old hash: kept as scrypt from now on
             kdf, salt, digest = _hash_password(password)
             db.execute("update accounts set kdf = ?, salt = ?, hash = ? where id = ?", (kdf, salt, digest, row["id"]))
+        db.execute("update accounts set last_sign_in = ? where id = ?", (time.time(), row["id"]))
+        row = db.execute("select * from accounts where id = ?", (row["id"],)).fetchone()
+    _changed()
     return _account(row)
 
 
@@ -352,7 +370,65 @@ def uses_default_password(account: Account | None) -> bool:
 
 
 def _admins(db) -> int:
-    return db.execute("select count(*) from accounts where role = ?", (ADMIN,)).fetchone()[0]
+    """The admins who can sign in (a disabled admin does not count: one always can)."""
+    return db.execute("select count(*) from accounts where role = ? and disabled = 0", (ADMIN,)).fetchone()[0]
+
+
+def _last_admin(row, db) -> bool:
+    return row["role"] == ADMIN and not row["disabled"] and _admins(db) <= 1
+
+
+def set_disabled(account_id: str, disabled: bool) -> Account:
+    """Disable an account (it cannot sign in; its sessions and API tokens stop working) or enable it again."""
+    with _LOCK, _db() as db:
+        row = db.execute("select * from accounts where id = ?", (account_id,)).fetchone()
+        if row is None:
+            raise AccountError("no such account", 404)
+        if disabled and _last_admin(row, db):
+            raise AccountError("this is the only admin: make someone else an admin first", 409)
+        db.execute("update accounts set disabled = ?, generation = generation + 1 where id = ?", (int(bool(disabled)), account_id))
+    _changed()
+    return get(account_id)
+
+
+def sign_out_elsewhere(account_id: str) -> Account:
+    """End every other sign-in of the account (its other browsers); the caller signs this one in again."""
+    with _LOCK, _db() as db:
+        if not db.execute("update accounts set generation = generation + 1 where id = ?", (account_id,)).rowcount:
+            raise AccountError("no such account", 404)
+    _changed()
+    return get(account_id)
+
+
+def add_with_temporary(name: str, role: str = ANNOTATOR) -> tuple[Account, str]:
+    """An admin adds a person: the account and a one-time password (shown once; kept only hashed), which its owner
+    replaces when signing in with it."""
+    made = register(name, secrets.token_urlsafe(24), role, by_admin=True)
+    return made, reset_password(made.id)
+
+
+def audit(actor: Account | None, action: str, target: Account | None = None, detail: str = "", target_name: str = "") -> None:
+    """Keep an admin action in the audit log: who, what, on whom, when."""
+    with _db() as db:
+        db.execute("insert into audit (time, actor, actor_name, action, target, target_name, detail) values (?, ?, ?, ?, ?, ?, ?)",
+                   (time.time(), actor.id if actor else "", actor.name if actor else "command line", action, target.id if target else "",
+                    target.name if target else target_name, detail[:500]))
+
+
+def audit_log(limit: int = 200) -> list[dict]:
+    with _db() as db:
+        return [dict(r) for r in db.execute("select * from audit order by id desc limit ?", (int(limit),))]
+
+
+def memberships() -> list[dict]:
+    """Every membership of every account: {account, project, session, joined}."""
+    with _db() as db:
+        return [dict(r) for r in db.execute("select account, project, session, joined from members order by joined")]
+
+
+def token_counts() -> dict[str, int]:
+    with _db() as db:
+        return {r["account"]: r["n"] for r in db.execute("select account, count(*) as n from tokens group by account")}
 
 
 def set_role(account_id: str, role: str) -> Account:
@@ -362,7 +438,7 @@ def set_role(account_id: str, role: str) -> Account:
         row = db.execute("select * from accounts where id = ?", (account_id,)).fetchone()
         if row is None:
             raise AccountError("no such account", 404)
-        if row["role"] == ADMIN and role != ADMIN and _admins(db) <= 1:
+        if role != ADMIN and _last_admin(row, db):
             raise AccountError("this is the only admin: make someone else an admin first", 409)
         db.execute("update accounts set role = ?, generation = generation + 1 where id = ?", (role, account_id))
     _changed()
@@ -374,9 +450,9 @@ def remove(account_id: str) -> None:
         row = db.execute("select * from accounts where id = ?", (account_id,)).fetchone()
         if row is None:
             raise AccountError("no such account", 404)
-        if row["role"] == ADMIN and _admins(db) <= 1:
+        if _last_admin(row, db):
             raise AccountError("this is the only admin: make someone else an admin first", 409)
-        for table in ("tokens", "members", "tutorials"):
+        for table in ("tokens", "members", "tutorials"):  # its labels stay as they are, with the name and id they carry
             db.execute(f"delete from {table} where account = ?", (account_id,))  # noqa: S608 - fixed table names
         db.execute("delete from accounts where id = ?", (account_id,))
     _changed()
@@ -430,7 +506,7 @@ def from_session(value: str) -> Account | None:
     if not hmac.compare_digest(parts[2], session._signature("account:" + message)):
         return None
     account = get(parts[0])
-    return account if account is not None and str(account.generation) == parts[1] else None
+    return account if account is not None and not account.disabled and str(account.generation) == parts[1] else None
 
 
 def new_token(account_id: str, label: str = "") -> str:
@@ -452,7 +528,8 @@ def from_token(token: str) -> Account | None:
         if row is None:
             return None
         db.execute("update tokens set last_used = ? where hash = ?", (time.time(), hashlib.sha256(token.encode()).hexdigest()))
-    return get(row["account"])
+    found = get(row["account"])
+    return found if found is not None and not found.disabled else None  # a disabled account's tokens do not work
 
 
 def tokens(account_id: str) -> list[dict]:

@@ -26,10 +26,20 @@ carry their own account like anyone's; they can open every labelling set from th
 only the labelling pages. Addresses of the earlier separate annotation pages (`/annotate`, `/annotate/tutorial`,
 `/annotate/account`) lead to the same pages of the one app; a session's link (`/p/<project>/annotate/<name>`) stays a
 deep link, and someone not signed in goes to the main page first and back there after signing in. Every admin-only request is refused for annotators (403)
-by the server, not only hidden in the page. Anyone can make an annotator account on the sign-in page; admins add
-people, promote and demote them, reset forgotten passwords (a one-time password; the person chooses a new one when
-signing in with it) and remove accounts under *Settings → People*. There is always at least one admin: the last one
-cannot be demoted or removed. Names are unique on the server (case does not matter); passwords are kept as scrypt
+by the server, not only hidden in the page. Anyone can make an annotator account on the sign-in page.
+
+**Users** (admins, in the menu; `/users`, `/api/admin/users…`, `api/routes/users.py`) manages every account of the
+server: a list with role, when it was made and last signed in, the labelling sets it joined (of every project), the
+labels it made and whether it is disabled, with search and sort. *Add a user* (name, role, optionally a labelling set)
+and *Reset password* show a one-time password once, with *Copy*: only its scrypt hash is kept, and the person chooses
+their own when signing in with it. A role changes between annotator and admin; *Disable* stops an account signing in
+and ends its sessions and API tokens (*Enable* brings it back); *Remove* deletes it after its name is typed, and its
+labels keep their name and account id (never deleted). *Manage* also adds the person to, or takes them out of, any
+labelling set of any project, lists, makes (shown once) and revokes their API tokens, and links a past name. An admin
+cannot remove, disable or demote their own account, and the last admin who can sign in stays. Every admin action on
+accounts and memberships is kept in an audit log (who, what, whom, when), shown at the bottom of the page. A session's
+*Who can label* (Labels) keeps its join key and links to *Manage members*: Users filtered to that set. Everyone's
+**Account** page changes their own password (the current one is needed) and signs out their other sessions. Names are unique on the server (case does not matter); passwords are kept as scrypt
 hashes with a salt of their own; sign-ins and join keys are rate-limited. Accounts belong to the server
 (`~/.stainid/accounts.sqlite`), so one account works in every project.
 
@@ -204,7 +214,8 @@ Sign-in then works as usual; the page keeps the sign-in as a token instead of a 
 | **Labels** | Labelling progress per stain, how often people and detection agree, the labelling sessions (create, open, close, share the link, follow people, download) and all labels as CSV. |
 | **Models** | Every model with its status and settings, download buttons, training from all labels, and trained models compared with the current one. |
 | **Results** | The main results table (download), every other table, plots by group and region, and the meaning of every column. |
-| **Settings** | Study name, TMA layout, diagnostic groups and every file location, with a folder picker. Also leads to the Projects page to open or create another project, manages the people with accounts (*People*), your password, API tokens for scripts, and (folded away) chooses the server. |
+| **Settings** | Study name, TMA layout, diagnostic groups and every file location, with a folder picker. Also leads to the Projects page to open or create another project, your password, API tokens for scripts, and (folded away) chooses the server; people are on **Users**. |
+| **Users** | Every account of the server: add (one-time password), reset passwords, roles, disable, remove, labelling sets of any project, API tokens, past names, and the audit log of admin actions. |
 | **Help** | Getting started, common questions and a glossary. Words with a dotted underline show their definition on hover. |
 
 ## Labels
@@ -274,7 +285,7 @@ password. Type the key under *Add a set*: the set joins *My labelling sets* (set
 their progress), and *Start* or *Continue* opens it. Sign in again next time, on any computer, to carry on.
 
 **Past names.** Labels made before accounts existed keep their names, and those names are reserved: nobody can sign
-up as one. Under *Settings → People*, link an account to such a name (*Past labels as*): the account then labels under
+up as one. On *Users*, link an account to such a name (*Manage* → *Labels as*): the account then labels under
 that name and sees its history as its own.
 
 **The tutorials.** Everyone's home, the Tutorials page and Help offer them: *Fix the field*, *AT8 threads* (when the

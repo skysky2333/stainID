@@ -22,6 +22,7 @@ import Projects from './pages/Projects'
 import Results from './pages/Results'
 import Labels from './pages/Labels'
 import Settings from './pages/Settings'
+import Users from './pages/Users'
 import Setup from './setup/Setup'
 import Workflow from './pages/Workflow'
 
@@ -47,7 +48,8 @@ const ADMIN_NAV: { section: string; links: NavItem[] }[] = [
     ['/models', 'Models', 'Get, train and choose the detection models'],
   ] },
 ]
-const ADMIN_FOOT: NavItem[] = [['/settings', 'Settings', 'Study settings, people and passwords, appearance']]
+const ADMIN_FOOT: NavItem[] = [['/users', 'Users', 'Everyone with an account: roles, passwords, labelling sets, tokens'],
+  ['/settings', 'Settings', 'Study settings, label classes, appearance']]
 const FOOT_NAV: NavItem[] = [['/help', 'Help', 'The tutorials, common questions, glossary'], ['/account', 'Account', 'Your name and password']]
 
 const belongs = (pathname: string, to: string) => (to === '/' ? pathname === '/' : pathname === to || pathname.startsWith(`${to}/`))
@@ -214,6 +216,7 @@ function Shell({ admin }: { admin: boolean }) {
             <Route path="/models" element={<Models />} />
             <Route path="/results" element={<Results />} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="/users" element={<Users />} />
           </>}
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>

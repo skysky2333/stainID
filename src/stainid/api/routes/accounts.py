@@ -44,8 +44,9 @@ class Member(BaseModel):
 
 @router.get("/labels/sessions/{name}/access", dependencies=admin)
 def access(name: str) -> dict:
-    """The session's join key (people who have it add the session to their sets), whether joining is on, its members."""
-    return accounts.access(state.get_state().id, _session(name))
+    """The session's join key (people who have it add the session to their sets), whether joining is on, its members,
+    and its project's id (the Users page's "manage members" filter)."""
+    return accounts.access(state.get_state().id, _session(name)) | {"project": state.get_state().id}
 
 
 @router.post("/labels/sessions/{name}/access/key", dependencies=admin)
@@ -60,17 +61,24 @@ def joining(name: str, body: Joining) -> dict:
 
 
 @router.post("/labels/sessions/{name}/access/members", dependencies=admin)
-def add_member(name: str, body: Member) -> dict:
-    if accounts.get(body.account) is None:
+def add_member(name: str, body: Member, request: Request) -> dict:
+    from stainid.api import session  # noqa: PLC0415
+
+    target = accounts.get(body.account)
+    if target is None:
         raise HTTPException(404, "no such account")
     accounts.add_member(body.account, state.get_state().id, _session(name))
-    return accounts.access(state.get_state().id, name)
+    accounts.audit(session.current_account(request), "add to set", target, f"{state.get_state().id} / {name}")
+    return access(name)
 
 
 @router.delete("/labels/sessions/{name}/access/members/{account_id}", dependencies=admin)
-def remove_member(name: str, account_id: str) -> dict:
+def remove_member(name: str, account_id: str, request: Request) -> dict:
+    from stainid.api import session  # noqa: PLC0415
+
     accounts.remove_member(account_id, state.get_state().id, _session(name))
-    return accounts.access(state.get_state().id, name)
+    accounts.audit(session.current_account(request), "remove from set", accounts.get(account_id), f"{state.get_state().id} / {name}")
+    return access(name)
 
 
 def may_label(request: Request, name: str) -> None:

@@ -14,7 +14,7 @@ export function useSession() {
 export const MIN_PASSWORD = 8
 
 /** The one sign-in of stainID: admins and annotators alike, by name and password; new people make an account here
- *  (an annotator account; admins are made in Settings → People). */
+ *  (an annotator account; admins are made on the Users page). */
 export function SignInForm({ intro, start = 'in' }: { intro?: React.ReactNode; start?: 'in' | 'up' }) {
   const { reload } = useSession()
   const [mode, setMode] = useState<'in' | 'up'>(start)

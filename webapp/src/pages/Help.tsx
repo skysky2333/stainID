@@ -90,7 +90,7 @@ const FAQ: [string, ReactNode][] = [
   ['Who can sign in?', <>Everyone signs in on the main page with their name and password and lands on their home: their labelling sets, Add a set and
     the tutorials. <b>Admins</b> label too (a session they open joins their sets, and their labels carry their own account) and also see the study’s pages
     and every labelling set on Labels; <b>annotators</b> only the labelling pages and the sets they added with a key. Anyone can make an annotator account; an admin promotes people,
-    resets forgotten passwords and removes accounts in <Link to="/settings">Settings → People</Link> (there is always at least one admin). The first admin is
+    resets forgotten passwords, adds people to sets, disables and removes accounts on <Link to="/users">Users</Link> (there is always at least one admin). The first admin is
     <b>admin</b>, with the admin password of earlier versions (<b>admin</b> on a new server, until you change it). The tutorial needs no account.</>],
   ['How to join a labelling set (annotators)', <>Open stainID’s address and <b>sign in</b>, or press <b>New here? Make an account</b> and choose your name
     and a password (names are unique on the server). Then type the <b>key</b> you were given under <b>Add a set</b>: the set appears in <b>My labelling sets</b>
@@ -100,7 +100,7 @@ const FAQ: [string, ReactNode][] = [
     label</b> shows the key (<b>Copy</b> it and send it with the link), the people who joined (<b>Remove</b> takes someone out) and <b>Joining on</b>. <b>New key</b>
     makes the old key stop working; people who already joined keep their access. Turn joining off once everyone is in. Only people who joined a set (and
     admins) can open it: the server checks on every request. Labels made before accounts existed keep their names; nobody can sign up under them, and in
-    Settings → People you link an account to such a name so it carries on that history.</>],
+    Users you link an account to such a name so it carries on that history. <b>Manage members</b> under Who can label opens Users for that set.</>],
   ['Can a script use the server?', <>Yes, with an API token of an account: Settings → API tokens for scripts, or <code>stainid accounts token NAME</code> on
     the server. Send it as <code>Authorization: Bearer &lt;token&gt;</code>. A token can do what its account can; revoke it there, and removing the account
     ends its tokens.</>],

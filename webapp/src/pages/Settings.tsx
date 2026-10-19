@@ -7,7 +7,8 @@ import { ErrorNote, FilePicker, HelpBox, Loading, PageHead, PathLine, withError 
 import type { Theme } from '../hooks'
 import { useTheme } from '../hooks'
 import { useProject } from '../project'
-import { ApiTokens, PeopleSettings } from '../people'
+import { ApiTokens } from '../people'
+import { UsersLink } from './Users'
 import { ChoosePassword, ServerChoice, useSession } from '../session'
 import { Advanced } from '../setup/parts'
 
@@ -50,7 +51,7 @@ export default function Settings() {
       </HelpBox>
       {info ? <StudySettings info={info} /> : <Loading label="Loading the settings…" />}
       <ClassSettings />
-      <PeopleSettings />
+      <UsersLink />
       <div className="grid grid-2 settings-more">
         <div id="password"><ChoosePassword title="Your password" current /></div>
         <Appearance />

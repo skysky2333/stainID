@@ -132,7 +132,29 @@ export function AccountPage() {
     <div className="annotate-home">
       <PageHead title="Your account" subtitle={`Signed in as ${session.account.name}${session.account.past_name ? ` (labels as “${session.account.past_name}”)` : ''}.`} />
       <ChoosePassword title="Change your password" current />
+      <SignOutElsewhere />
       <p className="small" style={{ marginTop: 12 }}><Link to="/">← Home</Link></p>
+    </div>
+  )
+}
+
+/** End the person's other sign-ins (other browsers and computers); this one stays. */
+function SignOutElsewhere() {
+  const { reload } = useSession()
+  const [error, setError] = useState<string | null>(null)
+  const [done, setDone] = useState(false)
+  const run = async () => {
+    setDone(false)
+    if (await withError(() => api.post('/api/session/sign-out-elsewhere', {}), setError)) { setDone(true); reload() }
+  }
+  return (
+    <div className="card register-card">
+      <h2 style={{ margin: 0 }}>Other sign-ins</h2>
+      <p className="small secondary" style={{ margin: 0 }}>Signed in on a computer you no longer use? Sign out everywhere else; this browser stays signed in.
+        API tokens are not sign-ins: they keep working until revoked.</p>
+      <div className="row"><button className="btn" onClick={run}>Sign out of other sessions</button>
+        {done && <span className="status-finished small">✓ Every other sign-in has ended.</span>}</div>
+      <ErrorNote error={error} />
     </div>
   )
 }

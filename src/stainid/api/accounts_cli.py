@@ -5,6 +5,8 @@
     stainid accounts token NAME [--label TEXT]    a new API token (printed once) for scripts: Authorization: Bearer <token>
     stainid accounts reset NAME                   a one-time password; the person chooses a new one when signing in
     stainid accounts role NAME admin|annotator
+
+Changes made here go into the same audit log as the Users page's (as "command line").
 """
 from __future__ import annotations
 
@@ -45,12 +47,16 @@ def run(args) -> None:
         elif args.action == "add":
             password = getpass.getpass(f"Password for {args.name}: ")
             made = accounts.register(args.name, password, accounts.ADMIN if args.admin else accounts.ANNOTATOR, by_admin=True)
+            accounts.audit(None, "add", made, f"role {made.role}")
             print(f"{made.name}: {made.role}")
         elif args.action == "token":
             print(accounts.new_token(account(args.name).id, args.label))
+            accounts.audit(None, "new token", account(args.name), args.label)
         elif args.action == "reset":
             print(accounts.reset_password(account(args.name).id))
+            accounts.audit(None, "reset password", account(args.name))
         elif args.action == "role":
             print(accounts.set_role(account(args.name).id, args.role).role)
+            accounts.audit(None, "role", account(args.name), args.role)
     except accounts.AccountError as error:
         sys.exit(str(error))

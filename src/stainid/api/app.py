@@ -27,6 +27,7 @@ from stainid.api.routes import cache as cache_routes
 from stainid.api.routes import classes as label_classes
 from stainid.api.routes import outline as outline_routes
 from stainid.api.routes import rounds as round_routes
+from stainid.api.routes import users as user_routes
 from stainid.api.session import GUEST_COOKIE, GUEST_DAYS, allowed_origins, current_account, guest_id, is_admin
 from stainid.labels import store
 
@@ -68,7 +69,7 @@ async def _lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     app = FastAPI(title="stainID", version="2.0", docs_url=None, redoc_url=None, openapi_url=None, lifespan=_lifespan)
-    for module in (projects, project, slides, setup, imageset, cohort, images, jobs, analysis, models, session, annotate, cache_routes, label_classes, outline_routes, round_routes, area_routes, account_routes):
+    for module in (projects, project, slides, setup, imageset, cohort, images, jobs, analysis, models, session, annotate, cache_routes, label_classes, outline_routes, round_routes, area_routes, account_routes, user_routes):
         app.include_router(module.router, prefix="/api")
 
     @app.get("/api/palette")

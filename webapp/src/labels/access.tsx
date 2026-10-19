@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import type { SessionAccess } from '../api'
 import { api } from '../api'
 import { ErrorNote, Loaded, timeAgo, withError } from '../components'
@@ -34,6 +35,8 @@ export function SessionAccessCard({ name }: { name: string }) {
                 <td><button className="btn small danger-outline" onClick={() => act(() => api.del(`/api/labels/sessions/${name}/access/members/${m.id}`))}>Remove</button></td></tr>
             ))}</tbody></table>
           ) : <p className="muted small" style={{ margin: 0 }}>Nobody has joined yet.</p>}
+          {a.project && <p className="small" style={{ margin: '4px 0 0' }}><Link to={`/users?project=${encodeURIComponent(a.project)}&set=${encodeURIComponent(name)}`}>Manage members →</Link>
+            <span className="muted"> add or take out anyone, on the Users page</span></p>}
         </>}
       </Loaded>
       <ErrorNote error={error} />
