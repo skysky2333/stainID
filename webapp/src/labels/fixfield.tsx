@@ -1141,7 +1141,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
               <ThresholdSlider value={start.value} detection={start.detection} onChange={(v) => { setStart((s) => (s ? moveTo(s, v) : s)); tell('threshold') }} />
               <p className="small" style={{ margin: '4px 0' }}>{sliderText(acceptedAt(startable, start.value, start.detection, meta.remove_class, positive), start.value,
                 acceptedAt(startable, start.detection, start.detection, meta.remove_class, positive), start.detection)}</p>
-              <p className="small muted" style={{ margin: '0 0 6px' }}>Objects scoring at or above it start solid in detection’s type, those below dotted grey (at 0 every object outside an excluded area).
+              <p className="small muted" style={{ margin: '0 0 6px' }}>Objects scoring at or above it start solid in detection’s type, those below dotted grey (at 0 every object that no rule of detection decided; point at one to see its rule).
                 It only sets where this field starts (it is saved with the field to tune thresholds later); the analysis keeps detection’s threshold.</p>
               <div className="row"><button className="btn primary" onClick={() => { lockStart(); tell('start') }}>Start editing</button>
                 <span className="small muted"><span className="kbd">Enter</span> · <span className="kbd">[</span> <span className="kbd">]</span> fine steps</span></div>

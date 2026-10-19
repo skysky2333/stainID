@@ -1,10 +1,11 @@
 /* Step 1 of every field in "Fix the field": the acceptance threshold, and where each object starts at it.
 
    The slider starts at detection's own threshold. Moving it re-decides, live, which objects start accepted (solid, in
-   the type detection would give them: `if_accepted`) and which start rejected (dotted grey), by score alone: p >= the
-   threshold counts, a missing score is 0, so at 0 every object counts and at 1 only those scoring 1. Objects in an
-   excluded area keep detection's call; detection's rules (a speck, a vessel wall) decide its own calls only, and the
-   side panel says which one left a counted object out of detection's count (reasons.ts, `whyStart`). It locks on "Start editing" (or Enter) and by itself on the first edit of any kind (a class
+   the type detection would give them: `if_accepted`) and which start rejected (dotted grey), as stage 4 would at that
+   threshold: an object passes where p >= the threshold (a missing score is 0) and then gets stage 4's call, its rules
+   after the model included (a speck stays rejected, a vessel deposit is CAA). Objects a rule decided, or in an excluded
+   area, keep detection's call at every value (`if_accepted` null). So raising it never counts more, and at 0 every
+   object no rule decided counts; the side panel says which rule decides an object (reasons.ts, `whyStart`). It locks on "Start editing" (or Enter) and by itself on the first edit of any kind (a class
    key, Del, `, a mask, a precise edit, a split, a merge, a brush stroke); locked, it does not move. "Reset field"
    (after a confirmation) discards the field's unsaved edits and unlocks it. The locked value is saved with the field
    (a `threshold` label): a training and evaluation signal, never an analysis input (labels/starting.py has the same

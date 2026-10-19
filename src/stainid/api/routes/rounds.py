@@ -431,7 +431,7 @@ def _field_shapes(meta: dict, tile: dict) -> tuple[list[dict], dict[str, list]]:
     for r in _field_candidates(meta, tile).rename(columns={"class": "klass"}).itertuples():
         identity, subtype = candidate_store.ai_call(words, r.decision, r.klass, r.subtype, r.reason)
         would = passing.get(r.candidate_id)
-        if_accepted = list(candidate_store.ai_call(words, *would[:3])) if would is not None else None
+        if_accepted = list(candidate_store.ai_call(words, *would)) if would is not None else None
         found_masks, default = candidate_store.choices(r)  # [the stain's, SAM small, medium, large]: what Tab cycles through
         shapes = [_shape(m) for m in found_masks]
         masks[r.candidate_id] = shapes
@@ -440,7 +440,7 @@ def _field_shapes(meta: dict, tile: dict) -> tuple[list[dict], dict[str, list]]:
                         "ai_probability": None if pd.isna(r.probability) else round(float(r.probability), 3), "decision": r.decision, "reason": r.reason,
                         "masks": [m if i == default else None for i, m in enumerate(shapes)], "mask": default,
                         "more_masks": sum(m is not None for i, m in enumerate(shapes) if i != default),
-                        "if_accepted": if_accepted, "rule": would[3] if would is not None else "",
+                        "if_accepted": if_accepted, "rule": would[3] if would is not None else (r.reason if str(r.reason).startswith("rule:") else ""),
                         "threshold": None if pd.isna(getattr(r, "threshold", np.nan)) else round(float(r.threshold), 3)})
     with _OBJECTS_LOCK:
         _OBJECTS[key] = (words, objects, masks)

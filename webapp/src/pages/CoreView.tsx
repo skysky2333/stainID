@@ -289,8 +289,9 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
       candidate: col.candidate_id === undefined ? undefined : String(r[col.candidate_id] ?? '') })).map((o) => {
       if (previewValue == null || detectionAt == null || Math.abs(previewValue - detectionAt) < 1e-9 || !o.candidate) return o
       const w = would.get(o.candidate)
-      if (!w || !w.identity) return o  // in an excluded area: as detection called it
-      if (!passes(w.p ?? 0, previewValue)) return o.cls === 'rejected' ? o : { ...o, ...objectClass(vocabulary, 'rejected') }  // score >= threshold counts
+      if (!w || (!w.identity && !w.reason)) return o  // a rule decided it, or an excluded area: as detection called it, whatever the threshold
+      if (!passes(w.p ?? 0, previewValue)) return o.cls === 'rejected' ? o : { ...o, ...objectClass(vocabulary, 'rejected') }  // passes where score >= threshold
+      if (!w.identity) return { ...o, ...objectClass(vocabulary, 'rejected'), reason: w.reason }  // passes, but a rule after the model rejects it
       if (o.cls !== 'rejected') return o
       return { ...o, ...objectClass(vocabulary, 'accepted', w.identity, w.subtype) }
     })
@@ -479,7 +480,7 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
               <OutlinesToggle made={outlinesMade} on={layers.outlines} onToggle={() => toggle('outlines')} state={shapes}
                 count={drawn.filter((o) => o.outline).length} v2={found.data.source === 'v2'} />
               {found.data.source === 'v2' && outlinesMade && <div className="small indent outline-choice" title="Tab switches every object's outline between Segment Anything's and the stain outline (the stain outline where Segment Anything has none). Only the view: the analysis keeps the stain's default.">
-                <span className="badge outline-badge">Outline: {CHOICE_NAME[shownChoice]}{allChoice === null ? ' (the default)' : ''}</span> · <span className="kbd">Tab</span> switches all (stain → SAM small → SAM medium)</div>}
+                <span className="badge outline-badge" title="SAM sizes are stored for every counted object (and some rejected ones); an object without them shows its stain outline">Outline: {CHOICE_NAME[shownChoice]}{allChoice === null ? ' (the default)' : ''}</span> · <span className="kbd">Tab</span> switches all (stain → SAM small → SAM medium)</div>}
               {stain === 'AT8' && <ThreadsToggle measured={threadsMeasured} on={layers.threads} onToggle={() => toggle('threads')} state={traced} />}
               {unproposedCount !== null && <UnproposedToggle count={unproposedCount} on={layers.unproposed} onToggle={() => toggle('unproposed')} state={stainedOnly} />}
             </>

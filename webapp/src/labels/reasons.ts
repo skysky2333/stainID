@@ -19,10 +19,11 @@ export interface WhyObject { ai_probability: number | null; reason?: string; if_
 /** Why an object of Fix the field starts as it does at acceptance threshold `value` (detection's own at `detection`),
  *  when its score alone does not say: an excluded area, or the rule that left it out of detection's count. */
 export function whyStart(o: WhyObject, value: number | null, detection: number | null): string {
-  if (o.excluded || !o.if_accepted) return o.excluded || o.reason === 'rule:excluded' ? 'in an excluded area: left out of the analysis and not asked about' : ''
+  if (o.excluded || o.reason === 'rule:excluded') return 'in an excluded area: left out of the analysis and not asked about'
   const rule = o.rule ?? ''
   if (!rule) return ''
-  const own = value == null || detection == null || Math.abs(value - detection) < 1e-9
-  return own ? `detection left it out: ${reasonText(rule)} (move the slider and its score alone decides)`
-    : `detection's rule would leave it out (${reasonText(rule)}); here its score decides`
+  if (!o.if_accepted) return `${reasonText(rule)}: detection's rule, whatever the threshold`
+  const score = o.ai_probability ?? 0
+  return value == null || score >= value - 1e-9 || (detection != null && Math.abs(value - detection) < 1e-9)
+    ? `${reasonText(rule)}: detection's rule once it passes the threshold` : ''
 }

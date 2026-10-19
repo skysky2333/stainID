@@ -1,6 +1,7 @@
-"""The acceptance threshold of Fix the field and of the Cores view's preview decides by score alone: p >= threshold
-counts (a missing score is 0), so at 0 every candidate outside an excluded area counts and at 1 only those scoring 1;
-detection's rules (a speck, a deposit on a vessel wall called CAA) decide its own calls, not the slider's."""
+"""The acceptance threshold of Fix the field and of the Cores view's preview re-decides the model's part only, as
+stage 4 would: p >= threshold passes (a missing score is 0); detection's rules (a speck, a deposit on a vessel wall
+called CAA) keep their call at every value. So at 0 every candidate no rule decided (outside excluded areas) counts, at
+1 only those scoring 1, and raising the threshold never counts more."""
 # ruff: noqa: F811  (the rounds fixture is shared with test_annotation_rounds)
 from __future__ import annotations
 
@@ -54,19 +55,30 @@ def test_the_field_and_the_cores_view_count_every_candidate_at_zero(rounds_proje
     objects = {o["candidate_id"]: o for o in field["objects"]}
     assert objects[vascular]["ai_value"] == "CAA"  # detection's own call on a vascular deposit: CAA, not "not a plaque"
     assert objects[speck]["rule"] == "rule:speck" and objects[vascular]["rule"] == "rule:vascular_or_edge"
-    assert objects[excluded]["if_accepted"] is None
-    for c in (accepted, weak, speck, vascular, unscored, zero):
+    for c in (speck, vascular, excluded):  # a rule's call, or an excluded area: detection's call at every value
+        assert objects[c]["if_accepted"] is None, c
+    for c in (accepted, weak, unscored, zero):
         assert objects[c]["if_accepted"][0] == "plaque", c
-    # the Cores view's preview: a score for each (0 when missing) and the call when counted
+    # the count never grows with the threshold (the page's rule, as the server saves untouched objects)
+    counted = []
+    for step in range(101):
+        t = step / 100
+        counted.append(sum(starting.start_call(o["ai_probability"], o["if_accepted"], t, (o["ai_value"], o["ai_subtype"]), REJECT)[0] == "plaque"
+                           for o in objects.values() if not o.get("excluded")))
+    assert all(a >= b for a, b in zip(counted, counted[1:])), counted
+    assert counted[0] == 4 and counted[-1] == 0  # at 0: every candidate no rule decided; at 1: none scores 1
+    # the Cores view's preview: a score for each (0 when missing) and the call once it passes
     preview = admin.get(f"/api/cores/{CORE}/6E10/threshold-preview").json()
     rows = {r[0]: r for r in preview["rows"]}
-    assert rows[unscored][1] == 0.0 and rows[zero][1] == 0.0 and rows[excluded][2] == ""
-    assert all(rows[c][2] == "plaque" for c in (accepted, weak, speck, vascular, unscored, zero))
-    # Save and continue at 0, untouched: every candidate outside the excluded area counts
+    assert rows[unscored][1] == 0.0 and rows[zero][1] == 0.0
+    assert all(rows[c][2] == "" for c in (speck, vascular, excluded)) and rows[speck][4] == "rule:speck"
+    assert all(rows[c][2] == "plaque" for c in (accepted, weak, unscored, zero))
+    # Save and continue at 0, untouched: every candidate no rule decided counts; the rules' calls stay
     assert _save(ann, name, TILE, [{"task": "threshold", "value": "0"}], submit=True).status_code == 200
     labels = store.current(project.output("reviews"))
     calls = labels[(labels.source == "Ann") & (labels.task == "class")].set_index("candidate")
-    assert all(calls.loc[c, "value"] == "plaque" for c in (accepted, weak, speck, vascular, unscored, zero))
+    assert all(calls.loc[c, "value"] == "plaque" for c in (accepted, weak, unscored, zero))
+    assert calls.loc[speck, "value"] == "not a plaque" and calls.loc[vascular, "value"] == "CAA"
     assert calls.loc[excluded, "value"] == "not a plaque"
 
 
