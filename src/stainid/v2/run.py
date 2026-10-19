@@ -220,16 +220,17 @@ def _limited_threads() -> None:
         os.environ.setdefault(key, "2")
 
 
-def default_processes(cores_at_once: int, per_process_gb: float = 1.3, per_core_gb: float = 1.6, reserve_gb: float = 4.0) -> int:
-    """Tile processes for stage 2: bounded by the processors and by the memory free now (each tile process about
-    `per_process_gb`, each core image in flight `per_core_gb` of shared memory)."""
+def default_processes(cores_at_once: int, threads: int = 1, per_process_gb: float = 1.3, per_core_gb: float = 1.6,
+                      reserve_gb: float = 4.0) -> int:
+    """Tile processes for stage 2 (`threads` threads each): bounded by the processors and by the memory free now (each
+    tile process about `per_process_gb`, each core image in flight `per_core_gb` of shared memory)."""
     try:
         with open("/proc/meminfo") as handle:
             info = {line.split(":")[0]: int(line.split()[1]) * 1024 for line in handle}
         available = info.get("MemAvailable", 8 * GB) / GB
     except OSError:
         available = 8.0
-    return max(1, min(os.cpu_count() or 2, int((available - reserve_gb - cores_at_once * per_core_gb) / per_process_gb)))
+    return max(1, min((os.cpu_count() or 2) // max(1, threads), int((available - reserve_gb - cores_at_once * per_core_gb) / per_process_gb)))
 
 
 def run_proposals(project, stains=STAINS, cores: set[str] | None = None, workers: int | None = None, shard_index: int = 0,
@@ -237,13 +238,13 @@ def run_proposals(project, stains=STAINS, cores: set[str] | None = None, workers
                   processes: int | None = None) -> None:
     """Stage 2 on every core image to do. With `processes` (> 0; None: `default_processes`), one pool of that many tile
     processes works on the tiles of `workers` core images at once (default 3: one is decoded or written while the
-    others' tiles keep every process busy), each process one thread. With `processes=0`, the older layout: `workers`
+    others' tiles keep every process busy), each process with `threads` threads (default 1). With `processes=0`, the older layout: `workers`
     core images at once in a process each, with `threads` filter threads (`stainid.imaging.parallel`) and `tiles_at_once`
     tiles in threads (sharing the decoded core image). The results depend on none of them."""
     jobs = todo(project, "proposals", stains, cores, redo)[shard_index::shard_count]
     calibration, nuclei = proposal_inputs(project)
     if processes != 0:
-        _run_proposals_pooled(project, jobs, calibration, nuclei, workers or 3, processes)
+        _run_proposals_pooled(project, jobs, calibration, nuclei, workers or 3, processes, threads or 1)
         return
     workers = workers or default_workers(2.2 + 1.0 * (tiles_at_once - 1))
     threads = threads or default_threads(workers * tiles_at_once)
@@ -278,11 +279,11 @@ def run_proposals(project, stains=STAINS, cores: set[str] | None = None, workers
 class _TilePool:
     """The tile processes of a run, made again if one dies (killed for memory: the pool is then broken)."""
 
-    def __init__(self, processes: int):
+    def __init__(self, processes: int, threads: int = 1):
         from stainid.v2.proposals import tile_pool
 
-        self.processes, self.lock = processes, threading.Lock()
-        self.pool = tile_pool(processes)
+        self.processes, self.threads, self.lock = processes, threads, threading.Lock()
+        self.pool = tile_pool(processes, threads)
 
     def renew(self, broken) -> None:
         from stainid.v2.proposals import tile_pool
@@ -290,26 +291,27 @@ class _TilePool:
         with self.lock:
             if self.pool is broken:
                 broken.shutdown(wait=False, cancel_futures=True)
-                self.pool = tile_pool(self.processes)
+                self.pool = tile_pool(self.processes, self.threads)
 
     def shutdown(self) -> None:
         self.pool.shutdown()
 
 
-def _run_proposals_pooled(project, jobs: list, calibration: dict, nuclei: frozenset, cores_at_once: int, processes: int | None) -> None:
+def _run_proposals_pooled(project, jobs: list, calibration: dict, nuclei: frozenset, cores_at_once: int, processes: int | None,
+                          threads: int = 1) -> None:
     from concurrent.futures import ThreadPoolExecutor
     from concurrent.futures.process import BrokenProcessPool
 
     from stainid.imaging import shared_arrays
     from stainid.v2.proposals import propose_core
 
-    processes = processes or default_processes(cores_at_once)
+    processes = processes or default_processes(cores_at_once, threads)
     print(f"[0/{len(jobs)}] stage 2 (proposals): {len(jobs)} core images to do, {cores_at_once} at once, their tiles in {processes} "
-          f"tile processes (one thread each)", flush=True)
+          f"tile processes ({threads} thread{'s' if threads > 1 else ''} each)", flush=True)
     if not jobs:
         return
     shared_arrays.clean_stale()
-    tiles_pool = _TilePool(processes)
+    tiles_pool = _TilePool(processes, threads)
 
     def one(core: str, stain: str, tiles: list[dict]) -> dict:
         claim = _claim(project, "proposals", stain, core)

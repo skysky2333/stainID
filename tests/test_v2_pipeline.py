@@ -505,7 +505,7 @@ def test_tile_processes_write_what_one_process_writes(v2_project, capsys):
         proposals.propose_core(project, stain, core, tiles, calibration[(tiles[0]["tma"], stain)], nuclei)
     one = saved()
     before = set(shared_arrays.folder().glob(f"{shared_arrays.PREFIX}{os.getpid()}-*"))
-    run.run_proposals(project, ["NeuN", "6E10", "AT8"], redo=True, workers=2, processes=2)
-    assert "2 tile processes" in capsys.readouterr().out
+    run.run_proposals(project, ["NeuN", "6E10", "AT8"], redo=True, workers=2, processes=2, threads=2)
+    assert "2 tile processes (2 threads each)" in capsys.readouterr().out
     assert saved() == one
     assert set(shared_arrays.folder().glob(f"{shared_arrays.PREFIX}{os.getpid()}-*")) == before

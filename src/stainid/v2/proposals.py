@@ -618,7 +618,8 @@ def decode_core(path, shared: bool = False) -> tuple[np.ndarray, float | None, s
             file, rgb = None, np.empty(shape, np.uint8)
         for y0 in range(0, image.height, 1024):  # in strips: no second whole copy of the picture
             y1 = min(image.height, y0 + 1024)
-            rgb[y0:y1] = np.asarray(image.crop((0, y0, image.width, y1)).convert("RGB"))
+            strip = image.crop((0, y0, image.width, y1))
+            rgb[y0:y1] = np.asarray(strip if strip.mode == "RGB" else strip.convert("RGB"))
     rgb = np.asarray(rgb)
     rgb.flags.writeable = False
     return rgb, glass, file
@@ -734,25 +735,34 @@ _WORK: dict = {}  # in a tile process: the CoreWork of the core images it worked
 _WORK_MAX = 4
 
 
-def _tile_process_start() -> None:
+THREAD_VARIABLES = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS")
+
+
+def _tile_process_start(threads: int) -> None:
     import cv2 as _cv2  # noqa: PLC0415
 
     from stainid.imaging import parallel  # noqa: PLC0415
 
-    _cv2.setNumThreads(1)
-    parallel.threads(1)
+    _cv2.setNumThreads(threads)
+    parallel.threads(threads)
+    try:  # the BLAS / OpenMP pools too, should a library have started before the variables applied
+        from threadpoolctl import threadpool_limits  # noqa: PLC0415
+
+        threadpool_limits(threads)
+    except ImportError:
+        pass
 
 
-def tile_pool(processes: int):
-    """`processes` tile processes (spawned, one thread each: OpenCV, the filter threads and the BLAS/OpenMP libraries
-    are set to 1, so `processes` processors are used and none oversubscribed) for `propose_core(pool=)`; several core
-    images may share one pool at once."""
+def tile_pool(processes: int, threads: int = 1):
+    """`processes` tile processes for `propose_core(pool=)` (spawned; several core images may share one pool at once),
+    each with `threads` threads for OpenCV, the filter threads (`stainid.imaging.parallel`) and the BLAS / OpenMP
+    libraries alike, so the pool uses `processes` x `threads` processors and oversubscribes none."""
     from concurrent.futures import ProcessPoolExecutor  # noqa: PLC0415
     from multiprocessing import get_context  # noqa: PLC0415
 
-    for key in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
-        os.environ[key] = "1"  # the processes inherit it when they start (spawned on demand)
-    return ProcessPoolExecutor(processes, mp_context=get_context("spawn"), initializer=_tile_process_start)
+    for key in THREAD_VARIABLES:
+        os.environ[key] = str(threads)  # the processes inherit them when they start (spawned on demand)
+    return ProcessPoolExecutor(processes, mp_context=get_context("spawn"), initializer=_tile_process_start, initargs=(threads,))
 
 
 def _work_in_process(spec: dict, files: dict) -> CoreWork:

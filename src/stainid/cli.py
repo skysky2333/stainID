@@ -122,7 +122,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="proposals: tile processes, one thread each, shared by the core images in flight (-1: as many as memory "
                         "and processors allow; 0: the older layout, one process per core image with --threads and --tiles-at-once)")
     p.add_argument("--threads", type=int, default=0,
-                   help="proposals with --processes 0: filter threads per core image (0: the processors the workers leave idle, at most 4)")
+                   help="proposals: threads per tile process (0: 1); with --processes 0, filter threads per core image (0: the "
+                        "processors the workers leave idle, at most 4)")
     p.add_argument("--tiles-at-once", type=int, default=1,
                    help="proposals with --processes 0: tiles of a core image worked on at once (threads sharing the decoded image; ~0.7 GB each)")
     p.add_argument("--device", default="", help="outlines: cuda, cuda:1 or cpu (default: a GPU when there is one)")
