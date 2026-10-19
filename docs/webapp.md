@@ -305,9 +305,13 @@ annotators see.
 
 **Step 1: the acceptance threshold.** Every field opens with a slider at the top of the panel, *Acceptance
 threshold*, at detection's own threshold for the stain's model (marked on the track). Dragging it (or [ and ] in steps
-of 0.01) re-decides, live, where the objects start: a candidate the model scored starts solid, in the type detection
-would give it if it passed (stage 4's own rules run with every scored candidate passing, `labels/starting.py`), at or
-above it, and dotted grey below it; candidates a rule decided keep detection's call. The panel counts them ("142
+of 0.01) re-decides, live, where the objects start, by score alone: a candidate whose probability is at least the
+threshold starts solid, in the type detection gives it (`v2.classify.types_if_passed`, `labels/starting.py`), and one
+below it dotted grey; a missing score counts as 0. So at 0 every candidate outside an excluded area counts and at 1
+only those scoring 1; candidates in an excluded area keep detection's call. Detection's rules (a speck, a deposit on a
+vessel wall it calls CAA) decide its own calls, at its own threshold, not the slider's: pointing at such an object, the
+side panel says which rule left it out of detection's count ("Why"). The Cores view's preview slider follows the same
+rule. The panel counts them ("142
 accepted at 0.43 (detection: 128 at 0.50)"). *Start editing* (or Enter) locks it, and so does the first edit of any
 kind (a class key, Del, `, an outline, a precise edit, a split, a merge, a brush stroke); locked, it shows a lock and
 its value and cannot move. The only way back is *Reset field*, which asks first, discards the field's unsaved edits and

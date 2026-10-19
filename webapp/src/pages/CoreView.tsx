@@ -13,6 +13,8 @@ import { INACTIVE_GREY, MODEL_CLASSES, UNKNOWN_COLOUR, UNSURE_AMBER, classColour
 import { PALETTE, areaColour } from '../palette'
 import type { Vocabulary } from '../labels/classKeys'
 import { ThresholdSlider } from '../labels/threshold'
+import { reasonText } from '../labels/reasons'
+import { passes } from '../labels/fieldStart'
 
 interface CoreInfo extends CoreDetail {
   images: (CoreDetail['images'][number] & { pixel_width_um?: number })[]
@@ -57,7 +59,7 @@ interface ObjectEdit {
 }
 /** The Cores view's preview of the acceptance threshold (GET …/threshold-preview, labels/starting.py): per candidate
  *  its score and the call it would get if it passed ("" where a rule decides it). Never saved. */
-interface ThresholdPreview { detection: number | null; rows: [string, number | null, string, string][] }
+interface ThresholdPreview { detection: number | null; rows: [string, number | null, string, string, string?][] }
 interface CoreAnnotations {
   objects: AnnotatedObject[]; added: AddedObject[]; edits?: ObjectEdit[]
   counts: { agree: number; changed: number; rejected: number; unsure: number; added: number; outline_fixed: number; split?: number; merge?: number }
@@ -120,18 +122,6 @@ const THREAD_COLOR = PALETTE.overlays.threads  // over a dark halo; a mid blue v
 const TRACING = ['waiting', 'tracing']
 /** A thread's line on screen (px), by its measured width: thin, medium (1–2 µm) or thick (2 µm or more). */
 const threadLine = (widthUm: number) => (widthUm < 1 ? 1.2 : widthUm < 2 ? 1.9 : 2.8)
-/** Why detection kept or rejected a candidate (the v2 reason codes), in plain words. */
-const REASON_TEXT: Record<string, string> = {
-  accepted: 'kept by the model', rejected_by_model: 'the model judged it not an object', 'rule:speck': 'smaller than a plaque (a speck)',
-  'rule:vascular_or_edge': 'on a vessel wall or tissue edge', 'rule:duplicate': 'a second detection of a nearby object',
-  'rule:excluded': 'in an area left out of the analysis', 'rule:near_profile': 'a nucleus beside a stained neuron',
-  'rule:pale_nucleus': 'a pale nucleus without stain', 'rule:shape': 'too small, too large or too long for a neuron',
-  'rule:low_contrast': 'too faint against its surroundings', 'rule:small': 'too small for a tau+ neuron',
-  'rule:artifact_shape': 'shaped like an artifact', 'rule:thread_like': 'lies on a thread',
-  'rule:edge': 'a brown rim along a tissue edge or hole', 'rule:irregular': 'too irregular for a cell body (thread tangle)',
-  'rule:fold': 'on a tissue fold',
-}
-const reasonText = (code: string) => REASON_TEXT[code] ?? code.replace(/^rule:/, '').replace(/_/g, ' ')
 /** The colours of people's areas: the one palette's area types (the brush's), and of a part taken out of a type. */
 const AREA_COLOURS: Record<string, string> = { '1': areaColour('1'), '2': areaColour('2'), '3': areaColour('3'), '4': areaColour('4'), include: areaColour('include') }
 const AREA_NAMES: Record<string, string> = { '1': 'fold or tissue damage', '2': 'artifact', '3': 'no tissue', '4': 'out of focus or bad staining', include: 'taken out of a type (marked fine)' }
@@ -281,7 +271,7 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
   const [previewAt, setPreviewAt] = useState<number | null>(null)
   const detectionAt = preview.data?.detection ?? null
   const previewValue = previewOn && detectionAt != null ? previewAt ?? detectionAt : null
-  const would = useMemo(() => new Map((preview.data?.rows ?? []).map(([id, p, identity, subtype]) => [id, { p, identity, subtype }])), [preview.data])
+  const would = useMemo(() => new Map((preview.data?.rows ?? []).map(([id, p, identity, subtype, reason]) => [id, { p, identity, subtype, reason: reason ?? '' }])), [preview.data])
   const objects = useMemo<Found[]>(() => {
     const data = found.data
     if (!data) return []
@@ -295,8 +285,8 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
       candidate: col.candidate_id === undefined ? undefined : String(r[col.candidate_id] ?? '') })).map((o) => {
       if (previewValue == null || detectionAt == null || Math.abs(previewValue - detectionAt) < 1e-9 || !o.candidate) return o
       const w = would.get(o.candidate)
-      if (!w || !w.identity || w.p == null) return o  // a rule decides it: as detection called it
-      if (w.p < previewValue) return { ...o, ...objectClass(vocabulary, 'rejected') }
+      if (!w || !w.identity) return o  // in an excluded area: as detection called it
+      if (!passes(w.p ?? 0, previewValue)) return o.cls === 'rejected' ? o : { ...o, ...objectClass(vocabulary, 'rejected') }  // score >= threshold counts
       if (o.cls !== 'rejected') return o
       return { ...o, ...objectClass(vocabulary, 'accepted', w.identity, w.subtype) }
     })

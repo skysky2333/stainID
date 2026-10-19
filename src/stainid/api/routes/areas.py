@@ -443,8 +443,9 @@ def core_annotations(core_id: str, stain: str) -> dict:
 @router.get("/cores/{core_id}/{stain}/threshold-preview", dependencies=admin)
 def threshold_preview(core_id: str, stain: str) -> dict:
     """What the Cores view's acceptance-threshold slider needs (a preview only: never saved, the analysis keeps
-    detection's threshold): detection's threshold and, per candidate, its score and the call it would get if it passed
-    (`labels.starting.if_accepted`, label-class ids; empty where a rule decides it whatever the threshold)."""
+    detection's threshold): detection's threshold and, per candidate, its score (0 when it has none: the slider counts
+    p >= threshold) and its call when counted (`labels.starting.if_accepted`, label-class ids; empty in an excluded
+    area, where detection's call stays), with the rule that kept it out of detection's count."""
     from stainid import candidates  # noqa: PLC0415
     from stainid.labels import candidate_store, starting  # noqa: PLC0415
     from stainid.labels import vocabulary as vocab  # noqa: PLC0415
@@ -458,8 +459,8 @@ def threshold_preview(core_id: str, stain: str) -> dict:
     thresholds = pd.to_numeric(frame.threshold, errors="coerce").dropna() if "threshold" in frame else pd.Series(dtype=float)
     rows = []
     for r in frame.itertuples(index=False):
-        would = passing.get(r.candidate_id) if r.reason in starting.SCORED else None
-        identity, subtype = candidate_store.ai_call(words, "accepted", *would) if would is not None else ("", "")
-        rows.append([r.candidate_id, None if pd.isna(r.probability) else round(float(r.probability), 3), identity, subtype])
-    return {"detection": float(thresholds.median()) if len(thresholds) else None, "columns": ["candidate_id", "probability", "identity", "subtype"],
-            "rows": rows}
+        would = passing.get(r.candidate_id)
+        identity, subtype = candidate_store.ai_call(words, *would[:3]) if would is not None else ("", "")
+        rows.append([r.candidate_id, starting.score(r.probability), identity, subtype, "" if would is None else would[3]])
+    return {"detection": float(thresholds.median()) if len(thresholds) else None,
+            "columns": ["candidate_id", "probability", "identity", "subtype", "reason"], "rows": rows}

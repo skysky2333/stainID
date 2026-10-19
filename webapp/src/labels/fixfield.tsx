@@ -38,6 +38,7 @@ import { BRUSH_KEY, BRUSH_PX, BRUSH_SCALE, CLEARED, EXCLUDE_TYPES, INCLUDE, brus
 import type { Slider } from './fieldStart'
 import { SLIDER_STEP, acceptedAt, lock, moveTo, slider, sliderText, startPick, unlock } from './fieldStart'
 import { LockIcon, ThresholdSlider } from './threshold'
+import { reasonText, whyStart } from './reasons'
 import { BackToSets, CHOICE_IDS, CHOICE_NAMES, ClassLegend, LookLegend, MaskSwitch, ROUND_TITLE, RoundProgressLine, SaveButtons, SaveState, callText, changesText, draftKey, lookOf, maskName,
   polygonArea, polygonPoints, readDraft, simplifyPolygon, stepMask, unsureClass, useCandidateKeys, useFitScreen, useLeaveGuard, useLive, useSaveKeys,
   writeDraft } from './rounds'
@@ -1088,7 +1089,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
               <ThresholdSlider value={start.value} detection={start.detection} onChange={(v) => { setStart((s) => (s ? moveTo(s, v) : s)); tell('threshold') }} />
               <p className="small" style={{ margin: '4px 0' }}>{sliderText(acceptedAt(startable, start.value, start.detection, meta.remove_class, positive), start.value,
                 acceptedAt(startable, start.detection, start.detection, meta.remove_class, positive), start.detection)}</p>
-              <p className="small muted" style={{ margin: '0 0 6px' }}>Objects scoring at or above it start solid in detection’s type, those below dotted grey.
+              <p className="small muted" style={{ margin: '0 0 6px' }}>Objects scoring at or above it start solid in detection’s type, those below dotted grey (at 0 every object outside an excluded area).
                 It only sets where this field starts (it is saved with the field to tune thresholds later); the analysis keeps detection’s threshold.</p>
               <div className="row"><button className="btn primary" onClick={() => { lockStart(); tell('start') }}>Start editing</button>
                 <span className="small muted"><span className="kbd">Enter</span> · <span className="kbd">[</span> <span className="kbd">]</span> fine steps</span></div>
@@ -1133,6 +1134,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
               areas teach and test bad-area detection, and objects in them are left out of training and scoring. The analysis keeps detection’s own.</p>
           </div>}
           <TargetCard s={target} call={target ? callOf(target) : null} meta={meta} precise={precise} px={px} outline={target ? outlineOf(target) : null}
+            why={target?.candidate ? whyStart(target.candidate, start ? start.value : null, start ? start.detection : null) : ''}
             choices={choicesOf(target)} added={target?.added && !target.added.meta?.edit && saved[target.added.id] ? addedState(target) : null} unsaved={!!target && isUnsaved(target)}
             onMask={(i) => { if (target) chooseMask(target, i) }} />
           <div className="card side-block">
@@ -1320,10 +1322,12 @@ const ADDED_TEXT: Record<AddedState['state'], string> = {
 
 /** The facts of the object under the cursor (or being edited precisely): its class, detection's call and score, its
  *  area and which of its masks shows. */
-function TargetCard({ s, call, meta, precise, px, outline, choices, added, unsaved, onMask }: {
+function TargetCard({ s, call, meta, precise, px, outline, choices, added, unsaved, onMask, why }: {
   s: Shown | undefined; call: { pick: ClassPick; by: string; who?: string[] } | null; meta: Meta; precise: Precise | null; px: number
   outline: number[][] | null; choices: { list: (number[][] | null)[]; index: number; names?: string[] }; added: AddedState['state'] | null; unsaved: boolean
   onMask: (i: number) => void
+  /** why it starts as it does when that is not the acceptance threshold alone (reasons.ts) */
+  why?: string
 }) {
   if (!s || !call) {
     return (
@@ -1345,8 +1349,9 @@ function TargetCard({ s, call, meta, precise, px, outline, choices, added, unsav
       <dl className="target-facts small">
         <dt>Now</dt><dd>{who}</dd>
         {c && <><dt>Detection</dt><dd>{callText(vocabulary, c.ai_value, c.ai_subtype, typesAsked)}{c.decision !== 'accepted' && <span className="muted">
-          {' '}(rejected{c.reason?.startsWith('rule:') ? `: ${c.reason.slice(5).replace(/_/g, ' ')}` : ''})</span>}</dd>
+          {' '}(rejected{c.reason?.startsWith('rule:') ? `: ${reasonText(c.reason)}` : ''})</span>}</dd>
           <dt>Score</dt><dd>{c.ai_probability != null ? fmt(c.ai_probability, 2) : '—'}</dd></>}
+        {why && <><dt>Why</dt><dd className="target-why">{why}</dd></>}
         {outline && <><dt>Area</dt><dd>{fmt(polygonArea(outline) * px * px, 3)} µm²</dd></>}
         {choices.list.length > 0 && !precise && choices.names !== CHOICE_NAMES && <><dt>Outline</dt><dd>{maskName(choices.index, choices.list.length, choices.names)}</dd></>}
       </dl>

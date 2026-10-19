@@ -152,6 +152,22 @@ def suppress_near(frame: pd.DataFrame, probability: np.ndarray, candidates: np.n
     return suppressed
 
 
+def types_if_passed(project, stain: str, frame: pd.DataFrame, model: Model) -> np.ndarray:
+    """The type (subtype) each candidate gets when it is accepted, by detection's type rule alone: 6E10 small, compact
+    or diffuse; AT8 mature tangle or pretangle; NeuN none."""
+    subtype = np.full(len(frame), "", dtype=object)
+    if stain == "AT8":
+        feature = str(model.bundle.get("mature_feature", "soma_dab_p90"))  # s_soma_dab_p90 for a slide-scaled model
+        mature = _number(frame, feature if feature.startswith("s_") else f"m_{feature}") >= float(model.bundle.get("mature_p90_threshold", np.inf))
+        subtype[:] = np.where(mature, "mature tangle", "pretangle")
+    elif stain == "6E10":
+        diameter = _number(frame, "m_equivalent_diameter_um")
+        small = diameter < float(model.bundle.get("morphotype_minimum_diameter_um", 15.0))
+        compact = _number(frame, "normalized_inner_dab") >= float(model.bundle.get("morphotype_threshold", np.inf))
+        subtype[:] = np.where(small, "small", np.where(compact, "compact", "diffuse"))
+    return subtype
+
+
 def call(project, stain: str, frame: pd.DataFrame, model: Model, rules: dict) -> pd.DataFrame:
     """The calls of one core image's candidates."""
     probability = model.probability(frame)
@@ -160,14 +176,13 @@ def call(project, stain: str, frame: pd.DataFrame, model: Model, rules: dict) ->
     passed = scored & (probability >= model.threshold)
     klass = np.full(len(frame), NEGATIVE[stain], dtype=object)
     subtype = np.full(len(frame), "", dtype=object)
+    types = types_if_passed(project, stain, frame, model)
     if stain == "AT8":
         radius = float(model.bundle.get("nms_radius_um", 12.0)) / project.pixel_size_um
         duplicate = suppress_near(frame, probability, passed, radius)
         reason[duplicate] = "rule:duplicate"
         passed &= ~duplicate
-        feature = str(model.bundle.get("mature_feature", "soma_dab_p90"))  # s_soma_dab_p90 for a slide-scaled model
-        mature = _number(frame, feature if feature.startswith("s_") else f"m_{feature}") >= float(model.bundle.get("mature_p90_threshold", np.inf))
-        subtype[passed] = np.where(mature[passed], "mature tangle", "pretangle")
+        subtype[passed] = types[passed]
         threadish = _number(frame, "thread_fraction") >= 0.5
         klass[~passed & threadish] = "thread"
     elif stain == "6E10":
@@ -178,10 +193,7 @@ def call(project, stain: str, frame: pd.DataFrame, model: Model, rules: dict) ->
         reason[vascular] = "rule:vascular_or_edge"
         klass[vascular] = "CAA"
         passed &= ~speck & ~vascular
-        normalized = _number(frame, "normalized_inner_dab")
-        small = diameter < float(model.bundle.get("morphotype_minimum_diameter_um", 15.0))
-        compact = normalized >= float(model.bundle.get("morphotype_threshold", np.inf))
-        subtype[passed] = np.where(small[passed], "small", np.where(compact[passed], "compact", "diffuse"))
+        subtype[passed] = types[passed]
     klass[passed] = POSITIVE[stain]
     reason[passed] = "accepted"
     reason[(reason == "") & scored] = "rejected_by_model"

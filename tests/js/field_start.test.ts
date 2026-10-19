@@ -6,8 +6,12 @@ import { acceptedAt, lock, moveTo, slider, sliderText, startPick, unlock } from 
 const REJECT = 'not a plaque'
 const accepted = { ai_value: 'plaque', ai_subtype: 'compact', ai_probability: 0.8, if_accepted: ['plaque', 'compact'] as [string, string] }
 const below = { ai_value: REJECT, ai_subtype: '', ai_probability: 0.42, if_accepted: ['plaque', 'diffuse'] as [string, string] }
-const ruled = { ai_value: REJECT, ai_subtype: '', ai_probability: 0.9, if_accepted: null }  // a rule rejected it (a speck)
-const objects = [accepted, below, ruled]
+const excluded = { ai_value: REJECT, ai_subtype: '', ai_probability: 0.9, if_accepted: null }  // in an excluded area
+const speck = { ai_value: REJECT, ai_subtype: '', ai_probability: 0.7, if_accepted: ['plaque', 'small'] as [string, string] }  // a rule left it out of detection's count
+const unscored = { ai_value: REJECT, ai_subtype: '', ai_probability: null, if_accepted: ['plaque', 'diffuse'] as [string, string] }
+const zero = { ai_value: REJECT, ai_subtype: '', ai_probability: 0, if_accepted: ['plaque', 'diffuse'] as [string, string] }
+const top = { ai_value: 'plaque', ai_subtype: 'compact', ai_probability: 1, if_accepted: ['plaque', 'compact'] as [string, string] }
+const objects = [accepted, below, excluded]
 const positive = (identity: string) => identity === 'plaque'
 
 // At detection's own threshold every object starts as detection called it.
@@ -16,8 +20,17 @@ for (const o of objects) assert.deepEqual(startPick(o, 0.5, 0.5, REJECT), { iden
 assert.deepEqual(startPick(below, 0.4, 0.5, REJECT), { identity: 'plaque', subtype: 'diffuse' })
 // Higher: an accepted object below it starts rejected.
 assert.deepEqual(startPick(accepted, 0.85, 0.5, REJECT), { identity: REJECT, subtype: null })
-// A rule's reject stays rejected whatever the threshold.
-assert.deepEqual(startPick(ruled, 0.1, 0.5, REJECT), { identity: REJECT, subtype: null })
+// In an excluded area it stays as detection called it whatever the threshold.
+assert.deepEqual(startPick(excluded, 0.1, 0.5, REJECT), { identity: REJECT, subtype: null })
+// By score alone, p >= threshold: a rule's reject counts once its score is at or above it; at 0 everything counts,
+// a missing score as 0; at 1 only p = 1; on the slider's step (0.29 is 0.29000000000000004) p = 0.29 counts.
+assert.deepEqual(startPick(speck, 0.6, 0.5, REJECT), { identity: 'plaque', subtype: 'small' })
+const all = [accepted, below, speck, unscored, zero, top]
+for (const o of all) assert.equal(startPick(o, 0, 0.5, REJECT).identity, 'plaque')
+assert.equal(acceptedAt(all, 0, 0.5, REJECT, positive), 6)
+assert.equal(acceptedAt(all, 1, 0.5, REJECT, positive), 1)
+assert.equal(startPick(top, 1, 0.5, REJECT).identity, 'plaque')
+assert.equal(startPick({ ...below, ai_probability: 0.29 }, moveTo(slider(0.5), 0.29).value, 0.5, REJECT).identity, 'plaque')
 assert.equal(acceptedAt(objects, 0.5, 0.5, REJECT, positive), 1)
 assert.equal(acceptedAt(objects, 0.4, 0.5, REJECT, positive), 2)
 assert.equal(acceptedAt(objects, 0.9, 0.5, REJECT, positive), 0)

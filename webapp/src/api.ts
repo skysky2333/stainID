@@ -540,8 +540,11 @@ export interface RoundObject<Shape = number[][]> {
   ai_probability: number | null; decision: string; reason: string; masks: (Shape | null)[]; mask: number; more_masks?: number
   /** in an excluded area (people's final say): drawn faint, not asked about */
   excluded?: boolean
-  /** its call (identity, subtype) if the acceptance threshold let it pass (labels/starting.py); null when a rule decides it */
+  /** its call (identity, subtype) when the acceptance threshold counts it (score >= threshold, a missing score 0:
+   *  labels/starting.py); null in an excluded area, where detection's call stays */
   if_accepted?: [string, string] | null
+  /** the rule that kept it out of detection's own count ("rule:speck", "rule:vascular_or_edge" …), else "" */
+  rule?: string
   /** detection's threshold for it (the model's cut-off) */
   threshold?: number | null
 }

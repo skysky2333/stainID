@@ -429,9 +429,9 @@ def _field_shapes(meta: dict, tile: dict) -> tuple[list[dict], dict[str, list]]:
     objects, masks = [], {}
     passing = starting.if_accepted(state.project, meta["stain"], str(tile["core_id"]))
     for r in _field_candidates(meta, tile).rename(columns={"class": "klass"}).itertuples():
-        identity, subtype = candidate_store.ai_call(words, r.decision, r.klass, r.subtype)
+        identity, subtype = candidate_store.ai_call(words, r.decision, r.klass, r.subtype, r.reason)
         would = passing.get(r.candidate_id)
-        if_accepted = list(candidate_store.ai_call(words, "accepted", *would)) if would is not None else None
+        if_accepted = list(candidate_store.ai_call(words, *would[:3])) if would is not None else None
         found_masks, default = candidate_store.choices(r)  # [Segment Anything's, the stain's]: what Tab switches between
         shapes = [_shape(m) for m in found_masks]
         masks[r.candidate_id] = shapes
@@ -440,7 +440,7 @@ def _field_shapes(meta: dict, tile: dict) -> tuple[list[dict], dict[str, list]]:
                         "ai_probability": None if pd.isna(r.probability) else round(float(r.probability), 3), "decision": r.decision, "reason": r.reason,
                         "masks": [m if i == default else None for i, m in enumerate(shapes)], "mask": default,
                         "more_masks": sum(m is not None for i, m in enumerate(shapes) if i != default),
-                        "if_accepted": if_accepted if r.reason in starting.SCORED else None,
+                        "if_accepted": if_accepted, "rule": would[3] if would is not None else "",
                         "threshold": None if pd.isna(getattr(r, "threshold", np.nan)) else round(float(r.threshold), 3)})
     with _OBJECTS_LOCK:
         _OBJECTS[key] = (words, objects, masks)
@@ -725,7 +725,7 @@ def clean(meta: dict, mark, person: str) -> dict | None:
         if second:
             field_tile(meta, record["tile_id"])
         if mark.task == "class" and mark.keep and not mark.deleted:
-            identity, subtype = candidate_store.ai_call(words, row.decision, row["class"], row.subtype)
+            identity, subtype = candidate_store.ai_call(words, row.decision, row["class"], row.subtype, row.get("reason", ""))
             record |= {"value": identity, "subtype": (subtype or None) if asks_subtypes(meta) else None, "confirmed": True}
             return record | {"id": store.object_id("class", record["tile_id"], record["x"], record["y"])}
         if mark.task == "outline" and not mark.deleted and mark.value in candidate_store.CHOICES:
@@ -828,7 +828,7 @@ def _confirmations(meta: dict, tile: dict, person: str, mine: pd.DataFrame) -> l
             continue
         x, y = round(float(r.x), 1), round(float(r.y), 1)
         key = store.object_id("class", tile_id, x, y)
-        detected = candidate_store.ai_call(words, r.decision, r.klass, r.subtype)
+        detected = candidate_store.ai_call(words, r.decision, r.klass, r.subtype, r.reason)
         identity, subtype = detected
         start = starts.get(r.candidate_id)
         if start is not None and start.get("threshold") is not None and abs(threshold - start["threshold"]) > 1e-9:

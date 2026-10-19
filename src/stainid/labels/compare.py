@@ -99,7 +99,7 @@ def _versus_detection(project, stain: str, tiles: pd.DataFrame, core_id: str | N
     if core_id is None:  # every core: the compact copies matching keeps, not each core's whole table
         found = candidate_store.core_calls(project, stain, set(rows.core_id))
     else:
-        found = candidate_store.for_cores(project, stain, set(rows.core_id), ["candidate_id", "x_core", "y_core", "decision", "class", "subtype"])
+        found = candidate_store.for_cores(project, stain, set(rows.core_id), ["candidate_id", "x_core", "y_core", "decision", "reason", "class", "subtype"])
     found = found.drop_duplicates("candidate_id").set_index("candidate_id") if len(found) else found
     words = vocab.of(project, stain)
     out = []
@@ -107,7 +107,7 @@ def _versus_detection(project, stain: str, tiles: pd.DataFrame, core_id: str | N
         if candidate not in found.index:
             continue
         row = found.loc[candidate]
-        identity, subtype = candidate_store.ai_call(words, row.decision, row["class"], row.subtype)
+        identity, subtype = candidate_store.ai_call(words, row.decision, row["class"], row.subtype, row.get("reason", ""))
         said = group[group.role != vocab.SKIP]
         people = [{"person": r.source, "identity": r.identity, "subtype": r.subtype or "", "role": r.role, "time": float(r.time)}
                   for r in group.sort_values("time").itertuples()]
