@@ -516,6 +516,8 @@ def instructions(vocabulary: vocab.Vocabulary, stain: str, round_: int) -> str:
     lookalikes = [c for c in choices(vocabulary) if c.group == "lookalike"]
     named = ", ".join(f"`{c.label}`" for c in lookalikes) or "(none for this stain)"
     positive = " / ".join(sorted({c.identity for c in choices(vocabulary) if c.group == "counted"}))
+    rules = vocab.DEFINITIONS.get(stain, ())
+    definitions = ("\n\n**How to tell them apart:**\n\n" + "\n".join(f"- {rule}" for rule in rules)) if rules else ""
     return f"""# AI review round {round_}: {stain}
 
 You label every numbered object of a few fields of {stain}-stained human brain tissue (a TMA core, 0.27 µm per pixel).
@@ -536,7 +538,7 @@ Your labels train and evaluate stainID's detection models; nothing you write cha
 
 | label | key | class | what it looks like |
 | --- | --- | --- | --- |
-{rows}
+{rows}{definitions}
 
 - **Counted ({positive})**: the object stainID counts. Give its type when you can see it.
 - **Named look-alike** ({named}): something real and recognisable that is *not* the counted object but is easily

@@ -130,7 +130,7 @@ reported next to density as a cellularity-independent measure.
    classified `vascular_or_edge` and excluded from parenchymal measures.
 4. Morphotype: accepted plaques ≥ 15 µm in diameter are **compact** when their inner DAB is at
    least `morphotype_threshold` × the slide threshold (default ≈ 1.59). Otherwise they are
-   **diffuse**. Plaques of 10–15 µm are `small_plaque`. Accepted deposits of 10 µm or less are `speck` and are not
+   **diffuse**. Plaques of 10–15 µm are `small_plaque`. Accepted deposits of 10 µm or less (78.5 µm²; reviewers: under 80 µm²) are `speck` and are not
    counted: in a blind review of 389 disputed objects none of 8 µm or less, and 4 % of 8–10 µm, were plaques.
 5. Per plaque:
    - area, dense-core area and fraction, circularity, solidity and boundary irregularity;

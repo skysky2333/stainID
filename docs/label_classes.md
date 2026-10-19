@@ -22,6 +22,16 @@ look-alikes** (solid, in their own colour, not counted), **Del** for the stain's
 | AT8 | tau+ neuron: **1** pretangle · **2** mature tangle · **3** ghost (extracellular) tangle | **Q** neuritic crown (tau around a plaque) · **W** tau in an astrocyte · **E** thread-like stain (not a neuron), a reject reason: dotted like Del | not tau | unsure |
 | NeuN | **1** NeuN+ neuron | — | not a neuron | unsure |
 
+How to tell 6E10's classes apart (the reviewers' rules, AI review round 4; `vocabulary.DEFINITIONS`, shown in every
+review batch's instructions):
+
+- **Small plaque or speck:** a deposit of at least **80 µm²** (about 10 µm equivalent diameter) is a plaque (`small`
+  when it is too small to type, up to about 15 µm across); under 80 µm² it is a speck: **not a plaque**. Detection's
+  stage-4 `rule:speck` cuts at an equivalent diameter of 10 µm (78.5 µm², rules 6E10 `speck_diameter_um`): the same
+  call on every labelled object (an 80 µm² cut changed 2 of 1,267 labelled 6E10 objects and no call, round 4).
+- **Compact or diffuse:** **compact** only with a well-defined dense body (a solid, sharply bounded core); granular,
+  mottled or fleecy deposits are **diffuse**, even when dark.
+
 - Each counted type and each look-alike has its own colour on every page (`Vocabulary.colour_slots`, sent to the web
   app as `vocabulary.slots`); the reject is dotted grey, the same as detection's own rejects, and a number key makes it
   solid again; unsure is dotted amber with a small "?", and is left out of training and evaluation.

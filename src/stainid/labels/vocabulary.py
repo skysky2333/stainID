@@ -117,16 +117,16 @@ DEFAULTS: dict[str, tuple[Identity, ...]] = {
         _i(*UNSURE),
     ),
     "6E10": (
-        _i("plaque", "plaque", POSITIVE, "A brown amyloid deposit between the cells, at least about 10 µm across.", "1", (
-            _s("compact", "compact (dense-core)", "A dense, well-defined brown core.", "1"),
-            _s("diffuse", "diffuse", "A loose, fluffy brown deposit without a dense core.", "2"),
+        _i("plaque", "plaque", POSITIVE, "A brown amyloid deposit between the cells, at least 80 µm² (about 10 µm across).", "1", (
+            _s("compact", "compact (dense-core)", "Only with a well-defined dense body: a solid, sharply bounded brown core.", "1"),
+            _s("diffuse", "diffuse", "No well-defined dense body: loose, granular, mottled or fleecy brown (even when dark).", "2"),
             _s("cored-neuritic", "cored-neuritic", "A dense core with a halo of swollen nerve endings around it, if you can see them.", "3"),
-            _s("small", "small (too small to type)", "A real plaque only 10–15 µm across: too small to tell its type.", "4"),
+            _s("small", "small (too small to type)", "A real plaque of 80 µm² (about 10 µm across) up to about 15 µm across: too small to tell its type.", "4"),
         )),
         _i("CAA", "CAA / vascular amyloid", NEGATIVE, "Brown amyloid in the wall of a blood vessel (cerebral amyloid angiopathy).", "q"),
         _i("intraneuronal", "staining inside a neuron", NEGATIVE,
            "Brown inside a neuron’s cell body: APP or Aβ in the cell, which 6E10 also stains. Not a plaque.", "w"),
-        _i("not a plaque", "not a plaque", NEGATIVE, "A cell, a speck under 10 µm, a fibre, background, debris or an artifact.", REJECT_KEY),
+        _i("not a plaque", "not a plaque", NEGATIVE, "A cell, a speck under 80 µm² (about 10 µm across), a fibre, background, debris or an artifact.", REJECT_KEY),
         _i(*UNSURE),
     ),
     "NeuN": (
@@ -147,6 +147,18 @@ GENERIC: tuple[Identity, ...] = (
     _i(*UNSURE),
 )
 REJECTS = {"AT8": "not tau", "6E10": "not a plaque", "NeuN": "not a neuron"}  # each stain's single reject (Del)
+# The reviewers' rules for telling classes apart (AI review round 4), shown with the classes in the review instructions
+# (`review.ai_batch.instructions`) and in docs/label_classes.md. 6E10's speck cut is also stage 4's `rule:speck`
+# (`v2.params` rules 6E10 `speck_diameter_um` 10 µm = 78.5 µm²: the same call on every labelled object).
+SPECK_AREA_UM2 = 80.0
+DEFINITIONS: dict[str, tuple[str, ...]] = {
+    "6E10": (
+        f"**Small plaque or speck:** a deposit of at least {SPECK_AREA_UM2:.0f} µm² (about 10 µm equivalent diameter) is a plaque; "
+        "under that it is a speck: `not a plaque`. Read the area under the panel.",
+        "**Compact or diffuse:** `compact` only with a well-defined dense body (a solid, sharply bounded core); granular, "
+        "mottled or fleecy deposits are `diffuse`, even when dark.",
+    ),
+}
 GENERIC_REJECT = "not an object"
 
 # The keys of the built-in classes before one key picked a type (identity 1–7, then a type by its place or Q W T R):
