@@ -32,14 +32,29 @@ import cv2
 import numpy as np
 import pandas as pd
 
-MODELS = {
-    "sam_vit_b": {"kind": "sam1", "arch": "vit_b", "file": "sam/sam_vit_b_01ec64.pth", "params": "91M",
-                  "url": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth", "name": "SAM ViT-B (current)"},
-    "sam2.1_hiera_b+": {"kind": "sam2", "config": "configs/sam2.1/sam2.1_hiera_b+.yaml", "file": "sam2/sam2.1_hiera_base_plus.pt", "params": "81M",
-                        "url": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_base_plus.pt", "name": "SAM 2.1 Hiera base+"},
-    "pathosam_vit_b": {"kind": "sam1", "arch": "vit_b", "file": "pathosam/vit_b_histopathology.pt", "params": "91M",
-                       "url": "https://owncloud.gwdg.de/index.php/s/sBB4H8CTmIoBZsQ/download", "name": "PathoSAM ViT-B (generalist)"},
+MODELS = {  # every official size of each family; xxh128: the authors' hash (micro_sam's model registry) where one is given
+    "sam_vit_b": {"family": "SAM", "kind": "sam1", "arch": "vit_b", "file": "sam/sam_vit_b_01ec64.pth", "short": "SAM-B",
+                  "url": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth", "xxh128": "6923c33df3637b6a922d7682bfc9a86b", "name": "SAM ViT-B (current)"},
+    "sam_vit_l": {"family": "SAM", "kind": "sam1", "arch": "vit_l", "file": "sam/sam_vit_l_0b3195.pth", "short": "SAM-L",
+                  "url": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth", "xxh128": "a82beb3c660661e3dd38d999cc860e9a", "name": "SAM ViT-L"},
+    "sam_vit_h": {"family": "SAM", "kind": "sam1", "arch": "vit_h", "file": "sam/sam_vit_h_4b8939.pth", "short": "SAM-H",
+                  "url": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth", "xxh128": "97698fac30bd929c2e6d8d8cc15933c2", "name": "SAM ViT-H"},
+    "sam2.1_hiera_t": {"family": "SAM 2", "kind": "sam2", "config": "configs/sam2.1/sam2.1_hiera_t.yaml", "file": "sam2/sam2.1_hiera_tiny.pt",
+                       "short": "S2-t", "url": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_tiny.pt", "name": "SAM 2.1 Hiera tiny"},
+    "sam2.1_hiera_s": {"family": "SAM 2", "kind": "sam2", "config": "configs/sam2.1/sam2.1_hiera_s.yaml", "file": "sam2/sam2.1_hiera_small.pt",
+                       "short": "S2-s", "url": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_small.pt", "name": "SAM 2.1 Hiera small"},
+    "sam2.1_hiera_b+": {"family": "SAM 2", "kind": "sam2", "config": "configs/sam2.1/sam2.1_hiera_b+.yaml", "file": "sam2/sam2.1_hiera_base_plus.pt",
+                        "short": "S2-b+", "url": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_base_plus.pt", "name": "SAM 2.1 Hiera base+"},
+    "sam2.1_hiera_l": {"family": "SAM 2", "kind": "sam2", "config": "configs/sam2.1/sam2.1_hiera_l.yaml", "file": "sam2/sam2.1_hiera_large.pt",
+                       "short": "S2-l", "url": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt", "name": "SAM 2.1 Hiera large"},
+    "pathosam_vit_b": {"family": "PathoSAM", "kind": "sam1", "arch": "vit_b", "file": "pathosam/vit_b_histopathology.pt", "short": "PS-B",
+                       "url": "https://owncloud.gwdg.de/index.php/s/sBB4H8CTmIoBZsQ/download", "xxh128": "ffd1a2cd84570458b257bd95fdd8f974", "name": "PathoSAM ViT-B (generalist)"},
+    "pathosam_vit_l": {"family": "PathoSAM", "kind": "sam1", "arch": "vit_l", "file": "pathosam/vit_l_histopathology.pt", "short": "PS-L",
+                       "url": "https://owncloud.gwdg.de/index.php/s/IZgnn1cpBq2PHod/download", "xxh128": "b591833c89754271023e901281dee3f2", "name": "PathoSAM ViT-L (generalist)"},
+    "pathosam_vit_h": {"family": "PathoSAM", "kind": "sam1", "arch": "vit_h", "file": "pathosam/vit_h_histopathology.pt", "short": "PS-H",
+                       "url": "https://owncloud.gwdg.de/index.php/s/L7AcvVz7DoWJ2RZ/download", "xxh128": "bd1856dafc156a43fb3aa705f1a6e92e", "name": "PathoSAM ViT-H (generalist)"},
 }
+SHORT = {"stain outline": "stain", **{k: v["short"] for k, v in MODELS.items()}}
 SIZES = ("small", "medium", "large")
 PROGRESS_ENV = "STAINID_PROGRESS_FILE"
 
@@ -81,6 +96,7 @@ class Sam1Outliner:
         if missing:
             raise ValueError(f"{path.name}: {len(missing)} weights missing (e.g. {missing[:3]}): not a SAM {spec['arch']} checkpoint")
         self.unexpected = list(unexpected)
+        self.params = sum(p.numel() for p in model.parameters())
         inner = BatchOutliner.__new__(BatchOutliner)
         inner.torch, inner.device, inner.model = torch, torch.device(device), model
         inner.half = inner.device.type == "cuda"
@@ -113,6 +129,7 @@ class Sam2Outliner:
             raise ValueError(f"{path.name}: {len(missing)} weights missing: not a SAM 2.1 checkpoint for {spec['config']}")
         model.to(device).eval()
         self.predictor = SAM2ImagePredictor(model)
+        self.params = sum(p.numel() for p in model.parameters())
         self.device = torch.device(device)
 
     def _autocast(self):
@@ -475,83 +492,168 @@ def truth_table(scored: pd.DataFrame, models: list[str]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+# ---------------------------------------------------------------- the external check: expert outlines of another project
+
+def expert_panel(project, tiles: pd.DataFrame, session: str, size: int, seed: int = 0) -> tuple[pd.DataFrame, dict]:
+    """Outlines imported from an expert set (the label log's `outline` labels of `session`, e.g. the ADNP-15 AT8
+    neuritic-plaque masks), a fixed random sample of `size` of them that a candidate falls in. Each is prompted through
+    that candidate (its point inside the outline, nearest the outline's centre) as stage 3 would; experts' objects no
+    candidate falls in are counted (not proposed: a detection matter, not an outline one)."""
+    from stainid import candidates
+    from stainid.labels import frames, store
+
+    labels = store.current(project.output("reviews"))
+    labels = labels[(labels.task == "outline") & (labels.session == session)]
+    by_tile = tiles.drop_duplicates("tile_id").set_index("tile_id")
+    tma = _tma_of(tiles)
+    rng = np.random.default_rng(seed)
+    rows, seen, looked, missed, cache = [], set(), 0, 0, {}
+    for i in rng.permutation(len(labels)):
+        if len(rows) >= size:
+            break
+        label = labels.iloc[int(i)]
+        if label.tile_id not in by_tile.index or not isinstance(label.points, list) or len(label.points) < 3:
+            continue
+        looked += 1
+        tile = by_tile.loc[label.tile_id]
+        ring = np.asarray(label.points, float) + frames.field_origin(tile, project.context_px)  # labels are in field px
+        key = (label.stain, str(tile.core_id))
+        if key not in cache:
+            cache[key] = _candidates(project, label.stain, str(tile.core_id))
+        frame = cache[key]
+        contour = ring.astype(np.float32).reshape(-1, 1, 2)
+        inside = np.array([cv2.pointPolygonTest(contour, (float(x), float(y)), False) >= 0 for x, y in zip(frame.x_core, frame.y_core)], bool)
+        if not inside.any():
+            missed += 1
+            continue
+        centre = ring.mean(axis=0)
+        chosen = frame[inside].assign(d=lambda f: np.hypot(f.x_core - centre[0], f.y_core - centre[1])).sort_values("d").iloc[0]
+        if chosen.candidate_id in seen:
+            continue
+        seen.add(chosen.candidate_id)
+        rows.append(chosen.drop("d").to_dict() | {"stain": label.stain, "tma": tma.get(str(tile.core_id), ""), "group": f"expert ({session})",
+                                                  "truth": candidates.encode_rings([np.rint(ring).astype(int).ravel().tolist()]), "person": "expert"})
+    return pd.DataFrame(rows), {"objects": len(rows), "looked_at": looked, "not_proposed": missed}
+
+
+# ---------------------------------------------------------------- results kept per model (so passes merge)
+
+def _cache_file(out: Path, model: str, tag: str) -> Path:
+    return out / "results" / f"{model.replace('+', 'plus')}{'__' + tag if tag else ''}.json"
+
+
+def load_results(out: Path, model: str, tag: str, ids: list[str]) -> tuple[dict, dict] | None:
+    """A model's results on exactly these candidates from an earlier pass, else None."""
+    try:
+        saved = json.loads(_cache_file(out, model, tag).read_text())
+    except (OSError, ValueError):
+        return None
+    if sorted(saved.get("ids", [])) != sorted(ids):
+        return None
+    return saved["results"], saved["timing"]
+
+
+def save_results(out: Path, model: str, tag: str, ids: list[str], results: dict, timing: dict) -> None:
+    path = _cache_file(out, model, tag)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    clean = {cid: {**r, "polygons": [[int(v) for v in p] for p in r["polygons"]]} for cid, r in results.items()}
+    path.write_text(json.dumps({"ids": sorted(ids), "results": clean, "timing": timing}))
+
+
 # ---------------------------------------------------------------- the picture grid
 
-GRID_COLOURS = {"stain outline": (255, 230, 0), "sam_vit_b": (0, 255, 255), "sam2.1_hiera_b+": (255, 0, 255), "pathosam_vit_b": (60, 255, 60)}
-CELL = 192
-LABEL_W = 230
-ROWS_PER_PAGE = 25
+PALETTE = [(0, 255, 255), (255, 0, 255), (60, 255, 60), (255, 140, 0), (80, 160, 255), (255, 80, 80), (200, 255, 80), (255, 255, 255)]
+STAIN_COLOUR = (255, 230, 0)
+CELL = 176
+LABEL_W = 210
+ROWS_PER_PAGE = 20
 
 
 def _pixel_um(found: dict[str, dict], candidate_id: str) -> float:
     return next((r[candidate_id]["pixel_um"] for r in found.values() if candidate_id in r), 0.0)
 
 
-def grid(project, tiles: pd.DataFrame, frame: pd.DataFrame, found: dict[str, dict], scored: pd.DataFrame, out: Path) -> list[Path]:
-    """Per stain, pages of one row per candidate: raw | stain outline | each model's stage-3 default (the human outline,
-    where one exists, dashed in white on the raw picture)."""
+def sheets_of(models: list[str]) -> dict[str, list[str]]:
+    """The grid's sheets: the SAM family and the SAM 2 family, PathoSAM (and the stain outline) on both."""
+    patho = [m for m in models if MODELS[m]["family"] == "PathoSAM"]
+    out = {}
+    for family, key in (("SAM", "sam"), ("SAM 2", "sam2")):
+        members = [m for m in models if MODELS[m]["family"] == family]
+        if members:
+            out[key] = members + patho
+    return out or ({"models": list(models)} if models else {})
+
+
+def grid(project, tiles: pd.DataFrame, frame: pd.DataFrame, found: dict[str, dict], scored: pd.DataFrame, out: Path, prefix: str = "grid",
+         limit: int | None = None) -> list[Path]:
+    """Per stain and sheet (`sheets_of`), pages of one row per candidate: raw (the prompt point; the human outline in
+    white, where one exists) | stain outline | each model's stage-3 default."""
     from PIL import Image, ImageDraw
 
     from stainid.imaging.core_images import open_image
 
+    if limit:
+        frame = frame.groupby("stain", group_keys=False).head(limit)
     outlines = outlines_of(frame, found)
-    methods = ["stain outline", *found]
-    names = {"stain outline": "stain", "sam_vit_b": "SAM ViT-B", "sam2.1_hiera_b+": "SAM 2.1 b+", "pathosam_vit_b": "PathoSAM ViT-B"}
+    every = ["stain outline", *found]
     by_tile = tiles.drop_duplicates("tile_id").set_index("tile_id")
     info = scored.set_index("candidate_id")
     pictures: dict[str, Image.Image] = {}
     boxes: dict[str, tuple[int, int, int]] = {}
-    for core_id, part in frame.groupby("core_id"):
+    for _, part in frame.groupby("core_id"):
         with open_image(project.root / by_tile.loc[part.tile_id.iloc[0]]["image_path"]) as image:
             for row in part.itertuples():
-                rings = [r for m in methods for r in outlines[row.candidate_id].get(m, [])] + _rings(row.truth)
+                rings = [r for m in every for r in outlines[row.candidate_id].get(m, [])] + _rings(row.truth)
                 points = np.vstack([np.asarray(r, float).reshape(-1, 2) for r in rings]) if rings else np.array([[row.x_core, row.y_core]])
                 cx, cy = float(row.x_core), float(row.y_core)
-                half = int(max(32, 1.25 * np.abs(points - (cx, cy)).max()))
-                half = min(half, 600)
+                half = min(int(max(32, 1.25 * np.abs(points - (cx, cy)).max())), 600)
                 x0, y0 = int(cx) - half, int(cy) - half
                 pictures[row.candidate_id] = image.crop((x0, y0, x0 + 2 * half, y0 + 2 * half)).convert("RGB")
                 boxes[row.candidate_id] = (x0, y0, 2 * half)
     written = []
     header = 22
-    for stain, part in frame.groupby("stain"):
-        part = part.reset_index(drop=True)
-        for page in range(0, len(part), ROWS_PER_PAGE):
-            chunk = part.iloc[page: page + ROWS_PER_PAGE]
-            sheet = Image.new("RGB", (LABEL_W + CELL * (1 + len(methods)), header + CELL * len(chunk)), (24, 24, 24))
-            draw = ImageDraw.Draw(sheet)
-            for c, title in enumerate(["raw", *(names.get(m, m) for m in methods)]):
-                draw.text((LABEL_W + c * CELL + 6, 4), title, fill=(230, 230, 230))
-            for r, row in enumerate(chunk.itertuples()):
-                top = header + r * CELL
-                x0, y0, side = boxes[row.candidate_id]
-                scale = CELL / side
-                picture = pictures[row.candidate_id].resize((CELL, CELL), Image.LANCZOS)
-                for c in range(1 + len(methods)):
-                    cell = picture.copy()
-                    pen = ImageDraw.Draw(cell)
-                    rings = _rings(row.truth) if c == 0 else outlines[row.candidate_id].get(methods[c - 1], [])
-                    colour = (255, 255, 255) if c == 0 else GRID_COLOURS.get(methods[c - 1], (255, 128, 0))
-                    for ring in rings:
-                        xy = [((x - x0) * scale, (y - y0) * scale) for x, y in np.asarray(ring, float).reshape(-1, 2)]
-                        pen.line(xy + xy[:1], fill=colour, width=2)
-                    if c == 0:
-                        px, py = (row.x_core - x0) * scale, (row.y_core - y0) * scale
-                        pen.line([(px - 4, py), (px + 4, py)], fill=(255, 60, 60), width=1)
-                        pen.line([(px, py - 4), (px, py + 4)], fill=(255, 60, 60), width=1)
-                    sheet.paste(cell, (LABEL_W + c * CELL, top))
-                s = info.loc[row.candidate_id]
-                lines = [row.candidate_id.split(":", 1)[1][:30], f"{row.group}", f"{row.decision}  p={float(row.probability):.2f}" if row.probability == row.probability
-                         else str(row.decision), f"stain {s.stain_area_um2:.0f} um2", f"crop {side * _pixel_um(found, row.candidate_id):.0f} um"]
-                for m in found:
-                    if f"{m}_ratio_to_stain" in s:
-                        ratio = s[f"{m}_ratio_to_stain"]
-                        status = str(s[f"{m}_status"])
-                        lines.append(f"{names.get(m, m)[:10]} x{ratio:.2f}" + (" fb" if status.startswith("fallback") else ""))
-                draw.multiline_text((6, top + 6), "\n".join(lines), fill=(220, 220, 220), spacing=3)
-            path = out / f"grid_{stain}_{page // ROWS_PER_PAGE + 1:02d}.png"
-            sheet.save(path, optimize=True)
-            written.append(path)
+    for sheet_name, members in sheets_of(list(found)).items():
+        methods = ["stain outline", *members]
+        colours = {"stain outline": STAIN_COLOUR, **{m: PALETTE[i % len(PALETTE)] for i, m in enumerate(members)}}
+        for stain, part in frame.groupby("stain"):
+            part = part.reset_index(drop=True)
+            for page in range(0, len(part), ROWS_PER_PAGE):
+                chunk = part.iloc[page: page + ROWS_PER_PAGE]
+                sheet = Image.new("RGB", (LABEL_W + CELL * (1 + len(methods)), header + CELL * len(chunk)), (24, 24, 24))
+                draw = ImageDraw.Draw(sheet)
+                for c, title in enumerate(["raw", *(SHORT.get(m, m) for m in methods)]):
+                    draw.text((LABEL_W + c * CELL + 6, 4), title, fill=(230, 230, 230) if c == 0 else colours[methods[c - 1]])
+                for r, row in enumerate(chunk.itertuples()):
+                    top = header + r * CELL
+                    x0, y0, side = boxes[row.candidate_id]
+                    scale = CELL / side
+                    picture = pictures[row.candidate_id].resize((CELL, CELL), Image.LANCZOS)
+                    for c in range(1 + len(methods)):
+                        cell = picture.copy()
+                        pen = ImageDraw.Draw(cell)
+                        rings = _rings(row.truth) if c == 0 else outlines[row.candidate_id].get(methods[c - 1], [])
+                        colour = (255, 255, 255) if c == 0 else colours[methods[c - 1]]
+                        for ring in rings:
+                            xy = [((x - x0) * scale, (y - y0) * scale) for x, y in np.asarray(ring, float).reshape(-1, 2)]
+                            pen.line(xy + xy[:1], fill=colour, width=2)
+                        if c == 0:
+                            px, py = (row.x_core - x0) * scale, (row.y_core - y0) * scale
+                            pen.line([(px - 4, py), (px + 4, py)], fill=(255, 60, 60), width=1)
+                            pen.line([(px, py - 4), (px, py + 4)], fill=(255, 60, 60), width=1)
+                        sheet.paste(cell, (LABEL_W + c * CELL, top))
+                    s = info.loc[row.candidate_id]
+                    probability = f"  p={float(row.probability):.2f}" if row.probability == row.probability else ""
+                    lines = [row.candidate_id.split(":", 1)[1][:28], str(row.group)[:30], f"{row.decision}{probability}",
+                             f"stain {s.stain_area_um2:.0f} um2, crop {side * _pixel_um(found, row.candidate_id):.0f} um"]
+                    for m in members:
+                        if f"{m}_ratio_to_stain" in s and s[f"{m}_ratio_to_stain"] == s[f"{m}_ratio_to_stain"]:
+                            fallback = " fb" if str(s[f"{m}_status"]).startswith("fallback") else ""
+                            truth = f" iou {s[f'iou_truth_{m}']:.2f}" if f"iou_truth_{m}" in s and s[f"iou_truth_{m}"] == s[f"iou_truth_{m}"] else ""
+                            lines.append(f"{SHORT[m]:6} x{s[f'{m}_ratio_to_stain']:.2f}{fallback}{truth}")
+                    draw.multiline_text((6, top + 6), "\n".join(lines), fill=(220, 220, 220), spacing=2)
+                path = out / f"{prefix}_{stain}_{sheet_name}_{page // ROWS_PER_PAGE + 1:02d}.png"
+                sheet.save(path, optimize=True)
+                written.append(path)
     return written
 
 
@@ -561,21 +663,110 @@ def _table(frame: pd.DataFrame) -> list[str]:
     if frame is None or not len(frame):
         return ["(none)", ""]
     columns = list(frame.columns)
-    lines = ["| " + " | ".join(columns) + " |", "|" + "---|" * len(columns)]
+    lines = ["| " + " | ".join(map(str, columns)) + " |", "|" + "---|" * len(columns)]
     for row in frame.itertuples(index=False):
         lines.append("| " + " | ".join("" if v is None or (isinstance(v, float) and v != v) else str(v) for v in row) + " |")
     return lines + [""]
 
 
-def markdown(counts: dict, summary: pd.DataFrame, truth: pd.DataFrame, pairs: pd.DataFrame, timing: pd.DataFrame, check: dict, grids: list[Path]) -> str:
-    lines = ["# Outline models compared on a candidate panel", "", "Panel: " + json.dumps(counts), "",
-             "Prompting check (SAM ViT-B re-run vs the outline stage 3 stored, median IoU): " + json.dumps(check), "",
-             "## Against the human outlines (Fix the field)", "", *_table(truth),
-             "## Each method against the stain outline (stage-3 default; the stain outline where stage 3 falls back)", "", *_table(summary),
-             "## Pairwise agreement (median IoU; area ratio b / a)", "", *_table(pairs),
-             "## Time and GPU memory (fp16 encoder; one window encoded per candidate's field window)", "", *_table(timing),
-             "## Picture grids", "", *(f"- {p}" for p in grids), ""]
+def overview(summary: pd.DataFrame, timing: pd.DataFrame, external: pd.DataFrame, models: list[str]) -> pd.DataFrame:
+    """The headline table: per stain and model, its size and cost, agreement with the stain outline (all candidates),
+    the summed-area ratio of the accepted ones (what positive area would change by), stage-3 fallbacks, and the IoU
+    against the external expert outlines (ADNP-15 AT8; the same for every stain)."""
+    cost = timing.set_index("model") if len(timing) else pd.DataFrame()
+    expert = external.set_index("method") if len(external) else pd.DataFrame()
+    rows = []
+    for stain in sorted(summary.stain.unique()):
+        everything = summary[(summary.stain == stain) & (summary.decision == "all")].set_index("method")
+        accepted = summary[(summary.stain == stain) & (summary.decision == "accepted")].set_index("method")
+        rows.append({"stain": stain, "model": "stain outline", "family": "baseline", "objects": int(everything.objects.iloc[0]) if len(everything) else 0,
+                     "external_iou_median": expert.loc["stain outline", "iou_median"] if "stain outline" in expert.index else None})
+        for m in models:
+            if m not in everything.index:
+                continue
+            rows.append({"stain": stain, "model": m, "family": MODELS[m]["family"],
+                         "params_M": round(cost.loc[m, "params"] / 1e6, 1) if m in cost.index and cost.loc[m, "params"] == cost.loc[m, "params"] else None,
+                         "s_per_object": cost.loc[m, "s_per_object"] if m in cost.index else None,
+                         "peak_gpu_gb": cost.loc[m, "peak_gpu_gb"] if m in cost.index else None,
+                         "objects": int(everything.loc[m, "objects"]),
+                         "iou_with_stain_median": everything.loc[m, "iou_with_stain_median"],
+                         "area_ratio_to_stain_median": everything.loc[m, "area_ratio_to_stain_median"],
+                         "summed_area_ratio_accepted": accepted.loc[m, "summed_area_ratio_to_stain"] if m in accepted.index else None,
+                         "stage3_fallback_share": everything.loc[m, "stage3_fallback_share"],
+                         "external_iou_median": expert.loc[m, "iou_median"] if m in expert.index else None,
+                         "external_iou_best_of_three": expert.loc[f"{m} best of three", "iou_median"] if f"{m} best of three" in expert.index else None})
+    return pd.DataFrame(rows)
+
+
+def agreement_matrix(pairs: pd.DataFrame, stain: str, methods: list[str]) -> pd.DataFrame:
+    part = pairs[pairs.stain == stain]
+    names = [SHORT.get(m, m) for m in methods]
+    table = pd.DataFrame("", index=names, columns=names)
+    for row in part.itertuples():
+        if row.a in methods and row.b in methods and row.iou_median is not None and row.iou_median == row.iou_median:
+            table.loc[SHORT.get(row.a, row.a), SHORT.get(row.b, row.b)] = f"{row.iou_median:.2f}"
+            table.loc[SHORT.get(row.b, row.b), SHORT.get(row.a, row.a)] = f"{row.iou_median:.2f}"
+    return table.reset_index(names="")
+
+
+def markdown(counts: dict, head: pd.DataFrame, summary: pd.DataFrame, truth: pd.DataFrame, external: pd.DataFrame, external_counts: dict,
+             pairs: pd.DataFrame, timing: pd.DataFrame, check: dict, grids: list[Path], models: list[str], notes: str = "") -> str:
+    lines = ["# Outline models compared on a candidate panel", "",
+             "Each candidate prompted exactly as stage 3 prompts SAM (one point at the candidate, the nearest 1024-px window, three outputs, stage 3's "
+             "default rule; the stain outline where stage 3 falls back). fp16 encoder on one GPU.", "",
+             "Panel: " + json.dumps(counts), "", "External check: " + json.dumps(external_counts), "",
+             "Prompting check (SAM ViT-B re-run vs the outline stage 3 stored, median IoU): " + json.dumps(check), ""]
+    if notes:
+        lines += ["## Recommendation", "", notes.strip(), ""]
+    lines += ["## Summary", "",
+              "Agreement and area ratio: with the stain outline, all panel candidates; summed-area ratio: accepted candidates (what positive area would "
+              "change by); external: median IoU of the stage-3 default (and of the best of the three outputs) against the ADNP-15 expert AT8 masks.", "",
+              *_table(head),
+              "## Against the human outlines (Fix the field)", "", *_table(truth),
+              "## Against the ADNP-15 expert AT8 masks (external)", "", *_table(external),
+              "## Pairwise agreement (median IoU of the stage-3 defaults)", ""]
+    for stain in sorted(pairs.stain.unique()) if len(pairs) else []:
+        lines += [f"### {stain}", "", *_table(agreement_matrix(pairs, stain, ["stain outline", *models]))]
+    lines += ["## Each method against the stain outline, by decision", "", *_table(summary),
+              "## Time and GPU memory", "", *_table(timing),
+              "## Picture grids", "", *(f"- {p}" for p in grids), ""]
     return "\n".join(lines)
+
+
+def _run_all(names, models_dir, device, project, tiles, frame, out, tag, progress, manifest, redo=False):
+    import torch
+
+    found, timings = {}, []
+    ids = frame.candidate_id.tolist()
+    for name in names:
+        spec = MODELS[name]
+        path = models_dir / spec["file"]
+        if name not in manifest["models"]:
+            manifest["models"][name] = {**spec, "path": str(path), "sha256": sha256(path) if path.exists() else None}
+        kept = None if redo else load_results(out, name, tag, ids)
+        if kept is not None:
+            found[name], timing = kept
+            timings.append(timing)
+            if progress:
+                progress(len(ids))
+            print(f"{name}{' (' + tag + ')' if tag else ''}: kept from an earlier pass", flush=True)
+            continue
+        try:
+            outliner = load_model(name, models_dir, device)
+        except Exception as error:  # noqa: BLE001 - one model that cannot be loaded does not stop the others
+            manifest["models"][name]["error"] = f"{type(error).__name__}: {error}"
+            print(f"{name}: not compared ({error})", flush=True)
+            continue
+        run_model(name, outliner, project, tiles, frame.head(2))  # warm-up (cuDNN autotuning, first allocations): not timed
+        found[name], timing = run_model(name, outliner, project, tiles, frame, progress)
+        timing["params"] = int(getattr(outliner, "params", 0)) or None
+        timings.append(timing)
+        save_results(out, name, tag, ids, found[name], timing)
+        print(f"{name}{' (' + tag + ')' if tag else ''}: {timing}", flush=True)
+        del outliner
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    return found, timings
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -586,40 +777,59 @@ def main(argv: list[str] | None = None) -> None:
 
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--project", required=True)
-    parser.add_argument("--candidates-root", default=None, help="the v2 folder to read candidates from (e.g. data/analysis/v2.before_v2b)")
+    parser.add_argument("--candidates-root", default=None, help="the project's v2 folder to read candidates from (e.g. data/analysis/v2.before_v2b)")
+    parser.add_argument("--panel", default=None, help="a panel.csv of an earlier run to use as it is (default: make the panel)")
     parser.add_argument("--stains", default="6E10,AT8,NeuN")
     parser.add_argument("--size", type=int, default=100, help="candidates per stain (the human-changed ones first)")
     parser.add_argument("--cores-per-stain", type=int, default=6, help="core images (each from another TMA) the sample is taken from")
+    parser.add_argument("--expert", default=None, metavar="PROJECT=SESSION",
+                        help="the external check: expert outlines of another project, e.g. /path/adnp15=import-adnp15-expert")
+    parser.add_argument("--expert-size", type=int, default=300)
     parser.add_argument("--models", default=",".join(MODELS))
     parser.add_argument("--models-dir", default=None, help="default: the project's data/models")
     parser.add_argument("--out", required=True)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--threads", type=int, default=2, help="processor threads (the queue's budget)")
+    parser.add_argument("--threads", type=int, default=2, help="processor threads")
+    parser.add_argument("--redo", action="store_true", help="run every model again (else results of an earlier pass on the same candidates are kept)")
+    parser.add_argument("--notes", default=None, help="a text file shown as the recommendation in summary.md")
     parser.add_argument("--panel-only", action="store_true", help="write the panel (panel.csv) and stop: no model is run")
     args = parser.parse_args(argv)
 
     torch.set_num_threads(args.threads)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    if args.candidates_root:
-        fixed_root = Path(args.candidates_root)
-        candidates.root = lambda project: fixed_root  # read-only: this tool never writes candidates
     loaded = state._load(args.project)
     project, tiles = loaded.project, loaded.tiles
+    if args.candidates_root:  # read-only: this tool never writes candidates
+        fixed_root, original, main_root = Path(args.candidates_root), candidates.root, Path(project.root).resolve()
+        candidates.root = lambda p: fixed_root if Path(p.root).resolve() == main_root else original(p)
     models_dir = Path(args.models_dir) if args.models_dir else project.root / "data" / "models"
     names = [m for m in args.models.split(",") if m]
-    frames = [panel(project, tiles, stain, args.size, args.cores_per_stain) for stain in args.stains.split(",")]
-    frame = pd.concat([f for f in frames if len(f)], ignore_index=True)
-    frame.drop(columns=[c for c in ("sam_outline_x",) if c in frame]).to_csv(out / "panel.csv", index=False)
+    if args.panel:
+        frame = pd.read_csv(args.panel, dtype={"core_id": str, "tile_id": str, "tma": str})
+        frame["truth"] = frame.truth.fillna("") if "truth" in frame else ""
+        if Path(args.panel).resolve() != (out / "panel.csv").resolve():
+            frame.to_csv(out / "panel.csv", index=False)
+    else:
+        frames = [panel(project, tiles, stain, args.size, args.cores_per_stain) for stain in args.stains.split(",")]
+        frame = pd.concat([f for f in frames if len(f)], ignore_index=True)
+        frame.to_csv(out / "panel.csv", index=False)
     counts = {stain: {"objects": int((frame.stain == stain).sum()), "fixed": int(frame[frame.stain == stain].group.str.startswith("fixed").sum()),
-                      "cores": sorted(frame[frame.stain == stain].core_id.unique().tolist()),
-                      "groups": frame[frame.stain == stain].group.value_counts().to_dict()} for stain in args.stains.split(",")}
+                      "cores": sorted(frame[frame.stain == stain].core_id.astype(str).unique().tolist())} for stain in sorted(frame.stain.unique())}
     print("panel: " + json.dumps(counts), flush=True)
+    external_frame, external_counts, external_state = pd.DataFrame(), {}, None
+    if args.expert:
+        root, session = args.expert.split("=", 1)
+        external_state = state._load(root)
+        external_frame, external_counts = expert_panel(external_state.project, external_state.tiles, session, args.expert_size)
+        external_counts = {"project": external_state.project.name, "session": session, **external_counts}
+        external_frame.to_csv(out / "external_panel.csv", index=False)
+        print("external: " + json.dumps(external_counts), flush=True)
     if args.panel_only:
-        (out / "panel.json").write_text(json.dumps(counts, indent=1))
+        (out / "panel.json").write_text(json.dumps({"panel": counts, "external": external_counts}, indent=1))
         return
 
-    total = len(frame) * len(names)
+    total = (len(frame) + len(external_frame)) * len(names)
     done = [0]
     progress_file = os.environ.get(PROGRESS_ENV)
 
@@ -630,43 +840,40 @@ def main(argv: list[str] | None = None) -> None:
                 handle.write(f"{done[0]}/{total}\n")
 
     manifest = {"models": {}, "device": args.device, "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
-                "project": str(project.root), "candidates_root": str(candidates.root(project)), "counts": counts,
+                "project": str(project.root), "candidates_root": str(candidates.root(project)), "counts": counts, "external": external_counts,
                 "started": time.strftime("%Y-%m-%d %H:%M:%S"), "torch": torch.__version__}
-    found, timings = {}, []
-    for name in names:
-        spec = MODELS[name]
-        path = models_dir / spec["file"]
-        manifest["models"][name] = {**spec, "path": str(path), "sha256": sha256(path) if path.exists() else None}
-        try:
-            outliner = load_model(name, models_dir, args.device)
-        except Exception as error:  # noqa: BLE001 - one model that cannot be loaded does not stop the others
-            manifest["models"][name]["error"] = f"{type(error).__name__}: {error}"
-            print(f"{name}: not compared ({error})", flush=True)
-            continue
-        run_model(name, outliner, project, tiles, frame.head(2))  # warm-up (cuDNN autotuning, first allocations): not timed
-        found[name], timing = run_model(name, outliner, project, tiles, frame, progress)
-        timings.append(timing)
-        print(f"{name}: {timing}", flush=True)
-        del outliner
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+    found, timings = _run_all(names, models_dir, args.device, project, tiles, frame, out, "", progress, manifest, args.redo)
+    models = [m for m in names if m in found]
     scored = score(frame, found)
     scored.to_csv(out / "objects.csv", index=False)
-    summary = summarise(scored, list(found))
+    summary = summarise(scored, models)
     summary.to_csv(out / "summary.csv", index=False)
-    truth = truth_table(scored, list(found))
+    truth = truth_table(scored, models)
     truth.to_csv(out / "truth.csv", index=False)
     pairs = pairwise(frame, found)
     pairs.to_csv(out / "pairwise.csv", index=False)
     timing = pd.DataFrame(timings)
     timing.to_csv(out / "timing.csv", index=False)
+    external, grids = pd.DataFrame(), []
+    if len(external_frame):
+        tag = external_state.project.name.split(":")[0].replace(" ", "_").lower()
+        found_ext, _ = _run_all(names, models_dir, args.device, external_state.project, external_state.tiles, external_frame, out, tag, progress,
+                                manifest, args.redo)
+        scored_ext = score(external_frame, found_ext)
+        scored_ext.to_csv(out / "external_objects.csv", index=False)
+        external = truth_table(scored_ext, [m for m in names if m in found_ext])
+        external.to_csv(out / "external.csv", index=False)
+        grids += grid(external_state.project, external_state.tiles, external_frame, found_ext, scored_ext, out, prefix="external_grid", limit=40)
     check = {}
     if "sam_vit_b_iou_stored_stage3" in scored:
         for stain, part in scored.groupby("stain"):
             values = pd.to_numeric(part.sam_vit_b_iou_stored_stage3, errors="coerce").dropna()
             check[stain] = round(float(values.median()), 3) if len(values) else None
-    grids = grid(project, tiles, frame, found, scored, out)
-    (out / "summary.md").write_text(markdown(counts, summary, truth, pairs, timing, check, grids))
+    head = overview(summary, timing, external, models)
+    head.to_csv(out / "overview.csv", index=False)
+    grids = grid(project, tiles, frame, found, scored, out) + grids
+    notes = Path(args.notes).read_text() if args.notes else ""
+    (out / "summary.md").write_text(markdown(counts, head, summary, truth, external, external_counts, pairs, timing, check, grids, models, notes))
     manifest["finished"] = time.strftime("%Y-%m-%d %H:%M:%S")
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1, default=str))
     print(f"written: {out}", flush=True)
