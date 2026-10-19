@@ -1,4 +1,7 @@
-"""Take the README screenshots of a running stainID web app on the synthetic demo project (never on study data).
+"""Take screenshots of a running stainID web app on the synthetic demo project (never on study data).
+
+The README now shows public datasets (see its "The app"); from this script it takes only the pages those lack: an
+annotator's home (my-sets), the Projects page and the Annotations layer of the Cores view, cropped to JPEG afterwards.
 
     python tools/demo/screenshots.py http://127.0.0.1:18555 docs/images [--only workflow annotate]
 
