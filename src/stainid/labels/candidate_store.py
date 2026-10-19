@@ -35,6 +35,7 @@ from stainid.labels import frames
 from stainid.labels import vocabulary as vocab
 from stainid.project import Project
 from stainid.tables import write_text_atomic
+from stainid.v2.classify import REJECT_RULES
 
 ACCEPTED = "accepted"
 MATCH_UM = v2.MATCH_RADIUS_UM  # how far an old label may sit from a candidate's centre to be about it
@@ -196,7 +197,7 @@ def radius(row, pixel_size_um: float) -> float:
 
 
 POSITIONS = ["candidate_id", "x_core", "y_core", "tile_id"]
-CALLS = [*POSITIONS, "decision", "class", "subtype"]
+CALLS = [*POSITIONS, "decision", "class", "subtype", "reason"]
 _WHOLE: OrderedDict[str, tuple[tuple, pd.DataFrame]] = OrderedDict()
 _WHOLE_LIMIT = 8  # a whole NeuN or AT8 core with its outlines and three masks parsed is a few hundred MB to a GB in memory
 _WHOLE_LOCK = threading.Lock()
@@ -386,14 +387,12 @@ def negative_class(vocabulary: vocab.Vocabulary) -> str:
 
 def ai_call(vocabulary: vocab.Vocabulary, decision: str, klass: str, subtype: str, reason: str = "") -> tuple[str, str]:
     """The AI's call on a candidate as (identity, subtype) ids of the stain's label classes: accepted ones their class
-    (the stain's first positive class when the class is not one of the labels'), rejected ones the negative class, or
-    the named look-alike a rule called it (`reason` "rule:…": a deposit on a vessel wall is CAA)."""
+    (the stain's first positive class when the class is not one of the labels'); rejected ones the named look-alike
+    detection called them (`class`: a deposit on a vessel wall is CAA, an AT8 thread a thread) unless a rule that only
+    says it is no object of its own (`reason` in `v2.classify.REJECT_RULES`: a duplicate, an excluded area, a rim, a fold),
+    else the stain's reject. A look-alike is a class, not a reject: drawn solid in its colour and recorded as it."""
     if not accepted(decision):
-        if str(reason).startswith("rule:") and klass:
-            found = vocabulary.identity(vocabulary.resolve(klass)[0])
-            if found is not None and found.role == vocab.NEGATIVE:
-                return found.id, ""
-        return negative_class(vocabulary), ""
+        return lookalike(vocabulary, klass, reason) or negative_class(vocabulary), ""
     identity, sub = vocabulary.resolve(klass, subtype)
     found = vocabulary.identity(identity) if identity else None
     if found is None or found.role != vocab.POSITIVE:
@@ -402,6 +401,17 @@ def ai_call(vocabulary: vocab.Vocabulary, decision: str, klass: str, subtype: st
         if found is None or found.role != vocab.POSITIVE:
             return next((c.id for c in vocabulary.classes if c.role == vocab.POSITIVE), ""), ""
     return found.id, sub if sub and found.subtype(sub) else ""
+
+
+def lookalike(vocabulary: vocab.Vocabulary, klass, reason="") -> str:
+    """The look-alike class (identity id) detection called a candidate it did not count, "" for none: its `class` where
+    that is a named negative class of the vocabulary other than the reject, unless a rule says it is no object of its
+    own (`v2.classify.REJECT_RULES`)."""
+    reason = "" if reason is None or reason != reason else str(reason)
+    if not klass or not isinstance(klass, str) or reason in REJECT_RULES:
+        return ""
+    found = vocabulary.identity(vocabulary.resolve(klass)[0])
+    return found.id if found is not None and found.role == vocab.NEGATIVE and found.id != vocabulary.reject else ""
 
 
 def calls_of(project: Project, stain: str, candidate_ids) -> pd.DataFrame:
@@ -462,7 +472,7 @@ def _keep_light(key: str, stamp, found: dict | None) -> None:
 def _index_file(project: Project, stain: str) -> Path:
     from stainid import disk_cache  # noqa: PLC0415
 
-    return disk_cache.path(project.root, "candidate_index", f"{stain}.npz")
+    return disk_cache.path(project.root, "candidate_index", f"{stain}-r.npz")  # -r: calls with their reason
 
 
 def _load_index(project: Project, stain: str) -> None:
@@ -534,7 +544,7 @@ def save_index(project: Project, stain: str) -> None:
 
 def _light(project: Project, stain: str, core_id: str) -> dict | None:
     """One core's candidates as matching needs them, compactly: ids (bytes), positions (float32) and the call of each
-    as a code into the core's few (decision, class, subtype) combinations. Kept until the store file changes (also on
+    as a code into the core's few (decision, class, subtype, reason) combinations. Kept until the store file changes (also on
     disk between restarts: `save_index`)."""
     target = path(project, stain, core_id)
     if target is None:
@@ -550,13 +560,13 @@ def _light(project: Project, stain: str, core_id: str) -> dict | None:
     frame = v2.read_core(project, stain, core_id, CALLS)  # the raw columns only: nothing parsed
     if not frame.empty and "candidate_id" not in frame:
         frame = frame.assign(candidate_id=[candidate_id(stain, core_id, a, b) for a, b in zip(frame.x_core, frame.y_core)])
-    for column in ("decision", "class", "subtype"):
+    for column in ("decision", "class", "subtype", "reason"):
         if not frame.empty:
             frame[column] = frame[column].fillna("").astype(str) if column in frame else ""
     if frame.empty or "x_core" not in frame:
         found = None
     else:
-        combos = pd.MultiIndex.from_arrays([frame.decision, frame["class"], frame.subtype])
+        combos = pd.MultiIndex.from_arrays([frame.decision, frame["class"], frame.subtype, frame.reason])
         codes, uniques = pd.factorize(combos)
         found = {"ids": frame.candidate_id.to_numpy().astype("S"), "xy": np.c_[frame.x_core.to_numpy(), frame.y_core.to_numpy()].astype(np.float32),
                  "codes": codes.astype(np.int32), "combos": list(uniques)}
@@ -638,11 +648,12 @@ def core_calls(project: Project, stain: str, core_ids) -> pd.DataFrame:
     for light in _lights(project, stain, core_ids).values():
         if light is None or not len(light["ids"]):
             continue
-        combos = np.array(light["combos"], dtype=object).reshape(-1, 3)
+        combos = np.array(light["combos"], dtype=object).reshape(-1, 4)
         picked = combos[light["codes"]]
         parts.append(pd.DataFrame({"candidate_id": light["ids"].astype(str), "x_core": light["xy"][:, 0].astype(float),
-                                   "y_core": light["xy"][:, 1].astype(float), "decision": picked[:, 0], "class": picked[:, 1], "subtype": picked[:, 2]}))
-    columns = ["candidate_id", "x_core", "y_core", "decision", "class", "subtype"]
+                                   "y_core": light["xy"][:, 1].astype(float), "decision": picked[:, 0], "class": picked[:, 1], "subtype": picked[:, 2],
+                                   "reason": picked[:, 3]}))
+    columns = ["candidate_id", "x_core", "y_core", "decision", "class", "subtype", "reason"]
     return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=columns)
 
 

@@ -2,6 +2,8 @@
 // and its lock. Run by tests/test_annotation_rounds.py: node --experimental-strip-types tests/js/field_start.test.ts
 import assert from 'node:assert/strict'
 import { acceptedAt, lock, moveTo, slider, sliderText, startPick, unlock } from '../../webapp/src/labels/fieldStart.ts'
+import { reasonText, whyFound, whyStart } from '../../webapp/src/labels/reasons.ts'
+import { isAiLabel, peopleChecks } from '../../webapp/src/labels/aiLabels.ts'
 
 const REJECT = 'not a plaque'
 const accepted = { ai_value: 'plaque', ai_subtype: 'compact', ai_probability: 0.8, if_accepted: ['plaque', 'compact'] as [string, string] }
@@ -61,4 +63,36 @@ assert.equal(lock(s), s)
 s = unlock(s)
 assert.ok(!s.locked && Math.abs(s.value - 0.43) < 1e-9)
 assert.ok(Math.abs(moveTo(s, 0.6).value - 0.6) < 1e-9)
+
+// A rule call that names a class is that class: a deposit detection's vessel rule calls CAA stays CAA at every value
+// (never the reject), and the Why row says so; an AT8 object the model does not count, lying on threads, is a thread
+// below the threshold and a tau+ neuron above it; a rule that only rejects says so.
+const caa = { ai_value: 'CAA', ai_subtype: '', ai_probability: 0.7, if_accepted: null, reason: 'rule:vascular_or_edge', rule: 'rule:vascular_or_edge' }
+for (let t = 0; t <= 100; t += 1) assert.deepEqual(startPick(caa, t / 100, 0.5, REJECT), { identity: 'CAA', subtype: null })
+assert.match(whyStart(caa, 0.2, 0.5), /^set by detection's vessel rule.*CAA at every threshold$/)
+assert.match(whyStart(caa, null, null), /vessel rule/)
+const thread = { ai_value: 'thread', ai_subtype: '', ai_probability: 0.3, if_accepted: ['tau+ neuron', 'pretangle'] as [string, string],
+  if_rejected: ['thread', ''] as [string, string], reason: 'rejected_by_model', rule: '' }
+assert.deepEqual(startPick(thread, 0.5, 0.5, 'not tau'), { identity: 'thread', subtype: null })
+assert.deepEqual(startPick(thread, 0.6, 0.5, 'not tau'), { identity: 'thread', subtype: null })
+assert.deepEqual(startPick(thread, 0.2, 0.5, 'not tau'), { identity: 'tau+ neuron', subtype: 'pretangle' })
+assert.match(whyStart(thread, 0.5, 0.5), /thread rule/)
+assert.equal(whyStart(thread, 0.2, 0.5), '')
+const tangleOnThreads = { ai_value: 'tau+ neuron', ai_subtype: 'pretangle', ai_probability: 0.8, if_accepted: ['tau+ neuron', 'pretangle'] as [string, string],
+  if_rejected: ['thread', ''] as [string, string], reason: 'accepted' }
+assert.deepEqual(startPick(tangleOnThreads, 0.9, 0.5, 'not tau'), { identity: 'thread', subtype: null })
+assert.match(whyStart({ ...speck, reason: 'rule:speck', rule: 'rule:speck' }, 0.1, 0.5), /a speck.*detection's rule, whatever the threshold/)
+assert.match(whyFound('label:thread/', 'rejected_by_model'), /thread rule/)
+assert.match(whyFound('label:CAA/', 'rule:vascular_or_edge'), /vessel rule/)
+assert.equal(whyFound('rejected', 'rejected_by_model'), reasonText('rejected_by_model'))
+// a shape rule left it out but its stain lies along threads: a thread at every value (a duplicate stays a reject)
+const smallThread = { ai_value: 'thread', ai_subtype: '', ai_probability: null, if_accepted: null, reason: 'rule:small', rule: 'rule:small' }
+for (const t of [0, 0.5, 1]) assert.deepEqual(startPick(smallThread, t, 0.5, 'not tau'), { identity: 'thread', subtype: null })
+assert.match(whyStart(smallThread, 0.2, 0.5), /^too small for a tau\+ neuron, and its stain lies along threads: set by detection's thread rule; a thread at every threshold$/)
+assert.match(whyStart({ ...smallThread, ai_value: 'not tau', reason: 'rule:duplicate', rule: 'rule:duplicate' }, 0.2, 0.5), /whatever the threshold/)
+// AI labels never show while annotating: an object only the AI checked starts as detection made it.
+for (const s of ['import: reference_6e10', 'AI reviewer', 'ai:round4']) assert.ok(isAiLabel(s), s)
+for (const s of ['Ann', '', 'aileen']) assert.ok(!isAiLabel(s), s)
+const check = (by: string[]) => ({ by, identity: 'plaque', subtype: '', time: 1 })
+assert.deepEqual(peopleChecks({ a: check(['import: x']), b: check(['ai:r4', 'Ann']), c: check(['Ben']) }), { b: check(['Ann']), c: check(['Ben']) })
 console.log('field start ok')

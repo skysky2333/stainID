@@ -39,6 +39,7 @@ import type { Slider } from './fieldStart'
 import { SLIDER_STEP, acceptedAt, lock, moveTo, slider, sliderText, startPick, unlock } from './fieldStart'
 import { LockIcon, ThresholdSlider } from './threshold'
 import { reasonText, whyStart } from './reasons'
+import { peopleChecks } from './aiLabels'
 import { BackToSets, CHOICE_IDS, CHOICE_NAMES, PIECE_IDS, PIECE_NAMES, tabNext, ClassLegend, LookLegend, MaskSwitch, ROUND_TITLE, RoundProgressLine, SaveButtons, SaveState, callText, changesText, draftKey, lookOf, maskName,
   polygonArea, polygonPoints, readDraft, simplifyPolygon, stepMask, unsureClass, useCandidateKeys, useFitScreen, useLeaveGuard, useLive, useSaveKeys,
   writeDraft } from './rounds'
@@ -195,15 +196,11 @@ function lighter(field: RoundField): RoundField {
 /** One object as the field draws it when it is not under the mouse (the layer of all of them is drawn once, not on
  *  every mouse move). */
 interface Drawn { key: string; x: number; y: number; r: number; points: string | null; colour: string; look: string; dash: boolean; diamond: boolean
-  others: boolean; reference: boolean; unsaved: boolean; fresh: boolean; faded: boolean; piece?: string }
+  others: boolean; unsaved: boolean; fresh: boolean; faded: boolean; piece?: string }
 
-/** Labels from outside the sessions (imported label sets, the earlier hand-drawn areas): the AI reference labels, shown
- *  apart from people's checks and from detection's calls. */
-export const isReference = (source: string) => source.startsWith('import:') || source === 'AI reviewer'
-/** Who checked an object, as the page says it: people by name, the reference labels as "AI reference labels". */
+/** Who checked an object, as the page says it: people by name (never the AI's labels: aiLabels.ts). */
 export function checkedByText(who: string[] = []): string {
-  const people = who.filter((w) => !isReference(w))
-  return [...people, ...(people.length < who.length ? ['AI reference labels'] : [])].join(', ')
+  return who.join(', ')
 }
 
 /** People's areas as SVG paths (rings in field px: an outer ring, then its holes). */
@@ -239,8 +236,6 @@ const ObjectLayer = memo(function ObjectLayer({ items, unit, dim }: { items: Dra
           {d.look === 'unsure' && <text className="unsure-mark" x={d.x} y={d.y + 4.5 * unit} fontSize={13 * unit} textAnchor="middle" fill={d.colour}
             stroke="#000" strokeWidth={2.5 * unit} paintOrder="stroke">?</text>}
           {d.others && <circle cx={d.x} cy={d.y} r={2.4 * unit} fill={PALETTE.markers.others} stroke="#000" strokeWidth={0.6 * unit} />}
-          {d.reference && <rect x={d.x - 2.4 * unit} y={d.y - 2.4 * unit} width={4.8 * unit} height={4.8 * unit}
-            fill={PALETTE.markers.reference} stroke="#000" strokeWidth={0.6 * unit} />}
           {d.piece && <text className="piece-mark" x={d.x} y={d.y + 3.5 * unit} fontSize={9 * unit} textAnchor="middle" fill="#fff" stroke="#000"
             strokeWidth={2.2 * unit} paintOrder="stroke">{d.piece === 'split' ? '½' : '∪'}</text>}
           {d.unsaved && !d.fresh && <circle className="unsaved-mark" cx={d.x + Math.max(6, d.r) * 0.75} cy={d.y - Math.max(6, d.r) * 0.75} r={2.6 * unit}
@@ -280,7 +275,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     for (const [id, c] of Object.entries(changes)) { if (c.label) out[id] = c.label; else delete out[id] }
     return out
   }, [saved, changes])
-  const [checked, setChecked] = useState<Record<string, RoundCheck>>(field.checked)
+  const [checked, setChecked] = useState<Record<string, RoundCheck>>(() => peopleChecks(field.checked))  // people's only: never the AI's labels
   const [openBy, setOpenBy] = useState<string[]>(field.open_by)
   const [doneBy, setDoneBy] = useState<string[]>(field.done_by)
   const [progress, setProgress] = useState<RoundProgress | null>(meta.progress)
@@ -341,7 +336,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   }, [areas.data, brush.reset])
 
   useLive(name, { tile_id: tile }, (live) => {
-    if (live.checked) setChecked(live.checked)
+    if (live.checked) setChecked(peopleChecks(live.checked))
     if (live.open_by) setOpenBy(live.open_by)
     if (live.done_by) setDoneBy(live.done_by)
     if (live.progress) setProgress(live.progress)
@@ -979,8 +974,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     const look = lookOf(vocabulary, meta.remove_class, call.pick.identity, call.pick.subtype)
     const poly = outlineOf(s)
     return { key: s.key, x: s.x, y: s.y, r: s.r, points: poly ? polygonPoints(poly) : null, colour: look.colour, look: look.look, dash: look.dash,
-      diamond: !!((s.added && !s.added.meta?.edit) || s.fresh), others: call.by === 'others' && !!call.who?.some((w) => !isReference(w)),
-      reference: call.by === 'others' && !!call.who?.length && call.who.every(isReference), unsaved: isUnsaved(s), fresh: !!s.fresh,
+      diamond: !!((s.added && !s.added.meta?.edit) || s.fresh), others: call.by === 'others' && !!call.who?.length, unsaved: isUnsaved(s), fresh: !!s.fresh,
       faded: !!s.candidate?.excluded, piece: s.added?.meta?.edit }
   }), [own, mine, fresh, checked, masks, prompts, precise?.key, precise?.points, changes, vocabulary, meta.remove_class, start])  // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1275,8 +1269,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
                 <li><b>Nothing is saved until you press Save</b> (a small gold dot marks each object you changed). <b>Save and continue</b> when the field
                   looks right: what you left as it is counts as checked by you, and the next field opens.</li>
                 <li><span className="look-swatch" style={{ borderColor: PALETTE.markers.others, background: PALETTE.markers.others, borderRadius: '50%' }} /> a small
-                  blue dot: someone else checked it · <span className="look-swatch" style={{ borderColor: PALETTE.markers.reference, background: PALETTE.markers.reference }} />
-                  {' '}a small square: the AI reference labels have it (imported label sets, not a person in a session).</li>
+                  blue dot: someone else checked it.</li>
                 <li>Scroll to zoom; drag (or hold the middle button) to move the picture.</li>
               </ol>
               {sam && !samReady && <p className="small muted">Preparing one-click outlines for this field… the first clicks may take a few seconds.</p>}
@@ -1392,7 +1385,7 @@ function TargetCard({ s, call, meta, precise, px, outline, choices, added, unsav
   const look = lookOf(vocabulary, meta.remove_class, call.pick.identity, call.pick.subtype)
   const c = s.candidate
   const title = s.fresh && !s.fresh.removed ? 'New candidate — press a class key' : callText(vocabulary, call.pick.identity, call.pick.subtype, typesAsked)
-  const who = call.by === 'me' ? (unsaved ? 'your change, not saved yet' : 'your call') : call.by === 'others' ? (call.who?.every(isReference) ? 'AI reference labels' : `checked by ${checkedByText(call.who)}`)
+  const who = call.by === 'me' ? (unsaved ? 'your change, not saved yet' : 'your call') : call.by === 'others' ? `checked by ${checkedByText(call.who)}`
     : call.by === 'ai' ? 'detection’s call' : 'added now'
   return (
     <div className={`card side-block round-target look-${look.look}`} style={{ borderLeftColor: look.look === 'class' || look.look === 'unsure' ? look.colour : undefined }}>
@@ -1400,7 +1393,7 @@ function TargetCard({ s, call, meta, precise, px, outline, choices, added, unsav
         <b className="ellipsis">{title}</b></div>
       <dl className="target-facts small">
         <dt>Now</dt><dd>{who}</dd>
-        {c && <><dt>Detection</dt><dd>{callText(vocabulary, c.ai_value, c.ai_subtype, typesAsked)}{c.decision !== 'accepted' && <span className="muted">
+        {c && <><dt>Detection</dt><dd>{callText(vocabulary, c.ai_value, c.ai_subtype, typesAsked)}{c.decision !== 'accepted' && c.ai_value === meta.remove_class && <span className="muted">
           {' '}(rejected{c.reason?.startsWith('rule:') ? `: ${reasonText(c.reason)}` : ''})</span>}</dd>
           <dt>Score</dt><dd>{c.ai_probability != null ? fmt(c.ai_probability, 2) : '—'}</dd></>}
         {why && <><dt>Why</dt><dd className="target-why">{why}</dd></>}

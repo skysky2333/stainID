@@ -106,6 +106,12 @@ def decided_now(stain: str, stale_ok: bool = False) -> decisions.State:
     return decisions.state(state.project, stain, state.tiles, stale_ok)
 
 
+def decided_by_people(stain: str, stale_ok: bool = False) -> decisions.State:
+    """The decisions Fix the field shows and starts from: people's only, never the AI's labels (`store.is_ai_label`)."""
+    state = get_state()
+    return decisions.people(state.project, stain, state.tiles, stale_ok)
+
+
 def store_ready(stain: str, tiles: pd.DataFrame) -> pd.DataFrame:
     """The tiles of this stain whose core has candidates (and a picture)."""
     tiles = tiles[tiles.stain == stain] if not tiles.empty else tiles
@@ -428,10 +434,15 @@ def _field_shapes(meta: dict, tile: dict) -> tuple[list[dict], dict[str, list]]:
             return kept[1], kept[2]
     objects, masks = [], {}
     passing = starting.if_accepted(state.project, meta["stain"], str(tile["core_id"]))
+    failing = starting.if_rejected(state.project, meta["stain"], str(tile["core_id"]))
+    reject = candidate_store.negative_class(words)
     for r in _field_candidates(meta, tile).rename(columns={"class": "klass"}).itertuples():
         identity, subtype = candidate_store.ai_call(words, r.decision, r.klass, r.subtype, r.reason)
         would = passing.get(r.candidate_id)
         if_accepted = list(candidate_store.ai_call(words, *would)) if would is not None else None
+        below = failing.get(r.candidate_id)
+        below = list(candidate_store.ai_call(words, *below)) if below is not None else None
+        if_rejected = below if below is not None and below[0] != reject else None  # a look-alike below the threshold (an AT8 thread)
         found_masks, default = candidate_store.choices(r)  # [the stain's, SAM small, medium, large]: what Tab cycles through
         shapes = [_shape(m) for m in found_masks]
         masks[r.candidate_id] = shapes
@@ -440,7 +451,7 @@ def _field_shapes(meta: dict, tile: dict) -> tuple[list[dict], dict[str, list]]:
                         "ai_probability": None if pd.isna(r.probability) else round(float(r.probability), 3), "decision": r.decision, "reason": r.reason,
                         "masks": [m if i == default else None for i, m in enumerate(shapes)], "mask": default,
                         "more_masks": sum(m is not None for i, m in enumerate(shapes) if i != default),
-                        "if_accepted": if_accepted, "rule": would[3] if would is not None else (r.reason if str(r.reason).startswith("rule:") else ""),
+                        "if_accepted": if_accepted, "if_rejected": if_rejected, "rule": would[3] if would is not None else (r.reason if str(r.reason).startswith("rule:") else ""),
                         "threshold": None if pd.isna(getattr(r, "threshold", np.nan)) else round(float(r.threshold), 3)})
     with _OBJECTS_LOCK:
         _OBJECTS[key] = (words, objects, masks)
@@ -463,7 +474,7 @@ def excluded_ids(meta: dict, ids) -> set[str]:
             continue
     out: set[str] = set()
     for core_id, group in by_core.items():
-        shares = excluded_areas.shares(get_state().project, meta["stain"], core_id, group)
+        shares = excluded_areas.shares(get_state().project, meta["stain"], core_id, group, ai=False)  # people's areas, not the AI reviewer's
         out |= {c for c, v in shares.items() if v >= excluded_areas.EXCLUDED_AT}
     return out
 
@@ -555,7 +566,7 @@ def open_field(meta: dict, tile_id: str, person: str):
             return made
     found = _field_candidates(meta, tile)
     objects = field_objects(meta, tile)
-    decided = decisions.State() if practice else decided_now(meta["stain"])
+    decided = decisions.State() if practice else decided_by_people(meta["stain"])  # never the AI's labels
     x0, y0 = render.crop_origin(tile, state.project.context_px)
     labels = store.current(root())
     mine = labels[(labels.source == person) & (labels.tile_id == tile_id) & (labels.stain == meta["stain"])]
@@ -629,7 +640,7 @@ def live(meta: dict, body: Live, person: str) -> dict:
         out |= {"open_by": sorted(tiles_held(meta).get(body.tile_id, set()) - {person}),
                 "done_by": sorted(finished.get(body.tile_id, set()) - {person})}
         if rounds.round_of(meta) == 2:
-            out["checked"] = checks(_field_candidates(meta, tile), decided_now(meta["stain"], stale_ok=True))
+            out["checked"] = checks(_field_candidates(meta, tile), decided_by_people(meta["stain"], stale_ok=True))
     return out | {"progress": progress(meta)}
 
 
@@ -833,7 +844,8 @@ def _confirmations(meta: dict, tile: dict, person: str, mine: pd.DataFrame) -> l
         identity, subtype = detected
         start = starts.get(r.candidate_id)
         if start is not None and start.get("threshold") is not None and abs(threshold - start["threshold"]) > 1e-9:
-            identity, subtype = starting.start_call(start.get("ai_probability"), start.get("if_accepted"), threshold, detected, reject)
+            identity, subtype = starting.start_call(start.get("ai_probability"), start.get("if_accepted"), threshold, detected, reject,
+                                                    start.get("if_rejected"))
         if key in said:
             positive = said[key]
         else:  # left as it started (detection's call, at the threshold they set): that is this person's answer
@@ -944,7 +956,7 @@ def field_annotated(name: str, tile_id: str, request: Request, person: str = Dep
     x0, y0 = render.crop_origin(tile, get_state().project.context_px)
     x1 = int(tile["x_px"]) + int(tile["width_px"]) + get_state().project.context_px
     y1 = int(tile["y_px"]) + int(tile["height_px"]) + get_state().project.context_px
-    return store_view.people_areas(get_state().project, str(tile["core_id"]), str(tile["stain"]), (x0, y0), (x0, y0, x1, y1))
+    return store_view.people_areas(get_state().project, str(tile["core_id"]), str(tile["stain"]), (x0, y0), (x0, y0, x1, y1), ai=False)
 
 
 @router.get("/annotate/{name}/fields/{tile_id}/areas")

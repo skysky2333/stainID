@@ -142,9 +142,15 @@ def all_edits(project) -> dict[tuple[str, str], list[Edit]]:
     return cache.memo(("exclusion edits", str(project.root)), [_log(project), *_tile_paths(project)], make)
 
 
-def edits(project, core_id: str, stain: str) -> list[Edit]:
-    """The edits of one core image and stain, oldest first (the history: who, when, which type)."""
-    return all_edits(project).get((stain, str(core_id)), [])
+def edits(project, core_id: str, stain: str, ai: bool = True) -> list[Edit]:
+    """The edits of one core image and stain, oldest first (the history: who, when, which type). `ai` False: people's
+    only, without the AI reviewer's (`labels.store.is_ai_label`), as the annotation pages start from them."""
+    found = all_edits(project).get((stain, str(core_id)), [])
+    if ai:
+        return found
+    from stainid.labels.store import is_ai_label  # noqa: PLC0415
+
+    return [e for e in found if not is_ai_label(e.source)]
 
 
 # ---------------------------------------------------------------- the layer
@@ -329,9 +335,9 @@ def digests(project, stain: str, core_ids) -> dict[str, str | None]:
     return {str(c): digest(project, str(c), stain) for c in core_ids}
 
 
-def edits_digest(project, core_id: str, stain: str) -> str:
+def edits_digest(project, core_id: str, stain: str, ai: bool = True) -> str:
     """People's edits of a core image, as a short text: changes exactly when one is saved."""
-    keys = [e.key() for e in edits(project, core_id, stain)]
+    keys = [e.key() for e in edits(project, core_id, stain, ai)]
     return hashlib.sha1(json.dumps(keys, default=str).encode()).hexdigest()[:16]
 
 
@@ -400,13 +406,13 @@ def _grid_shape(project, core_id: str, stain: str) -> tuple[int, int] | None:
     return None
 
 
-def annotated(project, core_id: str, stain: str) -> Annotated | None:
+def annotated(project, core_id: str, stain: str, ai: bool = True) -> Annotated | None:
     """People's areas of one core image and stain (every edit in time order, the latest winning); None when the image
-    is unknown. Only training and evaluation read them."""
+    is unknown. Only training and evaluation read them. `ai` False: without the AI reviewer's (the annotation pages)."""
     shape = _grid_shape(project, core_id, stain)
     if shape is None:
         return None
-    found = edits(project, core_id, stain)
+    found = edits(project, core_id, stain, ai)
     codes = np.zeros(shape, np.uint8)
     auto = automatic(project, core_id, stain) if found else None
     final = auto.codes.copy() if auto is not None and auto.codes.shape == shape else np.zeros(shape, np.uint8)  # people's say so far
@@ -420,7 +426,7 @@ def annotated(project, core_id: str, stain: str) -> Annotated | None:
                 codes[area], final[area] = CLEARED, COUNTED
             else:
                 codes[area] = final[area] = _painted_code(kind)
-    return Annotated(codes, found, edits_digest(project, core_id, stain))
+    return Annotated(codes, found, edits_digest(project, core_id, stain, ai))
 
 
 def agreement(auto: "Layer", people: Annotated) -> dict:
@@ -450,15 +456,15 @@ _SHARES_LIMIT = 100_000  # every core image and stain of a cohort (a pass over a
 _LOCK = threading.Lock()
 
 
-def _layer(project, core_id: str, stain: str, people: bool) -> Layer | None:
+def _layer(project, core_id: str, stain: str, people: bool, ai: bool = True) -> Layer | None:
     path = mask_path(project, core_id, stain)
     made_from = digest(project, core_id, stain)
     if made_from is None:
         return None
-    found = edits(project, core_id, stain) if people else []
+    found = edits(project, core_id, stain, ai) if people else []
     if people:
-        made_from = made_from + ":" + edits_digest(project, core_id, stain)
-    key = (str(project.root), stain, str(core_id), people)
+        made_from = made_from + ":" + edits_digest(project, core_id, stain, ai)
+    key = (str(project.root), stain, str(core_id), people, ai or not people)
     with _LOCK:
         kept = _LAYERS.get(key)
         if kept is not None and kept.digest == made_from:
@@ -487,11 +493,13 @@ def automatic(project, core_id: str, stain: str) -> Layer | None:
     return _layer(project, core_id, stain, people=False)
 
 
-def final_say(project, core_id: str, stain: str) -> Layer | None:
+def final_say(project, core_id: str, stain: str, ai: bool = True) -> Layer | None:
     """People's final say over detection's areas: detection's areas with every edit on top in time order (a painted
     part excluded with its type, a cleared part counted). It is the label set for training and evaluating (objects there
-    are left out of training and scoring, `drop_excluded`), never an analysis input; None before stage 2."""
-    return _layer(project, core_id, stain, people=True)
+    are left out of training and scoring, `drop_excluded`), never an analysis input; None before stage 2. `ai` False
+    (the annotation pages: Mark bad areas, the brush, the faded objects of Fix the field): without the AI reviewer's
+    edits (`labels.store.is_ai_label`), detection's areas and people's edits only."""
+    return _layer(project, core_id, stain, people=True, ai=ai)
 
 
 _TISSUE: OrderedDict[tuple, np.ndarray] = OrderedDict()  # (image, its signature, shape) -> tissue cells
@@ -638,19 +646,21 @@ def _known(project, stain: str, core_id: str, quick: tuple | None = None) -> dic
     return kept[1]
 
 
-def shares(project, stain: str, core_id: str, ids, quick: tuple | None = None) -> dict[str, float]:
+def shares(project, stain: str, core_id: str, ids, quick: tuple | None = None, ai: bool = True) -> dict[str, float]:
     """The excluded share of these candidates of one core in people's final say (`final_say`, `Layer.fractions` of their stain
     outlines; a candidate the store no longer has by the cell at the position in its id); empty before stage 2. Only
-    the candidates asked about are worked out (and kept until the layer or the store changes)."""
+    the candidates asked about are worked out (and kept until the layer or the store changes). `ai` False: in the final
+    say without the AI reviewer's edits (`final_say`), as the annotation pages draw it."""
     from stainid import candidates  # noqa: PLC0415
 
     known = _known(project, stain, core_id, quick)
     if known is None:
         return {}
     ids = [str(c) for c in dict.fromkeys(ids)]
-    missing = [c for c in ids if ("share", c) not in known]
+    tag = "share" if ai else "people share"
+    missing = [c for c in ids if (tag, c) not in known]
     if missing:
-        layer = final_say(project, core_id, stain)
+        layer = final_say(project, core_id, stain, ai=ai)
         rows = candidates.read_core(project, stain, core_id, ["candidate_id", "x_core", "y_core", "outline"])
         rows = rows[rows.candidate_id.isin(missing)].drop_duplicates("candidate_id") if len(rows) else rows
         found = dict(zip(rows.candidate_id, layer.fractions(rows.outline.tolist(), rows.x_core, rows.y_core))) if len(rows) else {}
@@ -660,8 +670,8 @@ def shares(project, stain: str, core_id: str, ids, quick: tuple | None = None) -
             codes = layer.at(xy[:, 0], xy[:, 1])
             found |= {c: float(code not in (COUNTED, OUTSIDE)) for c, code in zip(gone, codes)}
         with _LOCK:
-            known.update({("share", c): float(v) for c, v in found.items()})
-    return {c: known[("share", c)] for c in ids if ("share", c) in known}
+            known.update({(tag, c): float(v) for c, v in found.items()})
+    return {c: known[(tag, c)] for c in ids if (tag, c) in known}
 
 
 def codes_at(project, stain: str, core_id: str, xs, ys, quick: tuple | None = None) -> np.ndarray:

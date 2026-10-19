@@ -544,6 +544,9 @@ export interface RoundObject<Shape = number[][]> {
   /** its call (identity, subtype) when the acceptance threshold counts it (score >= threshold, a missing score 0:
    *  labels/starting.py); null in an excluded area, where detection's call stays */
   if_accepted?: [string, string] | null
+  /** its call below the threshold when that is a look-alike detection names (an AT8 object lying on threads is a
+   *  thread), null for a reject */
+  if_rejected?: [string, string] | null
   /** the rule that kept it out of detection's own count ("rule:speck", "rule:vascular_or_edge" …), else "" */
   rule?: string
   /** detection's threshold for it (the model's cut-off) */

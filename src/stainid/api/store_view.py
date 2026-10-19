@@ -28,8 +28,12 @@ def available(project, core_id: str, stain: str) -> bool:
     return candidates.path(project, stain, core_id, "candidates").exists()
 
 
+LOOKALIKE = "lookalike"  # the viewer's class of a candidate detection called a named look-alike (CAA, an AT8 thread)
+
+
 def model_class(stain: str, frame: pd.DataFrame) -> np.ndarray:
-    """The viewer's class of each candidate (its colours and legend): the same names as for the current outputs."""
+    """The viewer's class of each candidate (its colours and legend): the same names as for the current outputs
+    ("rejected" for detection's rejects; a look-alike is set apart by `found`)."""
     accepted = frame.decision.eq("accepted").to_numpy()
     out = np.full(len(frame), "rejected", dtype=object)
     if stain == "NeuN":
@@ -45,16 +49,33 @@ def model_class(stain: str, frame: pd.DataFrame) -> np.ndarray:
 
 def found(project, core_id: str, stain: str) -> pd.DataFrame:
     """Every candidate of the core image as the viewer's object rows (x, y in core pixels), with its label class (`class`,
-    `subtype`: label-vocabulary ids, empty for rejected ones), so the viewer colours it as every other page does."""
+    `subtype`: label-vocabulary ids, empty for rejected ones), so the viewer colours it as every other page does. A
+    candidate detection called a named look-alike (`candidate_store.lookalike`: a deposit on a vessel wall is CAA) is
+    that class, `model_class` "lookalike": drawn solid in the class's colour, not dotted as a reject."""
+    from stainid.labels import candidate_store  # noqa: PLC0415
+    from stainid.labels import vocabulary as vocab  # noqa: PLC0415
+
     frame = candidates.read_core(project, stain, core_id, COLUMNS)
     if frame.empty:
         return pd.DataFrame(columns=["x", "y", "radius_px", "model_class", "probability", "area_um2", "reason", "candidate_id", "class", "subtype"])
     accepted = frame.decision.eq("accepted")
     text = lambda column: frame[column].fillna("").astype(str).where(accepted, "") if column in frame else ""  # noqa: E731
+    classes, subtypes, shown = text("class"), text("subtype"), model_class(stain, frame)
+    if "class" in frame and (~accepted).any():
+        words = vocab.of(project, stain)
+        reasons = frame.reason.fillna("").astype(str) if "reason" in frame else pd.Series("", index=frame.index)
+        pairs = pd.Series(list(zip(frame["class"].fillna("").astype(str), reasons)), index=frame.index)[~accepted]
+        named = {pair: candidate_store.lookalike(words, *pair) for pair in set(pairs)}
+        found_named = pairs.map(named)
+        found_named = found_named[found_named != ""]
+        if len(found_named):
+            classes = classes.copy()
+            classes.loc[found_named.index] = found_named
+            shown[frame.index.get_indexer(found_named.index)] = LOOKALIKE
     return pd.DataFrame({"x": frame.x_core.round(1), "y": frame.y_core.round(1), "radius_px": frame.radius_px.round(1),
-                         "model_class": model_class(stain, frame), "probability": pd.to_numeric(frame.probability, errors="coerce").round(3),
+                         "model_class": shown, "probability": pd.to_numeric(frame.probability, errors="coerce").round(3),
                          "area_um2": frame.area_um2.round(1), "reason": frame.reason.fillna(""), "candidate_id": frame.candidate_id,
-                         "class": text("class"), "subtype": text("subtype")})
+                         "class": classes, "subtype": subtypes})
 
 
 OUTLINE_CHOICES = ("default", "stain", "sam", "sam0", "sam1", "sam2")  # which outline the core viewer draws for every candidate
@@ -285,20 +306,21 @@ def field_areas(project, tile: dict) -> dict:
 
     x0, y0 = frames.field_origin(tile, project.context_px)
     x1, y1 = int(tile["x_px"]) + int(tile["width_px"]) + project.context_px, int(tile["y_px"]) + int(tile["height_px"]) + project.context_px
-    return current_areas(project, str(tile["core_id"]), str(tile["stain"]), (x0, y0, x1, y1))
+    return current_areas(project, str(tile["core_id"]), str(tile["stain"]), (x0, y0, x1, y1), ai=False)
 
 
-def current_areas(project, core_id: str, stain: str, box: tuple[int, int, int, int] | None = None) -> dict:
+def current_areas(project, core_id: str, stain: str, box: tuple[int, int, int, int] | None = None, ai: bool = True) -> dict:
     """Each brush type's current area, as the one brush (field tool and "Mark bad areas") starts from it: detection's
     area of that type with every edit people saved merged in (`exclusions.final_say`, one region set per type), a
     white-on-transparent PNG per type (data URL, one pixel per layer cell) and where it lies (`x`, `y`, `width`,
     `height`, in px from the box's corner: the whole core image without a box). The brush adds to and takes from these
-    areas; nothing here is an analysis input."""
+    areas; nothing here is an analysis input. `ai` False (the annotation pages): without the AI reviewer's areas
+    (`labels.store.is_ai_label`), detection's areas and people's edits only."""
     import base64  # noqa: PLC0415
 
     import cv2  # noqa: PLC0415
 
-    layer = excluded_areas.final_say(project, core_id, stain)
+    layer = excluded_areas.final_say(project, core_id, stain, ai=ai)
     if layer is None:
         return {"status": "not_made", "kinds": {}}
     x0, y0, x1, y1 = box if box is not None else (0, 0, layer.codes.shape[1] * layer.scale, layer.codes.shape[0] * layer.scale)
@@ -319,11 +341,14 @@ def current_areas(project, core_id: str, stain: str, box: tuple[int, int, int, i
 
 
 def people_areas(project, core_id: str, stain: str, origin: tuple[int, int] = (0, 0),
-                 box: tuple[float, float, float, float] | None = None) -> dict:
+                 box: tuple[float, float, float, float] | None = None, ai: bool = True) -> dict:
     """People's areas of a core image for the Annotations layers (`stainid.exclusions.annotated`; they train and evaluate
     models, the analysis never reads them): each painted or cleared area as polygons (core px less `origin`; only those
-    reaching into `box`, x0 y0 x1 y1 core px), how they compare with detection's areas, and the edits (who, when, type)."""
-    found = excluded_areas.annotated(project, core_id, stain)
+    reaching into `box`, x0 y0 x1 y1 core px), how they compare with detection's areas, and the edits (who, when, type,
+    `ai`: the AI reviewer's). `ai` False (the annotation pages): people's own only (`labels.store.is_ai_label`)."""
+    from stainid.labels.store import is_ai_label  # noqa: PLC0415
+
+    found = excluded_areas.annotated(project, core_id, stain, ai=ai)
     if found is None:
         return {"regions": [], "agreement": None, "edits": []}
     regions = found.regions()
@@ -340,4 +365,4 @@ def people_areas(project, core_id: str, stain: str, origin: tuple[int, int] = (0
         regions = [{"kind": r["kind"], "rings": [[[round(x - ox, 1), round(y - oy, 1)] for x, y in ring] for ring in r["rings"]]} for r in regions]
     auto = excluded_areas.automatic(project, core_id, stain)
     return {"regions": regions, "agreement": excluded_areas.agreement(auto, found) if auto is not None else None,
-            "edits": [{"person": e.source, "time": e.time, "kinds": sorted(set(e.kinds))} for e in found.edits]}
+            "edits": [{"person": e.source, "time": e.time, "kinds": sorted(set(e.kinds)), "ai": is_ai_label(e.source)} for e in found.edits]}

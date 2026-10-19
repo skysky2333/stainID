@@ -3,15 +3,20 @@
    The slider starts at detection's own threshold. Moving it re-decides, live, which objects start accepted (solid, in
    the type detection would give them: `if_accepted`) and which start rejected (dotted grey), as stage 4 would at that
    threshold: an object passes where p >= the threshold (a missing score is 0) and then gets stage 4's call, its rules
-   after the model included (a speck stays rejected, a vessel deposit is CAA). Objects a rule decided, or in an excluded
-   area, keep detection's call at every value (`if_accepted` null). So raising it never counts more, and at 0 every
+   after the model included (a speck stays rejected, a vessel deposit is CAA); below it, stage 4's call for an object the
+   model does not count (`if_rejected`: an AT8 object lying on threads is a thread; else rejected). Objects a rule
+   decided, or in an excluded area, keep detection's call at every value (`if_accepted` null: CAA stays CAA, solid in
+   CAA's colour and counted as CAA). A look-alike a rule names is a class, not a reject. So raising it never counts more, and at 0 every
    object no rule decided counts; the side panel says which rule decides an object (reasons.ts, `whyStart`). It locks on "Start editing" (or Enter) and by itself on the first edit of any kind (a class
    key, Del, `, a mask, a precise edit, a split, a merge, a brush stroke); locked, it does not move. "Reset field"
    (after a confirmation) discards the field's unsaved edits and unlocks it. The locked value is saved with the field
    (a `threshold` label): a training and evaluation signal, never an analysis input (labels/starting.py has the same
    rule on the server, for the objects left as they started when the field is finished). */
 
-export interface StartObject { ai_value: string; ai_subtype: string; ai_probability: number | null; if_accepted?: [string, string] | null; excluded?: boolean }
+export interface StartObject {
+  ai_value: string; ai_subtype: string; ai_probability: number | null; if_accepted?: [string, string] | null; if_rejected?: [string, string] | null
+  excluded?: boolean
+}
 export interface Pick2 { identity: string; subtype: string | null }
 export interface Slider { value: number; locked: boolean; detection: number }
 export const SLIDER_STEP = 0.01
@@ -25,11 +30,13 @@ export const passes = (p: number, threshold: number) => p >= threshold - 1e-9
 export const scoreOf = (o: { ai_probability: number | null }) => (o.ai_probability == null || Number.isNaN(o.ai_probability) ? 0 : o.ai_probability)
 
 /** Where an object starts at threshold `value`: detection's call at detection's own threshold and in an excluded area
- *  (`if_accepted` null); else its `if_accepted` call where its score is at least `value`, `reject` below. */
+ *  (`if_accepted` null); else its `if_accepted` call where its score is at least `value`, below its `if_rejected`
+ *  look-alike (an AT8 thread) or else `reject`. */
 export function startPick(o: StartObject, value: number, detection: number, reject: string): Pick2 {
   const own: Pick2 = { identity: o.ai_value, subtype: o.ai_subtype || null }
   if (close(value, detection) || !o.if_accepted || o.excluded) return own  // an excluded area: as detection called it
-  return passes(scoreOf(o), value) ? { identity: o.if_accepted[0], subtype: o.if_accepted[1] || null } : { identity: reject, subtype: null }
+  if (passes(scoreOf(o), value)) return { identity: o.if_accepted[0], subtype: o.if_accepted[1] || null }
+  return o.if_rejected ? { identity: o.if_rejected[0], subtype: o.if_rejected[1] || null } : { identity: reject, subtype: null }
 }
 
 /** How many of these objects start accepted at `value` (rule-decided ones as detection called them). */

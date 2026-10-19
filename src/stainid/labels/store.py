@@ -25,6 +25,19 @@ import pandas as pd
 from stainid.labels import vocabulary as vocab
 from stainid.labels.vocabulary import Vocabulary
 
+AI_REVIEWER = "AI reviewer"  # the earlier AI-review rounds' hand-drawn areas (`stainid.exclusions.REVIEWER`)
+
+
+def is_ai_label(source) -> bool:
+    """Whether a label (object or area) is the AI's, not a person's: the imported reference sets ("import: …"), the
+    earlier AI reviewer ("AI reviewer") and AI review sessions (accounts "ai:<name>"). The annotation pages (Fix the
+    field, Mark bad areas, the brush, the tutorial) never show them nor start from them: people correct the pipeline's
+    output, not the AI's. The Labels and Models pages and the Cores view's Annotations layer keep them, marked as AI;
+    training and evaluation take them as their session is included. The page has the same rule
+    (webapp/src/labels/aiLabels.ts)."""
+    text = "" if source is None else str(source)
+    return text.startswith("import:") or text == AI_REVIEWER or text.startswith("ai:")
+
 COLUMNS = ["id", "source", "stain", "task", "tile_id", "x", "y", "value", "points", "session", "confirmed", "time", "deleted", "subtype", "candidate",
            "meta"]  # meta: where a label comes from (a split or merge, `labels.objectedit`), else None
 _CACHE: dict[Path, tuple[tuple[int, int], pd.DataFrame]] = {}

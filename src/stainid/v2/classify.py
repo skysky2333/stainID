@@ -7,6 +7,14 @@ candidate only the new sources found looks like an artifact (`rule:edge`, `rule:
 where it re-labelled an accepted one (`rule:speck`, `rule:vascular_or_edge`, `rule:duplicate`); each can be switched off
 or retuned under `v2.rules` in stainid.yaml. Re-running this stage after a new model, cut-off or rule takes minutes.
 
+A rule that names a class of the stain's vocabulary makes the candidate that class, a look-alike, not a reject
+(`CLASS_RULES`: a deposit on a vessel wall is CAA, an AT8 candidate lying on threads a thread); so is every AT8
+candidate not counted whose stain lies along threads (`THREAD`: the model's rejects and those a shape rule left out,
+too small or too irregular for a cell body), unless it is no object of its own (`REJECT_RULES`: a duplicate of a
+counted one, in an excluded area, a rim along a tissue edge, on a fold). The rest are the stain's reject (`NEGATIVE`):
+a speck (6E10 has no speck class), the model's rejects. The analysis counts accepted ones only; CAA is counted apart
+(`v2_vascular_or_edge_count`, stage 5), never as plaques.
+
 Also here: assembling the candidate store (proposals + outlines + calls) of a core image.
 """
 from __future__ import annotations
@@ -25,6 +33,12 @@ from stainid.v2.params import stage_params
 MODEL_KEY = {"NeuN": "neun", "6E10": "amyloid", "AT8": "tau"}
 POSITIVE = {"NeuN": "NeuN+ neuron", "6E10": "plaque", "AT8": "tau+ neuron"}
 NEGATIVE = {"NeuN": "not a neuron", "6E10": "not a plaque", "AT8": "not tau"}
+# the rules whose call is a look-alike class of the stain's vocabulary (labels.vocabulary: CAA is 6E10's Q, thread AT8's
+# E), not a reject; the label pages show and record them as that class (labels.candidate_store.ai_call)
+CLASS_RULES = {"rule:vascular_or_edge": "CAA", "rule:thread_like": "thread"}
+THREAD = "thread"  # an AT8 candidate not counted, its stain mostly along threads (thread_fraction >= 0.5)
+# rules saying a candidate is no object of its own: whatever class it has, it is the stain's reject
+REJECT_RULES = frozenset({"rule:duplicate", "rule:excluded", "rule:edge", "rule:fold"})
 LEGACY_SOURCES = {"NeuN": ("profile", "cellpose"), "6E10": ("legacy",), "AT8": ("ring", "dense")}  # what the old pipeline proposed
 CALL_COLUMNS = ["candidate_id", "probability", "threshold", "model_id", "decision", "reason", "class", "subtype"]
 
@@ -184,16 +198,17 @@ def call(project, stain: str, frame: pd.DataFrame, model: Model, rules: dict) ->
         passed &= ~duplicate
         subtype[passed] = types[passed]
         threadish = _number(frame, "thread_fraction") >= 0.5
-        klass[~passed & threadish] = "thread"
+        klass[~passed & threadish & ~np.isin(reason.astype(str), list(REJECT_RULES))] = THREAD  # not a duplicate, an excluded area, a rim, a fold
     elif stain == "6E10":
         diameter = _number(frame, "m_equivalent_diameter_um")
         speck = passed & (diameter <= float(rules.get("speck_diameter_um", 10.0)))
         reason[speck] = "rule:speck"
         vascular = passed & ~speck & (_number(frame, "lumen_contact_fraction") >= float(rules.get("lumen_contact", 0.25)))
         reason[vascular] = "rule:vascular_or_edge"
-        klass[vascular] = "CAA"
         passed &= ~speck & ~vascular
         subtype[passed] = types[passed]
+    for rule, named in CLASS_RULES.items():
+        klass[reason == rule] = named
     klass[passed] = POSITIVE[stain]
     reason[passed] = "accepted"
     reason[(reason == "") & scored] = "rejected_by_model"

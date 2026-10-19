@@ -150,7 +150,7 @@ def core_payload(meta: dict, core_id: str, person: str) -> dict:
         layer = store_view.excluded_info(state.project, core_id, stain)
         by = sorted(found.get((core_id, stain), set()))
         images.append({"stain": stain, "picture": picture, "excluded": layer, "checked_by": by, "checked_by_me": person in by,
-                       "edits": len(exclusions.edits(state.project, core_id, stain))})
+                       "edits": len(exclusions.edits(state.project, core_id, stain, ai=False))})
     others = sorted(held().get(core_id, set()) - {person})
     return {"core_id": core_id, "images": images, "second_check": core_id in set(meta.get("second") or []), "open_by": others,
             "progress": progress(meta), "pixel_size_um": state.project.pixel_size_um}
@@ -250,7 +250,7 @@ def core_annotated(name: str, core_id: str, stain: str, request: Request, person
     meta = areas_meta(name, request)
     if stain not in _core(meta, core_id):
         raise HTTPException(404, f"{core_id} has no {stain} image in this session")
-    return store_view.people_areas(get_state().project, core_id, stain)
+    return store_view.people_areas(get_state().project, core_id, stain, ai=False)  # people's own: never the AI reviewer's
 
 
 @router.get("/annotate/{name}/cores/{core_id}/{stain}/areas")
@@ -260,21 +260,29 @@ def core_areas(name: str, core_id: str, stain: str, request: Request, person: st
     meta = areas_meta(name, request)
     if stain not in _core(meta, core_id):
         raise HTTPException(404, f"{core_id} has no {stain} image in this session")
-    return store_view.current_areas(get_state().project, core_id, stain)
+    return store_view.current_areas(get_state().project, core_id, stain, ai=False)  # the automatic layer and people's edits only
 
 
 @router.get("/annotate/{name}/cores/{core_id}/{stain}/objects")
 def core_objects(name: str, core_id: str, stain: str, request: Request, person: str = Depends(annotator)) -> dict:
     """Detection's objects of a core image for context in "Mark bad areas" (they cannot be changed there): rows of
-    [x, y, accepted, rings] in core pixels (the stain's default outline, `candidates.outline_rings`)."""
+    [x, y, accepted, rings] in core pixels (the stain's default outline, `candidates.outline_rings`); `accepted`: a class,
+    counted or a look-alike detection names (CAA: `candidate_store.lookalike`), drawn solid; a reject is dotted."""
     from stainid import candidates  # noqa: PLC0415
+    from stainid.labels import candidate_store  # noqa: PLC0415
+    from stainid.labels import vocabulary as vocab  # noqa: PLC0415
 
     meta = areas_meta(name, request)
     if stain not in _core(meta, core_id):
         raise HTTPException(404, f"{core_id} has no {stain} image in this session")
-    frame = candidates.read_core(get_state().project, stain, core_id,
-                                 ["x_core", "y_core", "decision", "outline", "sam_outline", "sam_status", "outline_default"])
-    rows = [[round(float(r["x_core"]), 1), round(float(r["y_core"]), 1), r.get("decision") == "accepted", candidates.outline_rings(r)]
+    project = get_state().project
+    frame = candidates.read_core(project, stain, core_id,
+                                 ["x_core", "y_core", "decision", "reason", "class", "outline", "sam_outline", "sam_status", "outline_default"])
+    words = vocab.of(project, stain)
+    pairs = {(str(r.get("class") or ""), str(r.get("reason") or "")) for r in frame.to_dict("records")} if len(frame) else set()
+    named = {pair for pair in pairs if candidate_store.lookalike(words, *pair)}
+    rows = [[round(float(r["x_core"]), 1), round(float(r["y_core"]), 1),
+             r.get("decision") == "accepted" or (str(r.get("class") or ""), str(r.get("reason") or "")) in named, candidates.outline_rings(r)]
             for r in frame.to_dict("records")] if len(frame) else []
     return {"columns": ["x", "y", "accepted", "rings"], "rows": rows}
 
@@ -444,9 +452,11 @@ def core_annotations(core_id: str, stain: str) -> dict:
 def threshold_preview(core_id: str, stain: str) -> dict:
     """What the Cores view's acceptance-threshold slider needs (a preview only: never saved, the analysis keeps
     detection's threshold): detection's threshold and, per candidate, its score (0 when it has none: it passes where
-    p >= threshold) and its call once it passes (`labels.starting.if_accepted`, label-class ids; empty where it stays
-    rejected: a rule after the model rejects it, with that rule's reason, or detection's call stays at every threshold:
-    a rule decided it or it lies in an excluded area)."""
+    p >= threshold), its call once it passes (`labels.starting.if_accepted`, label-class ids, with the rule after the
+    model that decides it: empty where that rule rejects it, a speck; CAA where it names that class) and below it
+    (`below`, `below_subtype`: the look-alike detection names once the model does not count it, an AT8 thread; empty for
+    a reject); `fixed` where detection's call stays at every threshold: a rule decided it or it lies in an excluded area
+    (a CAA deposit stays CAA)."""
     from stainid import candidates  # noqa: PLC0415
     from stainid.labels import candidate_store, starting  # noqa: PLC0415
     from stainid.labels import vocabulary as vocab  # noqa: PLC0415
@@ -457,13 +467,18 @@ def threshold_preview(core_id: str, stain: str) -> dict:
         return {"detection": None, "columns": [], "rows": []}
     words = vocab.of(project, stain)
     passing = starting.if_accepted(project, stain, core_id)
+    failing = starting.if_rejected(project, stain, core_id)
+    reject = candidate_store.negative_class(words)
     thresholds = pd.to_numeric(frame.threshold, errors="coerce").dropna() if "threshold" in frame else pd.Series(dtype=float)
     rows = []
     for r in frame.itertuples(index=False):
         would = passing.get(r.candidate_id)
-        passes = would is not None and would[0] == "accepted"
-        identity, subtype = candidate_store.ai_call(words, *would[:3]) if passes else ("", "")
+        identity, subtype = candidate_store.ai_call(words, *would) if would is not None else ("", "")
+        identity, subtype = ("", "") if identity == reject else (identity, subtype)
+        below = failing.get(r.candidate_id)
+        below, below_subtype = candidate_store.ai_call(words, *below) if below is not None else ("", "")
+        below, below_subtype = ("", "") if below == reject else (below, below_subtype)
         rule = would[3] if would is not None else (str(r.reason) if str(r.reason).startswith("rule:") else "")
-        rows.append([r.candidate_id, starting.score(r.probability), identity, subtype, rule])
+        rows.append([r.candidate_id, starting.score(r.probability), identity, subtype, rule, would is None, below, below_subtype])
     return {"detection": float(thresholds.median()) if len(thresholds) else None,
-            "columns": ["candidate_id", "probability", "identity", "subtype", "reason"], "rows": rows}
+            "columns": ["candidate_id", "probability", "identity", "subtype", "reason", "fixed", "below", "below_subtype"], "rows": rows}

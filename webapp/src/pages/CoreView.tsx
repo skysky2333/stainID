@@ -12,8 +12,10 @@ import { CLASS_STYLE, RASTER_LAYERS } from '../viewer'
 import { INACTIVE_GREY, MODEL_CLASSES, UNKNOWN_COLOUR, UNSURE_AMBER, classColour } from '../classPalette'
 import { PALETTE, areaColour } from '../palette'
 import type { Vocabulary } from '../labels/classKeys'
+import { roleOf } from '../labels/classKeys'
 import { ThresholdSlider } from '../labels/threshold'
-import { reasonText } from '../labels/reasons'
+import { whyFound } from '../labels/reasons'
+import { isAiLabel } from '../labels/aiLabels'
 import { passes } from '../labels/fieldStart'
 
 interface CoreInfo extends CoreDetail {
@@ -63,7 +65,12 @@ interface ObjectEdit {
 }
 /** The Cores view's preview of the acceptance threshold (GET …/threshold-preview, labels/starting.py): per candidate
  *  its score and the call it would get if it passed ("" where a rule decides it). Never saved. */
-interface ThresholdPreview { detection: number | null; rows: [string, number | null, string, string, string?][] }
+interface ThresholdPreview {
+  detection: number | null
+  /** candidate_id, score, call once it passes ("" a reject), the rule after the model, fixed (a rule decided it: as
+   *  detection called it at every value), the look-alike below the threshold ("" a reject) and its type */
+  rows: [string, number | null, string, string, string?, boolean?, string?, string?][]
+}
 interface CoreAnnotations {
   objects: AnnotatedObject[]; added: AddedObject[]; edits?: ObjectEdit[]
   counts: { agree: number; changed: number; rejected: number; unsure: number; added: number; outline_fixed: number; split?: number; merge?: number }
@@ -106,7 +113,8 @@ type Layers = typeof LAYER_DEFAULTS
 const UNPROPOSED_COLOR = PALETTE.overlays.unproposed  // stained areas no candidate covers: no label class
 /** An object's class as the legend groups it, its name and colour: the store's label class and type (the same name and
  *  colour on every page, classPalette.ts), else detection's class name mapped onto the label classes (the current
- *  outputs: a compact plaque is the compact colour); rejected candidates dotted light grey. */
+ *  outputs: a compact plaque is the compact colour); rejected candidates dotted light grey. A look-alike detection
+ *  names (cls "lookalike": CAA on a vessel wall, an AT8 thread) is its class, solid in its colour like every class. */
 function objectClass(vocabulary: Vocabulary | undefined, cls: string, identity?: string, subtype?: string): { cls: string; label: string; color: string } {
   if (cls === 'rejected') return { cls, label: CLASS_STYLE.rejected.label, color: INACTIVE_GREY }
   if (cls === 'unproposed') return { cls, label: CLASS_STYLE.unproposed.label, color: UNPROPOSED_COLOR }
@@ -275,7 +283,8 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
   const [previewAt, setPreviewAt] = useState<number | null>(null)
   const detectionAt = preview.data?.detection ?? null
   const previewValue = previewOn && detectionAt != null ? previewAt ?? detectionAt : null
-  const would = useMemo(() => new Map((preview.data?.rows ?? []).map(([id, p, identity, subtype, reason]) => [id, { p, identity, subtype, reason: reason ?? '' }])), [preview.data])
+  const would = useMemo(() => new Map((preview.data?.rows ?? []).map(([id, p, identity, subtype, reason, fixed, below, belowSubtype]) =>
+    [id, { p, identity, subtype, reason: reason ?? '', fixed: fixed ?? (!identity && !reason), below: below ?? '', belowSubtype: belowSubtype ?? '' }])), [preview.data])
   const objects = useMemo<Found[]>(() => {
     const data = found.data
     if (!data) return []
@@ -289,17 +298,22 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
       candidate: col.candidate_id === undefined ? undefined : String(r[col.candidate_id] ?? '') })).map((o) => {
       if (previewValue == null || detectionAt == null || Math.abs(previewValue - detectionAt) < 1e-9 || !o.candidate) return o
       const w = would.get(o.candidate)
-      if (!w || (!w.identity && !w.reason)) return o  // a rule decided it, or an excluded area: as detection called it, whatever the threshold
-      if (!passes(w.p ?? 0, previewValue)) return o.cls === 'rejected' ? o : { ...o, ...objectClass(vocabulary, 'rejected') }  // passes where score >= threshold
+      if (!w || w.fixed) return o  // a rule decided it (CAA stays CAA), or an excluded area: as detection called it, whatever the threshold
+      if (!passes(w.p ?? 0, previewValue)) {  // passes where score >= threshold; below, stage 4's call for a model reject
+        return w.below ? { ...o, ...objectClass(vocabulary, 'lookalike', w.below, w.belowSubtype), reason: 'rejected_by_model' }
+          : o.cls === 'rejected' ? o : { ...o, ...objectClass(vocabulary, 'rejected'), reason: 'rejected_by_model' }
+      }
       if (!w.identity) return { ...o, ...objectClass(vocabulary, 'rejected'), reason: w.reason }  // passes, but a rule after the model rejects it
-      if (o.cls !== 'rejected') return o
-      return { ...o, ...objectClass(vocabulary, 'accepted', w.identity, w.subtype) }
+      return { ...o, ...objectClass(vocabulary, 'accepted', w.identity, w.subtype), reason: w.reason || 'accepted' }  // its type, or the look-alike a rule names (CAA)
     })
   }, [found.data, shapes.data, vocabulary, previewValue, detectionAt, would])
   const colorOfClass = useMemo(() => Object.fromEntries(objects.map((o) => [o.cls, o.color])), [objects])
   const labelOfClass = useMemo(() => Object.fromEntries(objects.map((o) => [o.cls, o.label])), [objects])
   const counts = useMemo(() => objects.reduce<Record<string, number>>((acc, o) => ({ ...acc, [o.cls]: (acc[o.cls] ?? 0) + 1 }), {}), [objects])
   const classes = Object.keys(counts).filter((c) => c !== 'rejected').sort()
+  /** objects the analysis counts: the stain's positive classes (a look-alike such as CAA is its own class, not counted) */
+  const counted = useMemo(() => objects.filter((o) => o.cls.startsWith('label:') && !!vocabulary
+    && roleOf(vocabulary, o.cls.slice(6).split('/')[0]) === 'positive').length, [objects, vocabulary])
   const showOutlines = layers.outlines && outlinesMade && !!shapes.data
   const drawn = useMemo(() => objects.filter((o) => (layers.rejected || o.cls !== 'rejected') && (layers.objects || (showOutlines && o.outline))),
     [objects, layers.objects, layers.rejected, showOutlines])
@@ -387,7 +401,7 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
   const [fixed, setFixed] = useState<{ points: number[][]; color: string; more?: number[][][] } | null>(null)
   const peopleLines = (a: AnnotatedObject) => [
     `Detection: ${className(vocabulary, a.detection_identity, a.detection_subtype)}`,
-    ...(a.people ?? []).map((p) => `Annotator (${p.person}, ${day(p.time)}): ${p.role === 'skip' ? 'unsure' : className(vocabulary, p.identity, p.subtype)}`),
+    ...(a.people ?? []).map((p) => `${isAiLabel(p.person) ? 'AI label' : 'Annotator'} (${p.person}, ${day(p.time)}): ${p.role === 'skip' ? 'unsure' : className(vocabulary, p.identity, p.subtype)}`),
     ...a.outline_fixed.map((f) => `Outline fixed by ${f.person} (${day(f.time)})${f.option ? `: switched to the ${CHOICE_NAME[f.option] ?? f.option}` : f.mask !== null ? `: chose mask ${f.mask}` : ''}`),
   ]
   const describe = (i: number) => {
@@ -498,7 +512,7 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
               <b>Acceptance threshold</b></label>
             {previewOn && (detectionAt == null ? (preview.data ? <p className="small muted">No detection threshold stored for this core.</p> : <Loading inline label="Loading…" />) : <>
               <ThresholdSlider value={previewValue ?? detectionAt} detection={detectionAt} onChange={setPreviewAt} label="What would be accepted at" />
-              <p className="small" style={{ margin: '4px 0' }}>{(objects.length - objects.filter((o) => o.cls === 'rejected').length).toLocaleString()} accepted
+              <p className="small" style={{ margin: '4px 0' }}>{counted.toLocaleString()} accepted
                 at {(previewValue ?? detectionAt).toFixed(2)}</p>
               <p className="small warning-text" style={{ margin: 0 }}>Preview only — the analysis uses detection’s threshold.</p>
             </>)}
@@ -510,7 +524,7 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
             <p className="row" style={{ margin: '0 0 6px' }}><span className="swatch" style={swatchOf(pick.color, pick.cls === 'rejected')} /><b>{pick.label}</b></p>
             <dl className="facts">
               {pick.p !== null && <><dt>Detection score</dt><dd>{Math.round(pick.p * 100)}%</dd></>}
-              {pick.reason && <><dt>Why</dt><dd>{reasonText(pick.reason)}</dd></>}
+              {pick.reason && <><dt>Why</dt><dd>{whyFound(pick.cls, pick.reason)}</dd></>}
               {pick.area !== null && <><dt>Area</dt><dd>{area(pick.area)} µm²</dd></>}
               {showOutlines && found.data?.source === 'v2' && <><dt title="Tab switches every object's (Segment Anything or the stain outline)">Outline shown</dt>
                 <dd className="outline-shown">{CHOICE_NAME[shownChoice]}</dd></>}

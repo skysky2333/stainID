@@ -61,7 +61,7 @@ export function keyGroups(vocabulary: Vocabulary, keys: KeyMap): KeyGroup[] {
     kinds[kind].push({ key, label: keyLabel(key), identity, subtype, name: s?.name ?? c?.name ?? identity, description: s?.description ?? c?.description ?? '' })
   }
   return (Object.entries(kinds) as [KeyGroupKind, KeyItem[]][]).filter(([, items]) => items.length).map(([group, items]) => ({
-    group, items, title: group === 'counted' ? 'Counted' : group === 'lookalike' ? 'Not counted' : items[0].name,
+    group, items, title: group === 'counted' ? 'Counted' : group === 'lookalike' ? 'Look-alikes' : items[0].name,
     keys: items.length > 1 ? `${items[0].label}–${items[items.length - 1].label}` : items[0].label,
   }))
 }

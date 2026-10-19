@@ -33,6 +33,7 @@ _LOCK = threading.Lock()
 _LEGACY: OrderedDict[tuple, pd.Series] = OrderedDict()  # (project, stain, what it was made from) -> candidate of each old label
 _LEGACY_LIMIT = 8  # the rounds' labels, training's and the Labels page's: each its own rows
 _STATE: dict[tuple[str, str], tuple[tuple, State]] = {}
+_PEOPLE: dict[tuple[str, str], tuple[State, State]] = {}  # (project, stain) -> (the state it was made from, people's only)
 _MAKING: dict[tuple[str, str], threading.Lock] = {}
 
 
@@ -194,7 +195,26 @@ def state(project: Project, stain: str, tiles: pd.DataFrame, stale_ok: bool = Fa
         making.release()
 
 
+def people(project: Project, stain: str, tiles: pd.DataFrame, stale_ok: bool = False) -> State:
+    """`state` without the AI's labels (`store.is_ai_label`: the imported reference sets, AI review sessions): what the
+    annotation pages show and start from (Fix the field: who checked an object, the class it starts with). Kept until
+    `state` is made again."""
+    full = state(project, stain, tiles, stale_ok)
+    key = (str(project.root), stain)
+    with _LOCK:
+        kept = _PEOPLE.get(key)
+    if kept is not None and kept[0] is full:
+        return kept[1]
+    rows = full.rows
+    ai = rows.source.map(store.is_ai_label).astype(bool) if len(rows) else pd.Series(False, index=rows.index)
+    made = _state_of(rows[~ai]) if ai.any() else full
+    with _LOCK:
+        _PEOPLE[key] = (full, made)
+    return made
+
+
 def forget() -> None:
     with _LOCK:
         _LEGACY.clear()
         _STATE.clear()
+        _PEOPLE.clear()
