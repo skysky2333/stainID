@@ -119,8 +119,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--workers", type=int, default=0,
                    help="core images at once (0: proposals 3, sharing the tile processes; calls as many as the processors allow)")
     p.add_argument("--processes", type=int, default=-1,
-                   help="proposals: tile processes, one thread each, shared by the core images in flight (-1: as many as memory "
-                        "and processors allow; 0: the older layout, one process per core image with --threads and --tiles-at-once)")
+                   help="proposals: tile processes, one thread each, shared by the core images in flight (-1: a quarter of the "
+                        "processors, where memory bandwidth tops out, bounded by memory; 0: the older layout, one process per core "
+                        "image with --threads and --tiles-at-once)")
     p.add_argument("--threads", type=int, default=0,
                    help="proposals: threads per tile process (0: 1); with --processes 0, filter threads per core image (0: the "
                         "processors the workers leave idle, at most 4)")

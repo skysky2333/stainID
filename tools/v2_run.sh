@@ -9,8 +9,8 @@
 #
 # Extra arguments go to every stage, e.g. `tools/v2_run.sh all --core cores.txt` or `--stain AT8`.
 # Settings (environment): STAINID_PROJECT (the project folder), STAINID_PYTHON (python with stainid installed),
-# STAINID_SRC (a source tree to run instead of the installed one), PROCESSES (stage 2 tile processes, default -1: as many as
-# the processors and the free memory allow, ~1.3 GB each; 0: the older layout, one process per core image), WORKERS (stage 2
+# STAINID_SRC (a source tree to run instead of the installed one), PROCESSES (stage 2 tile processes, default -1: a quarter
+# of the processors, where memory bandwidth tops out, ~1.3 GB each; 0: the older layout, one process per core image), WORKERS (stage 2
 # core images in flight sharing the tile processes, default 3, ~1.4 GB each; with PROCESSES=0 processes of ~2.2 GB),
 # THREADS (stage 2 threads per tile process, default 1), TILES_AT_ONCE (with PROCESSES=0: tiles in threads per process),
 # GPUS (default 2), PER_GPU (stage 3 processes per GPU, default 3: ~3.3 GB of memory each). None of them changes any result.

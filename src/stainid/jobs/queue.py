@@ -85,7 +85,7 @@ STEP_NEEDS = {
     "dearray": {"cpus": 2, "ram_gb": 6}, "export": {"cpus": 4, "ram_gb": 8}, "qc": {"cpus": 4, "ram_gb": 6},
     "tiles": {"cpus": 2, "ram_gb": 4}, "images": {"cpus": 4, "ram_gb": 6}, "calibrate": {"cpus": 2, "ram_gb": 6},
     "nuclei": {"cpus": 4, "gpus": 1, "ram_gb": 8}, "neun": {"cpus": 8, "ram_gb": 8}, "fields": {"cpus": 4, "gpus": 1, "ram_gb": 8},
-    "masks": {"cpus": 2, "gpus": 1, "ram_gb": 8}, "v2_proposals": {"cpus": 12, "ram_gb": 16}, "v2_calls": {"cpus": 4, "ram_gb": 6},
+    "masks": {"cpus": 2, "gpus": 1, "ram_gb": 8}, "v2_proposals": {"cpus": 8, "ram_gb": 16}, "v2_calls": {"cpus": 4, "ram_gb": 6},
     "v2_outlines": {"cpus": 2, "gpus": 1, "ram_gb": 8}, "v2_measures": {"cpus": 2, "ram_gb": 8},
     "download_models": {"cpus": 0, "ram_gb": 1, "network": True}, "prepare_labels": {"cpus": 2, "ram_gb": 4},
     "train": {"cpus": 4, "ram_gb": 6}, "score_segmentation": {"cpus": 2, "ram_gb": 4},

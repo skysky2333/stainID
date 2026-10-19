@@ -23,8 +23,11 @@ and `tools/v2_run.sh decide` only stages 4 and 5 (after a new model, cut-off or 
 done once its manifest is written, and every run redoes the core images that are missing or out of date. `stainid v2
 status` shows, per stage and stain, how many core images are done, out of date and in all; the Run page shows the same
 for the Detect steps *Find candidates*, *Decide*, *Outline objects* and the Results step *Make results tables*
-(*Run what's left* runs them; the first detection's steps are under *Legacy detection (v1)*). Memory: a stage-2 worker holds one decoded core image (about 0.8 GB) and one tile's
-pictures (about 1 GB); `--workers 0` picks as many as the free memory and the processors allow.
+(*Run what's left* runs them; the first detection's steps are under *Legacy detection (v1)*). Stage 2 decodes each core
+image once into shared memory (about 0.8 GB, plus 0.5 GB of core-wide masks) and works on its tiles in a pool of
+single-threaded tile processes (about 1.3 GB each, up to 2.3 GB on a 6E10 tile) shared by three core images in flight
+(`--workers`); `--processes` sets the pool (default: a quarter of the processors, bounded by the job's or the free
+memory), `--processes 0` gives the older layout, one process per core image. See "Speed" below.
 
 ## Manifests and out-of-date detection
 
@@ -131,9 +134,32 @@ its pixel count, width sum and the candidate it lies in), `unproposed/<stain>/<c
 picture `masks/<stain>/<core>.png` (bits: 1 tissue, 2 linear artifact, 4 fold, 8 manual exclusion — not set any more, 16 AT8
 edge guard, 32 analysed tile).
 
-Follow-up (speed): the AT8 thread network (`tau.maps`, about 12 s per tile) runs on every tile, also on tiles with no
-candidate and little stain; AT8 is now the slowest stain of stage 2 (about 900 s per core image with 12 at once). A
-tile whose DAB never reaches the network's level could skip it.
+### Speed
+
+Profile of the re-run's code (py-spy, LIP-1 F-3, one process with 2 filter threads): a core image kept 1.06 (6E10),
+1.21 (AT8) and 1.11 (NeuN) processors busy; the second thread worked only in the AT8 ridge filter and the
+linear-artifact openings (4%, 22% and 8% of the wall time). Busy time: the linear-artifact and fold masks 25 / 21 /
+34% (6E10 / AT8 / NeuN), stain separation, smoothing and levels 17 / 8 / 30%, split and watershed 18% of 6E10, the
+AT8 thread network (ridge filter included) 53% of AT8, proposal sources 15 / 7 / 9%, features 7 / – / 9%, nuclei 5 /
+4 / 9%, decoding 3 / 2 / 4%, writing nothing. On a dense AT8 core (LIP-5 D-5) a quarter of the time went to
+rebuilding a whole-field mask for every candidate.
+
+Fixed, each output byte-identical (7 core images of all stains checked): the per-candidate mask (dense AT8 tiles 23%
+faster), the per-component peaks of the 6E10 split (scipy sorted the whole picture), the ridge filter only in the
+256-px squares where a thread can be (sparse AT8 tiles 29% faster; bit-exact), saturation and skimage HED by 8-bit
+lookups, and the tile processes.
+
+Scaling (9 core images near the median cost, 3 cores x 3 stains; the machine otherwise idle): the throughput is the
+same, about 80 core images an hour, from 8 to 16 tile processes, and lower beyond (24: 69, 32: 70); the processor
+seconds the same work takes rise from 2250 (4 processes) to 3080 (8), 6310 (16) and 12950 (32). 16 processes on 16
+physical cores are no faster than 8, and 16 on 8 physical cores (both hardware threads) are 18% slower than 8 on 8:
+the ceiling is memory bandwidth, not SMT. One process streaming arrays already takes the machine's 19 GB/s (read) to
+25 GB/s (copy); a 5950X with two channels of DDR4-3200 usually gives about 35-45 GB/s, so the memory configuration
+(both channels populated, XMP speed) is worth a look. Two threads per process, huge pages and 2 or 5 core images in
+flight change nothing beyond noise. The re-run's layout (12 processes x 2 threads) did the same work in about 420 s
+of machine time; 8 tile processes take 393 s and leave three quarters of the processors free, and one core image
+alone now finishes in about half the time (LIP-1 F-3 NeuN: 161 s -> 81 s with 8 processes). More throughput needs
+less memory traffic per tile (float64 temporaries, whole-field pictures made for a few crops), not more processes.
 
 Stained regions no candidate proposes (`unproposed/`, per stain `proposals.<stain>.unproposed`): NeuN and AT8 as
 before (smoothed DAB ≥ the threshold, ≥ 15 / 20 µm², touching no candidate); 6E10 the DAB smoothed over 4 µm at

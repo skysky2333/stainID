@@ -222,7 +222,10 @@ def _limited_threads() -> None:
 
 PROCESS_GB = 1.3  # a tile process (its fields and pictures; up to about 2 GB on a 6E10 tile with local windows)
 CORE_GB = 1.4  # a core image in flight: its picture and core-wide masks in shared memory
-PROCESSES_PER_CPU = 1.0  # tile processes per logical processor (`stainid jobs` / the scaling test: see docs/pipeline_v2.md)
+# tile processes per logical processor: stage 2 is bound by memory bandwidth, which 8 processes fill on the 32-processor
+# study machine (5950X; the same throughput from 8 to 16 processes, less beyond; 2 per physical core no faster; see
+# docs/pipeline_v2.md, "Speed"), so more would only take processors from other work
+PROCESSES_PER_CPU = 0.25
 
 
 def default_processes(cores_at_once: int, threads: int = 1, reserve_gb: float = 4.0) -> int:
