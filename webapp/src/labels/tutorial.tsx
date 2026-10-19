@@ -1,11 +1,10 @@
 /* The two tutorials (/tutorial), offered on everyone's home and on Help (`TutorialCards`): "Fix the field" (about 3–5
-   minutes) on a practice field of the project (a 6E10 one when there is one), and `?kind=areas`, "Mark bad areas", on a
-   practice core (labels/markareas.tsx). Nothing is saved: the practice sessions (`practice-2-<stain>`, `practice-areas`)
+   minutes) on the practice field, and `?kind=areas`, "Mark bad areas", on the practice core (labels/markareas.tsx): the
+   one tutorial of the server (`stainid tutorial build`, a public dataset's field and core, the same for every project),
+   with its credit line. Nothing is saved: the practice sessions (`practice-2-<stain>`, `practice-areas`)
    keep nothing on the server, whatever is clicked. A coach asks for one thing at a time and waits until the person has
    done it. Skip at any time (back to `?next=`, else home). Finishing or skipping is kept with the person's account
-   (`/api/session/tutorials`); someone trying it without an account keeps it in this browser. The practice field and its
-   session are both asked of the page's project (`/api/tutorial` is a project route), so the field is always one of the
-   session's. The admin can open either from the Labels page (`?preview=1`): the same pages, nothing remembered. */
+   (`/api/session/tutorials`); someone trying it without an account keeps it in this browser. The admin can open either from the Labels page (`?preview=1`): the same pages, nothing remembered. */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import type { MySet, SessionDetail } from '../api'
@@ -18,7 +17,12 @@ import { MarkAreas, PRACTICE_AREAS } from './markareas'
 import type { RoundEvent } from './rounds'
 import { useSession } from '../session'
 
-interface TutorialInfo { done: boolean; practice: { stain: string; tile_id: string; round2: string } | null; project?: string }
+/** `/api/tutorial`: the one tutorial of the server (`stainid.tutorial`, the same for every project): its field, the
+ *  credit line of its images and the hint of the "Change the type" step; null before `stainid tutorial build`. */
+interface TutorialInfo {
+  done: boolean
+  practice: { stain: string; tile_id: string; round2: string; credit?: string; hint?: { text?: string; key?: string } } | null
+}
 export type TutorialKind = 'objects' | 'areas'
 interface Done { objects: boolean; areas: boolean; kept: boolean }
 /** One step: done once the page reports one of `done` (`times` of them: "reject a few"). */
@@ -28,14 +32,14 @@ interface Step { title: string; text: string; done: RoundEvent[]; times?: number
  *  editing), then reject what detection got wrong (Del), bring types back with a number, change a type (on a stain
  *  with types), unsure (`), a clean look (Space), precise editing, split (S) and merge (M), the brush (B), saving. `keys`: the practice
  *  stain's key line (`Vocabulary.keymap` summary); `typed`: its objects have several types to choose from. */
-function stepsFor(typed: boolean, counted: string): Step[] {
+function stepsFor(typed: boolean, counted: string, hint = ''): Step[] {
   const steps: Step[] = [
     { title: 'Step 1: the acceptance threshold', text: 'Every field starts with the slider at the top of the panel, at detection’s own threshold (marked on the track). Drag it (or press [ and ]): objects scoring at or above it turn solid, those below dotted grey. It only sets where this field starts; the analysis keeps detection’s threshold.', done: ['threshold'] },
     { title: 'Start editing', text: 'When the field starts about right, press “Start editing” (or Enter). The slider locks and shows a lock; your first edit would lock it too. Only “Reset field” unlocks it again, and that discards the field’s unsaved changes.', done: ['start'] },
     { title: 'Point at an object', text: 'Move the mouse over an outlined object. It lights up, its name shows beside it, and what detection said about it shows on the right. Every key acts on the object under the mouse.', done: ['hover'] },
     { title: 'Reject what detection got wrong', text: 'Find a few objects detection got wrong, point at each and press Del. They turn dotted grey and stay visible. Some objects are already dotted grey: detection rejected those itself, and they look just the same.', done: ['remove'], times: 2 },
     { title: 'Bring the type back', text: `Point at a dotted grey object that is a real one and press ${counted}: it becomes solid in that type’s colour. Each type has its own colour (see the panel on the right).`, done: ['class'] },
-    { title: 'Change the type', text: 'Point at a solid object and press another number: it changes to that type and colour. Things that look like one but are not have letters (Q, W …): solid too, but not counted.', done: ['subtype'] },
+    { title: 'Change the type', text: `Point at a solid object and press another number: it changes to that type and colour. ${hint ? `${hint} ` : ''}Things that look like one but are not have letters (Q, W …): solid too, but not counted.`, done: ['subtype'] },
     { title: 'Not sure?', text: 'Point at an object you cannot decide and press ` (the key left of 1; 0 works too). It turns dotted amber with a “?” and is left out of training and evaluation.', done: ['unsure'] },
     { title: 'Undo', text: 'Pressed the wrong key? Press Z to undo your last change. Z takes back changes you have not saved yet.', done: ['undo'] },
     { title: 'A clean look', text: 'Press Space to hide everything drawn over the picture and see the tissue alone. Press Space again to bring it back.', done: ['overlays'] },
@@ -76,8 +80,8 @@ const TUTORIALS: { kind: TutorialKind; title: string; text: string; minutes: str
   { kind: 'areas', title: 'Mark bad areas', minutes: '2 minutes', text: 'The brush: paint folds, artifacts, missing tissue and blur that should not be counted, core by core with every stain.' },
 ]
 
-/** The address of a tutorial: in the page's project, else in the project of the person's first set (each project
- *  practises on its own images), else the project the server opened last. */
+/** The address of a tutorial: in the page's project, else in the project of the person's first set, else the project
+ *  the server opened last (every project practises on the same tutorial, `stainid.tutorial`). */
 export function tutorialPath(kind: TutorialKind, sets?: MySet[] | null, next?: string) {
   const query = [kind === 'areas' ? 'kind=areas' : '', next ? `next=${encodeURIComponent(next)}` : ''].filter(Boolean).join('&')
   const page = `/tutorial${query ? `?${query}` : ''}`
@@ -126,8 +130,8 @@ export function Tutorial() {
     <Loaded state={info} label="Opening the tutorial…">
       {(data) => data.practice ? <Coached practice={data.practice} preview={preview} next={next} />
         : <><PageHead title="Tutorial" subtitle="Nothing to practise on yet." />
-          <Empty><p style={{ marginTop: 0 }}>The practice field appears once detection has proposed objects on this project’s images (the v2 detection’s
-            “Find candidates” and “Decide” steps on the Run page).</p>
+          <Empty><p style={{ marginTop: 0 }}>The tutorial is not set up on this server yet: an admin makes it once with <code>stainid tutorial build</code>
+            (a public dataset’s field and core, the same for every project).</p>
             <Link className="btn" to={next}>Back</Link></Empty></>}
     </Loaded>
   )
@@ -139,7 +143,8 @@ function Coached({ practice, preview, next }: { practice: NonNullable<TutorialIn
   const keys = field.data?.meta.keys
   const counted = keys?.groups?.find((g) => g.group === 'counted')
   const typed = (counted?.items.length ?? 0) > 1
-  const steps = useMemo(() => stepsFor(typed, counted ? (counted.items.length > 1 ? `a number (${counted.keys})` : counted.keys) : '1'), [typed, counted])
+  const hint = practice.hint?.text ?? ''
+  const steps = useMemo(() => stepsFor(typed, counted ? (counted.items.length > 1 ? `a number (${counted.keys})` : counted.keys) : '1', hint), [typed, counted, hint])
   const count = useRef(0)  // events of the step so far (for steps done after several)
   const [index, setIndex] = useState(0)
   const [cheer, setCheer] = useState(false)
@@ -187,6 +192,7 @@ function Coached({ practice, preview, next }: { practice: NonNullable<TutorialIn
         </div>
       </>}
       <ErrorNote error={error ?? field.error} />
+      {practice.credit && <p className="small muted tutorial-credit">{practice.credit}</p>}
     </aside>
   )
   return (
@@ -201,6 +207,15 @@ function Coached({ practice, preview, next }: { practice: NonNullable<TutorialIn
 /* ---------- the tutorial of "Mark bad areas" ---------- */
 
 interface AreaStep { title: string; text: string; done: AreaEvent[] }
+/** The steps; with one stain in the practice core (`single`) there is no stain to switch to, and Enter both ticks the
+ *  stain and saves the core. */
+function areaSteps(single: boolean): AreaStep[] {
+  if (!single) return AREA_STEPS
+  const steps = AREA_STEPS.filter((s) => !s.done.includes('stain') && !s.done.includes('saved'))
+  return steps.map((s) => s.done.includes('type') ? { ...s, text: `You see one core at a time with each of its stains as a tab above the picture (one stain in this example). ${s.text}` }
+    : s.done.includes('fine') ? { ...s, title: 'Save the core', text: 'When the core looks right — painted, or fine as it is — press Enter (or “Save and continue”): it is saved and the next core opens. With several stains, each stain gets its tick first. (In this practice nothing is kept.)', done: ['fine', 'saved'] }
+      : s)
+}
 const AREA_STEPS: AreaStep[] = [
   { title: 'One core, all its stains', text: 'You see one core at a time with each of its stains (the tabs above the picture). Hatched parts are each type’s area as it stands: what detection leaves out, with everyone’s edits (detection’s own areas, what the analysis uses, do not change here). Press ] (or click a tab) to look at the next stain, [ to go back.', done: ['stain'] },
   { title: 'Choose a type', text: 'Press 1–4 to choose what is wrong: 1 fold or tissue damage, 2 artifact (scratch, bubble, debris), 3 no tissue, 4 out of focus or bad staining. The brush takes its colour, and that type’s area shows strongly as one region: detection’s with everyone’s edits.', done: ['type'] },
@@ -216,10 +231,13 @@ const AREA_STEPS: AreaStep[] = [
 function AreasCoached({ preview, next }: { preview: boolean; next: string }) {
   const navigate = useNavigate()
   const detail = useFetch<SessionDetail>(`/api/annotate/${PRACTICE_AREAS}`)
+  const meta = detail.data?.meta as { stains_of?: Record<string, string[]>; credit?: string } | undefined
+  const single = Object.values(meta?.stains_of ?? {})[0]?.length === 1
+  const steps = useMemo(() => areaSteps(single), [single])
   const [index, setIndex] = useState(0)
   const [cheer, setCheer] = useState(false)
-  const step = AREA_STEPS[Math.min(index, AREA_STEPS.length - 1)]
-  const finished = index >= AREA_STEPS.length
+  const step = steps[Math.min(index, steps.length - 1)]
+  const finished = index >= steps.length
   const remember = useCallback(() => {
     if (preview) return  // the admin looking: nothing is remembered
     void rememberTutorial('areas').catch(() => undefined)
@@ -229,8 +247,8 @@ function AreasCoached({ preview, next }: { preview: boolean; next: string }) {
   at.current = index
   const onEvent = useCallback((event: AreaEvent) => {
     const i = at.current
-    if (i < AREA_STEPS.length && AREA_STEPS[i].done.includes(event)) { setIndex(i + 1); setCheer(true) }
-  }, [])
+    if (i < steps.length && steps[i].done.includes(event)) { at.current = i + 1; setIndex(i + 1); setCheer(true) }
+  }, [steps])
   useEffect(() => { if (!cheer) return; const timer = setTimeout(() => setCheer(false), 1200); return () => clearTimeout(timer) }, [cheer])
   const leave = () => { if (preview) window.history.length > 1 ? window.history.back() : window.close(); else navigate(next) }
   const coach = (
@@ -244,25 +262,26 @@ function AreasCoached({ preview, next }: { preview: boolean; next: string }) {
           teach and test the bad-area detection; the analysis uses detection’s own areas.</p>
         {preview ? <button className="btn primary" onClick={leave}>Close the preview</button> : <Link className="btn primary" to={next}>Start →</Link>}
       </> : <>
-        <div className="tutorial-step small muted">Step {index + 1} of {AREA_STEPS.length}{cheer && <span className="good-text"> · well done ✓</span>}</div>
+        <div className="tutorial-step small muted">Step {index + 1} of {steps.length}{cheer && <span className="good-text"> · well done ✓</span>}</div>
         <h3>{step.title}</h3>
         <p className="small">{step.text}</p>
         {index === 0 && <p className="small secondary">The areas you mark teach and test the bad-area detection; the analysis uses detection’s own areas.</p>}
-        <div className="tutorial-dots" aria-hidden="true">{AREA_STEPS.map((s, i) => <span key={s.title} className={i < index ? 'done' : i === index ? 'now' : ''} />)}</div>
+        <div className="tutorial-dots" aria-hidden="true">{steps.map((s, i) => <span key={s.title} className={i < index ? 'done' : i === index ? 'now' : ''} />)}</div>
         <div className="row">
           <button className="btn small" disabled={index === 0} onClick={() => setIndex(index - 1)}>Back</button>
           <button className="link-btn small" onClick={() => setIndex(index + 1)}>I did it / next</button>
         </div>
       </>}
+      {meta?.credit && <p className="small muted tutorial-credit">{meta.credit}</p>}
     </aside>
   )
   return (
     <div className="tutorial">
       {detail.error ? <><PageHead title="Tutorial" subtitle="Nothing to practise on yet." />
-        <Empty><p style={{ marginTop: 0 }}>The practice core appears once the project has analysed cores.</p><ErrorNote error={detail.error} />
+        <Empty><p style={{ marginTop: 0 }}>The tutorial is not set up on this server yet: an admin makes it once with <code>stainid tutorial build</code>.</p><ErrorNote error={detail.error} />
           <Link className="btn" to={next}>Back</Link></Empty></>
         : !detail.data ? <Loading label="Opening the practice core…" />
-          : <MarkAreas detail={detail.data} onEvent={onEvent} coach={coach} onFinished={() => setIndex((i) => Math.max(i, AREA_STEPS.length))} />}
+          : <MarkAreas detail={detail.data} onEvent={onEvent} coach={coach} onFinished={() => setIndex((i) => Math.max(i, steps.length))} />}
     </div>
   )
 }

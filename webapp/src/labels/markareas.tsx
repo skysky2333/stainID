@@ -232,7 +232,8 @@ function CoreTask({ name, core, after, afterStains, practice, onEvent, coach, on
                   {masks.current.get(i.stain)?.dirty ? <span className="area-dot" title="painted, not saved yet" /> : null}</span>
               </button>
             ))}
-            <span className="small muted area-tabs-keys"><span className="kbd">[</span> <span className="kbd">]</span> switch stains</span>
+            {images.length > 1 ? <span className="small muted area-tabs-keys"><span className="kbd">[</span> <span className="kbd">]</span> switch stains</span>
+              : <span className="small muted area-tabs-keys">one stain on this core</span>}
           </div>
           {image && <StainView key={image.stain} base={`${base}/${enc(image.stain)}`} image={image} masks={masks.current} kind={kind}
             brushRadius={brushSize / 2} hidden={hidden} objectsOn={objectsOn} tick={tick}

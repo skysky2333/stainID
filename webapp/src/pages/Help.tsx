@@ -129,7 +129,7 @@ export default function Help() {
             <h2>Labelling: the two tasks and their tutorials</h2>
             <p className="small secondary"><b>Fix the field</b>: one field of one stain at a time, with what detection found drawn on it; correct it (reject,
               change types, fix outlines, split, merge, add what it missed) and save. <b>Mark bad areas</b>: one core at a time with every stain; paint
-              folds, artifacts, missing tissue and blur that should not be counted. Each tutorial practises on real images; nothing is saved.</p>
+              folds, artifacts, missing tissue and blur that should not be counted. Both practise on real images of a public dataset (the same on every project); nothing is saved.</p>
             <TutorialCards compact />
           </div>
           {admin && <div className="card">

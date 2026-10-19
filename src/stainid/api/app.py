@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from stainid import palette, practice
+from stainid import palette, practice, tutorial
 from stainid.api import state, work
 from stainid.api.routes import accounts as account_routes
 from stainid.api.routes import analysis, annotate, cohort, images, imageset, jobs, models, project, projects, session, setup, slides
@@ -106,8 +106,12 @@ def create_app() -> FastAPI:
             if not account.admin or account.must_change:
                 return JSONResponse({"detail": "choose a new password first" if account.must_change else "only admins can do this"}, status_code=403)
         token = store.ATTRIBUTION.set(account.id if account is not None else None)
-        practising = practice.PRACTISING.set(bool(practice.PATH.match(request.url.path)))  # the tutorial: no store is written
+        on_practice = bool(practice.PATH.match(request.url.path))
+        practising = practice.PRACTISING.set(on_practice)  # the tutorial: no store is written
         try:
+            if on_practice and tutorial.built():  # the one tutorial of the server, whatever the project (`stainid.tutorial`)
+                with state.use_project(state.TUTORIAL):
+                    return await call_next(request)
             return await call_next(request)
         finally:
             practice.PRACTISING.reset(practising)

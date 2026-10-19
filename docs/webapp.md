@@ -278,12 +278,20 @@ up as one. Under *Settings → People*, link an account to such a name (*Past la
 that name and sees its history as its own.
 
 **The tutorials.** Everyone's home, the Tutorials page and Help offer both: *Fix the field* and *Mark bad areas*;
-nobody is sent into one. *Fix the field* (`/tutorial`; `/api/tutorial`, a project route like the practice session it
-opens, names the practice field, so the field is always one of that session's) is a practice on a real field
-of the project (a 6E10 field with several plaque types, detection rejects and a detected fold or artifact), where
-nothing is saved (about 3–5 minutes): step 1, the acceptance threshold (move it, watch objects switch, *Start
+nobody is sent into one. Both practise on **the one tutorial of the server**, the same for every project (the study's,
+any other, a new empty one), so a tutorial never depends on a project's outputs and never shows a study's tissue: a
+public dataset's field and core, made once with `stainid tutorial build --from <project> --field <tile> --core <core>
+--credit "<line>"` into `~/.stainid/tutorial` (`$STAINID_TUTORIAL`; `stainid/tutorial.py`). It is a small stainID
+project of its own (the two pictures, their tile and core-image rows, detection's outputs for them, and
+`tutorial.json`: what to practise on, the credit line shown in the tutorial, the source's licence and citation, and the
+"Change the type" step's example); the practice requests of every project run on it (`api.state.TUTORIAL`, the app's
+middleware). Only images whose licence allows public display and redistribution go in: the server's tutorial is a
+Keiser lab amyloid-YOLO 6E10 field (compact, diffuse, cored and small plaques, CAA along a vessel, rejects to bring
+back, a pair to merge and outlines where Tab matters) and an Aβ42 core with a real edge, detached meninges, glass and
+two knife streaks (MIT licence; see the README). Before it is built the tutorials say so. *Fix the field* (`/tutorial`,
+`/api/tutorial`) takes about 3–5 minutes: step 1, the acceptance threshold (move it, watch objects switch, *Start
 editing*), reject (Del), bring types back (numbers), unsure (`), a clean look (Space), precise editing, split (S) and
-merge (M), the brush (B), saving. A coach asks for one thing at a time and
+merge (M), the brush (B), saving (*Mark bad areas* on a core of one stain leaves out the stain switching). A coach asks for one thing at a time and
 waits until it is done. *Skip tutorial* is always there and goes back home. Who finished or skipped each tutorial is kept with
 their account (`/api/session/tutorials`, on every project; the `tutorials.json` of earlier releases counts too); a guest's
 in the browser. The tutorials are public: someone without an account can try them. **Nothing of a practice is

@@ -25,6 +25,7 @@ from stainid.project import Project, load_project
 from stainid.sampling.tiles import known_tiles, labelling_tiles, table
 
 CURRENT: ContextVar[str | None] = ContextVar("stainid_project", default=None)
+TUTORIAL = "stainid-tutorial"  # the id the tutorial's practice requests run under (`stainid.tutorial`, the app's middleware)
 
 
 class UnknownProject(KeyError):
@@ -216,6 +217,8 @@ def reload_project(path: Path | str) -> ProjectState:
 def get_state() -> ProjectState:
     """The state of the request's project (see `CURRENT`), else of the project opened last."""
     wanted = CURRENT.get()
+    if wanted == TUTORIAL:
+        return tutorial_state()
     with _LOCK:
         if wanted is None:
             if _LAST in _STATES:
@@ -228,6 +231,26 @@ def get_state() -> ProjectState:
         if root is None or not (root / "stainid.yaml").exists():
             raise UnknownProject(wanted)
         return open_project(root)
+
+
+_TUTORIAL: dict = {}
+
+
+def tutorial_state() -> ProjectState:
+    """The tutorial's own small project (`stainid.tutorial`), the same for every project: opened as it is, never
+    remembered on the Projects list, no job runner; read again when it is built anew."""
+    from stainid import tutorial  # noqa: PLC0415
+
+    found = tutorial.info()
+    if found is None:
+        raise UnknownProject(TUTORIAL)
+    key = (str(tutorial.folder()), found.get("built"))
+    with _LOCK:
+        kept = _TUTORIAL.get("state")
+        if kept is None or kept[0] != key:
+            kept = (key, ProjectState(load_project(tutorial.folder())))
+            _TUTORIAL["state"] = kept
+        return kept[1]
 
 
 def default_id() -> str | None:

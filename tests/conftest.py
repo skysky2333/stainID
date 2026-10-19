@@ -20,6 +20,7 @@ def own_app_settings(tmp_path_factory, monkeypatch):
     monkeypatch.setenv(queue.QUEUE_ENV, str(tmp_path_factory.mktemp("queue")))  # its own job queue, run as plain processes
     monkeypatch.setenv(queue.LAUNCHER_ENV, "process")
     monkeypatch.delenv(registry.PROJECTS_DIR_ENV, raising=False)
+    monkeypatch.setenv("STAINID_TUTORIAL", str(tmp_path_factory.mktemp("tutorial") / "tutorial"))  # not built: a test builds its own
     yield
     queue.reset()
     from stainid.labels import sessions

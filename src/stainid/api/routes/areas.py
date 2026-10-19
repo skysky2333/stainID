@@ -93,15 +93,17 @@ def _signals(core_id: str, stains: list[str]) -> dict | None:
 # ---------------------------------------------------------------- the round pages (annotators)
 
 def practice_meta() -> dict:
-    state = get_state()
-    stains_of = areas.core_stains(state.tiles)
-    with_masks = [c for c, stains in stains_of.items() if any(exclusions.mask_path(state.project, c, s).exists() for s in stains)]
-    core = (with_masks or list(stains_of))[:1]
-    if not core:
-        raise HTTPException(404, "there is no core to practise on yet")
+    """The made-up session of the "Mark bad areas" tutorial: the core of the one tutorial of the server
+    (`stainid.tutorial`, the same for every project), with its stains and credit line."""
+    from stainid import tutorial  # noqa: PLC0415
+
+    found = tutorial.info()
+    if not found:
+        raise HTTPException(404, "The tutorial is not set up on this server yet (stainid tutorial build).")
+    core, stains = found["areas"]["core_id"], list(found["areas"]["stains"])
     return {"name": PRACTICE, "title": "Practice: " + areas.TITLE, "stain": "all", "kind": areas.KIND, "tools": ["area"], "ai_view": "full",
-            "per_field": 1, "rule": "random", "fields": [], "source": areas.SOURCE, "cores": core, "stains_of": {core[0]: stains_of[core[0]]},
-            "second": [], "order": "random", "instructions": "", "open": True, "created": 0.0, "practice": True}
+            "per_field": 1, "rule": "random", "fields": [], "source": areas.SOURCE, "cores": [core], "stains_of": {core: stains},
+            "second": [], "order": "random", "instructions": "", "open": True, "created": 0.0, "practice": True, "credit": found.get("credit", "")}
 
 
 def areas_meta(name: str, request: Request) -> dict:

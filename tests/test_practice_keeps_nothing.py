@@ -17,7 +17,7 @@ pytest.importorskip("httpx")
 from fastapi.testclient import TestClient  # noqa: E402
 from test_annotation_rounds import TILE, rounds_project  # noqa: E402, F401
 
-from stainid import practice  # noqa: E402
+from stainid import practice, tutorial  # noqa: E402
 from stainid.api import registry, state  # noqa: E402
 from stainid.api.routes import annotate, areas, rounds  # noqa: E402
 from stainid.labels import sessions, store  # noqa: E402
@@ -79,11 +79,12 @@ def test_every_write_of_a_practice_session_leaves_every_store_unchanged(rounds_p
         writes = {path for path, methods in admin.app.openapi()["paths"].items() if path.startswith("/api/annotate/{name}")
                   and set(methods) & {"post", "put", "patch", "delete"}}
         assert writes == set(calls), "a new write endpoint: add it here (and make it keep nothing in practice)"
-        before, claims, log = _files(project.root, registry.SETTINGS.parent), _claims(), store.history(project.output("reviews"))
+        roots = (project.root, registry.SETTINGS.parent, tutorial.folder())  # the tutorial's own project too
+        before, claims, log = _files(*roots), _claims(), store.history(project.output("reviews"))
         for template, (path, body) in calls.items():
             answer = who.post(path, json=body)
             assert answer.status_code < 500, (template, answer.status_code, answer.text)
-            assert _files(project.root, registry.SETTINGS.parent) == before, template
+            assert _files(*roots) == before, template
             assert _claims() == claims, template
         assert store.history(project.output("reviews")).equals(log)
         saved = who.post(f"/api/annotate/{FIELD}/tiles/{TILE}/save", json={"records": [], "submit": True})
@@ -106,7 +107,7 @@ def test_a_guest_opens_the_practice_session_its_field_and_its_picture(rounds_pro
     admin, _, _ = rounds_project
     guest = TestClient(admin.app)
     info = guest.get("/api/tutorial").json()
-    assert info["project"] == state.get_state().id and info["practice"]["round2"] == FIELD
+    assert info["practice"]["round2"] == FIELD and info["practice"]["credit"]  # the server's one tutorial, with its credit line
     detail = guest.get(f"/api/annotate/{FIELD}")
     assert detail.status_code == 200 and detail.json()["meta"]["fields"] == [info["practice"]["tile_id"]]  # the field is the session's own
     assert guest.get(f"/api/annotate/{FIELD}/fields/{TILE}").status_code == 200

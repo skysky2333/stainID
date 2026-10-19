@@ -33,7 +33,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from stainid import cache
 from stainid import candidates as candidate_store_ids
 from stainid.api import render, sam_embeddings, work
 from stainid.api.routes.annotate import (
@@ -1059,51 +1058,13 @@ def practice_name(round_: int, stain: str) -> str:
     return f"{PRACTICE}-{round_}-{stain}"
 
 
-PRACTICE_STAIN = "6E10"  # amyloid: the most standard stain to learn on, with four plaque types and named look-alikes
-
-
 def practice_tile(stain: str) -> str | None:
-    """The field the tutorial practises on (both rounds): of the first cores with candidates, the ready field that best
-    shows every step: the most plaque (or other) types detection called there (up to four), a candidate detection
-    rejected itself (the tutorial shows that people's rejects look the same), an area detection excluded (a fold or an
-    artifact, for the brush), then the most candidates. Kept until the store changes."""
-    state = get_state()
+    """The field the tutorial practises on: the one tutorial of the server (`stainid.tutorial`), the same whatever
+    the project; None before it is built or for another stain."""
+    from stainid import tutorial  # noqa: PLC0415
 
-    def make() -> str | None:
-        from stainid import exclusions  # noqa: PLC0415
-
-        tiles = state.labelling_tiles
-        if tiles.empty:
-            return None
-        tiles = tiles[tiles.stain == stain]
-        with_candidates = candidate_store.cores(state.project, stain)  # a folder listing: only these cores' fields are checked
-        first = sorted(set(tiles.core_id.astype(str)) & with_candidates)[:6]
-        ready = store_ready(stain, tiles[tiles.core_id.astype(str).isin(first)])
-        best, most = None, (0, False, False, 0)
-        for core_id in sorted(set(ready.core_id.astype(str)))[:6]:
-            found = candidate_store.read_core(state.project, stain, core_id, candidate_store.CALLS)
-            if found is None or found.empty:
-                continue
-            layer = exclusions.automatic(state.project, core_id, stain)
-            took = found.decision.astype(str).map(candidate_store.accepted)
-            for _, tile in ready[ready.core_id.astype(str) == core_id].iterrows():
-                mine = found[found.tile_id == tile["tile_id"]]
-                if mine.empty:
-                    continue
-                kept = mine[took.loc[mine.index]]
-                types = len(set(zip(kept["class"].astype(str), kept.subtype.fillna("").astype(str))))
-                bad = False
-                if layer is not None:
-                    x0, y0 = int(tile["x_px"]) // layer.scale, int(tile["y_px"]) // layer.scale
-                    x1, y1 = (int(tile["x_px"]) + int(tile["width_px"])) // layer.scale, (int(tile["y_px"]) + int(tile["height_px"])) // layer.scale
-                    part = layer.codes[y0:y1 + 1, x0:x1 + 1]
-                    bad = bool(((part == 1) | (part == 2)).any())
-                rank = (min(types, 4), bool((~took.loc[mine.index]).any()), bad, len(mine))
-                if rank > most:
-                    best, most = str(tile["tile_id"]), rank
-        return best
-
-    return cache.memo(("practice field", str(state.root), stain), [candidate_store.folder(state.project, stain)], make, folders=True)
+    found = tutorial.practice()
+    return found["tile_id"] if found and found["stain"] == stain else None
 
 
 def practice_meta(name: str) -> dict:
@@ -1114,10 +1075,12 @@ def practice_meta(name: str) -> dict:
     round_, stain = int(parts[1]), parts[2]
     tile = practice_tile(stain)
     if tile is None:
-        raise HTTPException(404, f"there is no {stain} field with detection's candidates to practise on yet")
+        raise HTTPException(404, "The tutorial is not set up on this server yet (stainid tutorial build).")
+    from stainid import tutorial  # noqa: PLC0415
     return {"name": name, "title": "Practice: " + rounds.TITLE[round_], "stain": stain, "kind": rounds.KIND[round_], "tools": ["class", "point", "outline", "tag"],
             "ai_view": "full", "per_field": 1, "rule": rounds.RULE, "fields": [tile] if round_ == 2 else [], "scope": [tile], "source": rounds.SOURCE,
-            "round": round_, "level": None, "labels_needed": 1, "subtypes": True, "instructions": "", "open": True, "created": 0.0, "practice": True}
+            "round": round_, "level": None, "labels_needed": 1, "subtypes": True, "instructions": "", "open": True, "created": 0.0, "practice": True,
+            "credit": (tutorial.info() or {}).get("credit", "")}
 
 
 def _tutorials_path():
@@ -1137,18 +1100,13 @@ class Tutorial(BaseModel):
 
 @router.get("/tutorial")
 def tutorial(request: Request, person: str = Depends(annotator)) -> dict:
-    """Whether this person has been through the tutorial of this project, and where it practises: a field of this
-    project (a project route, `/api/projects/<id>/tutorial`, like the practice session the page then opens, so the
-    field is always one of that session's): a 6E10 field (`PRACTICE_STAIN`) with several plaque types, detection
-    rejects and a detected fold or artifact, else the stain of the first open round session, else the first of the
-    project's stains with candidates (`practice_tile`); the "Mark bad areas" practice is `practice-areas`. Finding the
-    practice field reads a few cores the first time: in the background then (`work`)."""
-    state = get_state()
-    practice = work.answer("tutorial", ("tutorial", state.id, str(state.root)), lambda task: _practice(), work.NOW, "Finding a practice field",
-                           fresh=work.within(15))
-    if isinstance(practice, Response):
-        return practice
-    return {"done": _done(request, person), "practice": practice, "project": state.id}
+    """Whether this person has been through the tutorial, and where it practises: the one tutorial of the server
+    (`stainid.tutorial`: a public dataset's field, the same for every project, a new one too), with its credit line
+    and the hint of the "Change the type" step; `practice` None before `stainid tutorial build`. The "Mark bad areas"
+    practice is `practice-areas`. Nothing of the project is read."""
+    from stainid import tutorial as shared  # noqa: PLC0415
+
+    return {"done": _done(request, person), "practice": shared.practice()}
 
 
 def _done(request: Request, person: str) -> bool:
@@ -1161,21 +1119,6 @@ def _done(request: Request, person: str) -> bool:
     if account is None or person == PREVIEW:
         return False
     return accounts.tutorials_done(account.id)["objects"] or person in _tutorials()
-
-
-def _practice() -> dict | None:
-    state = get_state()
-    metas = [sessions.meta(root(), n) for n in sessions.names(root())]
-    stains = [PRACTICE_STAIN] if candidate_store.cores(state.project, PRACTICE_STAIN) else []  # amyloid first, for everyone
-    stains += [m["stain"] for m in metas if rounds.is_round(m) and m.get("open")]
-    tiles = state.labelling_tiles
-    own = sorted(set(tiles.stain.astype(str))) if not tiles.empty else []  # an image set's or public dataset's own stains
-    stains += [s for s in [*STAINS, *own] if candidate_store.cores(state.project, s)]
-    for stain in dict.fromkeys(stains):
-        tile = practice_tile(stain)
-        if tile:
-            return {"stain": stain, "tile_id": tile, "round2": practice_name(2, stain)}
-    return None
 
 
 @router.post("/tutorial")

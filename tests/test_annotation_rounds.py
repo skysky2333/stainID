@@ -103,6 +103,9 @@ def rounds_project(synthetic_project, monkeypatch):
     admin = TestClient(create_app(), client=("127.0.0.1", 50000))
     assert admin.post("/api/session/admin", json={"password": "admin"}).status_code == 200
     candidate_store.write_core(state.get_state().project, "6E10", "LIP-1_B-2", pd.DataFrame(rows))
+    from stainid import tutorial  # the server's one tutorial, made from this project's field and core (as `stainid tutorial build`)
+
+    tutorial.build(synthetic_project, TILE, "LIP-1_B-2", "Images: synthetic test project")
     people = []
     for name in ("Ann", "Ben"):
         people.append(annotator(admin, name, every=True))
