@@ -57,7 +57,17 @@ def found(project, core_id: str, stain: str) -> pd.DataFrame:
                          "class": text("class"), "subtype": text("subtype")})
 
 
-OUTLINE_CHOICES = ("default", "stain", "sam0", "sam1", "sam2")  # which outline the core viewer draws for every candidate
+OUTLINE_CHOICES = ("default", "stain", "sam", "sam0", "sam1", "sam2")  # which outline the core viewer draws for every candidate
+
+
+def _flat_points(value) -> list[int]:
+    """An outline cell (store text) or point list as flat whole pixels ([] for none)."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return candidates.points(value) if value.strip() else []
+    flat = np.rint(np.asarray(value, float).reshape(-1)).astype(np.int64).tolist()
+    return flat if len(flat) >= 6 else []
 
 
 def _polygon_um2(flat: list[int], pixel_um: float) -> float:
@@ -73,7 +83,7 @@ def outline_rows(project, core_id: str, stain: str, outline: str = "default") ->
     if outline not in OUTLINE_CHOICES:
         raise ValueError(f"outline must be one of {', '.join(OUTLINE_CHOICES)}")
     sam = outline.startswith("sam")
-    frame = candidates.read_core(project, stain, core_id, [*COLUMNS, "sam_masks"] if sam else COLUMNS)
+    frame = candidates.read_core(project, stain, core_id, [*COLUMNS, "sam_masks", "sam_default"] if sam else COLUMNS)
     shown = candidates.shown_area_um2(frame).to_numpy(float) if outline == "default" and not frame.empty else None
     rows = []
     for number, row in enumerate(frame.to_dict("records")):
@@ -84,6 +94,11 @@ def outline_rows(project, core_id: str, stain: str, outline: str = "default") ->
             area = float(shown[number]) if np.isfinite(shown[number]) else area  # the drawn outline's, as the measures
         elif outline == "stain":
             rings = [own] if own else []
+        elif outline == "sam":  # the Segment Anything outline Tab switches to (`candidates.outline_choices`); the stain's where it has none
+            chosen = _flat_points(candidates.outline_choices(row)[0][0])
+            rings = [chosen] if chosen else ([own] if own else [])
+            if chosen:
+                area = _polygon_um2(chosen, project.pixel_size_um)
         else:
             masks = candidates.sam_masks(row.get("sam_masks"))
             index = int(outline[3:])

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import logging
 import re
 
 import numpy as np
@@ -15,6 +16,7 @@ from stainid.api.util import records
 from stainid.outputs import objects
 
 router = APIRouter(tags=["cohort"])
+log = logging.getLogger(__name__)
 CORE_COLUMNS = ["core_id", "tma", "core_label", "donor_id", "sample_region_id", "region", "disease_group", "technical_replicate"]
 GRID_THUMB = 256
 IMAGE_COLUMNS = 6  # pictures per row of an image set or whole-slide project on the Cores page
@@ -201,7 +203,7 @@ def core_objects(core_id: str, stain: str) -> dict:
         saved = store_view.threads(state.project, core_id) if stain == "AT8" else None
         return {"status": "done", "tiles_done": len(tiles), "tiles_total": len(tiles), "columns": V2_OBJECT_COLUMNS, "rows": rows, "tiles": boxes,
                 "outlines": True, "threads": saved["measured"] if saved else None, "source": "v2",
-                "unproposed": store_view.unproposed_count(state.project, core_id, stain)}
+                "unproposed": store_view.unproposed_count(state.project, core_id, stain), "outline_default": _default_outline(state, stain)}
     status, done, total = _detection(state, tiles, stain)
     found = _found(state, tiles, stain) if done else pd.DataFrame()
     rows = [list(r.values()) for r in records(found[OBJECT_COLUMNS])] if not found.empty else []
@@ -238,6 +240,15 @@ def core_outlines(core_id: str, stain: str, request: Request, outline: str = "de
                     taken.add(i)
                     rows.append([float(points[i, 0]), float(points[i, 1]), outline["area_um2"], outline["rings"]])
     return _json({"status": "not_made" if made is None else "done", "columns": OUTLINE_COLUMNS, "rows": rows}, request)
+
+
+def _default_outline(state: ProjectState, stain: str) -> str:
+    """The outline the stain draws first ("sam" or "stain", `v2.params.default_outline`): what Tab starts from."""
+    from stainid.v2.params import default_outline  # noqa: PLC0415
+
+    return "stain" if default_outline(state.project, stain) == "stain" else "sam"
+
+
 
 
 @router.get("/cores/{core_id}/{stain}/threads")

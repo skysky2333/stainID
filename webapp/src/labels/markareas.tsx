@@ -19,7 +19,7 @@ import { DeepZoom } from '../deepzoom'
 import type { Mark, PaintPoint, Pyramid } from '../deepzoom'
 import { useFetch, useStored } from '../hooks'
 import { AREA_SCALE, BRUSH_KEY, BRUSH_PX, BrushMasks, CLEARED, EXCLUDE_TYPES, brushStep, colourOfType } from './brush'
-import { useFitScreen, useLeaveGuard } from './rounds'
+import { BackToSets, useFitScreen, useLeaveGuard } from './rounds'
 
 export const AREAS_TITLE = 'Mark bad areas'
 export const AREAS_TEXT = 'One core at a time with all its stains: paint where the tissue is folded, torn, dirty, missing or out of focus, or press Enter when a stain looks fine.'
@@ -70,7 +70,7 @@ export function MarkAreas({ detail, onEvent, coach, onFinished }: {
   const top = (
     <div className="annotate-top">
       <div className="annotate-heading">
-        <span className="row small"><Link to="/">← My labelling sets</Link>
+        <span className="row small"><BackToSets />
           {!practice && <Link to={`/tutorial?kind=areas&next=${enc(`/annotate/${name}`)}`} title="The short tutorial of this page again">Tutorial</Link>}</span>
         <h1>{meta.title}</h1>
         <div className="muted small">{AREAS_TITLE}{next?.core_id ? ` · core ${next.core_id}` : ''}</div>

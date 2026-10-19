@@ -433,7 +433,7 @@ def _field_shapes(meta: dict, tile: dict) -> tuple[list[dict], dict[str, list]]:
         identity, subtype = candidate_store.ai_call(words, r.decision, r.klass, r.subtype)
         would = passing.get(r.candidate_id)
         if_accepted = list(candidate_store.ai_call(words, "accepted", *would)) if would is not None else None
-        found_masks, default = candidate_store.masks(r)
+        found_masks, default = candidate_store.choices(r)  # [Segment Anything's, the stain's]: what Tab switches between
         shapes = [_shape(m) for m in found_masks]
         masks[r.candidate_id] = shapes
         objects.append({"candidate_id": r.candidate_id, "x": round(float(r.x), 1), "y": round(float(r.y), 1), "own": bool(r.own),
@@ -478,8 +478,8 @@ def field_objects(meta: dict, tile: dict) -> list[dict]:
 
 
 def field_masks(meta: dict, tile: dict) -> dict[str, list]:
-    """Every outline of every candidate of the field (SAM small, medium, large, then the stain outline), flat whole pixels:
-    what the page loads after it has drawn the field, for switching outlines."""
+    """Both outlines of every candidate of the field (`candidate_store.CHOICES`: Segment Anything's, then the stain
+    outline; None where it has none), flat whole pixels: what the page loads after it has drawn the field, for Tab."""
     return _field_shapes(meta, tile)[1]
 
 
@@ -729,6 +729,8 @@ def clean(meta: dict, mark, person: str) -> dict | None:
             identity, subtype = candidate_store.ai_call(words, row.decision, row["class"], row.subtype)
             record |= {"value": identity, "subtype": (subtype or None) if asks_subtypes(meta) else None, "confirmed": True}
             return record | {"id": store.object_id("class", record["tile_id"], record["x"], record["y"])}
+        if mark.task == "outline" and not mark.deleted and mark.value in candidate_store.CHOICES:
+            record |= _chosen_outline(row, mark)
     elif not second or mark.task in ("class", "outline", objectedit.TASK):
         if not second:
             raise HTTPException(400, "a label of this round names its candidate")
@@ -753,9 +755,25 @@ def clean(meta: dict, mark, person: str) -> dict | None:
     return record | {"id": ids[mark.task]()}
 
 
+def _chosen_outline(row, mark) -> dict:
+    """The outline label of one of a candidate's two outlines (`candidate_store.CHOICES`, by name in `mark.value`): the
+    option's own points (in the field's picture), or, for Segment Anything where the store has none, the outline the
+    page asked of it live (`mark.points`); confirmed when it is the stain's default (the one shown first), so only a
+    changed option counts as an outline fix."""
+    found, default = candidate_store.choices(row)
+    index = candidate_store.CHOICES.index(mark.value)
+    dx, dy = float(row.x_core) - float(row.x), float(row.y_core) - float(row.y)
+    stored = found[index]
+    points = _simplified([[px - dx, py - dy] for px, py in stored]) if stored else mark.points
+    if not points or len(points) < 3:
+        raise HTTPException(400, f"candidate {mark.candidate} has no {mark.value} outline: send the one Segment Anything drew")
+    return {"points": points, "confirmed": index == default}
+
+
 def mask_outline(meta: dict, mark, record: dict) -> dict | None:
-    """The outline label of the mask someone chose with a decision (`mark.mask`, small to large): None when no mask was
-    chosen or the call says there is no object there ("not an object", "unsure")."""
+    """The outline label of the outline someone chose with a decision (`mark.mask`: an index into the candidate's
+    `candidate_store.choices`): None when none was chosen or the call says there is no object there ("not an object",
+    "unsure")."""
     outline_id = store.object_id("outline", record["tile_id"], record["x"], record["y"])
     if mark.deleted:  # a decision made with a mask taken back (undo): the mask goes with it
         return {**record, "id": outline_id, "task": "outline", "value": "", "subtype": None, "points": None} if mark.mask is not None else None
@@ -763,12 +781,12 @@ def mask_outline(meta: dict, mark, record: dict) -> dict | None:
     if mark.mask is None or record["value"] == candidate_store.negative_class(words) or words.skipped(record["value"]):
         return None
     row = candidate_row(meta["stain"], mark.candidate)
-    found, default = candidate_store.masks(row)
+    found, default = candidate_store.choices(row)
     if not 0 <= mark.mask < len(found) or not found[mark.mask]:
-        raise HTTPException(400, f"candidate {mark.candidate} has no mask {mark.mask}")
+        raise HTTPException(400, f"candidate {mark.candidate} has no outline {mark.mask}")
     dx, dy = float(row.x_core) - float(row.x), float(row.y_core) - float(row.y)
     points = _simplified([[px - dx, py - dy] for px, py in found[mark.mask]])
-    return {**record, "id": outline_id, "task": "outline", "value": f"mask {mark.mask}",
+    return {**record, "id": outline_id, "task": "outline", "value": candidate_store.CHOICES[mark.mask],
             "subtype": None, "points": points, "confirmed": mark.mask == default}
 
 
@@ -822,10 +840,12 @@ def _confirmations(meta: dict, tile: dict, person: str, mine: pd.DataFrame) -> l
             records.append({**stamp, "id": key, "task": "class", "x": x, "y": y, "value": identity, "confirmed": (identity, subtype) == detected,
                             "subtype": (subtype or None) if asks_subtypes(meta) else None, "candidate": r.candidate_id})
             positive = words.positive(identity, subtype)
-        outline = _simplified(candidate_store.ai_outline(r))  # the default mask
+        options, shown = candidate_store.choices(r)
+        outline = _simplified(options[shown])  # the outline shown first (the stain's default), which the person left as it is
         outline_key = store.object_id("outline", tile_id, x, y)
         if positive and outline and outline_key not in outlined:
-            records.append({**stamp, "id": outline_key, "task": "outline", "x": x, "y": y, "points": outline, "candidate": r.candidate_id, "confirmed": True})
+            records.append({**stamp, "id": outline_key, "task": "outline", "x": x, "y": y, "points": outline, "candidate": r.candidate_id, "confirmed": True,
+                            "value": candidate_store.CHOICES[shown]})
     return records
 
 

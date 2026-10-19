@@ -26,7 +26,11 @@ interface CoreObjects {
   tiles: number[][]; outlines: boolean; threads: ThreadTotals | null
   /** "v2": the candidate store (every candidate with its call and outline); "current": the detection steps' outputs */
   source?: 'v2' | 'current'; unproposed?: number | null
+  /** the outline the stain draws first (v2): what Tab switches from */
+  outline_default?: 'sam' | 'stain'
 }
+type Choice = 'sam' | 'stain'
+const CHOICE_NAME: Record<Choice, string> = { sam: 'Segment Anything', stain: 'stain outline' }
 /** Stained regions no v2 candidate covers: rows of [x, y, area µm², DAB / threshold, rings] in core-image pixels. */
 /** The areas the analysis leaves out (detection's automatic layer, `scale` core px per layer px, and the tissue in no
  *  analysed tile): each kind with its colour, hatching and share of the core's area; the picture is excluded.png. */
@@ -35,7 +39,7 @@ interface CoreExcluded { status: 'done' | 'not_made'; scale?: number; width?: nu
 /** What people said against detection on this core (GET …/annotations, labels/compare.py: the comparison scoring and the
  *  Labels overview use). Labels train and evaluate models only: nothing here changes what the analysis counts. */
 interface AnnotatorAnswer { person: string; identity: string; subtype: string; role: string; time: number }
-interface FixedOutline { person: string; time: number; points: number[][] | null; mask: number | null }
+interface FixedOutline { person: string; time: number; points: number[][] | null; mask: number | null; option?: 'sam' | 'stain' | null }
 interface AnnotatedObject {
   candidate_id: string; x_core?: number; y_core?: number; kind: 'agree' | 'changed' | 'rejected' | 'unsure' | 'outline'
   detection_identity?: string; detection_subtype?: string; identity?: string; subtype?: string; people?: AnnotatorAnswer[]; outline_fixed: FixedOutline[]
@@ -225,7 +229,12 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
   const outlinesMade = !!found.data?.outlines
   const [wantOutlines, setWantOutlines] = useState(false)  // fetched once asked for, kept when the layer is turned off
   useEffect(() => { if (layers.outlines) setWantOutlines(true) }, [layers.outlines])
-  const shapes = useFetch<CoreOutlines>(wantOutlines && outlinesMade ? `${base}/outlines?outline=default` : null)  // detection's own outline of each
+  // Tab: every object's outline switches at once between Segment Anything's and the stain outline (the stain's default
+  // first; the stain outline where Segment Anything has none). Only a view: nothing is saved here.
+  const [allChoice, setAllChoice] = useState<Choice | null>(null)
+  const defaultChoice: Choice = found.data?.outline_default ?? 'stain'
+  const shownChoice: Choice = allChoice ?? defaultChoice
+  const shapes = useFetch<CoreOutlines>(wantOutlines && outlinesMade ? `${base}/outlines?outline=${allChoice ?? 'default'}` : null)  // the outline of each
   const threadsMeasured = found.data?.threads ?? null
   const [threadPoll, setThreadPoll] = useState(true)
   const traced = useFetch<CoreThreads>(layers.threads && threadsMeasured ? `${base}/threads` : null, threadPoll ? 3000 : undefined)
@@ -364,13 +373,27 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
     [hidden, layers.tiles, found.data])
   const toggle = (key: keyof Layers) => setLayers({ ...layers, [key]: !layers[key] })
   const pick = drawn.find((o) => o.index === selected) ?? null
+  const latestTab = useRef({ shownChoice, layers })
+  latestTab.current = { shownChoice, layers }
+  useEffect(() => {  // Tab: every object's outline at once
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab' || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey || typing(e.target)) return
+      if (found.data?.source !== 'v2' || !outlinesMade) return
+      e.preventDefault()
+      const { shownChoice: now, layers: shownLayers } = latestTab.current
+      if (!shownLayers.outlines) setLayers({ ...shownLayers, outlines: true })
+      setAllChoice(now === 'sam' ? 'stain' : 'sam')
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [found.data?.source, outlinesMade])  // eslint-disable-line react-hooks/exhaustive-deps
 
   // pointing at an object with an outline someone fixed: their outline, thin and dashed, beside detection's (never instead)
   const [fixed, setFixed] = useState<{ points: number[][]; color: string; more?: number[][][] } | null>(null)
   const peopleLines = (a: AnnotatedObject) => [
     `Detection: ${className(vocabulary, a.detection_identity, a.detection_subtype)}`,
     ...(a.people ?? []).map((p) => `Annotator (${p.person}, ${day(p.time)}): ${p.role === 'skip' ? 'unsure' : className(vocabulary, p.identity, p.subtype)}`),
-    ...a.outline_fixed.map((f) => `Outline fixed by ${f.person} (${day(f.time)})${f.mask !== null ? `: chose mask ${f.mask}` : ''}`),
+    ...a.outline_fixed.map((f) => `Outline fixed by ${f.person} (${day(f.time)})${f.option ? `: switched to the ${CHOICE_NAME[f.option]}` : f.mask !== null ? `: chose mask ${f.mask}` : ''}`),
   ]
   const describe = (i: number) => {
     const o = drawn[i]
@@ -461,6 +484,8 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
               )}
               <OutlinesToggle made={outlinesMade} on={layers.outlines} onToggle={() => toggle('outlines')} state={shapes}
                 count={drawn.filter((o) => o.outline).length} v2={found.data.source === 'v2'} />
+              {found.data.source === 'v2' && outlinesMade && <div className="small indent outline-choice" title="Tab switches every object's outline between Segment Anything's and the stain outline (the stain outline where Segment Anything has none). Only the view: the analysis keeps the stain's default.">
+                <span className="badge outline-badge">Outline: {CHOICE_NAME[shownChoice]}{allChoice === null ? ' (the default)' : ''}</span> · <span className="kbd">Tab</span> switches all</div>}
               {stain === 'AT8' && <ThreadsToggle measured={threadsMeasured} on={layers.threads} onToggle={() => toggle('threads')} state={traced} />}
               {unproposedCount !== null && <UnproposedToggle count={unproposedCount} on={layers.unproposed} onToggle={() => toggle('unproposed')} state={stainedOnly} />}
             </>
@@ -492,6 +517,8 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
               {pick.p !== null && <><dt>Detection score</dt><dd>{Math.round(pick.p * 100)}%</dd></>}
               {pick.reason && <><dt>Why</dt><dd>{reasonText(pick.reason)}</dd></>}
               {pick.area !== null && <><dt>Area</dt><dd>{area(pick.area)} µm²</dd></>}
+              {showOutlines && found.data?.source === 'v2' && <><dt title="Tab switches every object's (Segment Anything or the stain outline)">Outline shown</dt>
+                <dd className="outline-shown">{CHOICE_NAME[shownChoice]}</dd></>}
               {showOutlines && pick.outline?.area != null && <><dt title="The area inside detection's outline">Outlined area</dt><dd>{area(pick.outline.area)} µm²</dd></>}
               <dt>Position</dt><dd>{Math.round(pick.x).toLocaleString()}, {Math.round(pick.y).toLocaleString()} px</dd>
             </dl>

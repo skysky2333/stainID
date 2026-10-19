@@ -42,7 +42,7 @@ def layer(project, stain: str, tiles: pd.DataFrame) -> dict:
     `object_edits` over all cores), kept until the label log, the candidate store or the excluded areas change: one
     core after another in the Cores view reads it without working it out again."""
     inputs = [store.log_path(project.output("reviews")), candidate_store.folder(project, stain)]
-    key = ("compare layer", str(project.root), stain, len(tiles), excluded_areas.signature(project, stain), vocab.of(project, stain))
+    key = ("compare layer", 2, str(project.root), stain, len(tiles), excluded_areas.signature(project, stain), vocab.of(project, stain))
     return cache.memo(key, inputs, lambda: {"found": _versus_detection(project, stain, tiles), "fixed": _fixed_outlines(project, stain, tiles),
                                             "added": _added_objects(project, stain, tiles), "edits": _object_edits(project, stain, tiles)},
                       folders=True, persist=disk_cache.answer_file(project.root, f"compare-{stain}.pkl"))
@@ -61,8 +61,10 @@ def versus_detection(project, stain: str, tiles: pd.DataFrame, core_id: str | No
 
 
 def fixed_outlines(project, stain: str, tiles: pd.DataFrame, core_id: str | None = None) -> pd.DataFrame:
-    """Outlines people fixed (precise editing, another mask, drawing), the latest per person and candidate: candidate_id,
-    person, time, points (core pixels) or mask (the index of the Segment Anything mask chosen)."""
+    """Outlines people fixed (precise editing, the other of its two outlines, drawing), the latest per person and
+    candidate: candidate_id, person, time, points (core pixels), `option` ("sam" or "stain": the other outline chosen
+    with Tab, its points kept with it; empty for a drawn one) or `mask` (pages of earlier releases: the index of the
+    Segment Anything mask chosen, without points)."""
     found = layer(project, stain, tiles)["fixed"]
     if core_id is None or found.empty:
         return found
@@ -135,7 +137,7 @@ def _object_labels(project, stain: str, task: str) -> pd.DataFrame:
 def _fixed_outlines(project, stain: str, tiles: pd.DataFrame, core_id: str | None = None) -> pd.DataFrame:
     rows = _object_labels(project, stain, "outline")
     if rows.empty or "candidate" not in rows:
-        return pd.DataFrame(columns=["candidate_id", "person", "time", "points", "mask"])
+        return pd.DataFrame(columns=FIXED_COLUMNS)
     rows = rows[(rows.candidate.fillna("").astype(str).str.len() > 0) & ~rows.confirmed.fillna(False).astype(bool)]
     if core_id is not None:
         rows = rows[rows.candidate.map(_core_of) == str(core_id)]
@@ -145,12 +147,16 @@ def _fixed_outlines(project, stain: str, tiles: pd.DataFrame, core_id: str | Non
     for r in rows.itertuples():
         value = str(r.value or "")
         mask = int(value[5:]) if value.startswith("mask ") and value[5:].isdigit() else None
+        option = value if value in candidate_store.CHOICES else ""
         points = None
         if mask is None and r.points is not None and r.tile_id in boxes.index:
             x0, y0 = frames.field_origin(boxes.loc[r.tile_id], project.context_px)
             points = [[round(float(x) + x0, 1), round(float(y) + y0, 1)] for x, y in r.points]
-        out.append({"candidate_id": r.candidate, "person": r.source, "time": float(r.time or 0), "points": points, "mask": mask})
-    return pd.DataFrame(out, columns=["candidate_id", "person", "time", "points", "mask"])
+        out.append({"candidate_id": r.candidate, "person": r.source, "time": float(r.time or 0), "points": points, "mask": mask, "option": option})
+    return pd.DataFrame(out, columns=FIXED_COLUMNS)
+
+
+FIXED_COLUMNS = ["candidate_id", "person", "time", "points", "mask", "option"]
 
 
 def _added_objects(project, stain: str, tiles: pd.DataFrame, core_id: str | None = None) -> pd.DataFrame:

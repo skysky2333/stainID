@@ -349,6 +349,15 @@ def masks(row) -> tuple[list[list[list[float]] | None], int]:
     return v2.outline_options(row)
 
 
+CHOICES = v2.CHOICES
+
+
+def choices(row) -> tuple[list[list[list[float]] | None], int]:
+    """The two outlines Tab switches between for a candidate ([Segment Anything's, the stain's], point lists, None
+    where missing) and the one shown first: `candidates.outline_choices`."""
+    return v2.outline_choices(row)
+
+
 def ai_outline(row) -> list[list[float]] | None:
     """The AI's outline of a candidate: the default of its masks (`masks`)."""
     found, default = masks(row)
@@ -665,9 +674,9 @@ def write_core(project: Project, stain: str, core_id: str, frame: pd.DataFrame) 
         if column in out:
             out[column] = [encode(p) for p in out[column]]
     if "sam_masks" in out:
-        out["sam_masks"] = ["|".join(encode(p) for p in m) if m else "" for m in out.sam_masks]
+        out["sam_masks"] = ["|".join(encode(p) for p in m) if isinstance(m, (list, tuple)) and m else "" for m in out.sam_masks]
     if "sam_scores" in out:
-        out["sam_scores"] = ["|".join(f"{v:.3f}" for v in m) if m else "" for m in out.sam_scores]
+        out["sam_scores"] = ["|".join(f"{v:.3f}" for v in m) if isinstance(m, (list, tuple)) and m else "" for m in out.sam_scores]
     return v2.write_table(target, out)
 
 

@@ -6,6 +6,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { RoundLive, RoundProgress } from '../api'
 import { api } from '../api'
+import { Link } from 'react-router-dom'
+import { useSession } from '../session'
 import { Progress } from '../components'
 import type { ClassPick, KeyMap, Vocabulary } from './classKeys'
 import { classText, keyGroups, keyName } from './classKeys'
@@ -22,14 +24,25 @@ export const ROUND_TEXT: Record<1 | 2, string> = {
 export type RoundEvent = 'hover' | 'class' | 'subtype' | 'unsure' | 'remove' | 'undo' | 'mask' | 'add' | 'added' | 'precise-in' | 'precise-edit'
   | 'precise-out' | 'save' | 'finish' | 'keep' | 'exclude' | 'overlays' | 'threshold' | 'start' | 'reset' | 'split-mode' | 'split-preview' | 'split'
   | 'merge-mode' | 'merge-pick' | 'merge' | 'brush-size'
+/** The way back from a labelling page: the person's sets, or, for a guest on a practice page (no account, no sets),
+ *  the sign-in. */
+export function BackToSets() {
+  const { session } = useSession()
+  return session.account ? <Link to="/">← My labelling sets</Link> : <Link to="/">Sign in</Link>
+}
+
 export const LIVE_MS = 3000  // how often a round page renews its hold on the field and asks for the progress
 export const TIER_TEXT: Record<number, string> = {
   0: 'Shown because detection is unsure about it (its score is near the cut-off).',
   1: 'Shown because detection rejected it although it looks strong.',
   2: 'Shown because detection accepted it although its score is low.',
 }
-/** What each of a candidate's outlines is, in the server's order: Segment Anything's three (small to large), then the
- *  stain-based outline when there are four; one alone is just "the outline". */
+/** A candidate's two outlines, as Tab switches between them and as their choice is saved (`candidate_store.CHOICES`):
+ *  Segment Anything's (ViT-B, the one stage 3 kept), then the stain outline. */
+export const CHOICE_IDS = ['sam', 'stain'] as const
+export const CHOICE_NAMES = ['Segment Anything', 'stain outline']
+/** What each of an object's outlines is, in the server's order (an object added with one click: Segment Anything's
+ *  three, small to large); one alone is just "the outline". */
 export function shapeNames(n: number): string[] {
   if (n === 1) return ['the outline']
   const sam = Math.min(n, 3)
@@ -174,6 +187,19 @@ export function MaskSwitch({ masks, index, onChange, disabled = false, names }: 
   const order = bySize(masks)
   const count = masks.length
   const rank = order.indexOf(index)
+  if (names === CHOICE_NAMES) {  // a candidate: its two outlines, Tab switches (Segment Anything is asked live where none is stored)
+    const other = index === 0 ? 1 : 0
+    return (
+      <div className="mask-switch" role="group" aria-label="Outline">
+        <div className="mask-switch-head small"><b>Outline</b> <span className="badge outline-badge" aria-live="polite">{CHOICE_NAMES[index]}</span>
+          {index === 0 && !masks[0] && <span className="muted"> · asking Segment Anything…</span>}</div>
+        <div className="mask-switch-row">
+          <button className="btn small" disabled={disabled} onClick={() => onChange(other)} title={`Show the ${CHOICE_NAMES[other]} (Tab)`}>
+            <span className="kbd">Tab</span> {CHOICE_NAMES[other]}{other === 0 && !masks[0] ? ' (asked live)' : ''}</button>
+        </div>
+      </div>
+    )
+  }
   if (order.length < 2) return null
   return (
     <div className="mask-switch" role="group" aria-label="Outline size">
@@ -375,7 +401,7 @@ export function KeyLegend({ round, vocabulary, keys, sam }: { round: 1 | 2; voca
       {round === 2 && <span>Point at an object: the keys act on it</span>}
       {round === 1 && <span><span className="kbd">Enter</span> keep detection’s call</span>}
       <ClassKeyHint vocabulary={vocabulary} keys={keys} brush={round === 2} />
-      <span><span className="kbd">Tab</span> / <span className="kbd">⇧ Tab</span> smaller / bigger outline</span>
+      <span><span className="kbd">Tab</span> {round === 2 ? 'switch outline: Segment Anything / stain' : 'smaller / bigger outline'}</span>
       {sam && <span><span className="kbd">Space</span> precise edit</span>}
       <span><span className="kbd">Z</span> undo (unsaved changes)</span>
       {round === 2 && sam && <span>Click empty tissue: add a missed object</span>}
