@@ -116,11 +116,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("stage", choices=("proposals", "calls", "outlines", "measures", "status"))
     p.add_argument("--stain", action="append", choices=("NeuN", "6E10", "AT8"))
     p.add_argument("--core", action="append", help="only this core (repeat for several; a file with one core id per line works too)")
-    p.add_argument("--workers", type=int, default=0, help="core images at once (0: as many as memory and processors allow)")
+    p.add_argument("--workers", type=int, default=0,
+                   help="core images at once (0: proposals 3, sharing the tile processes; calls as many as the processors allow)")
+    p.add_argument("--processes", type=int, default=-1,
+                   help="proposals: tile processes, one thread each, shared by the core images in flight (-1: as many as memory "
+                        "and processors allow; 0: the older layout, one process per core image with --threads and --tiles-at-once)")
     p.add_argument("--threads", type=int, default=0,
-                   help="proposals: filter threads per core image (0: the processors the workers leave idle, at most 4)")
+                   help="proposals with --processes 0: filter threads per core image (0: the processors the workers leave idle, at most 4)")
     p.add_argument("--tiles-at-once", type=int, default=1,
-                   help="proposals: tiles of a core image worked on at once (threads sharing the decoded image; ~0.7 GB each)")
+                   help="proposals with --processes 0: tiles of a core image worked on at once (threads sharing the decoded image; ~0.7 GB each)")
     p.add_argument("--device", default="", help="outlines: cuda, cuda:1 or cpu (default: a GPU when there is one)")
     p.add_argument("--redo", action="store_true", help="redo every core image, not only missing and outdated ones")
     _shard(p)
@@ -349,7 +353,7 @@ def run_v2(args: argparse.Namespace, project) -> None:
             print(f"{stage:<11} " + "  ".join(f"{s}: {v['done']}/{v['total']} done, {v['outdated']} outdated" for s, v in per.items()))
     elif args.stage == "proposals":
         run.run_proposals(project, stains, cores, args.workers or None, args.shard_index, args.shard_count, args.redo, args.threads or None,
-                          max(1, args.tiles_at_once))
+                          max(1, args.tiles_at_once), None if args.processes < 0 else args.processes)
     elif args.stage == "calls":
         run.run_calls(project, stains, cores, args.workers or None, args.redo)
     elif args.stage == "outlines":
