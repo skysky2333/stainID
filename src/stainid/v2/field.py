@@ -3,7 +3,7 @@ computed once (the legacy detection recomputed stain separation and the artifact
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from functools import cached_property
+from functools import cached_property, lru_cache
 
 import cv2
 import numpy as np
@@ -11,6 +11,32 @@ import numpy as np
 from stainid.imaging.color import rgb_to_hed
 from stainid.imaging.tissue import field_tissue_mask, fold_mask, linear_artifact_mask, tissue_area_mask
 from stainid.v2.geometry import disk
+
+
+@lru_cache(maxsize=1)
+def _hed_density() -> np.ndarray:
+    """skimage's `separate_stains` optical density of each 8-bit level (its own steps: `img_as_float64`, the 1e-6
+    floor, the log over log(1e-6)); read-only."""
+    from skimage.util import img_as_float64
+
+    levels = img_as_float64(np.arange(256, dtype=np.uint8))
+    np.maximum(levels, 1e-6, out=levels)
+    density = np.log(levels) / np.log(1e-6)
+    density.flags.writeable = False
+    return density
+
+
+@lru_cache(maxsize=1)
+def _saturation_table() -> np.ndarray:
+    """`Field.saturation` of a pixel by its brightest (row) and darkest (column) 8-bit level; read-only."""
+    value = (np.arange(256, dtype=np.float64) / 255.0)[:, None]
+    delta = value - (np.arange(256, dtype=np.float64) / 255.0)[None, :]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        table = delta / value
+    table[delta == 0.0] = 0.0
+    table[delta < 0.0] = 0.0  # darkest above brightest: never looked up
+    table.flags.writeable = False
+    return table
 
 
 @dataclass
@@ -161,20 +187,32 @@ class Field:
 
     @cached_property
     def skimage_hed(self) -> np.ndarray:
-        from skimage.color import rgb2hed
+        """skimage's `rgb2hed` of the field, to the bit: its optical densities looked up per 8-bit level (`_hed_density`,
+        made by skimage's own steps), then its matrix product as it does it."""
+        if self.rgb.dtype != np.uint8:
+            from skimage.color import rgb2hed
 
-        return rgb2hed(self.rgb)
+            return rgb2hed(self.rgb)
+        from skimage.color import hed_from_rgb
+
+        stains = _hed_density()[self.rgb] @ hed_from_rgb
+        np.maximum(stains, 0, out=stains)
+        return stains
 
     @cached_property
     def saturation(self) -> np.ndarray:
-        """HSV saturation, computed as skimage's rgb2hsv does (same floating-point steps), without its hue."""
-        scaled = self.rgb.astype(np.float64) / 255.0
-        value = scaled.max(axis=2)
-        delta = value - scaled.min(axis=2)
-        with np.errstate(invalid="ignore", divide="ignore"):
-            saturation = delta / value
-        saturation[delta == 0.0] = 0.0
-        return saturation
+        """HSV saturation, computed as skimage's rgb2hsv does (same floating-point steps), without its hue: a pixel's value
+        depends on its brightest and darkest channel alone (dividing by 255 keeps their order), so it is looked up."""
+        if self.rgb.dtype != np.uint8:
+            scaled = self.rgb.astype(np.float64) / 255.0
+            value = scaled.max(axis=2)
+            delta = value - scaled.min(axis=2)
+            with np.errstate(invalid="ignore", divide="ignore"):
+                saturation = delta / value
+            saturation[delta == 0.0] = 0.0
+            return saturation
+        red, green, blue = self.rgb[..., 0], self.rgb[..., 1], self.rgb[..., 2]
+        return _saturation_table()[np.maximum(np.maximum(red, green), blue), np.minimum(np.minimum(red, green), blue)]
 
     @cached_property
     def gray(self) -> np.ndarray:
