@@ -94,8 +94,10 @@ def outline_rows(project, core_id: str, stain: str, outline: str = "default") ->
             area = float(shown[number]) if np.isfinite(shown[number]) else area  # the drawn outline's, as the measures
         elif outline == "stain":
             rings = [own] if own else []
-        elif outline == "sam":  # the Segment Anything outline Tab switches to (`candidates.outline_choices`); the stain's where it has none
-            chosen = _flat_points(candidates.outline_choices(row)[0][0])
+        elif outline == "sam":  # the Segment Anything output stage 3 kept (`candidates.choice_index`); the stain's where it has none
+            options = candidates.outline_choices(row)[0]
+            index = candidates.choice_index("sam", row)
+            chosen = _flat_points(options[index]) if index else []
             rings = [chosen] if chosen else ([own] if own else [])
             if chosen:
                 area = _polygon_um2(chosen, project.pixel_size_um)

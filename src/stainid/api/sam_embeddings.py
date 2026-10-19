@@ -142,13 +142,15 @@ def field_picture(state: ProjectState, tile_id: str) -> np.ndarray:
     return rgb
 
 
-def outline(state: ProjectState, tile_id: str, stain: str, points: list[tuple[float, float, bool]]) -> dict:
-    """`ClickOutliner.outline` for clicks on a field, from the window around the first click."""
+def outline(state: ProjectState, tile_id: str, stain: str, points: list[tuple[float, float, bool]], box=None, sizes: bool = False,
+            avoid=None) -> dict:
+    """`ClickOutliner.outline` for clicks on a field, from the window around the first click (`box`, `sizes`, `avoid`:
+    a split piece's)."""
     model = clicks.outliner(checkpoint(state))
     rgb = field_picture(state, tile_id)
     origin = window_origin(rgb.shape, points[0][0], points[0][1])
     found = embedding(state, rgb, field_stem(state, tile_id), origin, model, click=True)
-    return model.outline(found, origin, rgb, stain, points)
+    return model.outline(found, origin, rgb, stain, points, box=box, sizes=sizes, avoid=avoid)
 
 
 def _make_field(state: ProjectState, tile_id: str, remember: bool, more_urgent) -> bool:

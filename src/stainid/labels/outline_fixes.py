@@ -8,8 +8,9 @@ stain outline and Segment Anything's three masks (small, medium, large), and the
 `candidates.outline_options`). For a split or merge the union of the originals' outlines is compared with the union
 of what people drew. Per outline: the intersection over union (IoU) and the area ratio (detection's area over the
 person's), and which outline was closest (highest IoU) for each object. An object whose outline people switched (Tab)
-to the other of its two outlines (`candidate_store.CHOICES`, e.g. a NeuN object from Segment Anything to the stain
-outline) counts as a fix too (kind "switched"), its chosen outline compared like a drawn one.
+to another of its outlines (`candidate_store.CHOICES`: the stain outline, Segment Anything small, medium, large; e.g. a
+6E10 plaque from the stain outline to SAM medium) counts as a fix too (kind "switched"), its chosen outline compared
+like a drawn one.
 
 An indication, not an accuracy measure: only objects people chose to fix are counted (where the shown outline was
 wrong enough to fix), and a precise edit starts from the shown outline. Where people only switched to another of
@@ -86,7 +87,7 @@ def _fixed(project, stain: str, tiles: pd.DataFrame) -> tuple[list[dict], dict[s
     objects, picked = [], {}
     for r in layer["fixed"].itertuples():
         option = getattr(r, "option", "") or ""
-        if option:  # the other of its two outlines, chosen with Tab: a changed option is an outline fix
+        if option:  # another of its outlines, chosen with Tab: a changed option is an outline fix
             picked[option] = picked.get(option, 0) + 1
             if r.points:
                 objects.append({"kind": "switched", "person": r.person, "time": r.time, "candidates": [r.candidate_id], "drawn": [r.points]})

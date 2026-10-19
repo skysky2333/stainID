@@ -353,9 +353,14 @@ CHOICES = v2.CHOICES
 
 
 def choices(row) -> tuple[list[list[list[float]] | None], int]:
-    """The two outlines Tab switches between for a candidate ([Segment Anything's, the stain's], point lists, None
+    """The outlines one chooses between for a candidate ([the stain's, SAM small, medium, large], point lists, None
     where missing) and the one shown first: `candidates.outline_choices`."""
     return v2.outline_choices(row)
+
+
+def choice_index(name: str, row) -> int | None:
+    """A choice's index by name (`CHOICES`, or "sam" of earlier releases): `candidates.choice_index`."""
+    return v2.choice_index(name, row)
 
 
 def ai_outline(row) -> list[list[float]] | None:
@@ -379,10 +384,15 @@ def negative_class(vocabulary: vocab.Vocabulary) -> str:
     return vocabulary.reject
 
 
-def ai_call(vocabulary: vocab.Vocabulary, decision: str, klass: str, subtype: str) -> tuple[str, str]:
+def ai_call(vocabulary: vocab.Vocabulary, decision: str, klass: str, subtype: str, reason: str = "") -> tuple[str, str]:
     """The AI's call on a candidate as (identity, subtype) ids of the stain's label classes: accepted ones their class
-    (the stain's first positive class when the class is not one of the labels'), rejected ones the negative class."""
+    (the stain's first positive class when the class is not one of the labels'), rejected ones the negative class, or
+    the named look-alike a rule called it (`reason` "rule:…": a deposit on a vessel wall is CAA)."""
     if not accepted(decision):
+        if str(reason).startswith("rule:") and klass:
+            found = vocabulary.identity(vocabulary.resolve(klass)[0])
+            if found is not None and found.role == vocab.NEGATIVE:
+                return found.id, ""
         return negative_class(vocabulary), ""
     identity, sub = vocabulary.resolve(klass, subtype)
     found = vocabulary.identity(identity) if identity else None
@@ -408,12 +418,13 @@ def calls_of(project: Project, stain: str, candidate_ids) -> pd.DataFrame:
             cores.add(v2.parse_id(c)[1])
         except ValueError:
             continue
-    found = for_cores(project, stain, cores, ["candidate_id", "x_core", "y_core", "decision", "class", "subtype", "probability", "radius_px", "area_um2"])
+    found = for_cores(project, stain, cores, ["candidate_id", "x_core", "y_core", "decision", "reason", "class", "subtype", "probability", "radius_px", "area_um2"])
     found = found[found.candidate_id.isin(set(ids))].drop_duplicates("candidate_id") if len(found) else found
     if found.empty:
         return pd.DataFrame(columns=columns)
     words = vocab.of(project, stain)
-    calls = [ai_call(words, d, k, t) for d, k, t in zip(found.decision, found["class"], found.subtype)]
+    reasons = found["reason"] if "reason" in found else pd.Series("", index=found.index)
+    calls = [ai_call(words, d, k, t, w) for d, k, t, w in zip(found.decision, found["class"], found.subtype, reasons.fillna(""))]
     return pd.DataFrame({"identity": [c[0] for c in calls], "subtype": [c[1] for c in calls],
                          "value": [f"{i} / {t}" if t else i for i, t in calls],
                          "probability": pd.to_numeric(found.probability, errors="coerce").to_numpy(),

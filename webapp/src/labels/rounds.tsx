@@ -21,7 +21,7 @@ export const ROUND_TEXT: Record<1 | 2, string> = {
   2: 'Whole fields with every object detection considered: point at one and press a key to change its call, fix its outline, add what it missed.',
 }
 /** What someone does on a round page, as the tutorial follows it. */
-export type RoundEvent = 'hover' | 'class' | 'subtype' | 'unsure' | 'remove' | 'undo' | 'mask' | 'add' | 'added' | 'precise-in' | 'precise-edit'
+export type RoundEvent = 'hover' | 'class' | 'subtype' | 'unsure' | 'remove' | 'undo' | 'mask' | 'add' | 'added' | 'precise-in' | 'precise-spot' | 'precise-drag'
   | 'precise-out' | 'save' | 'finish' | 'keep' | 'exclude' | 'overlays' | 'threshold' | 'start' | 'reset' | 'split-mode' | 'split-preview' | 'split'
   | 'merge-mode' | 'merge-pick' | 'merge' | 'brush-size'
 /** The way back from a labelling page: the person's sets, or, for a guest on a practice page (no account, no sets),
@@ -37,10 +37,20 @@ export const TIER_TEXT: Record<number, string> = {
   1: 'Shown because detection rejected it although it looks strong.',
   2: 'Shown because detection accepted it although its score is low.',
 }
-/** A candidate's two outlines, as Tab switches between them and as their choice is saved (`candidate_store.CHOICES`):
- *  Segment Anything's (ViT-B, the one stage 3 kept), then the stain outline. */
-export const CHOICE_IDS = ['sam', 'stain'] as const
-export const CHOICE_NAMES = ['Segment Anything', 'stain outline']
+/** A candidate's outlines by name (the server's `candidates.CHOICES`), and what the page calls them; "sam" of earlier
+ *  releases is Segment Anything's output stage 3 kept. */
+export const CHOICE_IDS = ['stain', 'sam_small', 'sam_medium', 'sam_large'] as const
+export const CHOICE_NAMES = ['stain outline', 'SAM small', 'SAM medium', 'SAM large']
+/** A split piece's outlines: the split's own, then Segment Anything's small and medium (asked live, the siblings left out). */
+export const PIECE_IDS = ['split', 'sam_small', 'sam_medium'] as const
+export const PIECE_NAMES = ['split outline', 'SAM small', 'SAM medium']
+/** The outline Tab moves to from `index`: stain (or split) outline -> SAM small -> SAM medium -> back; SAM large only
+ *  where it is the one shown first (`first`). */
+export function tabNext(index: number, first: number): number {
+  const order = [0, 1, 2, ...(first === 3 ? [3] : [])]
+  const at = order.indexOf(index)
+  return at < 0 ? 0 : order[(at + 1) % order.length]
+}
 /** What each of an object's outlines is, in the server's order (an object added with one click: Segment Anything's
  *  three, small to large); one alone is just "the outline". */
 export function shapeNames(n: number): string[] {
@@ -181,21 +191,21 @@ export function SaveButtons({ unsaved, saving, onSave, onContinue, canContinue, 
 }
 
 /** The smaller / bigger switch between an object's masks: the size shown, and Tab (smaller) / Shift+Tab (bigger), as for the brush. */
-export function MaskSwitch({ masks, index, onChange, disabled = false, names }: {
-  masks: (number[][] | null)[]; index: number; onChange: (i: number) => void; disabled?: boolean; names?: string[]
+export function MaskSwitch({ masks, index, onChange, disabled = false, names, first = 0 }: {
+  masks: (number[][] | null)[]; index: number; onChange: (i: number) => void; disabled?: boolean; names?: string[]; first?: number
 }) {
   const order = bySize(masks)
   const count = masks.length
   const rank = order.indexOf(index)
-  if (names === CHOICE_NAMES) {  // a candidate: its two outlines, Tab switches (Segment Anything is asked live where none is stored)
-    const other = index === 0 ? 1 : 0
+  if (names === CHOICE_NAMES || names === PIECE_NAMES) {  // a candidate or a split piece: Tab cycles (Segment Anything asked live where none is stored)
+    const next = tabNext(index, first)
     return (
       <div className="mask-switch" role="group" aria-label="Outline">
-        <div className="mask-switch-head small"><b>Outline</b> <span className="badge outline-badge" aria-live="polite">{CHOICE_NAMES[index]}</span>
-          {index === 0 && !masks[0] && <span className="muted"> · asking Segment Anything…</span>}</div>
+        <div className="mask-switch-head small"><b>Outline</b> <span className="badge outline-badge" aria-live="polite">{names[index]}</span>
+          {index > 0 && !masks[index] && <span className="muted"> · asking Segment Anything…</span>}</div>
         <div className="mask-switch-row">
-          <button className="btn small" disabled={disabled} onClick={() => onChange(other)} title={`Show the ${CHOICE_NAMES[other]} (Tab)`}>
-            <span className="kbd">Tab</span> {CHOICE_NAMES[other]}{other === 0 && !masks[0] ? ' (asked live)' : ''}</button>
+          <button className="btn small" disabled={disabled} onClick={() => onChange(next)} title={`Show the ${names[next]} (Tab)`}>
+            <span className="kbd">Tab</span> {names[next]}{next > 0 && !masks[next] ? ' (asked live)' : ''}</button>
         </div>
       </div>
     )

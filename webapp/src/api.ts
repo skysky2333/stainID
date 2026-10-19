@@ -222,7 +222,7 @@ export interface Label {
   id: string; source: string; stain: string; task: 'class' | 'outline' | 'tag' | 'note' | 'done' | 'exclude' | 'threshold' | 'replaced'; tile_id: string  // exclude: an area marked as bad (points: its rings)
   x: number | null; y: number | null; value: string; subtype?: string | null; points: number[][] | null; session: string; confirmed: boolean; time: number; deleted?: boolean
   /** where the label comes from: a piece of a split or a merged object ({edit, group}), an object replaced by one ({group, into}) */
-  meta?: { edit?: 'split' | 'merge'; group?: string; into?: number[][] } | null
+  meta?: { edit?: 'split' | 'merge'; group?: string; into?: number[][]; split_outline?: number[][] } | null
 }
 export interface FieldObjectLite { x: number; y: number; radius_px: number; ai_value?: string; ai_probability?: number }
 export interface FieldWork {
@@ -541,8 +541,11 @@ export interface RoundObject<Shape = number[][]> {
   ai_probability: number | null; decision: string; reason: string; masks: (Shape | null)[]; mask: number; more_masks?: number
   /** in an excluded area (people's final say): drawn faint, not asked about */
   excluded?: boolean
-  /** its call (identity, subtype) if the acceptance threshold let it pass (labels/starting.py); null when a rule decides it */
+  /** its call (identity, subtype) when the acceptance threshold counts it (score >= threshold, a missing score 0:
+   *  labels/starting.py); null in an excluded area, where detection's call stays */
   if_accepted?: [string, string] | null
+  /** the rule that kept it out of detection's own count ("rule:speck", "rule:vascular_or_edge" …), else "" */
+  rule?: string
   /** detection's threshold for it (the model's cut-off) */
   threshold?: number | null
 }

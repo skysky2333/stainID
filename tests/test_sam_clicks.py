@@ -238,3 +238,32 @@ def test_features_are_named_after_what_they_are_made_from(app):
     weights.write_bytes(b"other weights")
     assert sam_embeddings.field_stem(state, TILE) not in (stem, changed)
     assert "sam_embeddings" in disk_cache.KINDS
+
+
+def test_a_split_piece_is_outlined_in_its_box_without_its_siblings(on_cpu, tmp_path, monkeypatch):
+    """A split piece asks Segment Anything for its sizes (`sizes`, whatever the clicks) with a point on it, its sibling
+    left out, a box around it, and the sibling's outline cut out of every result (its largest part kept)."""
+    weights = tmp_path / "sam_vit_b_01ec64.pth"
+    weights.write_bytes(b"weights")
+    model = clicks.outliner(weights)
+    rgb = np.full((768, 768, 3), 225, np.uint8)
+    found = model.encode(rgb)
+    asked = {}
+
+    def predict(point_coords, point_labels, box=None, multimask_output=True):
+        asked.update(labels=list(point_labels), box=None if box is None else list(box), multimask=multimask_output)
+        sizes = []
+        for half in (40, 60, 120):  # each runs over the sibling to the right of x = 300
+            m = np.zeros((768, 768), bool)
+            m[250 - half: 250 + half, 250 - half: 250 + half] = True
+            sizes.append(m)
+        return np.stack(sizes), np.array([0.9, 0.8, 0.7]), None
+
+    monkeypatch.setattr(model.predictor, "predict", predict)
+    sibling = [[300.0, 100.0], [500.0, 100.0], [500.0, 400.0], [300.0, 400.0]]
+    out = model.outline(found, (0, 0), rgb, "6E10", [(250.0, 250.0, True), (400.0, 250.0, False)], box=(190, 190, 310, 310),
+                        sizes=True, avoid=[sibling])
+    assert asked == {"labels": [1, 0], "box": [190.0, 190.0, 310.0, 310.0], "multimask": True}
+    assert len(out["options"]) == 3
+    for option in out["options"]:
+        assert max(x for x, _ in option["points"]) < 300  # the sibling cut out

@@ -13,6 +13,8 @@ import { INACTIVE_GREY, MODEL_CLASSES, UNKNOWN_COLOUR, UNSURE_AMBER, classColour
 import { PALETTE, areaColour } from '../palette'
 import type { Vocabulary } from '../labels/classKeys'
 import { ThresholdSlider } from '../labels/threshold'
+import { reasonText } from '../labels/reasons'
+import { passes } from '../labels/fieldStart'
 
 interface CoreInfo extends CoreDetail {
   images: (CoreDetail['images'][number] & { pixel_width_um?: number })[]
@@ -29,8 +31,12 @@ interface CoreObjects {
   /** the outline the stain draws first (v2): what Tab switches from */
   outline_default?: 'sam' | 'stain'
 }
-type Choice = 'sam' | 'stain'
-const CHOICE_NAME: Record<Choice, string> = { sam: 'Segment Anything', stain: 'stain outline' }
+/** Which outline every object shows (Tab cycles stain -> SAM small -> SAM medium; "sam": the output stage 3 kept, the
+ *  default of a stain drawn with Segment Anything), and the `outline` the server draws for it (store_view.outline_rows). */
+type Choice = 'sam' | 'stain' | 'sam_small' | 'sam_medium'
+const CHOICE_NAME: Record<string, string> = { sam: 'Segment Anything', stain: 'stain outline', sam_small: 'SAM small', sam_medium: 'SAM medium', sam_large: 'SAM large' }
+const CHOICE_OUTLINE: Record<Choice, string> = { sam: 'sam', stain: 'stain', sam_small: 'sam0', sam_medium: 'sam1' }
+const TAB_ORDER: Choice[] = ['stain', 'sam_small', 'sam_medium']
 /** Stained regions no v2 candidate covers: rows of [x, y, area µm², DAB / threshold, rings] in core-image pixels. */
 /** The areas the analysis leaves out (detection's automatic layer, `scale` core px per layer px, and the tissue in no
  *  analysed tile): each kind with its colour, hatching and share of the core's area; the picture is excluded.png. */
@@ -39,7 +45,7 @@ interface CoreExcluded { status: 'done' | 'not_made'; scale?: number; width?: nu
 /** What people said against detection on this core (GET …/annotations, labels/compare.py: the comparison scoring and the
  *  Labels overview use). Labels train and evaluate models only: nothing here changes what the analysis counts. */
 interface AnnotatorAnswer { person: string; identity: string; subtype: string; role: string; time: number }
-interface FixedOutline { person: string; time: number; points: number[][] | null; mask: number | null; option?: 'sam' | 'stain' | null }
+interface FixedOutline { person: string; time: number; points: number[][] | null; mask: number | null; option?: string | null }
 interface AnnotatedObject {
   candidate_id: string; x_core?: number; y_core?: number; kind: 'agree' | 'changed' | 'rejected' | 'unsure' | 'outline'
   detection_identity?: string; detection_subtype?: string; identity?: string; subtype?: string; people?: AnnotatorAnswer[]; outline_fixed: FixedOutline[]
@@ -57,7 +63,7 @@ interface ObjectEdit {
 }
 /** The Cores view's preview of the acceptance threshold (GET …/threshold-preview, labels/starting.py): per candidate
  *  its score and the call it would get if it passed ("" where a rule decides it). Never saved. */
-interface ThresholdPreview { detection: number | null; rows: [string, number | null, string, string][] }
+interface ThresholdPreview { detection: number | null; rows: [string, number | null, string, string, string?][] }
 interface CoreAnnotations {
   objects: AnnotatedObject[]; added: AddedObject[]; edits?: ObjectEdit[]
   counts: { agree: number; changed: number; rejected: number; unsure: number; added: number; outline_fixed: number; split?: number; merge?: number }
@@ -120,18 +126,6 @@ const THREAD_COLOR = PALETTE.overlays.threads  // over a dark halo; a mid blue v
 const TRACING = ['waiting', 'tracing']
 /** A thread's line on screen (px), by its measured width: thin, medium (1–2 µm) or thick (2 µm or more). */
 const threadLine = (widthUm: number) => (widthUm < 1 ? 1.2 : widthUm < 2 ? 1.9 : 2.8)
-/** Why detection kept or rejected a candidate (the v2 reason codes), in plain words. */
-const REASON_TEXT: Record<string, string> = {
-  accepted: 'kept by the model', rejected_by_model: 'the model judged it not an object', 'rule:speck': 'smaller than a plaque (a speck)',
-  'rule:vascular_or_edge': 'on a vessel wall or tissue edge', 'rule:duplicate': 'a second detection of a nearby object',
-  'rule:excluded': 'in an area left out of the analysis', 'rule:near_profile': 'a nucleus beside a stained neuron',
-  'rule:pale_nucleus': 'a pale nucleus without stain', 'rule:shape': 'too small, too large or too long for a neuron',
-  'rule:low_contrast': 'too faint against its surroundings', 'rule:small': 'too small for a tau+ neuron',
-  'rule:artifact_shape': 'shaped like an artifact', 'rule:thread_like': 'lies on a thread',
-  'rule:edge': 'a brown rim along a tissue edge or hole', 'rule:irregular': 'too irregular for a cell body (thread tangle)',
-  'rule:fold': 'on a tissue fold',
-}
-const reasonText = (code: string) => REASON_TEXT[code] ?? code.replace(/^rule:/, '').replace(/_/g, ' ')
 /** The colours of people's areas: the one palette's area types (the brush's), and of a part taken out of a type. */
 const AREA_COLOURS: Record<string, string> = { '1': areaColour('1'), '2': areaColour('2'), '3': areaColour('3'), '4': areaColour('4'), include: areaColour('include') }
 const AREA_NAMES: Record<string, string> = { '1': 'fold or tissue damage', '2': 'artifact', '3': 'no tissue', '4': 'out of focus or bad staining', include: 'taken out of a type (marked fine)' }
@@ -234,7 +228,7 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
   const [allChoice, setAllChoice] = useState<Choice | null>(null)
   const defaultChoice: Choice = found.data?.outline_default ?? 'stain'
   const shownChoice: Choice = allChoice ?? defaultChoice
-  const shapes = useFetch<CoreOutlines>(wantOutlines && outlinesMade ? `${base}/outlines?outline=${allChoice ?? 'default'}` : null)  // the outline of each
+  const shapes = useFetch<CoreOutlines>(wantOutlines && outlinesMade ? `${base}/outlines?outline=${allChoice ? CHOICE_OUTLINE[allChoice] : 'default'}` : null)  // the outline of each
   const threadsMeasured = found.data?.threads ?? null
   const [threadPoll, setThreadPoll] = useState(true)
   const traced = useFetch<CoreThreads>(layers.threads && threadsMeasured ? `${base}/threads` : null, threadPoll ? 3000 : undefined)
@@ -281,7 +275,7 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
   const [previewAt, setPreviewAt] = useState<number | null>(null)
   const detectionAt = preview.data?.detection ?? null
   const previewValue = previewOn && detectionAt != null ? previewAt ?? detectionAt : null
-  const would = useMemo(() => new Map((preview.data?.rows ?? []).map(([id, p, identity, subtype]) => [id, { p, identity, subtype }])), [preview.data])
+  const would = useMemo(() => new Map((preview.data?.rows ?? []).map(([id, p, identity, subtype, reason]) => [id, { p, identity, subtype, reason: reason ?? '' }])), [preview.data])
   const objects = useMemo<Found[]>(() => {
     const data = found.data
     if (!data) return []
@@ -295,8 +289,9 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
       candidate: col.candidate_id === undefined ? undefined : String(r[col.candidate_id] ?? '') })).map((o) => {
       if (previewValue == null || detectionAt == null || Math.abs(previewValue - detectionAt) < 1e-9 || !o.candidate) return o
       const w = would.get(o.candidate)
-      if (!w || !w.identity || w.p == null) return o  // a rule decides it: as detection called it
-      if (w.p < previewValue) return { ...o, ...objectClass(vocabulary, 'rejected') }
+      if (!w || (!w.identity && !w.reason)) return o  // a rule decided it, or an excluded area: as detection called it, whatever the threshold
+      if (!passes(w.p ?? 0, previewValue)) return o.cls === 'rejected' ? o : { ...o, ...objectClass(vocabulary, 'rejected') }  // passes where score >= threshold
+      if (!w.identity) return { ...o, ...objectClass(vocabulary, 'rejected'), reason: w.reason }  // passes, but a rule after the model rejects it
       if (o.cls !== 'rejected') return o
       return { ...o, ...objectClass(vocabulary, 'accepted', w.identity, w.subtype) }
     })
@@ -382,7 +377,7 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
       e.preventDefault()
       const { shownChoice: now, layers: shownLayers } = latestTab.current
       if (!shownLayers.outlines) setLayers({ ...shownLayers, outlines: true })
-      setAllChoice(now === 'sam' ? 'stain' : 'sam')
+      setAllChoice(TAB_ORDER[(TAB_ORDER.indexOf(now) + 1) % TAB_ORDER.length])  // from the default "sam": the stain outline first
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -393,7 +388,7 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
   const peopleLines = (a: AnnotatedObject) => [
     `Detection: ${className(vocabulary, a.detection_identity, a.detection_subtype)}`,
     ...(a.people ?? []).map((p) => `Annotator (${p.person}, ${day(p.time)}): ${p.role === 'skip' ? 'unsure' : className(vocabulary, p.identity, p.subtype)}`),
-    ...a.outline_fixed.map((f) => `Outline fixed by ${f.person} (${day(f.time)})${f.option ? `: switched to the ${CHOICE_NAME[f.option]}` : f.mask !== null ? `: chose mask ${f.mask}` : ''}`),
+    ...a.outline_fixed.map((f) => `Outline fixed by ${f.person} (${day(f.time)})${f.option ? `: switched to the ${CHOICE_NAME[f.option] ?? f.option}` : f.mask !== null ? `: chose mask ${f.mask}` : ''}`),
   ]
   const describe = (i: number) => {
     const o = drawn[i]
@@ -485,7 +480,7 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
               <OutlinesToggle made={outlinesMade} on={layers.outlines} onToggle={() => toggle('outlines')} state={shapes}
                 count={drawn.filter((o) => o.outline).length} v2={found.data.source === 'v2'} />
               {found.data.source === 'v2' && outlinesMade && <div className="small indent outline-choice" title="Tab switches every object's outline between Segment Anything's and the stain outline (the stain outline where Segment Anything has none). Only the view: the analysis keeps the stain's default.">
-                <span className="badge outline-badge">Outline: {CHOICE_NAME[shownChoice]}{allChoice === null ? ' (the default)' : ''}</span> · <span className="kbd">Tab</span> switches all</div>}
+                <span className="badge outline-badge" title="SAM sizes are stored for every counted object (and some rejected ones); an object without them shows its stain outline">Outline: {CHOICE_NAME[shownChoice]}{allChoice === null ? ' (the default)' : ''}</span> · <span className="kbd">Tab</span> switches all (stain → SAM small → SAM medium)</div>}
               {stain === 'AT8' && <ThreadsToggle measured={threadsMeasured} on={layers.threads} onToggle={() => toggle('threads')} state={traced} />}
               {unproposedCount !== null && <UnproposedToggle count={unproposedCount} on={layers.unproposed} onToggle={() => toggle('unproposed')} state={stainedOnly} />}
             </>

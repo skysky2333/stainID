@@ -159,10 +159,13 @@ class ClickOutliner:
         return Embedding(features.numpy().astype(np.float16), tuple(window.shape[:2]), tuple(transformed.shape[:2]))
 
     def outline(self, embedding: Embedding, origin: tuple[int, int], rgb: np.ndarray, stain: str,
-                points: list[tuple[float, float, bool]]) -> dict:
+                points: list[tuple[float, float, bool]], box: tuple[float, float, float, float] | None = None,
+                sizes: bool = False, avoid: list[list[list[float]]] | None = None) -> dict:
         """Outlines for one object from clicks (x, y, on the object or not; the first one on it) in the window at
         `origin` of the field `rgb`: with one click the three sizes Segment Anything offers (smallest first) and the
-        one this stain's outline step would choose, with more clicks the one outline that fits them all."""
+        one this stain's outline step would choose, with more clicks the one outline that fits them all. `sizes`: the
+        three sizes whatever the clicks; `box` (x0, y0, x1, y1, field pixels) bounds the object; `avoid` (outlines in
+        field pixels) is cut out of every result, which keeps its largest part (a split piece's siblings)."""
         import torch
 
         x0, y0 = origin
@@ -170,14 +173,21 @@ class ClickOutliner:
         inside = [(px, py, on) for px, py, on in points if x0 <= px < x0 + width and y0 <= py < y0 + height]
         coords = np.array([[px - x0, py - y0] for px, py, _ in inside], float)
         labels = np.array([1 if on else 0 for _, _, on in inside])
-        many = len(inside) > 1
+        many = len(inside) > 1 and not sizes
+        framed = None if box is None else np.array([box[0] - x0, box[1] - y0, box[2] - x0, box[3] - y0], float)
         with self.decoding:
             predictor = self.predictor
             predictor.features = torch.from_numpy(embedding.features.astype(np.float32))
             predictor.original_size, predictor.input_size = embedding.original_size, embedding.input_size
             predictor.is_image_set = True
-            masks, scores, _ = predictor.predict(point_coords=coords, point_labels=labels, multimask_output=not many)
+            masks, scores, _ = predictor.predict(point_coords=coords, point_labels=labels, box=framed, multimask_output=not many)
         masks = [m.astype(bool) for m in masks]
+        if avoid:
+            others = np.zeros(masks[0].shape, np.uint8)
+            for ring in avoid:
+                if ring and len(ring) >= 3:
+                    cv2.fillPoly(others, [np.rint(np.asarray(ring, float) - (x0, y0)).astype(np.int32)], 1)
+            masks = [m & (others == 0) for m in masks]
         if many:
             chosen = 0
         else:
