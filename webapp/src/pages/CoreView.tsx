@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import type { CoreDetail } from '../api'
-import { apiUrl, coreThumb, enc } from '../api'
+import { api, apiUrl, coreThumb, enc } from '../api'
 import { ErrorNote, GroupBadge, Loaded, Loading, PageHead, Progress, fmt } from '../components'
 import type { Line, Mark, Pyramid, ViewTarget } from '../deepzoom'
 import { DeepZoom } from '../deepzoom'
@@ -26,7 +26,11 @@ interface CoreObjects {
   tiles: number[][]; outlines: boolean; threads: ThreadTotals | null
   /** "v2": the candidate store (every candidate with its call and outline); "current": the detection steps' outputs */
   source?: 'v2' | 'current'; unproposed?: number | null
+  /** the outline the stain draws first (v2): what Tab switches from */
+  outline_default?: 'sam' | 'stain'
 }
+type Choice = 'sam' | 'stain'
+const CHOICE_NAME: Record<Choice, string> = { sam: 'Segment Anything', stain: 'stain outline' }
 /** Stained regions no v2 candidate covers: rows of [x, y, area µm², DAB / threshold, rings] in core-image pixels. */
 /** The areas the analysis leaves out (detection's automatic layer, `scale` core px per layer px, and the tissue in no
  *  analysed tile): each kind with its colour, hatching and share of the core's area; the picture is excluded.png. */
@@ -35,7 +39,7 @@ interface CoreExcluded { status: 'done' | 'not_made'; scale?: number; width?: nu
 /** What people said against detection on this core (GET …/annotations, labels/compare.py: the comparison scoring and the
  *  Labels overview use). Labels train and evaluate models only: nothing here changes what the analysis counts. */
 interface AnnotatorAnswer { person: string; identity: string; subtype: string; role: string; time: number }
-interface FixedOutline { person: string; time: number; points: number[][] | null; mask: number | null }
+interface FixedOutline { person: string; time: number; points: number[][] | null; mask: number | null; option?: 'sam' | 'stain' | null }
 interface AnnotatedObject {
   candidate_id: string; x_core?: number; y_core?: number; kind: 'agree' | 'changed' | 'rejected' | 'unsure' | 'outline'
   detection_identity?: string; detection_subtype?: string; identity?: string; subtype?: string; people?: AnnotatorAnswer[]; outline_fixed: FixedOutline[]
@@ -225,7 +229,17 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
   const outlinesMade = !!found.data?.outlines
   const [wantOutlines, setWantOutlines] = useState(false)  // fetched once asked for, kept when the layer is turned off
   useEffect(() => { if (layers.outlines) setWantOutlines(true) }, [layers.outlines])
-  const shapes = useFetch<CoreOutlines>(wantOutlines && outlinesMade ? `${base}/outlines?outline=default` : null)  // detection's own outline of each
+  // Tab: an object's outline switches between Segment Anything's and the stain outline (the one pointed at or chosen),
+  // or every object's (nothing pointed at); the stain's default is shown first. Only a view: nothing is saved here.
+  const [allChoice, setAllChoice] = useState<Choice | null>(null)
+  const [oneChoice, setOneChoice] = useState<Record<string, Choice>>({})  // by "x,y" of the object
+  const [liveSam, setLiveSam] = useState<Record<string, { area: number | null; rings: number[][] }>>({})
+  const defaultChoice: Choice = found.data?.outline_default ?? 'stain'
+  const shownChoice: Choice = allChoice ?? defaultChoice
+  const shapes = useFetch<CoreOutlines>(wantOutlines && outlinesMade ? `${base}/outlines?outline=${allChoice ?? 'default'}` : null)  // the outline of each
+  const anyOne = Object.keys(oneChoice).length > 0
+  const stainShapes = useFetch<CoreOutlines>(anyOne && outlinesMade ? `${base}/outlines?outline=stain` : null)
+  const samShapes = useFetch<CoreOutlines>(anyOne && outlinesMade ? `${base}/outlines?outline=sam` : null)
   const threadsMeasured = found.data?.threads ?? null
   const [threadPoll, setThreadPoll] = useState(true)
   const traced = useFetch<CoreThreads>(layers.threads && threadsMeasured ? `${base}/threads` : null, threadPoll ? 3000 : undefined)
@@ -277,12 +291,19 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
     const data = found.data
     if (!data) return []
     const col = Object.fromEntries(data.columns.map((c, i) => [c, i]))
-    const outlines = new Map((shapes.data?.rows ?? []).map(([x, y, area, rings]) => [`${x},${y}`, { area, rings }]))
+    const byKey = (d: CoreOutlines | null) => new Map((d?.rows ?? []).map(([x, y, area, rings]) => [`${x},${y}`, { area, rings }]))
+    const outlines = byKey(shapes.data)
+    const ofChoice: Record<Choice, Map<string, { area: number | null; rings: number[][] }>> = { stain: byKey(stainShapes.data), sam: byKey(samShapes.data) }
+    const outlineAt = (key: string) => {
+      const one = oneChoice[key]
+      if (!one || one === shownChoice) return outlines.get(key)
+      return (one === 'sam' ? liveSam[key] : undefined) ?? ofChoice[one].get(key) ?? outlines.get(key)
+    }
     return data.rows.map((r, index) => ({ index, x: Number(r[col.x]), y: Number(r[col.y]), r: Number(r[col.radius_px] ?? 6),
       ...objectClass(vocabulary, String(r[col.model_class]), col.class === undefined ? undefined : String(r[col.class] ?? ''),
         col.subtype === undefined ? undefined : String(r[col.subtype] ?? '')),
       p: r[col.probability] === null ? null : Number(r[col.probability]), area: r[col.area_um2] === null ? null : Number(r[col.area_um2]),
-      outline: outlines.get(`${r[col.x]},${r[col.y]}`), reason: col.reason === undefined ? undefined : String(r[col.reason] ?? ''),
+      outline: outlineAt(`${r[col.x]},${r[col.y]}`), reason: col.reason === undefined ? undefined : String(r[col.reason] ?? ''),
       candidate: col.candidate_id === undefined ? undefined : String(r[col.candidate_id] ?? '') })).map((o) => {
       if (previewValue == null || detectionAt == null || Math.abs(previewValue - detectionAt) < 1e-9 || !o.candidate) return o
       const w = would.get(o.candidate)
@@ -291,7 +312,7 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
       if (o.cls !== 'rejected') return o
       return { ...o, ...objectClass(vocabulary, 'accepted', w.identity, w.subtype) }
     })
-  }, [found.data, shapes.data, vocabulary, previewValue, detectionAt, would])
+  }, [found.data, shapes.data, stainShapes.data, samShapes.data, oneChoice, liveSam, shownChoice, vocabulary, previewValue, detectionAt, would])
   const colorOfClass = useMemo(() => Object.fromEntries(objects.map((o) => [o.cls, o.color])), [objects])
   const labelOfClass = useMemo(() => Object.fromEntries(objects.map((o) => [o.cls, o.label])), [objects])
   const counts = useMemo(() => objects.reduce<Record<string, number>>((acc, o) => ({ ...acc, [o.cls]: (acc[o.cls] ?? 0) + 1 }), {}), [objects])
@@ -364,13 +385,50 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
     [hidden, layers.tiles, found.data])
   const toggle = (key: keyof Layers) => setLayers({ ...layers, [key]: !layers[key] })
   const pick = drawn.find((o) => o.index === selected) ?? null
+  const hoveredAt = useRef<Found | null>(null)
+  const latestTab = useRef({ pick, shownChoice, oneChoice })
+  latestTab.current = { pick, shownChoice, oneChoice }
+  useEffect(() => {  // Tab / Shift+Tab: the outline of the object pointed at (or chosen), or of every object
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab' || e.ctrlKey || e.metaKey || e.altKey || typing(e.target)) return
+      e.preventDefault()
+      const { pick: chosen, shownChoice: now, oneChoice: ones } = latestTab.current
+      if (!layers.outlines) setLayers({ ...layers, outlines: true })
+      const o = hoveredAt.current ?? chosen
+      if (o) {
+        const key = `${o.x},${o.y}`
+        const next: Choice = (ones[key] ?? now) === 'sam' ? 'stain' : 'sam'
+        setOneChoice({ ...ones, [key]: next })
+        return
+      }
+      setOneChoice({})
+      setAllChoice(now === 'sam' ? 'stain' : 'sam')
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
+  const asked = useRef(new Set<string>())
+  useEffect(() => {  // an object switched to Segment Anything the store has no outline of: one click of it, live
+    if (!samShapes.data || !stainShapes.data) return
+    const sam = new Map(samShapes.data.rows.map(([x, y, , rings]) => [`${x},${y}`, JSON.stringify(rings)]))
+    const stain = new Map(stainShapes.data.rows.map(([x, y, , rings]) => [`${x},${y}`, JSON.stringify(rings)]))
+    for (const [key, choice] of Object.entries(oneChoice)) {
+      if (choice !== 'sam' || liveSam[key] || asked.current.has(key)) continue
+      if (sam.has(key) && sam.get(key) !== stain.get(key)) continue  // stored: shown as it is
+      asked.current.add(key)
+      const [x, y] = key.split(',').map(Number)
+      void api.post<{ points: number[]; area_um2: number }>(`${base}/sam`, { x, y })
+        .then((got) => setLiveSam((all) => ({ ...all, [key]: { area: got.area_um2, rings: [got.points] } })))
+        .catch(() => undefined)  // no weights, or nothing found: the stain outline stays
+    }
+  }, [oneChoice, samShapes.data, stainShapes.data, liveSam, base])
 
   // pointing at an object with an outline someone fixed: their outline, thin and dashed, beside detection's (never instead)
   const [fixed, setFixed] = useState<{ points: number[][]; color: string; more?: number[][][] } | null>(null)
   const peopleLines = (a: AnnotatedObject) => [
     `Detection: ${className(vocabulary, a.detection_identity, a.detection_subtype)}`,
     ...(a.people ?? []).map((p) => `Annotator (${p.person}, ${day(p.time)}): ${p.role === 'skip' ? 'unsure' : className(vocabulary, p.identity, p.subtype)}`),
-    ...a.outline_fixed.map((f) => `Outline fixed by ${f.person} (${day(f.time)})${f.mask !== null ? `: chose mask ${f.mask}` : ''}`),
+    ...a.outline_fixed.map((f) => `Outline fixed by ${f.person} (${day(f.time)})${f.option ? `: switched to the ${CHOICE_NAME[f.option]}` : f.mask !== null ? `: chose mask ${f.mask}` : ''}`),
   ]
   const describe = (i: number) => {
     const o = drawn[i]
@@ -421,6 +479,7 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
           <DeepZoom pyramid={ready} tileUrl={tileUrl} layers={!hidden && layers.dab ? ['dab'] : []} marks={shown} lines={lines} lineColor={THREAD_COLOR}
             boxes={boxes} overlays={overlays} pixelUm={image?.pixel_width_um} height="auto"
             selected={!hidden && pick ? drawn.indexOf(pick) : null} describe={describe} target={target} onView={setViewRect}
+            onHover={(i) => { hoveredAt.current = i !== null && i < drawn.length ? drawn[i] : null }}
             onPick={(i) => {
               if (i !== null && i >= drawn.length) {  // a badge: its object
                 const at = annotated.about[i - drawn.length - regions.length]?.at
@@ -461,6 +520,9 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
               )}
               <OutlinesToggle made={outlinesMade} on={layers.outlines} onToggle={() => toggle('outlines')} state={shapes}
                 count={drawn.filter((o) => o.outline).length} v2={found.data.source === 'v2'} />
+              {found.data.source === 'v2' && outlinesMade && <div className="small indent outline-choice" title="Tab with the mouse on an object (or one chosen) switches its outline; with nothing pointed at, every object's. Only the view: the analysis keeps the stain's default.">
+                <span className="badge outline-badge">Outline: {CHOICE_NAME[shownChoice]}{allChoice === null ? ' (the default)' : ''}</span>
+                {anyOne && <span className="muted"> · {Object.keys(oneChoice).length} switched</span>} · <span className="kbd">Tab</span> switches</div>}
               {stain === 'AT8' && <ThreadsToggle measured={threadsMeasured} on={layers.threads} onToggle={() => toggle('threads')} state={traced} />}
               {unproposedCount !== null && <UnproposedToggle count={unproposedCount} on={layers.unproposed} onToggle={() => toggle('unproposed')} state={stainedOnly} />}
             </>
@@ -492,6 +554,8 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
               {pick.p !== null && <><dt>Detection score</dt><dd>{Math.round(pick.p * 100)}%</dd></>}
               {pick.reason && <><dt>Why</dt><dd>{reasonText(pick.reason)}</dd></>}
               {pick.area !== null && <><dt>Area</dt><dd>{area(pick.area)} µm²</dd></>}
+              {showOutlines && found.data?.source === 'v2' && <><dt title="Tab switches it (Segment Anything or the stain outline)">Outline shown</dt>
+                <dd className="outline-shown">{CHOICE_NAME[oneChoice[`${pick.x},${pick.y}`] ?? shownChoice]}</dd></>}
               {showOutlines && pick.outline?.area != null && <><dt title="The area inside detection's outline">Outlined area</dt><dd>{area(pick.outline.area)} µm²</dd></>}
               <dt>Position</dt><dd>{Math.round(pick.x).toLocaleString()}, {Math.round(pick.y).toLocaleString()} px</dd>
             </dl>

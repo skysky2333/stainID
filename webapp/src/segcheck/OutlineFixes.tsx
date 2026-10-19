@@ -10,11 +10,11 @@ import { useFetch } from '../hooks'
 
 interface OutlineOption { id: string; name: string; compared: number; iou_median: number | null; iou_mean: number | null; area_ratio_median: number | null; closest: number | null }
 interface StainFixes {
-  stain: string; objects: number; edited: number; split: number; merge: number; people: string[]; options: OutlineOption[]
+  stain: string; objects: number; edited: number; switched?: number; split: number; merge: number; people: string[]; options: OutlineOption[]
   picked: Record<string, number>; default: 'stain' | 'sam'; hint: { option: string; text: string } | null
 }
 
-const OPTION_NAME: Record<string, string> = { stain: 'stain outline', sam_small: 'SAM small', sam_medium: 'SAM medium', sam_large: 'SAM large' }
+const OPTION_NAME: Record<string, string> = { stain: 'stain outline', sam: 'Segment Anything', sam_small: 'SAM small', sam_medium: 'SAM medium', sam_large: 'SAM large' }
 const num = (v: number | null, digits = 2) => (v == null ? '–' : v.toFixed(digits))
 
 export function OutlineFixes() {
@@ -36,7 +36,7 @@ export function OutlineFixes() {
 }
 
 function StainFixesCard({ s }: { s: StainFixes }) {
-  const kinds = [[s.edited, 'edited precisely'], [s.split, 'split'], [s.merge, 'merged']].filter(([n]) => n).map(([n, w]) => `${(n as number).toLocaleString()} ${w}`)
+  const kinds = [[s.edited, 'edited precisely'], [s.switched ?? 0, 'switched to the other outline (Tab)'], [s.split, 'split'], [s.merge, 'merged']].filter(([n]) => n).map(([n, w]) => `${(n as number).toLocaleString()} ${w}`)
   const picked = Object.entries(s.picked).filter(([, n]) => n)
   const best = Math.max(...s.options.filter((o) => o.id !== 'shown').map((o) => o.iou_median ?? -1))
   return (
@@ -57,7 +57,7 @@ function StainFixesCard({ s }: { s: StainFixes }) {
           ))}</tbody>
         </table>
       </>}
-      {picked.length > 0 && <p className="small secondary" style={{ margin: '4px 0 0' }}>Switched to another of detection’s outlines without drawing:{' '}
+      {picked.length > 0 && <p className="small secondary" style={{ margin: '4px 0 0' }}>Switched to the other outline (Tab):{' '}
         {picked.map(([k, n]) => `${OPTION_NAME[k] ?? k} ${n.toLocaleString()}×`).join(', ')}.</p>}
       {s.hint && <p className="small" style={{ margin: '6px 0 0' }}><b>Hint:</b> {s.hint.text}. Change it on the <Link to="/workflow">Run page</Link> if it holds up.</p>}
     </div>

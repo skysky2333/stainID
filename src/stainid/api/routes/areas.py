@@ -427,7 +427,7 @@ def core_annotations(core_id: str, stain: str) -> dict:
     added = compare.added_objects(state.project, stain, state.tiles, core_id)
     outlines = {}
     for r in fixed.itertuples():
-        outlines.setdefault(r.candidate_id, []).append({"person": r.person, "time": r.time, "points": r.points, "mask": r.mask})
+        outlines.setdefault(r.candidate_id, []).append({"person": r.person, "time": r.time, "points": r.points, "mask": r.mask, "option": r.option or None})
     objects = [{**r, "outline_fixed": outlines.get(r["candidate_id"], [])} for r in found.to_dict("records")]
     known = set(found.candidate_id) if len(found) else set()
     objects += [{"candidate_id": c, "core_id": core_id, "kind": "outline", "outline_fixed": v} for c, v in outlines.items() if c not in known]

@@ -7,7 +7,9 @@ merged object against the candidates they replace). Each is compared with every 
 stain outline and Segment Anything's three masks (small, medium, large), and the one it showed first (`shown`,
 `candidates.outline_options`). For a split or merge the union of the originals' outlines is compared with the union
 of what people drew. Per outline: the intersection over union (IoU) and the area ratio (detection's area over the
-person's), and which outline was closest (highest IoU) for each object.
+person's), and which outline was closest (highest IoU) for each object. An object whose outline people switched (Tab)
+to the other of its two outlines (`candidate_store.CHOICES`, e.g. a NeuN object from Segment Anything to the stain
+outline) counts as a fix too (kind "switched"), its chosen outline compared like a drawn one.
 
 An indication, not an accuracy measure: only objects people chose to fix are counted (where the shown outline was
 wrong enough to fix), and a precise edit starts from the shown outline. Where people only switched to another of
@@ -25,11 +27,13 @@ from stainid.exclusions import signature as excluded_signature
 from stainid.labels import candidate_store, compare, store
 
 OPTIONS = ("stain", "sam_small", "sam_medium", "sam_large")
-NAMES = {"stain": "stain outline", "sam_small": "SAM small", "sam_medium": "SAM medium", "sam_large": "SAM large", "shown": "the outline shown first"}
+NAMES = {"stain": "stain outline", "sam_small": "SAM small", "sam_medium": "SAM medium", "sam_large": "SAM large", "shown": "the outline shown first",
+         "sam": "Segment Anything"}
 COLUMNS = ["candidate_id", "x_core", "y_core", "outline", "sam_outline", "sam_status", "sam_masks", "sam_scores", "sam_default", "outline_default"]
 HINT_GAIN = 0.05  # a hint when one outline's median IoU is at least this much above the shown outline's ...
 HINT_MIN = 5  # ... over at least this many fixed objects
-MASK_OPTION = {0: "sam_small", 1: "sam_medium", 2: "sam_large", 3: "stain"}
+MASK_OPTION = {0: "sam_small", 1: "sam_medium", 2: "sam_large", 3: "stain"}  # pages of earlier releases: "mask N"
+KINDS = ("edited", "switched", "split", "merge")
 ROW_COLUMNS = ["stain", "kind", "person", "time", "candidates", "outline", *[f"{m}_{n}" for n in (*OPTIONS, "shown") for m in ("iou", "ratio")], "closest"]
 
 
@@ -81,7 +85,12 @@ def _fixed(project, stain: str, tiles: pd.DataFrame) -> tuple[list[dict], dict[s
     layer = compare.layer(project, stain, tiles)
     objects, picked = [], {}
     for r in layer["fixed"].itertuples():
-        if r.points:
+        option = getattr(r, "option", "") or ""
+        if option:  # the other of its two outlines, chosen with Tab: a changed option is an outline fix
+            picked[option] = picked.get(option, 0) + 1
+            if r.points:
+                objects.append({"kind": "switched", "person": r.person, "time": r.time, "candidates": [r.candidate_id], "drawn": [r.points]})
+        elif r.points:
             objects.append({"kind": "edited", "person": r.person, "time": r.time, "candidates": [r.candidate_id], "drawn": [r.points]})
         elif r.mask is not None and r.mask == r.mask and int(r.mask) in MASK_OPTION:
             picked[MASK_OPTION[int(r.mask)]] = picked.get(MASK_OPTION[int(r.mask)], 0) + 1
@@ -129,7 +138,7 @@ def rows(project, stain: str, tiles: pd.DataFrame) -> pd.DataFrame:
 
 def _cached(project, stain: str, tiles: pd.DataFrame):
     inputs = [store.log_path(project.output("reviews")), candidate_store.folder(project, stain)]
-    key = ("outline fixes", str(project.root), stain, len(tiles), excluded_signature(project, stain))
+    key = ("outline fixes", 2, str(project.root), stain, len(tiles), excluded_signature(project, stain))
     return cache.memo(key, inputs, lambda: _rows(project, stain, tiles), folders=True,
                       persist=disk_cache.answer_file(project.root, f"outline-fixes-{stain}.pkl"))
 
@@ -157,5 +166,6 @@ def summary(project, stain: str, tiles: pd.DataFrame) -> dict:
         hint = {"option": best["id"], "text": f"{best['name']} matches people's fixes better for {stain} (IoU {best['iou_median']:.2f} vs "
                                               f"{shown['iou_median']:.2f} for {NAMES['shown']}, over {best['compared']} objects)"}
     kinds = frame.kind.value_counts().to_dict() if len(frame) else {}
-    return {"stain": stain, "objects": int(len(frame)), "edited": int(kinds.get("edited", 0)), "split": int(kinds.get("split", 0)), "merge": int(kinds.get("merge", 0)),
+    return {"stain": stain, "objects": int(len(frame)), "edited": int(kinds.get("edited", 0)), "switched": int(kinds.get("switched", 0)),
+            "split": int(kinds.get("split", 0)), "merge": int(kinds.get("merge", 0)),
             "people": sorted(set(frame.person)) if len(frame) else [], "options": options, "picked": picked, "default": default, "hint": hint}

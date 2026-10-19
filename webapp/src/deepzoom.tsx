@@ -223,8 +223,10 @@ export interface PaintPoint { x: number; y: number; s: number; shift: boolean }
  * a mark or inside its outline reports its index to `onPick` (null for empty space), hovering shows `describe(index)`.
  */
 export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lineColor = '#fff', boxes = [], overlays = [], selected = null, describe, onPick, target, pixelUm, toolbar, height = 'min(72vh, 760px)', onTileError, onView,
-  onPress, onMove, onRelease, panLock = false, onWheelOver, over, cursor }: {
+  onPress, onMove, onRelease, panLock = false, onWheelOver, over, cursor, onHover }: {
   pyramid: Pyramid
+  /** the mark under the mouse changed (null: none), e.g. for keys that act on the object pointed at */
+  onHover?: (index: number | null) => void
   tileUrl: (level: number, col: number, row: number, layer?: string) => string
   layers?: string[]
   marks?: Mark[]
@@ -275,6 +277,7 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
   const prepared = useMemo(() => prepare(marks), [marks])
   const strokes = useMemo(() => linePaths(lines ?? []), [lines])
   useEffect(() => setHovered(null), [marks])
+  useEffect(() => { onHover?.(hovered) }, [hovered])  // eslint-disable-line react-hooks/exhaustive-deps
   const cache = useRef<{ canvas: HTMLCanvasElement; view: View; w: number; h: number } | null>(null)
   const frame = useRef(0)
   const settle = useRef(0)

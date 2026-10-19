@@ -51,7 +51,7 @@ const FAQ: [string, ReactNode][] = [
     {' '}What stainID detection found is then on the picture: each type solid in its own colour, objects it rejected dotted grey.
     Point at an object and press one key: a <b>number</b> picks a counted type, a <b>letter</b> a named look-alike, <b>Del</b> rejects it (dotted grey,
     like detection’s own rejects; a number makes it solid again), <b>`</b> unsure (dotted amber with “?”, left out of training and evaluation).
-    <b>Tab</b> / <b>Shift+Tab</b> a smaller or bigger outline (the same for the brush), a <b>click</b> on the object to edit the outline spot by spot (a click outside or Enter
+    <b>Tab</b> switches its outline between Segment Anything’s and the stain outline (with nothing under the mouse, every object’s; with the brush on, Tab sizes the brush), a <b>click</b> on the object to edit the outline spot by spot (a click outside or Enter
     keeps it), <b>Space</b> to hide the drawings for a clean look, <b>S</b> to split an object in two (click it, Enter; or draw a line across objects),
     {' '}<b>M</b> to merge objects (click or drag over them, Enter), <b>B</b> the brush for bad areas (a drag adds to the chosen type’s area, Shift-drag
     takes out of it, <b>Tab</b> / <b>Shift+Tab</b> a smaller or bigger brush: it keeps its size on screen, so zoom in for a finer one), <b>Z</b> undo. Splits and merges are your labels: detection’s objects stay what the
