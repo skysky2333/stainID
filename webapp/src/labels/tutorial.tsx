@@ -304,7 +304,7 @@ function AreasCoached({ preview, next }: { preview: boolean; next: string }) {
 
 const THREAD_STEPS: { title: string; text: string; done: RoundEvent }[] = [
   { title: 'Open threads mode', text: 'Press H. The thread network detection found on this AT8 field is drawn in cyan (only in this mode: while you fix objects it stays hidden).', done: 'threads-mode' },
-  { title: 'Match the threads', text: 'Drag the thread-threshold slider (or press [ and ]): lower finds fainter threads, higher keeps only the darkest. Stop where the lines match the threads you see. The mark on the track is detection’s own setting.', done: 'threads-step' },
+  { title: 'Match the threads', text: 'Drag the thread-threshold slider (or press [ and ]): lower finds fainter threads, higher keeps only the darkest. Stop where the lines match the threads you see. The mark on the track is detection’s own setting. Lighter areas are not counted (glass, folds, artifacts): their lines are faded, so judge it on the rest.', done: 'threads-step' },
   { title: 'Threads look right', text: 'Press Enter (or “Threads look right”). Left untouched, Enter says detection’s threshold is right. You never edit single threads.', done: 'threads-saved' },
 ]
 
@@ -392,14 +392,14 @@ function ThreadsCoached({ preview, next }: { preview: boolean; next: string }) {
                 const unit = Number.isFinite(rawUnit) && rawUnit > 0 ? rawUnit : 1
                 return <>
                   {box && <path d={`M0 0H${size.w}V${size.h}H0Z M${box.x} ${box.y}v${box.height}h${box.width}v${-box.height}Z`} fill="#000" fillOpacity={0.22} fillRule="evenodd" pointerEvents="none" />}
-                  {threading && data && <ThreadLines lines={data.steps[at].lines} unit={unit} />}
+                  {threading && data && <ThreadLines lines={data.steps[at].lines} unit={unit} areas={ladder.data!.not_counted} />}
                 </>
               }}
             </ZoomViewer>
           </div>
           <aside className="annotate-side round-side" aria-label="The tutorial and threads mode">
             {coach}
-            {threading ? <ThreadsCard ladder={ladder.data} index={at} onChange={(i) => { setStep(i); tell('threads-step') }} onConfirm={confirm} saved={saved} practice />
+            {threading ? <ThreadsCard ladder={ladder.data} index={at} onChange={(i) => { setStep(i); tell('threads-step') }} onConfirm={confirm} saved={saved} practice notCounted={!!ladder.data.not_counted?.png} />
               : <div className="card side-block small"><span className="kbd">H</span> threads mode{saved != null ? ` · set: ${saved === 1 ? 'detection’s' : `${saved.toFixed(2)}×`} (not saved: practice)` : ''}</div>}
           </aside>
         </div>

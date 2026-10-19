@@ -133,6 +133,8 @@ def test_a_field_s_thread_threshold_is_one_label_and_comes_back(rounds_project, 
     six = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "open": True, "tile_ids": ["LIP-1_B-2_6E10_S01"]}).json()["name"]
     assert _save(ann, six, "LIP-1_B-2_6E10_S01", [{"task": tt.TASK, "value": "1"}]).status_code == 400
     assert ann.get(f"/api/annotate/{six}/fields/LIP-1_B-2_6E10_S01").json()["threads"] is None
+    assert ann.get(f"/api/annotate/{name}/fields/{AT8_TILE}/threads/areas").status_code == 200  # the "not counted" shade
+    assert ann.get(f"/api/annotate/{six}/fields/LIP-1_B-2_6E10_S01/threads/areas").status_code == 404
 
 
 def test_the_threads_practice_keeps_nothing(rounds_project):
@@ -153,3 +155,33 @@ def test_the_threads_practice_keeps_nothing(rounds_project):
         assert found.status_code == 200 and found.json()["credit"] == "Images: test" and len(found.json()["steps"]) == 17
         assert client.get("/api/annotate/practice-threads/picture.jpg").headers["content-type"] == "image/jpeg"
     assert _log_lines() == before
+
+
+def test_threads_mode_shades_what_is_not_counted_from_people_s_final_say_without_ai(monkeypatch):
+    import base64
+    from types import SimpleNamespace
+
+    from stainid import exclusions
+    from stainid.api import store_view
+
+    codes = np.zeros((40, 40), np.uint8)
+    codes[:, 30:] = 3  # glass on the right
+    codes[5:15, 5:15] = 1  # a fold
+    codes[38:, :] = exclusions.OUTSIDE  # beyond the tiles: not shaded
+    asked = {}
+
+    def final_say(project, core_id, stain, ai=True):
+        asked["ai"] = ai
+        return SimpleNamespace(codes=codes, scale=16, digest="d")
+
+    monkeypatch.setattr(exclusions, "final_say", final_say)
+    project = SimpleNamespace(context_px=64)
+    tile = {"core_id": "c", "stain": "AT8", "x_px": 64, "y_px": 64, "width_px": 512, "height_px": 512}
+    found = store_view.not_counted(project, tile)
+    assert asked["ai"] is False  # people's areas by the existing rule, no AI areas
+    assert found["status"] == "done" and (found["x"], found["y"]) == (0, 0) and found["width"] == found["height"] == 640
+    picture = cv2.imdecode(np.frombuffer(base64.b64decode(found["png"].split(",", 1)[1]), np.uint8), cv2.IMREAD_UNCHANGED)
+    assert picture[10, 10, 3] == 255 and picture[20, 35, 3] == 255 and picture[20, 20, 3] == 0 and picture[39, 20, 3] == 0
+    assert len(found["labels"]) == 2 and all(0 <= x <= 640 and 0 <= y <= 640 for x, y in found["labels"])
+    codes[:] = exclusions.COUNTED
+    assert store_view.not_counted(project, tile)["png"] is None

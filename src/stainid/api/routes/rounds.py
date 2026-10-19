@@ -978,6 +978,18 @@ def thread_detector() -> dict:
     return thread_threshold.summary(store.current(root()), get_state().tiles)
 
 
+@router.get("/annotate/{name}/fields/{tile_id}/threads/areas")
+def field_threads_areas(name: str, tile_id: str, request: Request, person: str = Depends(annotator)) -> dict:
+    """Threads mode's "not counted" shade (`store_view.not_counted`): detection's automatic areas with people's saved
+    edits (no AI areas), where the thread lines are drawn faded."""
+    from stainid.api import store_view  # noqa: PLC0415
+
+    meta = _round_meta(name, request)
+    if meta["stain"] != "AT8":
+        raise HTTPException(404, "threads are an AT8 step")
+    return store_view.not_counted(get_state().project, field_tile(meta, tile_id))
+
+
 @router.get("/annotate/practice-threads/ladder")
 def practice_threads() -> dict:
     """The threads practice of the tutorial (`stainid.tutorial`, an AT8 field of a public dataset): its picture's size,

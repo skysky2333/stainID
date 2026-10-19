@@ -40,7 +40,7 @@ import { SLIDER_STEP, acceptedAt, lock, moveTo, slider, sliderText, startPick, u
 import { LockIcon, ThresholdSlider } from './threshold'
 import { reasonText, whyStart } from './reasons'
 import { peopleChecks } from './aiLabels'
-import type { ThreadLadder } from './threads'
+import type { NotCounted, ThreadLadder } from './threads'
 import { THREAD_KEY, ThreadLines, ThreadsCard, stepOf } from './threads'
 import { BackToSets, CHOICE_IDS, CHOICE_NAMES, PIECE_IDS, PIECE_NAMES, tabNext, ClassLegend, LookLegend, MaskSwitch, ROUND_TITLE, RoundProgressLine, SaveButtons, SaveState, callText, changesText, draftKey, lookOf, maskName,
   polygonArea, polygonPoints, readDraft, simplifyPolygon, stepMask, unsureClass, useCandidateKeys, useFitScreen, useLeaveGuard, useLive, useSaveKeys,
@@ -275,6 +275,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   const ladder = useFetch<ThreadLadder>(threadsHere && threadsAsked ? `/api/annotate/${name}/fields/${enc(tile)}/threads` : null)
   const [threadSaved, setThreadSaved] = useState<number | null>(field.threads?.factor ?? null)
   const [threadStep, setThreadStep] = useState<number | null>(null)
+  const notCounted = useFetch<NotCounted>(threadsHere && threadsAsked ? `/api/annotate/${name}/fields/${enc(tile)}/threads/areas` : null)
   const ladderDone = ladder.data?.status === 'done' && ladder.data.steps.length ? ladder.data : null
   const threadIndex = ladderDone ? (threadStep ?? stepOf(ladderDone.factors, threadSaved, ladderDone.detection)) : 0
   const [split, setSplit] = useState<{ key: string; pieces: number[][][]; busy: boolean } | null>(null)  // the preview of a split
@@ -1090,7 +1091,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
               const litPoly = lit ? outlineOf(lit) : null
               const litCall = lit ? callOf(lit) : null
               return <>
-                {threading && ladderDone && <ThreadLines lines={ladderDone.steps[threadIndex].lines} unit={unit} />}
+                {threading && ladderDone && <ThreadLines lines={ladderDone.steps[threadIndex].lines} unit={unit} areas={notCounted.data} />}
                 {layers.box && <>
                   <path d={`M0 0H${size.w}V${size.h}H0Z M${box.x} ${box.y}v${box.height}h${box.width}v${-box.height}Z`} fill="#000" fillOpacity={0.22} fillRule="evenodd" />
                   <rect x={box.x} y={box.y} width={box.width} height={box.height} fill="none" stroke={BOX_COLOR} strokeWidth={2 * unit} strokeDasharray={`${12 * unit} ${8 * unit}`} />
@@ -1179,7 +1180,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
             </div>
           ))}
           {threading && <ThreadsCard ladder={ladder.data} pending={ladder.pending ? pendingText(ladder.pending) : null} error={ladder.error} index={threadIndex}
-            onChange={(i) => { setThreadStep(i); tell('threads-step') }} onConfirm={() => void confirmThreads()} saving={saving} saved={threadSaved} />}
+            onChange={(i) => { setThreadStep(i); tell('threads-step') }} onConfirm={() => void confirmThreads()} saving={saving} saved={threadSaved} notCounted={!!notCounted.data?.png} />}
           {mode === 'split' && <div className="card side-block exclude-bar" role="status">
             <b>Split</b>{split?.busy || merging ? <> · <Loading inline label="Splitting…" /></> : null} — <span className="kbd">S</span> or <span className="kbd">Esc</span> to leave
             <ul className="key-list small" style={{ marginTop: 6 }}>

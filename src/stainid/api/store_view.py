@@ -310,6 +310,46 @@ def field_areas(project, tile: dict) -> dict:
     return current_areas(project, str(tile["core_id"]), str(tile["stain"]), (x0, y0, x1, y1), ai=False)
 
 
+def not_counted(project, tile: dict) -> dict:
+    """AT8 threads mode: where the field is not counted, so the page shades it and fades the thread lines there (people
+    judge the thread threshold on counted tissue only). Detection's automatic areas (fold, artifact, no tissue, focus,
+    the edge guard, …) with people's saved edits on top (`exclusions.final_say`, without AI areas), as one
+    white-on-transparent PNG (data URL, one pixel per layer cell) placed in field-picture px, and `labels`: a point well
+    inside each sizeable region (field px) for a small "not counted" note."""
+    import base64  # noqa: PLC0415
+
+    import cv2  # noqa: PLC0415
+
+    from stainid.labels import frames  # noqa: PLC0415
+
+    layer = excluded_areas.final_say(project, str(tile["core_id"]), str(tile["stain"]), ai=False)
+    if layer is None:
+        return {"status": "not_made"}
+    x0, y0 = frames.field_origin(tile, project.context_px)
+    x1, y1 = int(tile["x_px"]) + int(tile["width_px"]) + project.context_px, int(tile["y_px"]) + int(tile["height_px"]) + project.context_px
+    window = _cells(layer, x0, y0, x1, y1)
+    codes = layer.codes[window]
+    cells = (codes != excluded_areas.COUNTED) & (codes != excluded_areas.OUTSIDE)
+    scale = layer.scale
+    ox, oy = window[1].start * scale - x0, window[0].start * scale - y0
+    out = {"status": "done", "scale": scale, "x": ox, "y": oy, "width": codes.shape[1] * scale, "height": codes.shape[0] * scale,
+           "version": layer.digest, "png": None, "labels": []}
+    if not cells.any():
+        return out
+    rgba = np.zeros((*codes.shape, 4), np.uint8)
+    rgba[cells] = 255
+    ok, png = cv2.imencode(".png", rgba)
+    out["png"] = "data:image/png;base64," + base64.b64encode(png.tobytes()).decode() if ok else None
+    inside = cv2.distanceTransform(np.pad(cells, 1).astype(np.uint8), cv2.DIST_L2, 3)[1:-1, 1:-1]
+    count, regions, stats, _ = cv2.connectedComponentsWithStats(cells.astype(np.uint8), connectivity=8)
+    big = [r for r in range(1, count) if stats[r, cv2.CC_STAT_AREA] * scale * scale >= 160 * 160]
+    for r in sorted(big, key=lambda r: -stats[r, cv2.CC_STAT_AREA])[:8]:
+        depth = np.where(regions == r, inside, 0)
+        row, col = np.unravel_index(int(np.argmax(depth)), depth.shape)
+        out["labels"].append([int(ox + (col + 0.5) * scale), int(oy + (row + 0.5) * scale)])
+    return out
+
+
 def current_areas(project, core_id: str, stain: str, box: tuple[int, int, int, int] | None = None, ai: bool = True) -> dict:
     """Each brush type's current area, as the one brush (field tool and "Mark bad areas") starts from it: detection's
     area of that type with every edit people saved merged in (`exclusions.final_say`, one region set per type), a

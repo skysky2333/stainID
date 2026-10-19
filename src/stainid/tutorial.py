@@ -96,6 +96,7 @@ def add_threads(source_root: Path | str, field_tile: str, credit: str, out: Path
     earlier one; returns what `threads()` serves."""
     import cv2  # noqa: PLC0415
 
+    from stainid.api import store_view  # noqa: PLC0415
     from stainid.imaging.core_images import read_bgr  # noqa: PLC0415
     from stainid.labels import (
         frames,  # noqa: PLC0415
@@ -127,6 +128,7 @@ def add_threads(source_root: Path | str, field_tile: str, credit: str, out: Path
     dataset = raw.get("dataset") or {}
     found = {"tile_id": field_tile, "credit": credit, "width": x1 - x0, "height": y1 - y0, "box": box,
              "pixel_size_um": float(source.pixel_size_um), "source": {k: dataset.get(k) for k in ("id", "title", "licence", "citation", "doi") if dataset.get(k)},
+             "not_counted": store_view.not_counted(source, tile),  # shaded in threads mode, its lines faded
              **{k: ladder[k] for k in ("status", "factors", "detection", "steps", "dab_threshold", "ridge_threshold")}}
     (work / "threads.json").write_text(json.dumps(found))
     if target.exists():
