@@ -1,5 +1,5 @@
 # ruff: noqa: F811  (the rounds fixture is shared with test_annotation_rounds)
-"""Each candidate's two outlines (Tab, in the field tool and the Cores view): Segment Anything's (the one stage 3
+"""Each candidate's two outlines (Tab: in the field tool the object under the mouse, in the Cores view every object): Segment Anything's (the one stage 3
 kept) and the stain outline, the stain's default first. The one a person leaves an object on is kept per candidate in
 the label log (by name, with its points; or the one Segment Anything drew live), a changed option counts as an
 outline fix, and the analysis keeps the automatic default whatever people chose."""
@@ -103,8 +103,7 @@ def test_the_cores_view_shows_either_outline(rounds_project):
     sam = {(x, y): rings for x, y, _, rings in store_view.outline_rows(project, CORE, "6E10", "sam")}
     stain = {(x, y): rings for x, y, _, rings in store_view.outline_rows(project, CORE, "6E10", "stain")}
     assert sam[SWITCHED] != stain[SWITCHED] and len(sam[SWITCHED][0]) == 8  # the SAM outline stage 3 kept
-    assert sam[NO_SAM] == stain[NO_SAM]  # none stored: the stain outline (the page asks SAM live)
+    assert sam[NO_SAM] == stain[NO_SAM]  # none stored: the stain outline
     found = admin.get(f"/api/cores/{CORE}/6E10/objects").json()
     assert found["source"] == "v2" and found["outline_default"] == "stain"
     assert admin.get(f"/api/cores/{CORE}/6E10/outlines?outline=sam").status_code == 200
-    assert admin.post(f"/api/cores/{CORE}/6E10/sam", json={"x": 400, "y": 480}).status_code == 409  # no weights here: plainly said

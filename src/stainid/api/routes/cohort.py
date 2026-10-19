@@ -8,7 +8,6 @@ import re
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Request, Response
-from pydantic import BaseModel
 from scipy.spatial import cKDTree
 
 from stainid.api import outlines, placeholders, pyramid, render, store_view, threads
@@ -250,38 +249,6 @@ def _default_outline(state: ProjectState, stain: str) -> str:
     return "stain" if default_outline(state.project, stain) == "stain" else "sam"
 
 
-class Spot(BaseModel):
-    x: float  # core-image px: the object's centre
-    y: float
-
-
-@router.post("/cores/{core_id}/{stain}/sam")
-def core_sam(core_id: str, stain: str, body: Spot) -> dict:
-    """A live one-click Segment Anything (ViT-B) outline of the object at (x, y), for a candidate the store has none for
-    (Tab in the Cores view): `points` flat core-image px, `area_um2`. Nothing is kept; 409 without the weights."""
-    from stainid.api import sam_embeddings  # noqa: PLC0415
-
-    state = get_state()
-    if not state.project.model("sam").exists():
-        raise HTTPException(409, "The Segment Anything weights are not downloaded (the Models page).")
-    tiles = _core_tiles(state, core_id, stain)
-    on = tiles[(tiles.x_px <= body.x) & (body.x < tiles.x_px + tiles.width_px) & (tiles.y_px <= body.y) & (body.y < tiles.y_px + tiles.height_px)] if not tiles.empty else tiles
-    if on.empty:
-        raise HTTPException(404, "no analysed tile of this core image holds that spot")
-    tile = on.iloc[0].to_dict()
-    x0, y0 = render.crop_origin(tile, state.project.context_px)
-    try:
-        found = sam_embeddings.outline(state, str(tile["tile_id"]), stain, [(body.x - x0, body.y - y0, True)])
-    except IndexError:
-        found = {"options": [], "chosen": 0}
-    except Exception as error:  # noqa: BLE001 - the weights would not load: a plain message (the detail is logged)
-        log.warning("Segment Anything failed on %s: %s", tile["tile_id"], error)
-        raise HTTPException(503, sam_embeddings.PLAIN_FAILED) from error
-    if not found["options"]:
-        raise HTTPException(404, "Segment Anything found no object there")
-    points = found["options"][found["chosen"]]["points"]
-    flat = [int(round(v)) for p in points for v in (p[0] + x0, p[1] + y0)]
-    return {"points": flat, "area_um2": round(store_view._polygon_um2(flat, state.project.pixel_size_um), 1)}
 
 
 @router.get("/cores/{core_id}/{stain}/threads")

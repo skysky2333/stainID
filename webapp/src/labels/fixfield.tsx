@@ -7,7 +7,7 @@
    dotted amber with a "?" when someone is unsure. Objects in an excluded area are drawn faint.
    Everything acts on the object under the cursor (it lights up, its name shows beside it and its facts at the side):
    1–4 pick its counted type, Q W E R a named look-alike (the server's `vocabulary.assign_keys`), ` (or 0) unsure,
-   Delete rejects it (it turns dotted grey and stays; a number key makes it solid again), Tab switches its outline between Segment Anything's and the stain outline (nothing under the mouse: every object; the choice is saved per candidate), a click on it edits it precisely
+   Delete rejects it (it turns dotted grey and stays; a number key makes it solid again), Tab switches its outline between Segment Anything's and the stain outline (the choice is saved per candidate), a click on it edits it precisely
    (everything else locked: a click adds a spot to it, Shift+click leaves one out, drag the dots; Z undoes a step; a
    click outside its neighbourhood, drawn faintly, or Enter keeps the edit, Esc leaves without keeping), Space hides and shows everything drawn over the
    picture (a clean look at the tissue), B changes the bad areas (the brush, brush.ts: a drag adds to the chosen type's
@@ -283,7 +283,6 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     .map((m) => [m.candidate!, CHOICE_IDS.indexOf(m.value as typeof CHOICE_IDS[number])]))
   const [masks, setMasks] = useState<Record<string, number>>(() => chosenMasks(mine))
   const [liveSam, setLiveSam] = useState<Record<string, number[][]>>({})  // Segment Anything asked live, for a candidate the store has none for
-  const [allOutlines, setAllOutlines] = useState<number | null>(null)  // the outline Tab last put every object on (nothing under the mouse)
   const [prompts, setPrompts] = useState<Record<string, { options: number[][][]; chosen: number }>>({})  // masks of objects added in this visit
   const [fresh, setFresh] = useState<Record<string, Fresh>>({})
   const [hovered, setHovered] = useState<string | null>(null)
@@ -354,7 +353,6 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   const outlineId = (x: number, y: number) => `outline:${tile}:${rkey(x, y)}`
   const own = useMemo(() => field.objects.filter((o) => o.own), [field.objects])
   const ownKeys = useMemo(() => new Set(own.map((o) => rkey(o.x, o.y))), [own])
-  const firstChoice = useMemo(() => (own.filter((o) => o.mask === 0).length * 2 > own.length ? 0 : 1), [own])  // the stain's default outline
   const replaced = new Set(Object.values(mine).filter((m) => m.task === 'replaced' && m.candidate).map((m) => m.candidate!))  // split or merged
   const added = Object.values(mine).filter((m) => m.task === 'class' && !m.candidate && m.x != null && !ownKeys.has(rkey(m.x, m.y!)))
   const shown: Shown[] = [
@@ -502,39 +500,15 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
       save([{ task: 'outline', x: s.x, y: s.y, points: list[next] }], { local: () => setPrompts((p) => ({ ...p, [s.key]: { ...p[s.key], chosen: index } })) })
     }
   }, [precise, save, masks, prompts])  // eslint-disable-line react-hooks/exhaustive-deps
+
   /** Tab: the object under the mouse switches to its other outline (a candidate: Segment Anything ↔ stain outline; an
-   *  object added with one click: Segment Anything's next size); with nothing under the mouse, every object of the field
-   *  (one step for Z). */
+   *  object added with one click: Segment Anything's next size). Nothing under the mouse: nothing happens. */
   const switchMask = useCallback((bigger: boolean) => {
-    if (precise) return
     const s = target
-    if (s) {
-      const { list, index } = choicesOf(s)
-      chooseMask(s, s.candidate ? (index === 0 ? 1 : 0) : stepMask(list, index, bigger))
-      return
-    }
-    const drawnByHand = (o: Shown) => {  // an outline edited by hand stays as it is
-      const m = mine[outlineId(o.x, o.y)]
-      return !!m?.points?.length && !CHOICE_IDS.includes(m.value as typeof CHOICE_IDS[number])
-    }
-    const mineNow = shown.filter((o) => o.candidate && !o.candidate.excluded && !drawnByHand(o))
-    if (!mineNow.length) return
-    const onSam = mineNow.filter((o) => choicesOf(o).index === 0).length
-    const goal = allOutlines === null ? (onSam * 2 >= mineNow.length ? 1 : 0) : 1 - allOutlines
-    const before = { ...masks }
-    const after = { ...masks }
-    const records: Rec[] = []
-    for (const o of mineNow) {
-      const { list, index } = choicesOf(o)
-      if (index === goal || !list[goal]) continue
-      after[o.candidate!.candidate_id] = goal
-      records.push({ task: 'outline', candidate: o.candidate!.candidate_id, points: list[goal], value: CHOICE_IDS[goal] })
-    }
-    setAllOutlines(goal)
-    if (!records.length) return
-    setMasks(after)
-    save(records, { local: () => setMasks(before) })
-  }, [target, precise, chooseMask, shown, allOutlines, masks, mine])  // eslint-disable-line react-hooks/exhaustive-deps
+    if (!s || precise) return
+    const { list, index } = choicesOf(s)
+    chooseMask(s, s.candidate ? (index === 0 ? 1 : 0) : stepMask(list, index, bigger))
+  }, [target, precise, chooseMask])  // eslint-disable-line react-hooks/exhaustive-deps
 
   /** Out of precise editing: the view goes back to exactly where it was before (zoom and position), the object stays
    *  the one the keys act on. */
@@ -599,7 +573,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     },
     onUnsure: () => { if (target && unsure) { tell(target.fresh ? 'added' : 'unsure'); giveClass(target, { identity: unsure, subtype: null }) } },
     onRemove: () => { if (excluding) return; if (target) tell('remove'); removeTarget() },
-    onMask: (bigger) => { if (excluding || mode) return; if (!precise) tell('mask'); switchMask(bigger) },  // the brush's Tab sizes it first (onSize)
+    onMask: (bigger) => { if (excluding || mode) return; if (target && !precise) tell('mask'); switchMask(bigger) },  // the brush's Tab sizes it first (onSize)
     onPrecise: () => { tell('overlays'); setHidden((h) => !h) },  // Space: hide and show everything drawn over the picture
     onUndo: () => { tell('undo'); undo() },
     onEnter: () => {
@@ -1015,7 +989,8 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
               {mode === 'split' && <span className="badge status-running">split — click an object, or draw a line across · Esc leaves</span>}
               {mode === 'merge' && <span className="badge status-running">merge — {chosenForMerge.length} selected · Enter to merge · Esc leaves</span>}
               {start && !start.locked && <span className="badge">Step 1: set the acceptance threshold</span>}
-              <span className="badge outline-badge" title="Tab with the mouse on an object switches its outline; with nothing under the mouse, every object">Outline: {allOutlines === null ? `${CHOICE_NAMES[firstChoice]} (default)` : `all ${CHOICE_NAMES[allOutlines]}`} · Tab</span></span>}
+              {target?.candidate && !precise && !excluding && <span className="badge outline-badge" title="Tab switches the outline of the object under the mouse">
+                Outline: {CHOICE_NAMES[choicesOf(target).index]} · Tab</span>}</span>}
             focus={focus} cursor={excluding ? 'none' : mode ? 'crosshair' : precise ? 'crosshair' : target ? 'pointer' : 'copy'} onClick={click} onMove={move}
             onPress={press} onRelease={release} panLock={excluding || !!mode} onSize={setFieldSize}
             paint={!hidden && fieldSize && (excluding || brush.dirty) ? (  // each type's area now: one merged region per type (brush.ts), from the first stroke
@@ -1323,7 +1298,7 @@ function Controls({ sam, precise, excluding, mode }: { sam: boolean; precise: bo
   }
   return (
     <ul className="key-list small">
-      <li><span className="kbd">Tab</span> switch outline: Segment Anything / stain (nothing under the mouse: all)</li>
+      <li><span className="kbd">Tab</span> switch its outline: Segment Anything / stain</li>
       <li><span className="kbd">Del</span> reject — dotted grey · <span className="kbd">`</span> unsure — dotted amber ?</li>
       <li><span className="kbd">click</span> empty tissue: {sam ? 'a new candidate' : 'draw a new one by hand'}</li>
       <li><span className="kbd">click</span> an object: precise edit{sam ? ' (click add, ⇧ click remove, drag dots, click beyond the frame done)' : ' (drag dots, click beyond the frame done)'}</li>
