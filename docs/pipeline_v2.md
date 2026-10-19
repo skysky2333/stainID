@@ -202,6 +202,32 @@ the setting is `stain` or SAM fell back, else the stored default output. The vie
 re-assembles the store only; the measures take each object's area from the outline this setting draws
 (`candidates.shown_area_um2`), so what is drawn is what is measured.
 
+**NeuN positive area on the SAM outline depends on each core's size mix.** On the same accepted neurons, the SAM
+outline is larger than the stain outline for small profiles and smaller for large ones. On the 7 NeuN ablation cores
+(17,662 neurons, ablation step 6 → 7), SAM area / stain-outline area is:
+
+| Stain-outline area | Sum ratio |
+|---|---|
+| 30 µm² or less | ×1.68 |
+| 30–60 µm² | ×1.30 |
+| 60–120 µm² | ×1.02 |
+| 120–250 µm² | ×0.79 |
+| Over 250 µm² | ×0.72 |
+
+Pooled over the 7 cores, the area rises only ×1.06. Per core, `neun_positive_profile_area_fraction` moves with the
+size mix:
+
+- Cores of small profiles go up: LIP-1_A-4 ×1.43, LIP-6_A-2 ×1.46, LIP-1_F-3 ×1.32.
+- Cores of large neurons go down or stay level: LIP-1_E-3 ×0.80, LIP-10_B-1 ×1.00.
+
+The 7-core median, +32%, comes from this per-core size mix alone. The object set, the denominator and the units are
+unchanged: the same accepted ids, area within 0.04%, and density +0.02%. So positive area on SAM narrows the contrast
+between cores; for example, E-3 / A-4 drops from 3.5× on the stain outline to 1.9×. Neuron counts and density are
+unaffected. The outline-model panel's ×0.86 (`data/analysis/outline_model_panel/summary.md`) is consistent size for
+size, but its cores are large-neuron-rich, so it does not carry over to the cohort mix. NeuN keeps SAM as its default
+outline (decided for the v2b re-run). Read NeuN positive-area results with this effect in mind. The decomposition is
+`data/analysis/v2_audit/ablation/neun_step7_objects.csv`.
+
 ## Stage 5: measures and the mapping to the current tables
 
 `measures/results_core.csv` and `results_donor_region.csv` have the columns of the current stainID results tables, and
@@ -214,7 +240,7 @@ frozen v1 tables the R analyses read (same aggregation code: `stainid.analysis.a
 | tissue areas (`tissue_area_mm2`, `v2_tissue_area_mm2`) | `tiles.analysis_area_mm2` (tissue at the core's glass level, exclusions removed, as before) | yes |
 | NeuN `neun_positive_profile_count`, `neun_profile_density_mm2`, … | accepted NeuN candidates | yes; now includes recovered neurons (split merges, component tree) |
 | `candidate_profile_count`, `neun_positive_fraction_of_candidates` | candidates that reached the model (no rule) | definition of "candidate" widened |
-| `neun_positive_profile_area_fraction` | summed candidate areas of accepted neurons / area | approximately (was the label-mask union) |
+| `neun_positive_profile_area_fraction` | summed areas of accepted neurons on their default outline (SAM) / area | approximately (was the label-mask union); depends on the core's size mix, see the default-outline note above |
 | `neun_local_density_cv_100um` | accepted centres in the saved 100 µm windows | yes |
 | 6E10 `v2_plaque_*`, `plaque_area_fraction`, `compact_fraction_v2` | accepted plaques (compact / diffuse / small) | yes |
 | `amyloid_positive_area_fraction` (v1, the burden covariate) | union of the legacy-segmentation deposits in valid tissue / area | yes (split segmentation instead of the unsplit v1 one) |

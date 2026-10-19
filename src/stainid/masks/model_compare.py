@@ -593,10 +593,16 @@ def save_results(out: Path, model: str, tag: str, ids: list[str], results: dict,
 
 # ---------------------------------------------------------------- the picture grid
 
-PALETTE = [(0, 255, 255), (255, 0, 255), (60, 255, 60), (255, 140, 0), (80, 160, 255), (255, 80, 80), (200, 255, 80), (255, 255, 255)]
+# one colour per family, a shade per size (small → large: light → deep)
+COLOURS = {"sam_vit_b": (120, 255, 255), "sam_vit_l": (0, 200, 255), "sam_vit_h": (0, 120, 255),
+           "sam2.1_hiera_t": (255, 180, 255), "sam2.1_hiera_s": (255, 110, 255), "sam2.1_hiera_b+": (235, 0, 235), "sam2.1_hiera_l": (170, 0, 210),
+           "pathosam_vit_b": (170, 255, 120), "pathosam_vit_l": (60, 230, 60), "pathosam_vit_h": (0, 170, 80)}
+FAMILY_CODES = {"SAM": ("SAM", {"sam_vit_b": "B", "sam_vit_l": "L", "sam_vit_h": "H"}),
+                "SAM 2": ("S2", {"sam2.1_hiera_t": "t", "sam2.1_hiera_s": "s", "sam2.1_hiera_b+": "b+", "sam2.1_hiera_l": "l"}),
+                "PathoSAM": ("PS", {"pathosam_vit_b": "B", "pathosam_vit_l": "L", "pathosam_vit_h": "H"})}
 STAIN_COLOUR = (255, 230, 0)
-CELL = 176
-LABEL_W = 210
+CELL = 136
+LABEL_W = 250
 ROWS_PER_PAGE = 20
 
 
@@ -604,21 +610,34 @@ def _pixel_um(found: dict[str, dict], candidate_id: str) -> float:
     return next((r[candidate_id]["pixel_um"] for r in found.values() if candidate_id in r), 0.0)
 
 
-def sheets_of(models: list[str]) -> dict[str, list[str]]:
-    """The grid's sheets: the SAM family and the SAM 2 family, PathoSAM (and the stain outline) on both."""
-    patho = [m for m in models if MODELS[m]["family"] == "PathoSAM"]
-    out = {}
-    for family, key in (("SAM", "sam"), ("SAM 2", "sam2")):
-        members = [m for m in models if MODELS[m]["family"] == family]
-        if members:
-            out[key] = members + patho
-    return out or ({"models": list(models)} if models else {})
+def columns_of(models: list[str]) -> list[str]:
+    """The grid's model columns: every model, by family (SAM, SAM 2, PathoSAM) and size."""
+    return [m for m in MODELS if m in models]
+
+
+def _label_lines(s, models: list[str]) -> list[str]:
+    """Per family one line: each size's area ratio to the stain outline ("*": stage 3 falls back to the stain outline),
+    or, where a human or expert outline exists, its IoU with it."""
+    truth = any(f"iou_truth_{m}" in s and s[f"iou_truth_{m}"] == s[f"iou_truth_{m}"] for m in models)
+    lines = ["IoU with the human/expert outline" if truth else "area ratio to the stain outline"]
+    for family, (code, sizes) in FAMILY_CODES.items():
+        parts = []
+        for m, size in sizes.items():
+            if m not in models:
+                continue
+            key = f"iou_truth_{m}" if truth else f"{m}_ratio_to_stain"
+            value = s[key] if key in s else None
+            mark = "*" if str(s.get(f"{m}_status", "")).startswith("fallback") else ""
+            parts.append(f"{size} {value:.2f}{mark}" if value is not None and value == value else f"{size} -")
+        if parts:
+            lines.append(f"{code:4}" + "  ".join(parts))
+    return lines
 
 
 def grid(project, tiles: pd.DataFrame, frame: pd.DataFrame, found: dict[str, dict], scored: pd.DataFrame, out: Path, prefix: str = "grid",
          limit: int | None = None) -> list[Path]:
-    """Per stain and sheet (`sheets_of`), pages of one row per candidate: raw (the prompt point; the human outline in
-    white, where one exists) | stain outline | each model's stage-3 default."""
+    """Per stain, pages of one row per candidate, the same crop across the row: raw (the prompt point; the human or
+    expert outline in white, where one exists) | stain outline | every model's stage-3 default (`columns_of`)."""
     from PIL import Image, ImageDraw
 
     from stainid.imaging.core_images import open_image
@@ -643,48 +662,43 @@ def grid(project, tiles: pd.DataFrame, frame: pd.DataFrame, found: dict[str, dic
                 boxes[row.candidate_id] = (x0, y0, 2 * half)
     written = []
     header = 22
-    for sheet_name, members in sheets_of(list(found)).items():
-        methods = ["stain outline", *members]
-        colours = {"stain outline": STAIN_COLOUR, **{m: PALETTE[i % len(PALETTE)] for i, m in enumerate(members)}}
-        for stain, part in frame.groupby("stain"):
-            part = part.reset_index(drop=True)
-            for page in range(0, len(part), ROWS_PER_PAGE):
-                chunk = part.iloc[page: page + ROWS_PER_PAGE]
-                sheet = Image.new("RGB", (LABEL_W + CELL * (1 + len(methods)), header + CELL * len(chunk)), (24, 24, 24))
-                draw = ImageDraw.Draw(sheet)
-                for c, title in enumerate(["raw", *(SHORT.get(m, m) for m in methods)]):
-                    draw.text((LABEL_W + c * CELL + 6, 4), title, fill=(230, 230, 230) if c == 0 else colours[methods[c - 1]])
-                for r, row in enumerate(chunk.itertuples()):
-                    top = header + r * CELL
-                    x0, y0, side = boxes[row.candidate_id]
-                    scale = CELL / side
-                    picture = pictures[row.candidate_id].resize((CELL, CELL), Image.LANCZOS)
-                    for c in range(1 + len(methods)):
-                        cell = picture.copy()
-                        pen = ImageDraw.Draw(cell)
-                        rings = _rings(row.truth) if c == 0 else outlines[row.candidate_id].get(methods[c - 1], [])
-                        colour = (255, 255, 255) if c == 0 else colours[methods[c - 1]]
-                        for ring in rings:
-                            xy = [((x - x0) * scale, (y - y0) * scale) for x, y in np.asarray(ring, float).reshape(-1, 2)]
-                            pen.line(xy + xy[:1], fill=colour, width=2)
-                        if c == 0:
-                            px, py = (row.x_core - x0) * scale, (row.y_core - y0) * scale
-                            pen.line([(px - 4, py), (px + 4, py)], fill=(255, 60, 60), width=1)
-                            pen.line([(px, py - 4), (px, py + 4)], fill=(255, 60, 60), width=1)
-                        sheet.paste(cell, (LABEL_W + c * CELL, top))
-                    s = info.loc[row.candidate_id]
-                    probability = f"  p={float(row.probability):.2f}" if row.probability == row.probability else ""
-                    lines = [row.candidate_id.split(":", 1)[1][:28], str(row.group)[:30], f"{row.decision}{probability}",
-                             f"stain {s.stain_area_um2:.0f} um2, crop {side * _pixel_um(found, row.candidate_id):.0f} um"]
-                    for m in members:
-                        if f"{m}_ratio_to_stain" in s and s[f"{m}_ratio_to_stain"] == s[f"{m}_ratio_to_stain"]:
-                            fallback = " fb" if str(s[f"{m}_status"]).startswith("fallback") else ""
-                            truth = f" iou {s[f'iou_truth_{m}']:.2f}" if f"iou_truth_{m}" in s and s[f"iou_truth_{m}"] == s[f"iou_truth_{m}"] else ""
-                            lines.append(f"{SHORT[m]:6} x{s[f'{m}_ratio_to_stain']:.2f}{fallback}{truth}")
-                    draw.multiline_text((6, top + 6), "\n".join(lines), fill=(220, 220, 220), spacing=2)
-                path = out / f"{prefix}_{stain}_{sheet_name}_{page // ROWS_PER_PAGE + 1:02d}.png"
-                sheet.save(path, optimize=True)
-                written.append(path)
+    members = columns_of(list(found))
+    methods = ["stain outline", *members]
+    colours = {"stain outline": STAIN_COLOUR, **{m: COLOURS.get(m, (255, 140, 0)) for m in members}}
+    for stain, part in frame.groupby("stain"):
+        part = part.reset_index(drop=True)
+        for page in range(0, len(part), ROWS_PER_PAGE):
+            chunk = part.iloc[page: page + ROWS_PER_PAGE]
+            sheet = Image.new("RGB", (LABEL_W + CELL * (1 + len(methods)), header + CELL * len(chunk)), (24, 24, 24))
+            draw = ImageDraw.Draw(sheet)
+            for c, title in enumerate(["raw", *(SHORT.get(m, m) for m in methods)]):
+                draw.text((LABEL_W + c * CELL + 6, 4), title, fill=(230, 230, 230) if c == 0 else colours[methods[c - 1]])
+            for r, row in enumerate(chunk.itertuples()):
+                top = header + r * CELL
+                x0, y0, side = boxes[row.candidate_id]
+                scale = CELL / side
+                picture = pictures[row.candidate_id].resize((CELL, CELL), Image.LANCZOS)
+                for c in range(1 + len(methods)):
+                    cell = picture.copy()
+                    pen = ImageDraw.Draw(cell)
+                    rings = _rings(row.truth) if c == 0 else outlines[row.candidate_id].get(methods[c - 1], [])
+                    colour = (255, 255, 255) if c == 0 else colours[methods[c - 1]]
+                    for ring in rings:
+                        xy = [((x - x0) * scale, (y - y0) * scale) for x, y in np.asarray(ring, float).reshape(-1, 2)]
+                        pen.line(xy + xy[:1], fill=colour, width=2)
+                    if c == 0:
+                        px, py = (row.x_core - x0) * scale, (row.y_core - y0) * scale
+                        pen.line([(px - 4, py), (px + 4, py)], fill=(255, 60, 60), width=1)
+                        pen.line([(px, py - 4), (px, py + 4)], fill=(255, 60, 60), width=1)
+                    sheet.paste(cell, (LABEL_W + c * CELL, top))
+                s = info.loc[row.candidate_id]
+                probability = f"  p={float(row.probability):.2f}" if row.probability == row.probability else ""
+                lines = [row.candidate_id.split(":", 1)[1][:34], f"{str(row.group)[:24]}  {row.decision}{probability}",
+                         f"stain {s.stain_area_um2:.0f} um2, crop {side * _pixel_um(found, row.candidate_id):.0f} um", *_label_lines(s, members)]
+                draw.multiline_text((6, top + 6), "\n".join(lines), fill=(220, 220, 220), spacing=3)
+            path = out / f"{prefix}_{stain}_{page // ROWS_PER_PAGE + 1:02d}.png"
+            sheet.save(path, optimize=True)
+            written.append(path)
     return written
 
 
