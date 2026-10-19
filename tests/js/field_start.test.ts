@@ -88,7 +88,7 @@ assert.equal(whyFound('rejected', 'rejected_by_model'), reasonText('rejected_by_
 // a shape rule left it out but its stain lies along threads: a thread at every value (a duplicate stays a reject)
 const smallThread = { ai_value: 'thread', ai_subtype: '', ai_probability: null, if_accepted: null, reason: 'rule:small', rule: 'rule:small' }
 for (const t of [0, 0.5, 1]) assert.deepEqual(startPick(smallThread, t, 0.5, 'not tau'), { identity: 'thread', subtype: null })
-assert.match(whyStart(smallThread, 0.2, 0.5), /^too small for a tau\+ neuron, and its stain lies along threads: set by detection's thread rule; a thread at every threshold$/)
+assert.match(whyStart(smallThread, 0.2, 0.5), /^set by detection's thread rule: too small for a tau\+ neuron, its stain along threads \(a thread-like stain, not a neuron\); not counted at every threshold$/)
 assert.match(whyStart({ ...smallThread, ai_value: 'not tau', reason: 'rule:duplicate', rule: 'rule:duplicate' }, 0.2, 0.5), /whatever the threshold/)
 // AI labels never show while annotating: an object only the AI checked starts as detection made it.
 for (const s of ['import: reference_6e10', 'AI reviewer', 'ai:round4']) assert.ok(isAiLabel(s), s)

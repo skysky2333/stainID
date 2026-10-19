@@ -140,3 +140,17 @@ def test_an_at8_model_reject_on_threads_starts_as_a_thread(rounds_project):
     named = {c: candidate_store.ai_call(words, *below[c])[0] if below[c] is not None else None for c in ids}
     assert named == {ids[0]: "not tau", ids[1]: "thread", ids[2]: "thread", ids[3]: None}  # a rule decided ids[3]: no slider call
     assert candidate_store.ai_call(words, "rejected", "thread", "", "rule:excluded")[0] == "not tau"
+
+
+def test_a_thread_like_stain_is_a_reject_reason_with_its_own_name_and_key():
+    tau = vocab.defaults("AT8")
+    thread = tau.identity("thread")
+    assert thread.name == "thread-like stain (not a neuron)" and thread.key == "e" and thread.role == vocab.NEGATIVE
+    assert tau.rejecting("thread") and tau.rejecting("not tau") and not tau.rejecting("astroglial tau") and not tau.rejecting("tau+ neuron")
+    assert not vocab.defaults("6E10").rejecting("CAA")  # CAA stays a solid look-alike
+    assert any(k["identity"] == "thread" and k["key"] == "e" for g in tau.keymap()["groups"] for k in g["items"])  # its key kept
+    assert next(c for c in tau.to_api()["classes"] if c["id"] == "thread")["rejects"] is True
+    saved = vocab.from_config("AT8", [{"id": "thread", "name": "thread or dystrophic neurite", "key": "e"}])
+    assert saved.identity("thread").name == "thread-like stain (not a neuron)" and saved.rejecting("thread")  # older settings
+    mine = vocab.from_config("AT8", [{"id": "fibre", "name": "fibre", "role": "negative", "key": "t", "rejects": True}])
+    assert mine.rejecting("fibre")

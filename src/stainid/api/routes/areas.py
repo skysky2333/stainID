@@ -267,7 +267,8 @@ def core_areas(name: str, core_id: str, stain: str, request: Request, person: st
 def core_objects(name: str, core_id: str, stain: str, request: Request, person: str = Depends(annotator)) -> dict:
     """Detection's objects of a core image for context in "Mark bad areas" (they cannot be changed there): rows of
     [x, y, accepted, rings] in core pixels (the stain's default outline, `candidates.outline_rings`); `accepted`: a class,
-    counted or a look-alike detection names (CAA: `candidate_store.lookalike`), drawn solid; a reject is dotted."""
+    counted or a look-alike detection names (CAA: `candidate_store.lookalike`), drawn solid; a reject, or a reject
+    reason such as a thread-like stain (`Vocabulary.rejecting`), is dotted."""
     from stainid import candidates  # noqa: PLC0415
     from stainid.labels import candidate_store  # noqa: PLC0415
     from stainid.labels import vocabulary as vocab  # noqa: PLC0415
@@ -280,7 +281,7 @@ def core_objects(name: str, core_id: str, stain: str, request: Request, person: 
                                  ["x_core", "y_core", "decision", "reason", "class", "outline", "sam_outline", "sam_status", "outline_default"])
     words = vocab.of(project, stain)
     pairs = {(str(r.get("class") or ""), str(r.get("reason") or "")) for r in frame.to_dict("records")} if len(frame) else set()
-    named = {pair for pair in pairs if candidate_store.lookalike(words, *pair)}
+    named = {pair for pair in pairs if candidate_store.lookalike(words, *pair) and not words.rejecting(candidate_store.lookalike(words, *pair))}
     rows = [[round(float(r["x_core"]), 1), round(float(r["y_core"]), 1),
              r.get("decision") == "accepted" or (str(r.get("class") or ""), str(r.get("reason") or "")) in named, candidates.outline_rings(r)]
             for r in frame.to_dict("records")] if len(frame) else []

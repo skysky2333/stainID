@@ -51,7 +51,8 @@ def found(project, core_id: str, stain: str) -> pd.DataFrame:
     """Every candidate of the core image as the viewer's object rows (x, y in core pixels), with its label class (`class`,
     `subtype`: label-vocabulary ids, empty for rejected ones), so the viewer colours it as every other page does. A
     candidate detection called a named look-alike (`candidate_store.lookalike`: a deposit on a vessel wall is CAA) is
-    that class, `model_class` "lookalike": drawn solid in the class's colour, not dotted as a reject."""
+    that class, `model_class` "lookalike": drawn solid in the class's colour, not dotted as a reject; one that is a
+    reject reason (`Vocabulary.rejecting`: a thread-like stain) the page draws dotted grey with its name."""
     from stainid.labels import candidate_store  # noqa: PLC0415
     from stainid.labels import vocabulary as vocab  # noqa: PLC0415
 

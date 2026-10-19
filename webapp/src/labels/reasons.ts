@@ -18,7 +18,7 @@ export const reasonText = (code: string) => REASON_TEXT[code] ?? code.replace(/^
  *  the object is that class (CAA is 6E10's Q, a thread AT8's E), drawn solid in its colour and counted as it. */
 export const CLASS_RULES: Record<string, string> = { 'rule:vascular_or_edge': 'CAA', 'rule:thread_like': 'thread' }
 /** Why an object the model does not count is a look-alike (stage 4 names it, `if_rejected`), by class. */
-const BELOW_TEXT: Record<string, string> = { thread: "set by detection's thread rule: the model does not count it as a tau+ neuron and its stain lies along threads" }
+const BELOW_TEXT: Record<string, string> = { thread: "set by detection's thread rule: its stain lies along threads and the model does not count it (a thread-like stain, not a neuron)" }
 /** The rules saying an object is no object of its own: whatever class stage 4 left on it, a reject
  *  (stainid/v2/classify.py REJECT_RULES). */
 export const REJECT_RULES = new Set(['rule:duplicate', 'rule:excluded', 'rule:edge', 'rule:fold'])
@@ -28,7 +28,7 @@ export const REJECT_RULES = new Set(['rule:duplicate', 'rule:excluded', 'rule:ed
 export function whyFound(cls: string, reason: string): string {
   const identity = cls.startsWith('label:') ? cls.slice(6).split('/')[0] : ''
   if (!BELOW_TEXT[identity] || CLASS_RULES[reason] || reason === 'accepted') return reasonText(reason)
-  return reason === 'rejected_by_model' ? BELOW_TEXT[identity] : `${reasonText(reason)}, and its stain lies along threads: set by detection's thread rule`
+  return reason === 'rejected_by_model' ? BELOW_TEXT[identity] : `set by detection's thread rule: ${reasonText(reason)}, its stain along threads (a thread-like stain, not a neuron)`
 }
 
 export interface WhyObject {
@@ -48,7 +48,7 @@ export function whyStart(o: WhyObject, value: number | null, detection: number |
   if (!rule) return ''
   if (!o.if_accepted) {  // a rule decided it: a class it names (CAA, a thread) or a reject, at every value
     if (CLASS_RULES[rule]) return `${reasonText(rule)}; ${CLASS_RULES[rule]} at every threshold`
-    if (o.ai_value && BELOW_TEXT[o.ai_value] && !REJECT_RULES.has(rule)) return `${whyFound(`label:${o.ai_value}/`, rule)}; a ${o.ai_value} at every threshold`
+    if (o.ai_value && BELOW_TEXT[o.ai_value] && !REJECT_RULES.has(rule)) return `${whyFound(`label:${o.ai_value}/`, rule)}; not counted at every threshold`
     return `${reasonText(rule)}: detection's rule, whatever the threshold`
   }
   return atDetection || passing ? `${reasonText(rule)}: detection's rule once it passes the threshold` : ''

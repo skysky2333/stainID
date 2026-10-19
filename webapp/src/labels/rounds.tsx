@@ -280,7 +280,9 @@ export function lookOf(vocabulary: Vocabulary, removeClass: string, identity: st
   if (!identity) return { look: 'new', colour: GREY, dash: true }
   const role = vocabulary.classes.find((c) => c.id === identity)?.role
   if (role === 'skip' || identity === vocabulary.unsure) return { look: 'unsure', colour: UNSURE_AMBER, dash: true }
-  if (identity === removeClass || identity === vocabulary.reject) return { look: 'removed', colour: GREY, dash: true }
+  if (identity === removeClass || identity === vocabulary.reject || vocabulary.classes.find((c) => c.id === identity)?.rejects) {
+    return { look: 'removed', colour: GREY, dash: true }  // the reject, or a reject reason (a thread-like stain): not counted
+  }
   return { look: 'class', colour: tissueColour(vocabulary, identity, subtype), dash: false }
 }
 
@@ -371,7 +373,7 @@ export function LookLegend() {
   return (
     <ul className="look-legend small secondary">
       <li><span className="look-swatch" style={{ borderColor: CLASS_COLOURS[0], background: CLASS_COLOURS[0] }} />solid, in its type’s colour: that type</li>
-      <li><span className="look-swatch look-removed" style={{ borderColor: GREY }} />dotted grey: rejected (Del, or by detection) — a number key makes it solid again</li>
+      <li><span className="look-swatch look-removed" style={{ borderColor: GREY }} />dotted grey: rejected (Del, a reject reason such as a thread-like stain, or by detection) — a number key makes it solid again</li>
       <li><span className="look-swatch look-unsure" style={{ borderColor: UNSURE_AMBER }} />dotted amber with “?”: unsure — left out of training and evaluation</li>
       <li><span className="look-swatch look-new" style={{ borderColor: GREY }} /><span className="look-diamond" aria-hidden="true" />dotted grey with a diamond: new, choose its class</li>
     </ul>

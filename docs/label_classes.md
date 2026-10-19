@@ -19,7 +19,7 @@ look-alikes** (solid, in their own colour, not counted), **Del** for the stain's
 | Stain | Counted (positive) | Named look-alikes (negative) | Del (negative) | ` |
 | --- | --- | --- | --- | --- |
 | 6E10 | plaque: **1** compact (dense-core) · **2** diffuse · **3** cored-neuritic · **4** small (too small to type) | **Q** CAA / vascular amyloid · **W** staining inside a neuron (APP/Aβ, which 6E10 also stains) | not a plaque | unsure |
-| AT8 | tau+ neuron: **1** pretangle · **2** mature tangle · **3** ghost (extracellular) tangle | **Q** neuritic crown (tau around a plaque) · **W** tau in an astrocyte · **E** thread or dystrophic neurite | not tau | unsure |
+| AT8 | tau+ neuron: **1** pretangle · **2** mature tangle · **3** ghost (extracellular) tangle | **Q** neuritic crown (tau around a plaque) · **W** tau in an astrocyte · **E** thread-like stain (not a neuron), a reject reason: dotted like Del | not tau | unsure |
 | NeuN | **1** NeuN+ neuron | — | not a neuron | unsure |
 
 - Each counted type and each look-alike has its own colour on every page (`Vocabulary.colour_slots`, sent to the web

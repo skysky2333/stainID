@@ -35,7 +35,7 @@ def test_each_stain_has_identities_with_subtypes_and_plain_descriptions():
         assert words.role(words.resolve("artifact or unclear")[0]) == NEGATIVE  # old labels of the class that is gone
         assert all(c.description for c in words.classes) and all(s.description for c in words.classes for s in c.subtypes)
     assert at8.display("tau+ neuron", "pretangle") == "tau+ neuron · pretangle" and at8.display("tau+ neuron") == "tau+ neuron (type not recorded)"
-    assert at8.display("thread") == "thread or dystrophic neurite"
+    assert at8.display("thread") == "thread-like stain (not a neuron)" and at8.rejecting("thread") and at8.identity("thread").key == "e"
 
 
 @pytest.mark.parametrize("stain, value, subtype, expected", [

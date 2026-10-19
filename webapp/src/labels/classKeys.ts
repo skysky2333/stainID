@@ -9,6 +9,8 @@ export interface SubtypeDef { id: string; name: string; description: string; key
 export interface ClassDef {
   id: string; name: string; role: ClassRole; description: string; key: string; example: string; hidden: boolean; builtin?: boolean
   subtypes: SubtypeDef[]
+  /** a reject reason: not counted, drawn dotted grey as the reject, with its own name and key (AT8 "thread-like stain") */
+  rejects?: boolean
 }
 /** A stain's classes, with how the values of labels made before types existed map onto them (value -> [identity, type]),
  *  the reject and "unsure" class ids and each class's colour slot (by "identity" and "identity/type"). */

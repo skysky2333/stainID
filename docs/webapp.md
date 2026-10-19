@@ -309,13 +309,17 @@ threshold*, at detection's own threshold for the stain's model (marked on the tr
 of 0.01) re-decides, live, where the objects start, as stage 4 would at that threshold: a candidate passes the model
 where its probability is at least the threshold (a missing score counts as 0) and then gets stage 4's call, its rules
 after the model included (a speck stays rejected, a deposit on a vessel wall or tissue edge is CAA; `labels/starting.py`
-runs stage 4 with every candidate passing, so a promoted plaque gets detection's type); below it, dotted grey, or the
-look-alike stage 4 names for a candidate the model does not count (an AT8 object whose stain lies along threads is a
-thread). A candidate a rule decided keeps detection's call at every value, as does one in an excluded area, and
+runs stage 4 with every candidate passing, so a promoted plaque gets detection's type); below it, dotted grey, with the
+reason stage 4 names for a candidate the model does not count where it names one (an AT8 object whose stain lies along
+threads is a *thread-like stain (not a neuron)*). A candidate a rule decided keeps detection's call at every value, as does one in an excluded area, and
 pointing at it the side panel says which rule ("Why"). A rule that names a class makes a class, not a reject: a
 deposit detection's vessel rule calls CAA starts solid in CAA's colour (key Q), counted as CAA at every value ("Why: set
 by detection's vessel rule …"), and is saved as CAA if left as it is; a type key or Del overrides it. Only real rejects
-(a speck, a duplicate, an excluded area, an edge or fold, the model's own reject) are dotted grey. The Cores view, the
+(a speck, a duplicate, an excluded area, an edge or fold, the model's own reject) are dotted grey, and so are the reject
+reasons: classes with their own name and key that mark an object as not counted and record why (AT8 **E** *thread-like
+stain (not a neuron)*, which detection's thread rule also gives, "Why: set by detection's thread rule"; a counted type's
+key overrides it). They are negatives everywhere (the Labels page, Outline fixes, training) with their reason kept, and
+have nothing to do with the thread measurement (the thread network, its length and width). The Cores view, the
 label comparisons and the Mark bad areas context draw them the same way. So raising the threshold never counts more, at 0 every candidate no rule
 decided counts and at 1 only those scoring 1; a person overrides any call with a key. The Cores view's preview slider
 follows the same rule. The panel counts them ("142
@@ -349,7 +353,7 @@ fields; and the *Tutorial* link. Pointing at an object also shows its name besid
 | Key | What it does |
 |---|---|
 | 1–4, 5–9 | its counted type: 6E10 1 compact, 2 diffuse, 3 cored-neuritic, 4 small; AT8 1 pretangle, 2 mature tangle, 3 ghost tangle; NeuN 1 neuron (classes people add take 5–9). Solid, each type its own colour ([label_classes.md](label_classes.md)) |
-| Q W E R, T Y U … | a named look-alike, solid in its own colour and its own class (kept apart from the counted types): 6E10 Q CAA, W staining inside a neuron; AT8 Q neuritic crown, W tau in an astrocyte, E thread. Detection's own look-alike calls start that way too: a deposit its vessel rule calls CAA, an AT8 object the model does not count whose stain lies along threads a thread |
+| Q W E R, T Y U … | a named look-alike, solid in its own colour and its own class (kept apart from the counted types): 6E10 Q CAA, W staining inside a neuron; AT8 Q neuritic crown, W tau in an astrocyte. Detection's own look-alike calls start that way too: a deposit its vessel rule calls CAA. AT8 E *thread-like stain (not a neuron)* is a reject reason: dotted grey like Del, its name kept |
 | ` (or 0) | unsure: dotted amber with a "?", left out of training and evaluation; that person is not asked again, but the others are |
 | Delete (Backspace) | the stain's single reject (not a plaque, not tau, not a neuron): it turns dotted grey and stays visible, the same as detection's own rejects (also an object the person added); a number key makes it solid again |
 | Tab (or − / +) | move the object's outline to its next: stain outline → Segment Anything small → Segment Anything medium → stain outline (the three SAM ViT-B sizes of its point prompt, which stage 3 stores; asked live with one click where the store has none; SAM large only where it is the one shown first). The stain's default comes first (6E10 and AT8: the stain outline; NeuN: the SAM output stage 3 picked), the panel and a badge say which is shown, and the one an object is left on is saved with the field per candidate (an `outline` label, value `stain`, `sam_small`, `sam_medium` or `sam_large` — `sam` of earlier releases is the output stage 3 kept — with its points; a changed option counts as an outline fix on the Models page, the analysis keeps the default). On a piece of a split: its split outline → SAM small → SAM medium, asked live with a point on the piece, points on its sibling pieces to leave out and a box around it, the siblings cut out of the result (its largest part kept); the choice is saved with the piece's outline (value `split`, `sam_small` or `sam_medium`, the split outline kept with it). With nothing under the mouse Tab does nothing; the badge shows the outline of the object under the mouse. On an object added with one click, Tab / Shift+Tab step through Segment Anything's three sizes. With the brush on: a smaller or bigger brush (Shift+Tab bigger) |

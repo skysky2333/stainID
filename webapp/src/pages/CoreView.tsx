@@ -102,7 +102,12 @@ interface CoreThreads {
 interface Outline { area: number | null; rings: number[][] }
 /** One object on the core picture. `cls` groups the legend: "rejected", "unproposed", the store's label class
  *  ("label:<identity>/<subtype>", named and coloured as on every page) or, for the current outputs, detection's class. */
-interface Found { index: number; x: number; y: number; r: number; cls: string; label: string; color: string; p: number | null; area: number | null; outline?: Outline; reason?: string; candidate?: string }
+interface Found {
+  index: number; x: number; y: number; r: number; cls: string; label: string; color: string; p: number | null; area: number | null; outline?: Outline; reason?: string
+  candidate?: string
+  /** the class a rejected one was named (a reject reason: a thread-like stain) */
+  named?: string
+}
 
 // exact outlines are drawn instead of circles wherever the Outline objects step has made them; every candidate is shown,
 // rejected ones dotted grey (stored under a new key, so the choice of hiding them made before applies no more)
@@ -115,8 +120,10 @@ const UNPROPOSED_COLOR = PALETTE.overlays.unproposed  // stained areas no candid
  *  colour on every page, classPalette.ts), else detection's class name mapped onto the label classes (the current
  *  outputs: a compact plaque is the compact colour); rejected candidates dotted light grey. A look-alike detection
  *  names (cls "lookalike": CAA on a vessel wall, an AT8 thread) is its class, solid in its colour like every class. */
-function objectClass(vocabulary: Vocabulary | undefined, cls: string, identity?: string, subtype?: string): { cls: string; label: string; color: string } {
-  if (cls === 'rejected') return { cls, label: CLASS_STYLE.rejected.label, color: INACTIVE_GREY }
+function objectClass(vocabulary: Vocabulary | undefined, cls: string, identity?: string, subtype?: string): { cls: string; label: string; color: string; named?: string } {
+  if (cls === 'rejected') return { cls, label: CLASS_STYLE.rejected.label, color: INACTIVE_GREY, named: undefined }
+  const reason = identity ? vocabulary?.classes.find((c) => c.id === identity && c.rejects) : undefined
+  if (reason) return { cls: 'rejected', label: reason.name, color: INACTIVE_GREY, named: reason.id }  // a reject reason: dotted grey, its name kept
   if (cls === 'unproposed') return { cls, label: CLASS_STYLE.unproposed.label, color: UNPROPOSED_COLOR }
   const known = identity && vocabulary?.classes.some((c) => c.id === identity)
   const mapped = MODEL_CLASSES[cls]
@@ -524,7 +531,7 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
             <p className="row" style={{ margin: '0 0 6px' }}><span className="swatch" style={swatchOf(pick.color, pick.cls === 'rejected')} /><b>{pick.label}</b></p>
             <dl className="facts">
               {pick.p !== null && <><dt>Detection score</dt><dd>{Math.round(pick.p * 100)}%</dd></>}
-              {pick.reason && <><dt>Why</dt><dd>{whyFound(pick.cls, pick.reason)}</dd></>}
+              {pick.reason && <><dt>Why</dt><dd>{whyFound(pick.named ? `label:${pick.named}/` : pick.cls, pick.reason)}</dd></>}
               {pick.area !== null && <><dt>Area</dt><dd>{area(pick.area)} µm²</dd></>}
               {showOutlines && found.data?.source === 'v2' && <><dt title="Tab switches every object's (Segment Anything or the stain outline)">Outline shown</dt>
                 <dd className="outline-shown">{CHOICE_NAME[shownChoice]}</dd></>}

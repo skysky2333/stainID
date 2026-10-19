@@ -71,6 +71,9 @@ class Identity:
     hidden: bool = False
     builtin: bool = False
     subtypes: tuple[Subtype, ...] = field(default_factory=tuple)
+    # a reject reason: a negative class with its own name and key that marks the object as not counted and is drawn as
+    # the reject is (dotted grey), so why it is not one is recorded (AT8 "thread-like stain (not a neuron)")
+    rejects: bool = False
 
     def subtype(self, ref: str) -> Subtype | None:
         """A subtype by id, else by name (case does not matter)."""
@@ -78,15 +81,15 @@ class Identity:
 
     def to_config(self) -> dict:
         return {"id": self.id, "name": self.name, "role": self.role, "description": self.description, "key": self.key, "example": self.example,
-                "hidden": self.hidden, "subtypes": [s.to_config() for s in self.subtypes]}
+                "hidden": self.hidden, "subtypes": [s.to_config() for s in self.subtypes], "rejects": self.rejects}
 
 
 def _s(id: str, name: str, description: str, key: str = "", hidden: bool = False) -> Subtype:
     return Subtype(id, name, description, key, hidden=hidden, builtin=True)
 
 
-def _i(id: str, name: str, role: str, description: str, key: str, subtypes: tuple[Subtype, ...] = ()) -> Identity:
-    return Identity(id, name, role, description, key, builtin=True, subtypes=subtypes)
+def _i(id: str, name: str, role: str, description: str, key: str, subtypes: tuple[Subtype, ...] = (), rejects: bool = False) -> Identity:
+    return Identity(id, name, role, description, key, builtin=True, subtypes=subtypes, rejects=rejects)
 
 
 ARTIFACT = "artifact or unclear"  # a class no more: its labels read as the stain's reject (`LEGACY`)
@@ -106,7 +109,9 @@ DEFAULTS: dict[str, tuple[Identity, ...]] = {
             _s("thorn-shaped astrocyte", "thorn-shaped astrocyte", "Short thorn-like brown processes, often near vessels, under the brain surface or in white matter.",
                hidden=True),
         )),
-        _i("thread", "thread or dystrophic neurite", NEGATIVE, "Short brown threads, dots or swollen fibres in the tissue, without a cell body.", "e"),
+        _i("thread", "thread-like stain (not a neuron)", NEGATIVE,
+           "Brown stain along threads, dots or swollen fibres, without a cell body: not counted (a reject with its reason). "
+           "The thread network is measured apart, whatever is said here.", "e", rejects=True),
         _i("not tau", "not tau", NEGATIVE, "Not a tau+ neuron: a blue nucleus, a vessel, background, debris or an artifact.", REJECT_KEY),
         _i(*UNSURE),
     ),
@@ -237,6 +242,12 @@ class Vocabulary:
         found = next((c for c in self.visible if c.key == REJECT_KEY), None) or self.identity(REJECTS.get(self.stain, GENERIC_REJECT))
         found = found or next((c for c in self.visible if c.role == NEGATIVE), None)
         return found.id if found else ""
+
+    def rejecting(self, identity: str) -> bool:
+        """Whether a class marks the object as not counted and is drawn as the reject (dotted grey): the reject itself,
+        and the reject reasons (`Identity.rejects`, "thread-like stain")."""
+        found = self.identity(identity) if identity else None
+        return found is not None and (found.id == self.reject or found.rejects)
 
     @property
     def unsure(self) -> str:
@@ -435,6 +446,9 @@ def _current_key(stain: str, ref: str, key: str, base_key: str | None) -> str:
     return key
 
 
+OLD_NAMES = {"thread": "thread or dystrophic neurite"}  # built-in names since changed: settings saved with the old one get the new
+
+
 def from_config(stain: str, entries: list[dict] | None, subtype_wait_s: float = DEFAULT_SUBTYPE_WAIT_S) -> Vocabulary:
     """A stain's classes from its `labels.classes` entry: built-in classes keep their id and role (and come back, as they
     are by default, when the entry lacks them), others are taken as written."""
@@ -460,8 +474,10 @@ def from_config(stain: str, entries: list[dict] | None, subtype_wait_s: float = 
         subtypes += [s for s in known.values() if not any(t.id == s.id for t in subtypes)]
         role = base.role if base else (text(entry.get("role")) if text(entry.get("role")) in ROLES else NEGATIVE)
         key = _current_key(stain, ident, _clean_key(entry.get("key")), base.key if base else None)
-        out.append(Identity(ident, text(entry.get("name")) or ident, role, text(entry.get("description")), key,
-                            text(entry.get("example")), bool(entry.get("hidden")), builtin=base is not None, subtypes=tuple(subtypes)))
+        rejects = base.rejects if base else bool(entry.get("rejects")) and role == NEGATIVE
+        name = base.name if base is not None and base.rejects and text(entry.get("name")) == OLD_NAMES.get(ident) else text(entry.get("name")) or ident
+        out.append(Identity(ident, name, role, text(entry.get("description")), key,
+                            text(entry.get("example")), bool(entry.get("hidden")), builtin=base is not None, subtypes=tuple(subtypes), rejects=rejects))
     out += [c for c in builtin.values() if not any(o.id == c.id for o in out)]
     return Vocabulary(stain, tuple(out), subtype_wait_s)
 
