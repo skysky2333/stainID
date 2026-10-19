@@ -94,6 +94,7 @@ KINDS: dict[str, str] = {
     "answers": "The app's heavy answers, kept for a quick start",
     "label_overview": "The Labels page's counts per stain",
     "tissue": "Tissue of core images (the areas pages' \"not analysed\" layer)",
+    "thread_ladder": "AT8 thread networks of fields at every thread threshold (the threads slider)",
 }
 _KIND = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 _MARKER = f"{os.sep}data{os.sep}cache{os.sep}"

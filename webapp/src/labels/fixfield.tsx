@@ -40,6 +40,8 @@ import { SLIDER_STEP, acceptedAt, lock, moveTo, slider, sliderText, startPick, u
 import { LockIcon, ThresholdSlider } from './threshold'
 import { reasonText, whyStart } from './reasons'
 import { peopleChecks } from './aiLabels'
+import type { ThreadLadder } from './threads'
+import { THREAD_KEY, ThreadLines, ThreadsCard, stepOf } from './threads'
 import { BackToSets, CHOICE_IDS, CHOICE_NAMES, PIECE_IDS, PIECE_NAMES, tabNext, ClassLegend, LookLegend, MaskSwitch, ROUND_TITLE, RoundProgressLine, SaveButtons, SaveState, callText, changesText, draftKey, lookOf, maskName,
   polygonArea, polygonPoints, readDraft, simplifyPolygon, stepMask, unsureClass, useCandidateKeys, useFitScreen, useLeaveGuard, useLive, useSaveKeys,
   writeDraft } from './rounds'
@@ -266,6 +268,15 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   })
   const lockStart = useCallback(() => setStart((s) => (s && !s.locked ? lock(s) : s)), [])
   const [mode, setMode] = useState<'split' | 'merge' | null>(null)  // S and M
+  // AT8 threads mode (H, threads.tsx): the field's thread network at one thread threshold, drawn only in this mode
+  const threadsHere = field.threads != null
+  const [threading, setThreading] = useState(false)
+  const [threadsAsked, setThreadsAsked] = useState(false)  // fetched once threads mode first opens (made ahead on the server)
+  const ladder = useFetch<ThreadLadder>(threadsHere && threadsAsked ? `/api/annotate/${name}/fields/${enc(tile)}/threads` : null)
+  const [threadSaved, setThreadSaved] = useState<number | null>(field.threads?.factor ?? null)
+  const [threadStep, setThreadStep] = useState<number | null>(null)
+  const ladderDone = ladder.data?.status === 'done' && ladder.data.steps.length ? ladder.data : null
+  const threadIndex = ladderDone ? (threadStep ?? stepOf(ladderDone.factors, threadSaved, ladderDone.detection)) : 0
   const [split, setSplit] = useState<{ key: string; pieces: number[][][]; busy: boolean } | null>(null)  // the preview of a split
   const [chosenForMerge, setChosenForMerge] = useState<string[]>([])
   const [stroke, setStroke] = useState<number[][] | null>(null)  // a line drawn across objects (split) or over them (merge)
@@ -605,8 +616,16 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     })
   }, [precise, undos])
 
+  const confirmThreads = async () => {  // Enter in threads mode: this field's thread threshold (one label, replaced when set again)
+    if (!ladderDone || saving) return
+    const factor = ladderDone.factors[threadIndex]
+    if (await send([{ task: 'thread_threshold', value: factor.toFixed(4) }], false)) {
+      setThreadSaved(factor); setThreadStep(null); setThreading(false)
+      tell('threads-saved')
+    }
+  }
   useCandidateKeys(keys, {
-    answering: !!target && !draft.length && !excluding,
+    answering: !!target && !draft.length && !excluding && !threading,
     onSize: (bigger) => {  // the brush: Tab smaller, Shift+Tab bigger (the outline keys rest while it is on)
       if (!excluding) return false
       setBrushSize(brushStep(brushSize, bigger))
@@ -620,11 +639,12 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
       giveClass(target, pick)
     },
     onUnsure: () => { if (target && unsure) { tell(target.fresh ? 'added' : 'unsure'); giveClass(target, { identity: unsure, subtype: null }) } },
-    onRemove: () => { if (excluding) return; if (target) tell('remove'); removeTarget() },
-    onMask: (bigger) => { if (excluding || mode) return; if (target && !precise) tell('mask'); switchMask(bigger) },  // the brush's Tab sizes it first (onSize)
+    onRemove: () => { if (excluding || threading) return; if (target) tell('remove'); removeTarget() },
+    onMask: (bigger) => { if (excluding || mode || threading) return; if (target && !precise) tell('mask'); switchMask(bigger) },  // the brush's Tab sizes it first (onSize)
     onPrecise: () => { tell('overlays'); setHidden((h) => !h) },  // Space: hide and show everything drawn over the picture
     onUndo: () => { tell('undo'); undo() },
     onEnter: () => {
+      if (threading) { void confirmThreads(); return }  // threads mode: "Threads look right"
       if (start && !start.locked) { lockStart(); tell('start'); return }  // step 1 done: "Start editing"
       if (mode === 'split') { if (split && !split.busy) acceptSplit(); return }
       if (mode === 'merge') { void mergeChosen(); return }
@@ -632,6 +652,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
       if (draft.length >= 3) closeDraft()
     },
     onEscape: () => {
+      if (threading) { setThreading(false); return }  // the thread layer goes with the mode
       if (split) { setSplit(null); return }  // the preview goes; a second Esc leaves split mode
       if (mode) { leaveMode(); return }
       if (excluding) { setExcluding(false); return }
@@ -646,15 +667,24 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     const onKey = (e: KeyboardEvent) => {
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement).tagName) || e.metaKey || e.ctrlKey || e.altKey) return
       if (e.key === '[' || e.key === ']') {
-        if (start && !start.locked) { e.preventDefault(); setStart((s) => (s ? moveTo(s, s.value + (e.key === ']' ? SLIDER_STEP : -SLIDER_STEP)) : s)); tell('threshold') }
+        if (threading && ladderDone) {  // threads mode: one step of the thread threshold
+          e.preventDefault()
+          setThreadStep(Math.max(0, Math.min(ladderDone.factors.length - 1, threadIndex + (e.key === ']' ? 1 : -1)))); tell('threads-step')
+        } else if (start && !start.locked) { e.preventDefault(); setStart((s) => (s ? moveTo(s, s.value + (e.key === ']' ? SLIDER_STEP : -SLIDER_STEP)) : s)); tell('threshold') }
         return
       }
       if (e.repeat) return
       if (excluding && ['1', '2', '3', '4'].includes(e.key)) { e.preventDefault(); setBrushKind(e.key); return }  // the type of area painted
       const key = e.key.toLowerCase()
+      if (key === THREAD_KEY && threadsHere && !precise && !draft.length && !e.shiftKey) {  // H: threads mode on and off
+        e.preventDefault(); setHovered(null); leaveMode(); setExcluding(false); setThreadsAsked(true)
+        setThreading((on) => !on); tell('threads-mode')
+        return
+      }
       if (!['b', 's', 'm'].includes(key) || precise || draft.length || e.shiftKey) return
       e.preventDefault()
       setHovered(null)
+      setThreading(false)
       if (key === 'b') { leaveMode(); setExcluding((on) => !on); return }
       setExcluding(false)
       const next = key === 's' ? 'split' : 'merge'
@@ -664,7 +694,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [precise, draft.length, excluding, start])  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [precise, draft.length, excluding, start, threading, ladderDone, threadIndex])  // eslint-disable-line react-hooks/exhaustive-deps
   const brushRadius = (unit: number) => (brushSize / 2) * unit  // in field px at this zoom (`unit`: field px per screen px): constant on screen
   const press = (p: ImagePoint, event: React.MouseEvent) => {
     if (event.button !== 0) return  // the left button paints (Shift: takes out) or draws a line; the middle one pans
@@ -1038,7 +1068,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
               {start && !start.locked && <span className="badge">Step 1: set the acceptance threshold</span>}
               {target && (target.candidate || pieceOf(target)) && !precise && !excluding && <span className="badge outline-badge" title="Tab switches the outline of the object under the mouse">
                 Outline: {(choicesOf(target).names ?? CHOICE_NAMES)[choicesOf(target).index]} · Tab</span>}</span>}
-            focus={focus} cursor={excluding ? 'none' : mode ? 'crosshair' : precise ? 'crosshair' : target ? 'pointer' : 'copy'} onClick={click} onMove={move}
+            focus={focus} cursor={threading ? 'default' : excluding ? 'none' : mode ? 'crosshair' : precise ? 'crosshair' : target ? 'pointer' : 'copy'} onClick={threading ? undefined : click} onMove={move}
             onPress={press} onRelease={release} panLock={excluding || !!mode} onSize={setFieldSize}
             paint={!hidden && fieldSize && (excluding || brush.dirty) ? (  // each type's area now: one merged region per type (brush.ts), from the first stroke
               <div ref={brush.host} className="exclude-painted" style={{ position: 'absolute', left: 0, top: 0,
@@ -1050,7 +1080,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
                   width={excluded.data.width} height={excluded.data.height} preserveAspectRatio="none" style={{ imageRendering: 'pixelated' }} />
               ) : null}
               {layers.excluded !== false && !excluding && people.data && <PeopleAreaLines areas={people.data} unit={Number.isFinite(rawUnit) && rawUnit > 0 ? rawUnit : 1} />}
-              <ObjectLayer items={drawnItems} unit={Number.isFinite(rawUnit) && rawUnit > 0 ? rawUnit : 1} dim={precise ? 0.25 : excluding ? 0.55 : split ? 0.6 : 1} />
+              <ObjectLayer items={drawnItems} unit={Number.isFinite(rawUnit) && rawUnit > 0 ? rawUnit : 1} dim={precise ? 0.25 : threading ? 0.3 : excluding ? 0.55 : split ? 0.6 : 1} />
             </>}>
             {(_zoom, size, rawUnit) => {
               const unit = Number.isFinite(rawUnit) && rawUnit > 0 ? rawUnit : 1
@@ -1060,6 +1090,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
               const litPoly = lit ? outlineOf(lit) : null
               const litCall = lit ? callOf(lit) : null
               return <>
+                {threading && ladderDone && <ThreadLines lines={ladderDone.steps[threadIndex].lines} unit={unit} />}
                 {layers.box && <>
                   <path d={`M0 0H${size.w}V${size.h}H0Z M${box.x} ${box.y}v${box.height}h${box.width}v${-box.height}Z`} fill="#000" fillOpacity={0.22} fillRule="evenodd" />
                   <rect x={box.x} y={box.y} width={box.width} height={box.height} fill="none" stroke={BOX_COLOR} strokeWidth={2 * unit} strokeDasharray={`${12 * unit} ${8 * unit}`} />
@@ -1147,6 +1178,8 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
                 title="Discard this field’s unsaved changes and set the threshold again">Reset field</button>
             </div>
           ))}
+          {threading && <ThreadsCard ladder={ladder.data} pending={ladder.pending ? pendingText(ladder.pending) : null} error={ladder.error} index={threadIndex}
+            onChange={(i) => { setThreadStep(i); tell('threads-step') }} onConfirm={() => void confirmThreads()} saving={saving} saved={threadSaved} />}
           {mode === 'split' && <div className="card side-block exclude-bar" role="status">
             <b>Split</b>{split?.busy || merging ? <> · <Loading inline label="Splitting…" /></> : null} — <span className="kbd">S</span> or <span className="kbd">Esc</span> to leave
             <ul className="key-list small" style={{ marginTop: 6 }}>
@@ -1187,7 +1220,8 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
             <h3>Classes</h3>
             <ClassLegend vocabulary={vocabulary} keys={keys} removeClass={meta.remove_class} active={target ? callOf(target).pick : null} />
             <p className="small muted" style={{ margin: '4px 0 0' }}><span className="kbd">B</span> brush for bad areas (then 1–4 are area types) ·
-              {' '}<span className="kbd">S</span> split · <span className="kbd">M</span> merge</p>
+              {' '}<span className="kbd">S</span> split · <span className="kbd">M</span> merge{threadsHere && <> · <span className="kbd">H</span> threads
+                {threadSaved != null ? ` (set: ${threadSaved === 1 ? 'detection’s' : `${threadSaved.toFixed(2)}×`})` : ''}</>}</p>
           </div>
           <div className="card side-block">
             <h3>Keys</h3>

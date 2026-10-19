@@ -207,8 +207,9 @@ results are never touched. See [docs/webapp.md](docs/webapp.md).
 The screenshots show public datasets opened in stainID, and a synthetic demo where a page needs people's work that
 the public projects do not have; none shows study data:
 
-- **the tutorials** (Fix the field, precise editing, Tab, split, merge, the brush, Mark bad areas): the one tutorial
-  every stainID server offers (`stainid tutorial build`), a field and a core of the Keiser lab amyloid-YOLO dataset;
+- **the tutorials** (Fix the field, precise editing, Tab, split, merge, the brush, Mark bad areas, AT8 threads): the
+  one tutorial every stainID server offers (`stainid tutorial build`), a field and a core of the Keiser lab
+  amyloid-YOLO dataset, and a Tangle-Tracer AT8 field for the threads practice;
 - **Home, Run, Models, Labels, Results, Settings, Cores**: the amyloid-YOLO project, and the Tangle-Tracer project for
   the AT8 core (see [Image credits](#image-credits));
 - **My labelling sets, Projects, Annotations on the Cores view**: the synthetic demo
@@ -241,7 +242,8 @@ the public projects do not have; none shows study data:
 ### Image credits
 
 The public datasets in the screenshots and the tutorial, each used under its licence (the tutorial carries the credit
-line "Images: Keiser lab amyloid-YOLO dataset (2023), MIT licence"):
+line "Images: Keiser lab amyloid-YOLO dataset (2023), MIT licence", and its AT8 threads practice "Images: Tangle-Tracer
+(Ghandian et al. 2024, BioImage Archive S-BIAD1165), CC0"):
 
 - **amyloid-YOLO** (Keiser lab): code and released data under the MIT licence (Copyright (c) 2021 keiserlab), the
   paper under CC BY 4.0. Wong DR, Magaki SD, Vinters HV, Yong WH, Monuki ES, Williams CK, Martini AC, DeCarli C,

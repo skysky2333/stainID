@@ -79,6 +79,7 @@ export default function Models() {
           <SegmentationCheck />
           <h2 className="stage-title">Bad-area detector</h2>
           <BadAreaDetector />
+          {list.some((m) => m.stain === 'AT8') && <><h2 className="stage-title">Thread detector</h2><ThreadDetector /></>}
           <h2 className="stage-title">Published models</h2>
           <PublishedModels models={list.filter((m) => m.source !== 'train')} job={download} onChanged={() => { jobs.reload(); models.reload() }} />
         </>}
@@ -365,6 +366,69 @@ function BadAreaDetector() {
             </>}
           </>
         }}
+      </Loaded>
+    </section>
+  )
+}
+
+/* ---------- the thread detector ---------- */
+
+interface ThreadGroup { tma?: string; slide?: string; fields: number; labels: number; median: number; q25: number; q75: number; length_ratio: number | null; factors: number[] }
+interface ThreadSummary {
+  fields: number; people: number; by_tma: ThreadGroup[]; by_slide: ThreadGroup[]; length_ratio?: number | null
+  suggested: number | null; per_tma: { tma: string; suggested: number; fields: number }[]
+}
+
+const LOW = 0.5
+const HIGH = 2
+const factorText = (f: number) => (Math.abs(f - 1) < 1e-6 ? 'detection’s' : `${f.toFixed(2)}×`)
+const ratioText = (r: number | null | undefined) => (r == null ? '—' : `${Math.round(100 * r)}%`)
+
+/** People's factors on the slider's log scale (0.5–2), detection's (1) marked. */
+function FactorStrip({ factors }: { factors: number[] }) {
+  const x = (f: number) => 4 + (152 * (Math.log(f) - Math.log(LOW))) / (Math.log(HIGH) - Math.log(LOW))
+  return (
+    <svg width="160" height="16" viewBox="0 0 160 16" aria-label={`people’s thread thresholds: ${factors.map(factorText).join(', ')}`}>
+      <line x1={4} x2={156} y1={8} y2={8} stroke="var(--border)" />
+      <line x1={x(1)} x2={x(1)} y1={1} y2={15} stroke="var(--warning)" strokeWidth={2} />
+      {factors.map((f, i) => <circle key={i} cx={x(f)} cy={8} r={3} fill="var(--accent)" fillOpacity={0.55} />)}
+    </svg>
+  )
+}
+
+/** The AT8 thread detector against people: the thread threshold people set in threads mode (H in "Fix the field"),
+ *  relative to detection's, per TMA or slide; the thread length it gives against the current; a suggested setting.
+ *  It only tunes: the analysis keeps detection's threshold until a new one is validated and the pipeline run again. */
+function ThreadDetector() {
+  const state = useFetch<ThreadSummary>('/api/models/thread-detector')
+  const [by, setBy] = useState<'tma' | 'slide'>('tma')
+  return (
+    <section className="card">
+      <div className="row"><h2 style={{ margin: 0 }}>Thread detector</h2><span className="spacer" /><span className="badge">AT8 · tuning only</span></div>
+      <p className="small secondary">Finds the neuropil thread network that the analysis measures by length. In AT8 <b>Fix the field</b> people press <b>H</b> and move one
+        slider until the drawn threads match the threads they see; here are their thresholds against detection’s own (1 = detection’s, marked).</p>
+      <Loaded state={state} label="Reading people’s thread thresholds…">
+        {(d) => !d.fields ? <Empty><p style={{ margin: 0 }}>No thread threshold set yet. In an AT8 “Fix the field” session, press <b>H</b> on a field, move the slider and press Enter.</p></Empty> : <>
+          <p className="small"><b>{d.fields.toLocaleString()}</b> field{d.fields === 1 ? '' : 's'} set by <b>{d.people}</b> {d.people === 1 ? 'person' : 'people'}.
+            {' '}Suggested setting for AT8: <b>{d.suggested == null ? '—' : factorText(d.suggested)}</b>
+            {d.suggested != null && Math.abs(d.suggested - 1) > 1e-6 ? ' detection’s threshold' : ''} · thread length {ratioText(d.length_ratio)} of the current.
+            {d.per_tma.length > 0 && <> Per TMA, where they differ consistently: {d.per_tma.map((t) => `TMA ${t.tma} ${factorText(t.suggested)} (${t.fields} fields)`).join(' · ')}.</>}</p>
+          <p className="small muted">Nothing changes in the analysis: a new setting is validated first, then the pipeline runs again with it.</p>
+          <div className="row small"><span className="spacer" />
+            <div className="segmented">
+              <button type="button" className={`btn small${by === 'tma' ? ' chosen' : ''}`} onClick={() => setBy('tma')}>Per TMA</button>
+              <button type="button" className={`btn small${by === 'slide' ? ' chosen' : ''}`} onClick={() => setBy('slide')}>Per slide</button>
+            </div>
+          </div>
+          <div className="table-wrap" style={{ marginTop: 8 }}><table className="compact small">
+            <thead><tr><th>{by === 'tma' ? 'TMA' : 'Slide'}</th><th>Fields</th><th title="The middle of people’s thresholds, and the middle half">Median (middle half)</th>
+              <th title="0.5× to 2× of detection’s; the mark is detection’s">People’s thresholds</th><th title="The thread length people’s thresholds give, against detection’s on the same fields">Thread length vs current</th></tr></thead>
+            <tbody>{(by === 'tma' ? d.by_tma : d.by_slide).map((g) => (
+              <tr key={String(g.tma ?? g.slide)}><td>{(by === 'tma' ? g.tma : g.slide) || '—'}</td><td>{g.fields.toLocaleString()}</td>
+                <td>{factorText(g.median)} ({g.q25.toFixed(2)}–{g.q75.toFixed(2)})</td><td><FactorStrip factors={g.factors} /></td><td>{ratioText(g.length_ratio)}</td></tr>
+            ))}</tbody>
+          </table></div>
+        </>}
       </Loaded>
     </section>
   )

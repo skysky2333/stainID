@@ -53,7 +53,20 @@ from stainid.api.routes.annotate import (
 from stainid.api.session import PREVIEW, annotator, require_admin
 from stainid.api.state import get_state
 from stainid.api.util import fast_json
-from stainid.labels import added, candidate_store, decisions, exclusions, objectedit, readiness, rounds, sessions, starting, status, store
+from stainid.labels import (
+    added,
+    candidate_store,
+    decisions,
+    exclusions,
+    objectedit,
+    readiness,
+    rounds,
+    sessions,
+    starting,
+    status,
+    store,
+    thread_threshold,
+)
 from stainid.labels import vocabulary as vocab
 from stainid.labels.tasks import STAINS
 from stainid.tables import write_text_atomic
@@ -546,6 +559,12 @@ def prefetch(meta: dict, tile_id: str, person: str) -> None:
     for tile in nexts:
         if not field_prepared(meta, state.tile(tile)):
             work.submit("field", _prepare_key(meta, tile), lambda task, t=tile: prepare_field(meta, t, task), work.AHEAD, "Preparing the next field")
+    if meta["stain"] == "AT8":  # threads mode's network at every thread threshold: this field's and the next ones'
+        for tile in [tile_id, *nexts]:
+            found = state.tile(tile)
+            if not thread_threshold.ready(state.project, found):
+                work.submit("thread_ladder", (state.id, tile), lambda task, t=found: thread_threshold.field_ladder(get_state().project, t), work.AHEAD,
+                            "Preparing the threads of a field")
 
 
 def open_field(meta: dict, tile_id: str, person: str):
@@ -578,7 +597,10 @@ def open_field(meta: dict, tile_id: str, person: str):
     prefetch(meta, tile_id, person)
     thresholds = [o["threshold"] for o in objects if o.get("threshold") is not None]
     chosen = mine[mine.task == starting.TASK] if "task" in mine else mine.iloc[:0]
-    return {"tile_id": tile_id, "box": box, "objects": objects, "checked": checks(found, decided), "layers": LAYERS.get(meta["stain"], []),
+    threads = mine[mine.task == thread_threshold.TASK] if "task" in mine else mine.iloc[:0]
+    return {"tile_id": tile_id, "box": box, "objects": objects, "checked": checks(found, decided),
+            "layers": [layer for layer in LAYERS.get(meta["stain"], []) if layer != "threads"],  # threads show in threads mode (H) only
+            "threads": {"factor": _number(threads.value.iloc[-1]) if len(threads) else None} if meta["stain"] == "AT8" and not practice else None,
             "detection_threshold": float(np.median(thresholds)) if thresholds else None,
             "threshold": _number(chosen.value.iloc[-1]) if len(chosen) else None,
             "mine": mine.replace({np.nan: None}).to_dict(orient="records"), "added": added_states(meta, tile, mine, found),
@@ -706,6 +728,8 @@ def clean(meta: dict, mark, person: str) -> dict | None:
     stain = meta["stain"]
     second = rounds.round_of(meta) == 2
     allowed = {"class", "outline"} | ({"tag", "note", "done", exclusions.TASK, starting.TASK, objectedit.TASK} if second else set())
+    if second and stain == "AT8":
+        allowed.add(thread_threshold.TASK)
     if mark.task not in allowed:
         raise HTTPException(400, f"{mark.task} labels are not part of this session")
     record = {"source": person, "stain": stain, "task": mark.task, "session": meta["name"], "deleted": mark.deleted, "value": mark.value,
@@ -729,6 +753,14 @@ def clean(meta: dict, mark, person: str) -> dict | None:
         if value is None or not 0 <= value <= 1:
             raise HTTPException(400, "the acceptance threshold is a number from 0 to 1")
         return record | {"id": starting.label_id(mark.tile_id), "value": f"{value:.3f}", "x": None, "y": None, "points": None, "candidate": None}
+    if mark.task == thread_threshold.TASK:  # threads mode: the thread threshold the lines matched the threads at (Enter)
+        tile = field_tile(meta, mark.tile_id)
+        value = _number(mark.value)
+        if value is None or not thread_threshold.FACTORS[0] - 1e-6 <= value <= thread_threshold.FACTORS[-1] + 1e-6:
+            raise HTTPException(400, f"the thread threshold is a factor from {thread_threshold.FACTORS[0]} to {thread_threshold.FACTORS[-1]}")
+        ladder = thread_threshold.field_ladder(get_state().project, tile)
+        return record | {"id": thread_threshold.label_id(mark.tile_id), "x": None, "y": None, "candidate": None, "subtype": None,
+                         **thread_threshold.record(ladder, value)}
     if mark.task == objectedit.TASK and not mark.deleted and mark.value not in objectedit.EDITS:
         raise HTTPException(400, f"an object is replaced by a {' or a '.join(objectedit.EDITS)}")
     if mark.candidate:
@@ -921,6 +953,51 @@ def _round_meta(name: str, request: Request) -> dict:
     if not rounds.is_round(meta):
         raise HTTPException(404, f"{name} is not an annotation round")
     return meta
+
+
+@router.get("/annotate/{name}/fields/{tile_id}/threads")
+def field_threads(name: str, tile_id: str, request: Request, person: str = Depends(annotator)):
+    """Threads mode of an AT8 field (`labels.thread_threshold`): the detected thread network at every thread threshold,
+    in field-picture pixels, made once per field (ahead, with the next fields); a 202 `pending` answer while it is made."""
+    meta = _round_meta(name, request)
+    if meta["stain"] != "AT8":
+        raise HTTPException(404, "threads are an AT8 step")
+    if meta.get("practice"):
+        raise HTTPException(404, "the threads practice is its own tutorial (/api/annotate/practice-threads/ladder)")
+    state = get_state()
+    tile = field_tile(meta, tile_id)
+    return work.answer("thread_ladder", (state.id, tile_id), lambda task: thread_threshold.field_ladder(state.project, tile), work.NOW,
+                       "Drawing the threads of this field")
+
+
+@router.get("/models/thread-detector", dependencies=admin)
+def thread_detector() -> dict:
+    """The Models page's "Thread detector" panel (`labels.thread_threshold.summary`): people's thread thresholds against
+    detection's, per TMA and slide, the thread length each gives and a suggested setting. Labels only tune: the analysis
+    keeps detection's threshold until a new setting is validated and the pipeline run again."""
+    return thread_threshold.summary(store.current(root()), get_state().tiles)
+
+
+@router.get("/annotate/practice-threads/ladder")
+def practice_threads() -> dict:
+    """The threads practice of the tutorial (`stainid.tutorial`, an AT8 field of a public dataset): its picture's size,
+    the credit line and the thread network at every thread threshold. Nothing of it is kept."""
+    from stainid import tutorial  # noqa: PLC0415
+
+    found = tutorial.threads()
+    if found is None:
+        raise HTTPException(404, "The threads practice is not set up on this server yet (stainid tutorial build --threads-from …).")
+    return found
+
+
+@router.get("/annotate/practice-threads/picture.jpg")
+def practice_threads_picture() -> Response:
+    from stainid import tutorial  # noqa: PLC0415
+
+    path = tutorial.threads_picture()
+    if path is None:
+        raise HTTPException(404, "no threads practice")
+    return Response(path.read_bytes(), media_type="image/jpeg", headers={"Cache-Control": "max-age=3600"})
 
 
 @router.get("/annotate/{name}/fields/{tile_id}/excluded")
@@ -1125,10 +1202,11 @@ def tutorial(request: Request, person: str = Depends(annotator)) -> dict:
     """Whether this person has been through the tutorial, and where it practises: the one tutorial of the server
     (`stainid.tutorial`: a public dataset's field, the same for every project, a new one too), with its credit line
     and the hint of the "Change the type" step; `practice` None before `stainid tutorial build`. The "Mark bad areas"
-    practice is `practice-areas`. Nothing of the project is read."""
+    practice is `practice-areas`; `threads` the AT8 threads practice ({tile_id, credit}, `/api/annotate/practice-threads/…`)
+    when the tutorial has one. Nothing of the project is read."""
     from stainid import tutorial as shared  # noqa: PLC0415
 
-    return {"done": _done(request, person), "practice": shared.practice()}
+    return {"done": _done(request, person), "practice": shared.practice(), "threads": (shared.info() or {}).get("threads")}
 
 
 def _done(request: Request, person: str) -> bool:

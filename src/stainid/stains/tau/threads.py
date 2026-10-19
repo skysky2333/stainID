@@ -119,14 +119,49 @@ def thread_network(
 ) -> dict[str, np.ndarray | float]:
     """Neuropil threads: ridges that exceed the slide threshold and stand out from the local AT8 background (haze),
     away from tissue/hole rims and hematoxylin nuclei, and at least `minimum_length_um` long."""
+    inputs = _thread_inputs(rgb, valid, pixel_size_um, nuclei, background_um, rim_um)
+    possible = _possible(inputs, dab_threshold, contrast)
+    ridge = ridge_filter(inputs["dab"], sigmas=[1, 1.5, 2, 3], where=possible)  # only where a thread can be
+    return _network(ridge, possible, dab_threshold, pixel_size_um, minimum_length_um)
+
+
+def thread_ladder(
+    rgb: np.ndarray,
+    valid: np.ndarray,
+    dab_threshold: float,
+    pixel_size_um: float,
+    factors,
+    nuclei: np.ndarray | None = None,
+    contrast: float = 0.6,
+    background_um: float = 8.0,
+    rim_um: float = 4.0,
+    minimum_length_um: float = 4.0,
+) -> list[dict[str, np.ndarray | float]]:
+    """`thread_network` at each thread threshold `factor` x the slide threshold (both of its cuts, the stain's and the
+    ridge's), from one ridge response: the ridge filter is made once, where a thread can be at the lowest factor, and
+    each value is the whole picture's (`ridge_filter`), so the network at factor 1 is `thread_network`'s to the pixel."""
+    inputs = _thread_inputs(rgb, valid, pixel_size_um, nuclei, background_um, rim_um)
+    lowest = _possible(inputs, min(factors) * dab_threshold, contrast)
+    ridge = ridge_filter(inputs["dab"], sigmas=[1, 1.5, 2, 3], where=lowest)
+    return [_network(ridge, _possible(inputs, factor * dab_threshold, contrast), factor * dab_threshold, pixel_size_um, minimum_length_um)
+            for factor in factors]
+
+
+def _thread_inputs(rgb, valid, pixel_size_um, nuclei, background_um, rim_um) -> dict:
     dab = np.maximum(rgb_to_hed(rgb)[..., 2], 0).astype(np.float32)
     smooth = cv2.GaussianBlur(dab, (0, 0), 0.8)
     valid = valid & (cv2.distanceTransform(field_tissue_mask(rgb).astype(np.uint8), cv2.DIST_L2, 5) * pixel_size_um > rim_um)
     if nuclei is not None:
         valid = valid & ~cv2.dilate((nuclei > 0).astype(np.uint8), _disk(max(1, round(1.0 / pixel_size_um)))).astype(bool)
     background = cv2.GaussianBlur(dab, (0, 0), background_um / pixel_size_um)
-    possible = (smooth >= 0.6 * dab_threshold) & (smooth >= (1 + contrast) * background) & valid
-    ridge = ridge_filter(dab, sigmas=[1, 1.5, 2, 3], where=possible)  # only where a thread can be
+    return {"dab": dab, "smooth": smooth, "valid": valid, "background": background}
+
+
+def _possible(inputs: dict, dab_threshold: float, contrast: float) -> np.ndarray:
+    return (inputs["smooth"] >= 0.6 * dab_threshold) & (inputs["smooth"] >= (1 + contrast) * inputs["background"]) & inputs["valid"]
+
+
+def _network(ridge: np.ndarray, possible: np.ndarray, dab_threshold: float, pixel_size_um: float, minimum_length_um: float) -> dict:
     line = (ridge >= 0.25 * dab_threshold) & possible
     line = remove_small_objects(line, 12)
     labels, count = ndimage.label(line, np.ones((3, 3)))

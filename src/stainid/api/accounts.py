@@ -541,7 +541,7 @@ def sets_of(account_id: str) -> list[tuple[str, str, float]]:
         return [(r["project"], r["session"], r["joined"]) for r in db.execute("select * from members where account = ? order by joined desc", (account_id,))]
 
 
-TUTORIALS = ("objects", "areas")  # "Fix the field" and "Mark bad areas"
+TUTORIALS = ("objects", "areas", "threads")  # "Fix the field", "Mark bad areas" and AT8 threads (its thread-threshold slider)
 
 
 def tutorials_done(account_id: str) -> dict[str, bool]:

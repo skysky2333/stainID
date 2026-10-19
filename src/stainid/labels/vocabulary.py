@@ -37,12 +37,13 @@ UNTYPED = "type not recorded"  # shown for a positive object whose type nobody g
 TYPE_SPLIT = "people disagree on the type"  # "plaque (people disagree on the type)"
 REJECT_KEY, UNSURE_KEY, BRUSH_KEY = "delete", "`", "b"
 KEY_ALIASES = {"0": UNSURE_KEY, "backspace": REJECT_KEY}  # quiet aliases: 0 where ` is awkward, Backspace (a Mac's delete key)
-# keys the pages use for something else: field-page tools (v, a, o), save (s), undo (z), the brush (b), unsure (` and 0)
-RESERVED_KEYS = {"v", "a", "o", "s", "m", "z", BRUSH_KEY, "0", UNSURE_KEY, REJECT_KEY}  # s split, m merge, z undo, b the brush
+# keys the pages use for something else: field-page tools (v, a, o), save (s), undo (z), the brush (b), unsure (` and 0),
+# AT8 threads mode (h)
+RESERVED_KEYS = {"v", "a", "o", "s", "m", "z", "h", BRUSH_KEY, "0", UNSURE_KEY, REJECT_KEY}  # s split, m merge, z undo, b the brush, h threads
 COUNTED_KEYS = "123456789"
 EXTRA_COUNTED_FROM = "5"  # types people add take 5–9 (then any free number)
 LOOKALIKE_KEYS = "qwer"  # the built-in look-alikes
-EXTRA_LOOKALIKE_KEYS = "tyuiphjklcndfgx"  # look-alikes people add (then Q W E R when free)
+EXTRA_LOOKALIKE_KEYS = "tyuipjklcndfgx"  # look-alikes people add (then Q W E R when free)
 DEFAULT_SUBTYPE_WAIT_S = 1.0  # no longer used (types are picked with one key); kept so older settings still load
 
 
@@ -518,7 +519,7 @@ def problems(vocabulary: Vocabulary) -> list[str]:
             if not key or c.id in (reject, unsure):
                 continue
             if key in RESERVED_KEYS:
-                out.append(f"The key {key_label(key)} of {owner} is used for something else (Del, `, B brush, S save, Z undo or the field tools).")
+                out.append(f"The key {key_label(key)} of {owner} is used for something else (Del, `, B brush, H threads, S save, Z undo or the field tools).")
             elif counted and key not in COUNTED_KEYS:
                 out.append(f"{owner} is counted, so its key must be a number (1–9), not {key_label(key)}.")
             elif not counted and not key.isalpha():

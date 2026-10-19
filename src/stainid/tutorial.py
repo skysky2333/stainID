@@ -10,6 +10,11 @@ licence and citation, and a hint for the "Change the type" step). The practice s
 `practice-areas`) are then answered from this project (`api.state.TUTORIAL`, the app's middleware), and nothing of
 them is ever kept (`stainid.practice`).
 
+The threads practice (AT8 only: threads mode of "Fix the field", its thread-threshold slider) is a field of another
+public dataset with AT8 threads: `--threads-from <project> --threads-field <tile> --threads-credit …` (or `stainid
+tutorial threads` to add it to a built tutorial) keeps its field picture and its thread network at every thread
+threshold (`labels.thread_threshold.compute`) in `threads/`, served by `/api/annotate/practice-threads/…`.
+
 Only use images whose licence allows public display and redistribution: the build records the source's licence.
 """
 from __future__ import annotations
@@ -56,6 +61,79 @@ def info() -> dict | None:
 
 def built() -> bool:
     return info() is not None
+
+
+THREADS = "threads"  # the threads practice's folder in the tutorial: its field picture and `threads.json`
+
+
+def threads() -> dict | None:
+    """The threads practice (None when the tutorial has none): its field's tile id, picture size, credit line and the
+    thread network at every thread threshold (`labels.thread_threshold.compute`)."""
+    path = folder() / THREADS / "threads.json"
+    try:
+        stamp = path.stat().st_mtime_ns
+    except FileNotFoundError:
+        return None
+    kept = _INFO.get(str(path))
+    if kept and kept[0] == stamp:
+        return kept[1]
+    try:
+        found = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    _INFO[str(path)] = (stamp, found)
+    return found
+
+
+def threads_picture() -> Path | None:
+    path = folder() / THREADS / "field.jpg"
+    return path if path.exists() else None
+
+
+def add_threads(source_root: Path | str, field_tile: str, credit: str, out: Path | str | None = None) -> dict:
+    """Add the threads practice to a tutorial folder (the built one by default): an AT8 field of `source_root` (read
+    only; only images whose licence allows public display), its field picture and its thread ladder. Replaces an
+    earlier one; returns what `threads()` serves."""
+    import cv2  # noqa: PLC0415
+
+    from stainid.imaging.core_images import read_bgr  # noqa: PLC0415
+    from stainid.labels import (
+        frames,  # noqa: PLC0415
+        thread_threshold,  # noqa: PLC0415
+    )
+    from stainid.project import load_project  # noqa: PLC0415
+
+    source = load_project(source_root)
+    target = (Path(out) if out is not None else folder()) / THREADS
+    table = pd.read_csv(source.analysis_tiles())
+    row = table[table.tile_id.astype(str) == field_tile]
+    if row.empty or str(row.iloc[0]["stain"]) != "AT8":
+        raise KeyError(f"{field_tile} is not an AT8 tile of {source.root}")
+    tile = row.iloc[0].to_dict()
+    ladder = thread_threshold.compute(source, tile)
+    if ladder["status"] != "done":
+        raise ValueError(f"the threads of {field_tile} cannot be made (stage 2 of its core missing?)")
+    bgr = read_bgr(source.root / tile["image_path"])
+    x0, y0 = frames.field_origin(tile, source.context_px)
+    x1 = min(bgr.shape[1], int(tile["x_px"]) + int(tile["width_px"]) + source.context_px)
+    y1 = min(bgr.shape[0], int(tile["y_px"]) + int(tile["height_px"]) + source.context_px)
+    work = target.with_name(THREADS + ".building")
+    if work.exists():
+        shutil.rmtree(work)
+    work.mkdir(parents=True)
+    cv2.imwrite(str(work / "field.jpg"), bgr[y0:y1, x0:x1], [cv2.IMWRITE_JPEG_QUALITY, 90])
+    box = {"x": int(tile["x_px"]) - x0, "y": int(tile["y_px"]) - y0, "width": int(tile["width_px"]), "height": int(tile["height_px"])}
+    raw = yaml.safe_load((source.root / "stainid.yaml").read_text()) or {}
+    dataset = raw.get("dataset") or {}
+    found = {"tile_id": field_tile, "credit": credit, "width": x1 - x0, "height": y1 - y0, "box": box,
+             "pixel_size_um": float(source.pixel_size_um), "source": {k: dataset.get(k) for k in ("id", "title", "licence", "citation", "doi") if dataset.get(k)},
+             **{k: ladder[k] for k in ("status", "factors", "detection", "steps", "dab_threshold", "ridge_threshold")}}
+    (work / "threads.json").write_text(json.dumps(found))
+    if target.exists():
+        shutil.rmtree(target)
+    work.rename(target)
+    _INFO.clear()
+    return found
 
 
 def practice() -> dict | None:
@@ -133,9 +211,11 @@ def _hint(project, stain: str, tile: dict) -> dict:
             "text": f"For example, the big plaque near the {where} has a clear dense core: point at it and press {key.upper()} to make it cored / neuritic."}
 
 
-def build(source_root: Path | str, field_tile: str, areas_core: str, credit: str, out: Path | str | None = None) -> dict:
+def build(source_root: Path | str, field_tile: str, areas_core: str, credit: str, out: Path | str | None = None,
+          threads_from: Path | str | None = None, threads_field: str = "", threads_credit: str = "") -> dict:
     """Make the tutorial from a project (read only): its field `field_tile` and its core `areas_core` (every stain image
-    of that core), with `credit` shown in the tutorial. Replaces an earlier tutorial; returns `tutorial.json`."""
+    of that core), with `credit` shown in the tutorial, and with `threads_from` the threads practice (`add_threads`).
+    Replaces an earlier tutorial; returns `tutorial.json`."""
     from stainid.labels import candidate_store  # noqa: PLC0415
     from stainid.project import load_project  # noqa: PLC0415
     from stainid.sampling.tiles import known_tiles  # noqa: PLC0415
@@ -224,6 +304,9 @@ def build(source_root: Path | str, field_tile: str, areas_core: str, credit: str
     meta = {"version": VERSION, "built": time.time(), "credit": credit, "source": {"name": source.name, **config["dataset"]},
             "field": {"stain": stain, "tile_id": field_tile, "core_id": field_core},
             "areas": {"core_id": areas_core, "stains": area_stains}, "hint": hint}
+    if threads_from is not None:
+        found = add_threads(threads_from, threads_field, threads_credit, work)
+        meta["threads"] = {"tile_id": found["tile_id"], "credit": found["credit"]}
     (work / INFO).write_text(json.dumps(meta, indent=1))
     if target.exists():
         shutil.rmtree(target)
@@ -241,12 +324,27 @@ def add_parser(sub) -> None:
     b.add_argument("--core", required=True, help="the core id of the 'Mark bad areas' practice core")
     b.add_argument("--credit", required=True, help='the credit line shown in the tutorial, e.g. "Images: … dataset (2023), MIT licence"')
     b.add_argument("--out", type=Path, default=None, help="where (default: $STAINID_TUTORIAL or ~/.stainid/tutorial)")
+    for parser, required in ((b, False), (what.add_parser("threads", help="add (or replace) the AT8 threads practice of a built tutorial"), True)):
+        parser.add_argument("--threads-from", type=Path, required=required, help="the project the AT8 threads practice field comes from")
+        parser.add_argument("--threads-field", default="", required=required, help="its AT8 tile id")
+        parser.add_argument("--threads-credit", default="", required=required, help="its credit line")
+        if parser is not b:
+            parser.add_argument("--out", type=Path, default=None, help="the tutorial folder (default: $STAINID_TUTORIAL or ~/.stainid/tutorial)")
     what.add_parser("show", help="what the built tutorial practises on")
 
 
 def run(args) -> None:
+    if args.tutorial_command == "threads":
+        found = add_threads(args.threads_from, args.threads_field, args.threads_credit, args.out)
+        target = (Path(args.out) if args.out is not None else folder()) / INFO
+        meta = json.loads(target.read_text())
+        meta["threads"] = {"tile_id": found["tile_id"], "credit": found["credit"]}
+        target.write_text(json.dumps(meta, indent=1))
+        _INFO.clear()
+        print(f"threads practice added: {found['tile_id']}; {found['credit']}")
+        return
     if args.tutorial_command == "build":
-        meta = build(args.source, args.field, args.core, args.credit, args.out)
+        meta = build(args.source, args.field, args.core, args.credit, args.out, args.threads_from, args.threads_field, args.threads_credit)
         print(f"tutorial built in {args.out or folder()}: field {meta['field']['tile_id']}, core {meta['areas']['core_id']} "
               f"({', '.join(meta['areas']['stains'])}); {meta['credit']}")
     else:

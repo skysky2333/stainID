@@ -558,6 +558,8 @@ export interface RoundField<Shape = number[][]> {
   open_by: string[]; done_by: string[]; pixel_size_um: number
   /** detection's acceptance threshold on this field, and the one this person locked (saved), if any */
   detection_threshold?: number | null; threshold?: number | null
+  /** AT8 threads mode (H): the thread threshold this person set on the field (a factor on detection's), null before; none on other stains */
+  threads?: { factor: number | null } | null
 }
 /** Each brush type's current area over a field (GET …/fields/{tile}/areas): detection's with people's saved edits
  *  merged in, a PNG per type (one pixel per `scale` field px) placed at x, y in the field picture. */

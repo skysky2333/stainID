@@ -1,5 +1,7 @@
-/* The two tutorials (/tutorial), offered on everyone's home and on Help (`TutorialCards`): "Fix the field" (about 3–5
-   minutes) on the practice field, and `?kind=areas`, "Mark bad areas", on the practice core (labels/markareas.tsx): the
+/* The tutorials (/tutorial), offered on everyone's home and on Help (`TutorialCards`): "Fix the field" (about 3–5
+   minutes) on the practice field, `?kind=threads`, "AT8 threads" (threads mode of Fix the field: H, the thread-threshold
+   slider, Enter; on an AT8 field of a CC0 dataset, labels/threads.tsx), when the server's tutorial has it, and
+   `?kind=areas`, "Mark bad areas", on the practice core (labels/markareas.tsx): the
    one tutorial of the server (`stainid tutorial build`, a public dataset's field and core, the same for every project),
    with its credit line. Nothing is saved: the practice sessions (`practice-2-<stain>`, `practice-areas`)
    keep nothing on the server, whatever is clicked. A coach asks for one thing at a time and waits until the person has
@@ -8,7 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import type { MySet, SessionDetail } from '../api'
-import { api, appBase, projectPath } from '../api'
+import { api, apiUrl, appBase, projectPath } from '../api'
 import { Empty, ErrorNote, Loaded, Loading, PageHead } from '../components'
 import { useFetch } from '../hooks'
 import { FixField } from './fixfield'
@@ -16,15 +18,20 @@ import type { AreaEvent } from './markareas'
 import { MarkAreas, PRACTICE_AREAS } from './markareas'
 import type { RoundEvent } from './rounds'
 import { useSession } from '../session'
+import { ZoomViewer } from '../viewer'
+import type { ThreadLadder } from './threads'
+import { THREAD_KEY, ThreadLines, ThreadsCard } from './threads'
 
 /** `/api/tutorial`: the one tutorial of the server (`stainid.tutorial`, the same for every project): its field, the
  *  credit line of its images and the hint of the "Change the type" step; null before `stainid tutorial build`. */
 interface TutorialInfo {
   done: boolean
   practice: { stain: string; tile_id: string; round2: string; credit?: string; hint?: { text?: string; key?: string } } | null
+  /** the AT8 threads practice, when the tutorial has one */
+  threads?: { tile_id: string; credit?: string } | null
 }
-export type TutorialKind = 'objects' | 'areas'
-interface Done { objects: boolean; areas: boolean; kept: boolean }
+export type TutorialKind = 'objects' | 'areas' | 'threads'
+interface Done { objects: boolean; areas: boolean; threads?: boolean; kept: boolean }
 /** One step: done once the page reports one of `done` (`times` of them: "reject a few"). */
 interface Step { title: string; text: string; done: RoundEvent[]; times?: number }
 
@@ -68,7 +75,8 @@ function guestDone(kind: TutorialKind) {
 export function useTutorialsDone() {
   const server = useFetch<Done>('/api/session/tutorials')
   const kept = !!server.data?.kept
-  return { objects: kept ? server.data!.objects : guestDone('objects'), areas: kept ? server.data!.areas : guestDone('areas'), loaded: !!server.data || !!server.error }
+  return { objects: kept ? server.data!.objects : guestDone('objects'), areas: kept ? server.data!.areas : guestDone('areas'),
+    threads: kept ? !!server.data!.threads : guestDone('threads'), loaded: !!server.data || !!server.error }
 }
 
 /** Remember that this person finished or skipped a tutorial (`done` false: offer it again). */
@@ -79,13 +87,14 @@ export async function rememberTutorial(kind: TutorialKind, done = true) {
 
 const TUTORIALS: { kind: TutorialKind; title: string; text: string; minutes: string }[] = [
   { kind: 'objects', title: 'Fix the field', minutes: '3–5 minutes', text: 'The main task: correct what detection found on a field — reject, change types, fix outlines, split, merge, add what it missed.' },
+  { kind: 'threads', title: 'AT8 threads', minutes: '1 minute', text: 'AT8 only: in Fix the field, H shows the detected thread network; one slider sets where it matches the threads you see, Enter keeps it.' },
   { kind: 'areas', title: 'Mark bad areas', minutes: '2 minutes', text: 'The brush: paint folds, artifacts, missing tissue and blur that should not be counted, core by core with every stain.' },
 ]
 
 /** The address of a tutorial: in the page's project, else in the project of the person's first set, else the project
  *  the server opened last (every project practises on the same tutorial, `stainid.tutorial`). */
 export function tutorialPath(kind: TutorialKind, sets?: MySet[] | null, next?: string) {
-  const query = [kind === 'areas' ? 'kind=areas' : '', next ? `next=${encodeURIComponent(next)}` : ''].filter(Boolean).join('&')
+  const query = [kind !== 'objects' ? `kind=${kind}` : '', next ? `next=${encodeURIComponent(next)}` : ''].filter(Boolean).join('&')
   const page = `/tutorial${query ? `?${query}` : ''}`
   if (appBase || !sets?.length) return { to: page, href: `${appBase}${page}` }
   return { to: null, href: projectPath(sets[0].project, page) }
@@ -94,9 +103,10 @@ export function tutorialPath(kind: TutorialKind, sets?: MySet[] | null, next?: s
 /** Both tutorials, offered on everyone's home and on Help: what each is for, and whether this person has done it. */
 export function TutorialCards({ sets, compact = false }: { sets?: MySet[] | null; compact?: boolean }) {
   const done = useTutorialsDone()
+  const info = useFetch<TutorialInfo>('/api/tutorial')
   return (
     <div className={`grid grid-2 tutorial-cards${compact ? ' compact' : ''}`}>
-      {TUTORIALS.map((t) => {
+      {TUTORIALS.filter((t) => t.kind !== 'threads' || info.data?.threads).map((t) => {
         const { to, href } = tutorialPath(t.kind, sets)
         const label = done[t.kind] ? 'See it again' : 'Start the tutorial'
         return (
@@ -126,8 +136,10 @@ export function Tutorial() {
   const preview = params.get('preview') === '1' && session.admin
   const next = nextOf(params)
   const areas = params.get('kind') === 'areas'
-  const info = useFetch<TutorialInfo>(!areas ? '/api/tutorial' : null)  // public: no account needed, nothing is kept
+  const threads = params.get('kind') === 'threads'
+  const info = useFetch<TutorialInfo>(!areas && !threads ? '/api/tutorial' : null)  // public: no account needed, nothing is kept
   if (areas) return <AreasCoached preview={preview} next={next} />
+  if (threads) return <ThreadsCoached preview={preview} next={next} />
   return (
     <Loaded state={info} label="Opening the tutorial…">
       {(data) => data.practice ? <Coached practice={data.practice} preview={preview} next={next} />
@@ -284,6 +296,114 @@ function AreasCoached({ preview, next }: { preview: boolean; next: string }) {
           <Link className="btn" to={next}>Back</Link></Empty></>
         : !detail.data ? <Loading label="Opening the practice core…" />
           : <MarkAreas detail={detail.data} onEvent={onEvent} coach={coach} onFinished={() => setIndex((i) => Math.max(i, steps.length))} />}
+    </div>
+  )
+}
+
+/* ---------- AT8 threads: threads mode of Fix the field ---------- */
+
+const THREAD_STEPS: { title: string; text: string; done: RoundEvent }[] = [
+  { title: 'Open threads mode', text: 'Press H. The thread network detection found on this AT8 field is drawn in cyan (only in this mode: while you fix objects it stays hidden).', done: 'threads-mode' },
+  { title: 'Match the threads', text: 'Drag the thread-threshold slider (or press [ and ]): lower finds fainter threads, higher keeps only the darkest. Stop where the lines match the threads you see. The mark on the track is detection’s own setting.', done: 'threads-step' },
+  { title: 'Threads look right', text: 'Press Enter (or “Threads look right”). Left untouched, Enter says detection’s threshold is right. You never edit single threads.', done: 'threads-saved' },
+]
+
+/** The threads practice: the tutorial's AT8 field (`stainid tutorial threads`), its thread network at every step,
+ *  coached H → slider → Enter. Nothing is sent to the server. */
+function ThreadsCoached({ preview, next }: { preview: boolean; next: string }) {
+  const navigate = useNavigate()
+  const ladder = useFetch<ThreadLadder>('/api/annotate/practice-threads/ladder')
+  const [index, setIndex] = useState(0)
+  const [cheer, setCheer] = useState(false)
+  const [threading, setThreading] = useState(false)
+  const [step, setStep] = useState<number | null>(null)
+  const [saved, setSaved] = useState<number | null>(null)
+  const data = ladder.data?.status === 'done' && ladder.data.steps.length ? ladder.data : null
+  const at = data ? (step ?? data.detection) : 0
+  const finished = index >= THREAD_STEPS.length
+  const remember = useCallback(() => { if (!preview) void rememberTutorial('threads').catch(() => undefined) }, [preview])
+  useEffect(() => { if (finished) remember() }, [finished, remember])
+  const now = useRef(0)
+  now.current = index
+  const tell = useCallback((event: RoundEvent) => {
+    const i = now.current
+    if (i < THREAD_STEPS.length && THREAD_STEPS[i].done === event) { now.current = i + 1; setIndex(i + 1); setCheer(true) }
+  }, [])
+  useEffect(() => { if (!cheer) return; const timer = setTimeout(() => setCheer(false), 1200); return () => clearTimeout(timer) }, [cheer])
+  const confirm = useCallback(() => { if (!data) return; setSaved(data.factors[at]); setStep(null); setThreading(false); tell('threads-saved') }, [data, at, tell])
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement).tagName) && e.key !== 'Enter') return
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      const key = e.key.toLowerCase()
+      if (key === THREAD_KEY && !e.repeat) { e.preventDefault(); setThreading((on) => !on); tell('threads-mode'); return }
+      if (!threading) return
+      if (e.key === 'Escape') { setThreading(false); return }
+      if (e.key === 'Enter') { e.preventDefault(); confirm(); return }
+      if ((e.key === '[' || e.key === ']') && data) {
+        e.preventDefault(); setStep(Math.max(0, Math.min(data.factors.length - 1, at + (e.key === ']' ? 1 : -1)))); tell('threads-step')
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [threading, data, at, confirm, tell])
+  const leave = () => { if (preview) window.history.length > 1 ? window.history.back() : window.close(); else navigate(next) }
+  const current = THREAD_STEPS[Math.min(index, THREAD_STEPS.length - 1)]
+  const coach = (
+    <aside className="card tutorial-coach in-panel" role="dialog" aria-label="Tutorial">
+      <div className="row small"><b>Tutorial: AT8 threads</b><span className="muted">{preview ? 'preview — nothing is saved' : 'practice — nothing here is saved'}</span>
+        <span className="spacer" />
+        {!finished && <button className="link-btn small" onClick={() => { remember(); leave() }}>{preview ? 'Close' : 'Skip tutorial'}</button>}</div>
+      {finished ? <>
+        <h3>You are ready</h3>
+        <p className="small secondary">On every AT8 field of Fix the field: H, the slider, Enter. The thresholds people set tune the thread detector (Models page);
+          the analysis keeps detection’s threshold until a new one is validated.</p>
+        {preview ? <button className="btn primary" onClick={leave}>Close the preview</button> : <Link className="btn primary" to={next}>Done →</Link>}
+      </> : <>
+        <div className="tutorial-step small muted">Step {index + 1} of {THREAD_STEPS.length}{cheer && <span className="good-text"> · well done ✓</span>}</div>
+        <h3>{current.title}</h3>
+        <p className="small">{current.text}</p>
+        <div className="tutorial-dots" aria-hidden="true">{THREAD_STEPS.map((s, i) => <span key={s.title} className={i < index ? 'done' : i === index ? 'now' : ''} />)}</div>
+        <div className="row">
+          <button className="btn small" disabled={index === 0} onClick={() => setIndex(index - 1)}>Back</button>
+          <button className="link-btn small" onClick={() => setIndex(index + 1)}>I did it / next</button>
+        </div>
+      </>}
+      {ladder.data?.credit && <p className="small muted tutorial-credit">{ladder.data.credit}</p>}
+    </aside>
+  )
+  if (ladder.error) {
+    return <div className="tutorial"><PageHead title="Tutorial: AT8 threads" subtitle="Nothing to practise on yet." />
+      <Empty><p style={{ marginTop: 0 }}>The threads practice is not set up on this server yet: an admin adds it once with <code>stainid tutorial threads</code>.</p>
+        <Link className="btn" to={next}>Back</Link></Empty></div>
+  }
+  if (!ladder.data) return <div className="tutorial"><Loading label="Opening the practice field…" /></div>
+  const box = ladder.data.box
+  return (
+    <div className="tutorial">
+      <div className="annotate-page round-page fit-page">
+        <div className="annotate-top"><div className="annotate-heading"><h1>Practice: AT8 threads</h1>
+          <div className="muted small">AT8 · Fix the field · threads mode</div></div></div>
+        <div className="annotate-workspace">
+          <div className="annotate-image">
+            <ZoomViewer fit src={apiUrl('/api/annotate/practice-threads/picture.jpg')} cursor="default"
+              title={<span className="row"><span className="muted small">{ladder.data.tile_id}</span>{threading && <span className="badge status-running">threads mode</span>}</span>}>
+              {(_zoom, size, rawUnit) => {
+                const unit = Number.isFinite(rawUnit) && rawUnit > 0 ? rawUnit : 1
+                return <>
+                  {box && <path d={`M0 0H${size.w}V${size.h}H0Z M${box.x} ${box.y}v${box.height}h${box.width}v${-box.height}Z`} fill="#000" fillOpacity={0.22} fillRule="evenodd" pointerEvents="none" />}
+                  {threading && data && <ThreadLines lines={data.steps[at].lines} unit={unit} />}
+                </>
+              }}
+            </ZoomViewer>
+          </div>
+          <aside className="annotate-side round-side" aria-label="The tutorial and threads mode">
+            {coach}
+            {threading ? <ThreadsCard ladder={ladder.data} index={at} onChange={(i) => { setStep(i); tell('threads-step') }} onConfirm={confirm} saved={saved} practice />
+              : <div className="card side-block small"><span className="kbd">H</span> threads mode{saved != null ? ` · set: ${saved === 1 ? 'detection’s' : `${saved.toFixed(2)}×`} (not saved: practice)` : ''}</div>}
+          </aside>
+        </div>
+      </div>
     </div>
   )
 }

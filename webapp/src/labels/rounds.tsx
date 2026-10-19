@@ -23,7 +23,7 @@ export const ROUND_TEXT: Record<1 | 2, string> = {
 /** What someone does on a round page, as the tutorial follows it. */
 export type RoundEvent = 'hover' | 'class' | 'subtype' | 'unsure' | 'remove' | 'undo' | 'mask' | 'add' | 'added' | 'precise-in' | 'precise-spot' | 'precise-drag'
   | 'precise-out' | 'save' | 'finish' | 'keep' | 'exclude' | 'overlays' | 'threshold' | 'start' | 'reset' | 'split-mode' | 'split-preview' | 'split'
-  | 'merge-mode' | 'merge-pick' | 'merge' | 'brush-size'
+  | 'merge-mode' | 'merge-pick' | 'merge' | 'brush-size' | 'threads-mode' | 'threads-step' | 'threads-saved'
 /** The way back from a labelling page: the person's sets, or, for a guest on a practice page (no account, no sets),
  *  the sign-in. */
 export function BackToSets() {
