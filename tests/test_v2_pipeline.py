@@ -379,6 +379,22 @@ def test_measures_tables_from_the_store(v2_project):
     assert core.neun_positive_profile_count.iloc[0] == accepted
 
 
+def test_a_core_without_candidates_is_measured_with_zero_objects(v2_project):
+    """An AT8 control core where stage 2 found nothing: its store table is empty (no call columns); stage 5 must still
+    measure its tiles (zero tau neurons, its burden) instead of dropping the core and its donor-region."""
+    project = load_project(v2_project)
+    _proposals(project)
+    run_calls_inline(project)
+    from stainid.v2.measures import write_measures
+
+    pd.DataFrame().to_parquet(store.path(project, "AT8", "LIP-1_B-2", "candidates"))
+    assert "decision" not in store.read_core(project, "AT8", "LIP-1_B-2")
+    write_measures(project)
+    core = pd.read_csv(store.root(project) / "measures" / "results_core.csv")
+    assert core.tau_neuron_count.iloc[0] == 0
+    assert np.isfinite(core.at8_positive_area_fraction.iloc[0])
+
+
 def test_outlines_keep_all_three_sam_outputs(v2_project, monkeypatch):
     torch = pytest.importorskip("torch")
     pytest.importorskip("segment_anything")

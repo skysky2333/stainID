@@ -124,6 +124,21 @@ if __name__ == "__main__":
     unittest.main()
 
 
+def test_a_tile_without_tissue_adds_nothing_to_the_core_burden():
+    """An edge sliver whose tissue is all excluded has 0 area and a 0/0 (NaN) fraction; it must not make the core NaN."""
+    base = {"core_id": "C1", "tma": "1", "donor_id": "D1", "sample_region_id": "D1_FR", "region": "frontal", "disease_group": "AD",
+            "technical_replicate": "1", "stain": "AT8", "total_artifact_exclusion_area_fraction": "0.0", "thread_area_fraction": "0.15",
+            "compact_profile_count": "4", "thread_skeleton_length_mm_per_mm2": "3.0", "edge_guard_triggered": "false",
+            "preview_tissue_fraction": "1.0"}
+    rows = [{**base, "tile_id": "T1", "selection_order": "1", "tissue_area_mm2": "2.0", "at8_positive_area_fraction": "0.2"},
+            {**base, "tile_id": "T2", "selection_order": "2", "tissue_area_mm2": "0.00000000", "at8_positive_area_fraction": "nan",
+             "thread_area_fraction": "nan", "thread_skeleton_length_mm_per_mm2": "nan", "preview_tissue_fraction": "0.0085"}]  # as stage 5 writes it
+    core = next(row for row in aggregate_level(rows, [], "core") if row["sampling_extent"] == "whole_core")
+    assert abs(core["tau_positive_area_fraction"] - 0.2) < 1e-12
+    assert abs(core["at8_noncompact_area_mm2"] - 0.3) < 1e-12
+    assert abs(core["at8_thread_length_mm"] - 6.0) < 1e-12
+
+
 def test_sampling_extents_are_the_whole_core_and_its_interior():
     from stainid.analysis.aggregation import sampling_extents
 

@@ -52,6 +52,13 @@ def _weighted_mean(rows: list[dict[str, str]], value: str, weight: str) -> float
     return float(np.average(pairs[:, 0], weights=pairs[:, 1])) if pairs.size else float("nan")
 
 
+def _in_area(row: dict[str, str], fraction: float) -> float:
+    """A tile's fraction as an area (x its tissue area). A tile without tissue (an edge sliver whose tissue is all
+    excluded) adds nothing: its own fraction is 0/0, and NaN x 0 would make the whole core NaN."""
+    area = _number(row, "tissue_area_mm2")
+    return fraction * area if area else 0.0
+
+
 def _first_available(row: dict[str, str], *keys: str) -> float:
     for key in keys:
         if row.get(key, ""):
@@ -87,13 +94,11 @@ def summarize_stain_group(
             row for row in objects if row.get("candidate_class") in {"compact", "diffuse"}
         ]
         plaque_area_mm2 = sum(
-            _number(row, "accepted_plaque_deposit_area_fraction")
-            * _number(row, "tissue_area_mm2")
+            _in_area(row, _number(row, "accepted_plaque_deposit_area_fraction"))
             for row in rows
         )
         positive_area_mm2 = sum(
-            _number(row, "amyloid_positive_area_fraction")
-            * _number(row, "tissue_area_mm2")
+            _in_area(row, _number(row, "amyloid_positive_area_fraction"))
             for row in rows
         )
         summary.update(
@@ -134,22 +139,17 @@ def summarize_stain_group(
         )
     elif stain == "AT8":
         positive_area_mm2 = sum(
-            _number(row, "at8_positive_area_fraction")
-            * _number(row, "tissue_area_mm2")
+            _in_area(row, _number(row, "at8_positive_area_fraction"))
             for row in rows
         )
         thread_area_mm2 = sum(
-            _first_available(
-                row, "noncompact_at8_area_fraction", "thread_area_fraction"
-            )
-            * _number(row, "tissue_area_mm2")
+            _in_area(row, _first_available(row, "noncompact_at8_area_fraction", "thread_area_fraction"))
             for row in rows
         )
         compact_count = round(_sum(rows, "compact_profile_count"))
         compact = [row for row in objects if row.get("source_kind") == "compact_profile"]
         thread_length_mm = sum(
-            _number(row, "thread_skeleton_length_mm_per_mm2")
-            * _number(row, "tissue_area_mm2")
+            _in_area(row, _number(row, "thread_skeleton_length_mm_per_mm2"))
             for row in rows
         )
         summary.update(
@@ -192,8 +192,7 @@ def summarize_stain_group(
         profile_count = round(_sum(rows, "neun_positive_profile_count"))
         candidate_count = round(_sum(rows, "candidate_profile_count"))
         positive_area_mm2 = sum(
-            _number(row, "neun_positive_profile_area_fraction")
-            * _number(row, "tissue_area_mm2")
+            _in_area(row, _number(row, "neun_positive_profile_area_fraction"))
             for row in rows
         )
         positive = [
