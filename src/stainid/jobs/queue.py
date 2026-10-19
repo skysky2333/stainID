@@ -65,7 +65,12 @@ RAM_MARGIN = 1.1  # a running job counts its highest measured memory and this mu
 PRESSURE_GRACE = 20.0  # seconds a job paused for memory pressure has to reach a unit boundary
 AGE_S = 1800.0  # a job waiting this long goes ahead of its class's newer jobs and may pre-empt newer ones of its class
 WATCHDOG_S = 900.0  # a job waiting this long although what it needs is (or can be made) free is reported
-MEMORY_EVERY = 3.0  # seconds between two looks at the memory
+MEMORY_EVERY = 3.0  # seconds between two looks at the memory (and at the processors the running jobs use)
+CPU_WINDOW_S = 60.0  # a running job's processor use: its average over this long
+CPU_WARMUP_S = 60.0  # a job that started less than this ago counts the processors it declared
+CPU_MARGIN = 1.25  # a running job counts its measured processor use and this much more (never more than it declared)
+CPU_FLOOR = 0.5  # the fewest processors a running job counts
+CPU_OVER_S = 60.0  # running jobs using more processors than there are for this long: the lowest class pauses
 OUTSIDE_GPU_MB = 1500  # a GPU on which a program the queue did not start uses this much memory counts as busy
 KILL_AFTER = 30.0  # seconds from the polite stop (SIGTERM) to SIGKILL
 MAX_ATTEMPTS = 5  # runs that vanished without an exit code (reboot, killed) before the job is given up
@@ -345,6 +350,8 @@ class Scheduler:
         self._handle = None
         self._stops: dict[str, tuple[str, float]] = {}  # job id -> (how far its hard stop has got, when)
         self._ram_seen: dict[str, tuple] = {}  # job id -> (its start, highest measured GB, latest measured GB)
+        self._cpu_seen: dict[str, tuple] = {}  # job id -> (its start, [(when, processor seconds so far), ...] over CPU_WINDOW_S)
+        self._cpu_over_since: float | None = None  # since when the running jobs use more processors than there are
         self._memory: tuple[float, dict] = (0.0, {})
         self._urgent: set[str] = set()  # jobs asked to stop for memory pressure (short grace)
         self._making_room: dict[str, float] = {}  # job id -> since when lower-priority jobs pause to make room for it
@@ -984,15 +991,76 @@ class Scheduler:
             pass
         if found:
             found["app_gb"] = _app_memory_gb()
-            for job in list(self.jobs.values()):
-                if job.status == "running" and not job.children:
-                    gb = self.measure(job)
-                    if gb is not None:
-                        before = self._ram_seen.get(job.id)
-                        peak = max(gb, before[1]) if before and before[0] == job.started else gb
-                        self._ram_seen[job.id] = (job.started, peak, gb)
+            running = [j for j in list(self.jobs.values()) if j.status == "running" and not j.children]
+            for job in running:
+                gb = self.measure(job)
+                if gb is not None:
+                    before = self._ram_seen.get(job.id)
+                    peak = max(gb, before[1]) if before and before[0] == job.started else gb
+                    self._ram_seen[job.id] = (job.started, peak, gb)
+            self._sample_cpu(running)
         self._memory = (time.time(), found)
         return found
+
+    # -- processors
+
+    def _sample_cpu(self, running: list[Job]) -> None:
+        """Note the processor seconds each running job has used so far (its cgroup's, else its processes')."""
+        now, tree = time.time(), None
+        for job in running:
+            pids = self._pids(job) if job.source != COMMAND_LINE else ((job.pid,) if job.pid else ())
+            if not pids:
+                continue
+            group = _cgroup_of(pids[0])
+            seconds = _cgroup_cpu_seconds(group) if group and "stainid-job-" in group else None
+            if seconds is None:
+                tree = tree if tree is not None else _process_tree()
+                seconds = _tree_cpu_seconds(pids, tree)
+            if seconds is None:
+                continue
+            before = self._cpu_seen.get(job.id)
+            samples = before[1] if before and before[0] == job.started else []
+            if samples and seconds < samples[-1][1]:  # a process of it ended and took its time along: start again
+                samples = []
+            samples = [s for s in samples if now - s[0] <= CPU_WINDOW_S] + [(now, seconds)]
+            self._cpu_seen[job.id] = (job.started, samples)
+        alive_ids = {j.id for j in running}
+        self._cpu_seen = {k: v for k, v in self._cpu_seen.items() if k in alive_ids}
+
+    def cpu_use(self, job: Job) -> float | None:
+        """The processors a running job used on average over the last CPU_WINDOW_S (None: not measured for 10 s yet)."""
+        seen = self._cpu_seen.get(job.id)
+        if not seen or seen[0] != job.started or len(seen[1]) < 2:
+            return None
+        (t0, c0), (t1, c1) = seen[1][0], seen[1][-1]
+        return max(0.0, (c1 - c0) / (t1 - t0)) if t1 - t0 >= 10.0 else None
+
+    def _relieve_cpus(self, running: list[Job], budget: Budget) -> None:
+        """Jobs start on the processors the running ones use (measured), not on what they declared; when the running
+        jobs then use more processors than there are for CPU_OVER_S (one grows into what it declared), the lowest-class
+        jobs (newest first) are asked to pause until the rest fit; they queue again at their place. The highest-class
+        job running is never paused for this."""
+        if not self.watch_outside:
+            return
+        use = {j.id: self.cpu_use(j) or 0.0 for j in running}
+        total, now = sum(use.values()), time.time()
+        if total <= budget.cpus + 1.0:
+            self._cpu_over_since = None
+            return
+        self._cpu_over_since = self._cpu_over_since or now
+        if now - self._cpu_over_since < CPU_OVER_S:
+            return
+        total -= sum(use[j.id] for j in running if j.request)  # stopping already
+        keep = min(running, key=lambda j: (RANK[job_class(j)], j.started or 0))  # the oldest of the highest class
+        pool = sorted((j for j in running if j is not keep and j.source != COMMAND_LINE and not j.request and use[j.id] > 0),
+                      key=lambda j: (-RANK[job_class(j)], -(j.started or 0)))
+        for job in pool:
+            if total <= budget.cpus:
+                break
+            LOG.warning("processors oversubscribed (%.1f of %g used): pausing %s", total, budget.cpus, title_of(job))
+            self._ask_to_stop(job, "preempt")
+            total -= use[job.id]
+        self._cpu_over_since = None
 
     def measure(self, job: Job) -> float | None:
         """A running job's memory in GB (None: cannot tell)."""
@@ -1008,7 +1076,9 @@ class Scheduler:
 
     def _holds(self, job: Job) -> dict:
         """What a running job takes from the budget. Memory: what it declared until it has been measured for a while, then
-        its highest measured memory (and a margin); `ram_free` is what it takes from the memory available right now."""
+        its highest measured memory (and a margin); `ram_free` is what it takes from the memory available right now.
+        Processors alike: what it declared for its first CPU_WARMUP_S, then its use over the last CPU_WINDOW_S and a
+        margin, never more than it declared (`cpus_declared`, `cpus_now`: what it declared and uses). GPUs: as declared."""
         need = policy.counted(self.budget.clamp(job_needs(job)))
         seen = self._ram_seen.get(job.id)
         held = dict(need)
@@ -1020,6 +1090,10 @@ class Scheduler:
         else:
             held["ram_free"] = need["ram_gb"]  # not measured yet: all of it is still to come
             held["ram_now"] = 0.0
+        use = self.cpu_use(job) if self.watch_outside else None
+        held["cpus_declared"], held["cpus_now"] = need["cpus"], use if use is not None else 0.0
+        if use is not None and time.time() - (job.started or 0) >= CPU_WARMUP_S:
+            held["cpus"] = min(need["cpus"], max(CPU_FLOOR, use * CPU_MARGIN))  # work-conserving: what it uses, at most what it declared
         disk = policy.disk_of(job) if policy.io_of(job, job_needs(job)) == "heavy" and not need["gpus"] else None
         if disk is not None:  # (a GPU job is held back by its GPU, not its disk)
             held[f"io:{disk}"] = 1
@@ -1170,7 +1244,7 @@ class Scheduler:
     @staticmethod
     def _fits(need: dict, free: dict, budget: Budget) -> bool:
         for key, value in need.items():
-            if value <= 0 or key == "ram_now":
+            if value <= 0 or key in ("ram_now", "cpus_now", "cpus_declared"):
                 continue
             have = free.get(key, budget.io_per_disk if key.startswith("io:") else None)
             if have is not None and value > have + 1e-9:
@@ -1243,7 +1317,7 @@ class Scheduler:
     def _released(self, room: dict, job: Job, sign: int = 1) -> dict:
         """`room` once `job` has stopped: what it holds comes free (from what is available: its measured memory too)."""
         held = self._holds(job)
-        freed = {k: v for k, v in held.items() if k != "ram_now"}
+        freed = {k: v for k, v in held.items() if k not in ("ram_now", "cpus_now", "cpus_declared")}
         freed["ram_free"] = held["ram_free"] + held["ram_now"]
         return {**room, **{k: room[k] + sign * v for k, v in freed.items() if k in room}}
 
@@ -1280,6 +1354,7 @@ class Scheduler:
         running = [j for j in jobs if j.status == "running"]
         blocking = [j for j in jobs if j.status in (*ACTIVE, "paused")]  # a paused step still holds back what needs it
         self._relieve_memory(running)
+        self._relieve_cpus(running, budget)
         free = self._free(budget, running)
         busy_gpus = {g for j in running for g in (j.gpus or [])} | (set(self.outside()["gpus"]) if self.watch_outside else set())
         by_project: dict[str, list[Job]] = {}
@@ -1535,6 +1610,8 @@ class Scheduler:
             left = self.remaining(job)
             out["eta_s"] = round(left) if left is not None else None
             out["stopping"] = job.request
+            use = self.cpu_use(job)
+            out["cpus_now"] = round(use, 1) if use is not None else None
         return out
 
     def typical(self, job: Job) -> float | None:
@@ -1553,6 +1630,10 @@ class Scheduler:
         budget = self.current_budget()
         running = [j for j in jobs if j.status == "running" and not j.children]
         used, _ = self._used(running)
+        holds = [self._holds(j) for j in running]
+        used["cpus"] = round(used["cpus"], 1)
+        used["cpus_declared"] = round(sum(h["cpus_declared"] for h in holds), 1)
+        used["cpus_now"] = round(sum(h["cpus_now"] for h in holds), 1)
         memory = None
         if self.watch_outside and (found := self.memory()).get("total_gb"):
             free = self._free(budget, running)
@@ -1586,6 +1667,50 @@ def _cgroup_memory_gb(group: str) -> float | None:
         return (int(stat.get("anon", 0)) + int(stat.get("shmem", 0))) / 2**30
     except (OSError, ValueError):
         return None
+
+
+def _cgroup_cpu_seconds(group: str) -> float | None:
+    """The processor seconds a cgroup's processes have used, ended ones included."""
+    try:
+        for line in Path(f"/sys/fs/cgroup{group}/cpu.stat").read_text().splitlines():
+            if line.startswith("usage_usec"):
+                return int(line.split()[1]) / 1e6
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def _process_tree() -> dict[int, list[int]]:
+    """Every process's children (pid -> [pid, ...])."""
+    children: dict[int, list[int]] = {}
+    for entry in Path("/proc").iterdir():
+        if entry.name.isdigit():
+            try:
+                parent = int((entry / "stat").read_text().rsplit(")", 1)[1].split()[1])
+            except (OSError, ValueError, IndexError):
+                continue
+            children.setdefault(parent, []).append(int(entry.name))
+    return children
+
+
+_TICKS = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
+
+
+def _tree_cpu_seconds(pids: tuple[int, ...], children: dict[int, list[int]]) -> float | None:
+    """The processor seconds of these processes and all their children (and of the children they waited for)."""
+    todo, seen, ticks = list(pids), set(), 0
+    while todo:
+        pid = todo.pop()
+        if pid in seen:
+            continue
+        try:
+            fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+            ticks += sum(int(fields[i]) for i in (11, 12, 13, 14))  # utime stime cutime cstime
+        except (OSError, ValueError, IndexError):
+            continue
+        seen.add(pid)
+        todo += children.get(pid, [])
+    return ticks / _TICKS if seen else None
 
 
 def _tree_rss_gb(pids: tuple[int, ...]) -> float | None:

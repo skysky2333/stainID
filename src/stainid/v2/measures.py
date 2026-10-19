@@ -259,7 +259,9 @@ def write_measures(project) -> list[str]:
         for core_id in cores:
             tiles = _tiles(project, stain, core_id)
             found = store.read_core(project, stain, core_id, CANDIDATE_COLUMNS)
-            if tiles.empty or "decision" not in found:
+            # a core image without a single candidate (an AT8 control core) is measured all the same: its tiles count
+            # with no objects (zero burden), else the core and its donor-region drop out of every table
+            if tiles.empty or ("decision" not in found and not found.empty):
                 continue
             for column in CANDIDATE_COLUMNS:
                 if column not in found:

@@ -182,11 +182,14 @@ def run(args, project_path: Path | None) -> None:
 
 
 def _resources(overview: dict) -> str:
-    """"14 of 32 processors · 1 of 2 GPUs · RAM: 21 of 53 GB used · 26 free for jobs"."""
+    """"Processors: 6 in use, 18 declared, 9 counted of 32 · 1 of 2 GPUs · RAM: 21 of 53 GB used · 26 free for jobs"
+    (counted: what the running jobs take from the budget, their measured use with a margin)."""
     b, used, memory = overview["budget"], overview["used"], overview.get("memory")
     ram = (f"RAM: {memory['used_gb']:.0f} of {memory['total_gb']:.0f} GB used (app {memory['app_gb']:.1f}, jobs {memory['jobs_gb']:.1f})"
            f" · {memory['free_for_jobs_gb']:.0f} free for jobs" if memory else f"{used['ram_gb']:g} of {b['ram_gb']:g} GB")
-    return f"In use: {used['cpus']:g} of {b['cpus']:g} processors · {used['gpus']} of {b['gpus']} GPUs · {ram}"
+    cpus = (f"Processors: {used['cpus_now']:g} in use, {used['cpus_declared']:g} declared, {used['cpus']:g} counted of {b['cpus']:g}"
+            if "cpus_now" in used else f"In use: {used['cpus']:g} of {b['cpus']:g} processors")
+    return f"{cpus} · {used['gpus']} of {b['gpus']} GPUs · {ram}"
 
 
 def _hint(scheduler) -> None:
