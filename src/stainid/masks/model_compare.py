@@ -1,10 +1,14 @@
 """Outline models compared on a small panel of candidates, each prompted exactly as stage 3 (`v2.outlines`) prompts SAM.
 
     python -m stainid.masks.model_compare --project ROOT --out DIR [--candidates-root ROOT/data/analysis/v2.before_v2b]
-        [--size 100] [--cores-per-stain 6] [--models sam_vit_b,sam2.1_hiera_b+,pathosam_vit_b]
+        [--panel DIR/panel.csv] [--size 100] [--cores-per-stain 6] [--models a,b,…]
+        [--expert /path/adnp15=import-adnp15-expert --expert-size 300] [--notes recommendation.md]
 
-Methods: Segment Anything ViT-B (the current weights), SAM 2.1 Hiera base+, PathoSAM ViT-B (the generalist
-histopathology weights) and the stain outline (the baseline). The panel, per stain: every candidate whose outline people
+Methods: every official size of Segment Anything (ViT-B, the current weights; ViT-L; ViT-H), SAM 2.1 Hiera (tiny,
+small, base+, large) and PathoSAM (the generalist histopathology ViT-B, L, H), and the stain outline (the baseline).
+Each model's results are kept per panel (DIR/results), so a later pass adds models and reports everything together.
+The external check (`--expert`): expert outlines of another project (the ADNP-15 AT8 neuritic-plaque masks), each
+prompted through the candidate inside it, scored by IoU. The panel, per stain: every candidate whose outline people
 changed in Fix the field (`labels.outline_fixes`: precise edits, splits, merges) plus a fixed random sample (seed 0) from
 a few core images of different TMAs, stratified by size (terciles) and accepted vs rejected, to make up about `--size`.
 
@@ -37,7 +41,7 @@ MODELS = {  # every official size of each family; xxh128: the authors' hash (mic
                   "url": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth", "xxh128": "6923c33df3637b6a922d7682bfc9a86b", "name": "SAM ViT-B (current)"},
     "sam_vit_l": {"family": "SAM", "kind": "sam1", "arch": "vit_l", "file": "sam/sam_vit_l_0b3195.pth", "short": "SAM-L",
                   "url": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth", "xxh128": "a82beb3c660661e3dd38d999cc860e9a", "name": "SAM ViT-L"},
-    "sam_vit_h": {"family": "SAM", "kind": "sam1", "arch": "vit_h", "file": "sam/sam_vit_h_4b8939.pth", "short": "SAM-H",
+    "sam_vit_h": {"family": "SAM", "kind": "sam1", "arch": "vit_h", "file": "sam/sam_vit_h_4b8939.pth", "short": "SAM-H", "encoder": "bf16",
                   "url": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth", "xxh128": "97698fac30bd929c2e6d8d8cc15933c2", "name": "SAM ViT-H"},
     "sam2.1_hiera_t": {"family": "SAM 2", "kind": "sam2", "config": "configs/sam2.1/sam2.1_hiera_t.yaml", "file": "sam2/sam2.1_hiera_tiny.pt",
                        "short": "S2-t", "url": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_tiny.pt", "name": "SAM 2.1 Hiera tiny"},
@@ -51,7 +55,7 @@ MODELS = {  # every official size of each family; xxh128: the authors' hash (mic
                        "url": "https://owncloud.gwdg.de/index.php/s/sBB4H8CTmIoBZsQ/download", "xxh128": "ffd1a2cd84570458b257bd95fdd8f974", "name": "PathoSAM ViT-B (generalist)"},
     "pathosam_vit_l": {"family": "PathoSAM", "kind": "sam1", "arch": "vit_l", "file": "pathosam/vit_l_histopathology.pt", "short": "PS-L",
                        "url": "https://owncloud.gwdg.de/index.php/s/IZgnn1cpBq2PHod/download", "xxh128": "b591833c89754271023e901281dee3f2", "name": "PathoSAM ViT-L (generalist)"},
-    "pathosam_vit_h": {"family": "PathoSAM", "kind": "sam1", "arch": "vit_h", "file": "pathosam/vit_h_histopathology.pt", "short": "PS-H",
+    "pathosam_vit_h": {"family": "PathoSAM", "kind": "sam1", "arch": "vit_h", "file": "pathosam/vit_h_histopathology.pt", "short": "PS-H", "encoder": "bf16",
                        "url": "https://owncloud.gwdg.de/index.php/s/L7AcvVz7DoWJ2RZ/download", "xxh128": "bd1856dafc156a43fb3aa705f1a6e92e", "name": "PathoSAM ViT-H (generalist)"},
 }
 SHORT = {"stain outline": "stain", **{k: v["short"] for k, v in MODELS.items()}}
@@ -82,7 +86,9 @@ def _state_dict(path: Path) -> dict:
 
 
 class Sam1Outliner:
-    """SAM (ViT-B/L, Meta's or PathoSAM's weights) through stage 3's own `BatchOutliner.decode` (fp16 encoder)."""
+    """SAM (Meta's or PathoSAM's weights) through stage 3's own `BatchOutliner.decode`: the encoder in fp16 on the GPU,
+    as stage 3 runs it, except ViT-H in bf16 (its encoder overflows in fp16: the embedding of a NeuN window differs
+    from fp32 by 155 %, PathoSAM's ViT-H by 139 %, silently; bf16 1-2 %, ViT-B in fp16 0.13 %)."""
 
     def __init__(self, spec: dict, path: Path, device: str):
         import torch
@@ -99,15 +105,25 @@ class Sam1Outliner:
         self.params = sum(p.numel() for p in model.parameters())
         inner = BatchOutliner.__new__(BatchOutliner)
         inner.torch, inner.device, inner.model = torch, torch.device(device), model
-        inner.half = inner.device.type == "cuda"
+        self.precision = ("bf16" if spec.get("encoder") == "bf16" else "fp16") if torch.device(device).type == "cuda" else "fp32"
+        inner.half = self.precision == "fp16"
         if inner.half:
             model.image_encoder.half()
+        elif self.precision == "bf16":
+            model.image_encoder.to(torch.bfloat16)
         model.to(inner.device).eval()
         inner.transform = ResizeLongestSide(model.image_encoder.img_size)
         self.inner = inner
 
     def encode(self, window: np.ndarray):
-        return self.inner.encode(window)
+        if self.precision != "bf16":
+            return self.inner.encode(window)
+        inner, torch = self.inner, self.inner.torch
+        transformed = inner.transform.apply_image(window)
+        x = inner.model.preprocess(torch.as_tensor(transformed, device=inner.device).permute(2, 0, 1).contiguous()[None].float())
+        with torch.inference_mode():
+            features = inner.model.image_encoder(x.to(torch.bfloat16)).float()
+        return features, tuple(window.shape[:2]), tuple(transformed.shape[:2])
 
     def decode(self, embedding, points: np.ndarray):
         return self.inner.decode(embedding, points)
@@ -130,6 +146,7 @@ class Sam2Outliner:
         model.to(device).eval()
         self.predictor = SAM2ImagePredictor(model)
         self.params = sum(p.numel() for p in model.parameters())
+        self.precision = "fp16 autocast" if torch.device(device).type == "cuda" else "fp32"
         self.device = torch.device(device)
 
     def _autocast(self):
@@ -283,6 +300,8 @@ def panel(project, tiles: pd.DataFrame, stain: str, size: int, cores_per_stain: 
 
 # ---------------------------------------------------------------- running a model over the panel, as stage 3 does
 
+_FIELDS: dict = {}  # (project root, tile id) -> (field x, field y, µm per px, field shape, {window origin: 1024-px window})
+
 def run_model(name: str, outliner, project, tiles: pd.DataFrame, frame: pd.DataFrame, progress=None) -> tuple[dict, dict]:
     """Per candidate id: the three polygons (small → large, core px), the stage-3 default's index among them (-1: stage 3
     keeps the stain outline) and its status; with the time spent and the peak GPU memory."""
@@ -302,46 +321,58 @@ def run_model(name: str, outliner, project, tiles: pd.DataFrame, frame: pd.DataF
     if cuda:
         torch.cuda.reset_peak_memory_stats()
     for (stain, core_id), group in frame.groupby(["stain", "core_id"], sort=True):
-        first = by_tile.loc[group.tile_id.iloc[0]]
-        with open_image(project.root / first["image_path"]) as image:
-            image.load()
-            for tile_id, rows in group.groupby("tile_id"):
-                tile = by_tile.loc[tile_id]
-                x, y = int(tile["x_px"]), int(tile["y_px"])
-                rgb, inner = context_crop(image, x, y, int(tile["width_px"]), int(tile["height_px"]), project.context_px)
-                pixel = float(np.sqrt(float(tile["pixel_width_um"]) * float(tile["pixel_height_um"])))
-                fx, fy = x - inner[1].start, y - inner[0].start
-                dab = np.maximum(rgb_to_hed(rgb)[..., 2], 0).astype(np.float32)
-                xs, ys = rows.x_core.to_numpy(float) - fx, rows.y_core.to_numpy(float) - fy
-                origins = [window_origin(rgb.shape[:2], a, b) for a, b in zip(xs, ys)]
-                for origin in sorted(set(origins)):
-                    index = [i for i, w in enumerate(origins) if w == origin]
-                    x0, y0 = origin
-                    window = np.ascontiguousarray(rgb[y0: y0 + 1024, x0: x0 + 1024])
-                    if cuda:
-                        torch.cuda.synchronize()
-                    started = time.perf_counter()
-                    embedding = outliner.encode(window)
-                    if cuda:
-                        torch.cuda.synchronize()
-                    middle = time.perf_counter()
-                    decoded = outliner.decode(embedding, np.column_stack((xs[index] - x0, ys[index] - y0)))
-                    if cuda:
-                        torch.cuda.synchronize()
-                    encode_s += middle - started
-                    decode_s += time.perf_counter() - middle
-                    windows += 1
-                    local_dab = dab[y0: y0 + window.shape[0], x0: x0 + window.shape[1]]
-                    for i, outputs in zip(index, decoded):
-                        row = rows.iloc[i]
-                        chosen, status = choose(outputs, float(row.area_um2) / pixel ** 2, stain, pixel, local_dab, float(settings["runaway_factor"]),
-                                                float(settings.get("shrink_factor", 0.0)), float(settings.get("shrink_min_um2", np.inf)))
-                        polygons = [_polygon(o, (fx + x0, fy + y0)) for o in outputs]
-                        order = list(np.argsort([o.area for o in outputs], kind="stable"))
-                        results[row.candidate_id] = {"polygons": [polygons[j] for j in order], "default": order.index(chosen) if chosen >= 0 else -1,
-                                                     "status": status, "pixel_um": pixel}
-                    if progress is not None:
-                        progress(len(index))
+        def wanted(tile_id, rows, shape):
+            fx, fy = _FIELDS[(str(project.root), tile_id)][:2] if (str(project.root), tile_id) in _FIELDS else (0, 0)
+            return [window_origin(shape, a, b) for a, b in zip(rows.x_core.to_numpy(float) - fx, rows.y_core.to_numpy(float) - fy)]
+
+        missing = [t for t, rows in group.groupby("tile_id") if (str(project.root), t) not in _FIELDS or
+                   not set(wanted(t, rows, _FIELDS[(str(project.root), t)][3])) <= set(_FIELDS[(str(project.root), t)][4])]
+        if missing:  # each field is read once; its 1024-px windows are kept for the other models
+            first = by_tile.loc[group.tile_id.iloc[0]]
+            with open_image(project.root / first["image_path"]) as image:
+                image.load()
+                for tile_id in missing:
+                    tile = by_tile.loc[tile_id]
+                    x, y = int(tile["x_px"]), int(tile["y_px"])
+                    rgb, inner = context_crop(image, x, y, int(tile["width_px"]), int(tile["height_px"]), project.context_px)
+                    pixel = float(np.sqrt(float(tile["pixel_width_um"]) * float(tile["pixel_height_um"])))
+                    fx, fy = x - inner[1].start, y - inner[0].start
+                    known = _FIELDS.get((str(project.root), tile_id), (fx, fy, pixel, rgb.shape[:2], {}))[4]
+                    _FIELDS[(str(project.root), tile_id)] = (fx, fy, pixel, rgb.shape[:2], known)
+                    for x0, y0 in set(wanted(tile_id, group[group.tile_id == tile_id], rgb.shape[:2])):
+                        known[(x0, y0)] = np.ascontiguousarray(rgb[y0: y0 + 1024, x0: x0 + 1024])
+        for tile_id, rows in group.groupby("tile_id"):
+            fx, fy, pixel, shape, kept = _FIELDS[(str(project.root), tile_id)]
+            xs, ys = rows.x_core.to_numpy(float) - fx, rows.y_core.to_numpy(float) - fy
+            origins = [window_origin(shape, a, b) for a, b in zip(xs, ys)]
+            for origin in sorted(set(origins)):
+                index = [i for i, w in enumerate(origins) if w == origin]
+                x0, y0 = origin
+                window = kept[origin]
+                if cuda:
+                    torch.cuda.synchronize()
+                started = time.perf_counter()
+                embedding = outliner.encode(window)
+                if cuda:
+                    torch.cuda.synchronize()
+                middle = time.perf_counter()
+                decoded = outliner.decode(embedding, np.column_stack((xs[index] - x0, ys[index] - y0)))
+                if cuda:
+                    torch.cuda.synchronize()
+                encode_s += middle - started
+                decode_s += time.perf_counter() - middle
+                windows += 1
+                local_dab = np.maximum(rgb_to_hed(window)[..., 2], 0).astype(np.float32)  # (per pixel: as from the whole field)
+                for i, outputs in zip(index, decoded):
+                    row = rows.iloc[i]
+                    chosen, status = choose(outputs, float(row.area_um2) / pixel ** 2, stain, pixel, local_dab, float(settings["runaway_factor"]),
+                                            float(settings.get("shrink_factor", 0.0)), float(settings.get("shrink_min_um2", np.inf)))
+                    polygons = [_polygon(o, (fx + x0, fy + y0)) for o in outputs]
+                    order = list(np.argsort([o.area for o in outputs], kind="stable"))
+                    results[row.candidate_id] = {"polygons": [polygons[j] for j in order], "default": order.index(chosen) if chosen >= 0 else -1,
+                                                 "status": status, "pixel_um": pixel}
+                if progress is not None:
+                    progress(len(index))
     timing = {"model": name, "objects": len(results), "windows": windows,
               "s_per_object": round((encode_s + decode_s) / len(results), 4) if results else None,
               "encode_s_per_window": round(encode_s / windows, 4) if windows else None,
@@ -713,7 +744,8 @@ def markdown(counts: dict, head: pd.DataFrame, summary: pd.DataFrame, truth: pd.
              pairs: pd.DataFrame, timing: pd.DataFrame, check: dict, grids: list[Path], models: list[str], notes: str = "") -> str:
     lines = ["# Outline models compared on a candidate panel", "",
              "Each candidate prompted exactly as stage 3 prompts SAM (one point at the candidate, the nearest 1024-px window, three outputs, stage 3's "
-             "default rule; the stain outline where stage 3 falls back). fp16 encoder on one GPU.", "",
+             "default rule; the stain outline where stage 3 falls back). On one GPU, the image encoder in fp16 as stage 3 runs it, except the ViT-H "
+             "models in bf16: their encoder overflows in fp16 (the embedding differs from fp32 by 140-155 %, silently; bf16 1-2 %; ViT-B fp16 0.13 %).", "",
              "Panel: " + json.dumps(counts), "", "External check: " + json.dumps(external_counts), "",
              "Prompting check (SAM ViT-B re-run vs the outline stage 3 stored, median IoU): " + json.dumps(check), ""]
     if notes:
@@ -733,7 +765,7 @@ def markdown(counts: dict, head: pd.DataFrame, summary: pd.DataFrame, truth: pd.
     return "\n".join(lines)
 
 
-def _run_all(names, models_dir, device, project, tiles, frame, out, tag, progress, manifest, redo=False):
+def _run_all(names, models_dir, device, project, tiles, frame, out, tag, progress, manifest, redo=False, redo_models=()):
     import torch
 
     found, timings = {}, []
@@ -743,7 +775,7 @@ def _run_all(names, models_dir, device, project, tiles, frame, out, tag, progres
         path = models_dir / spec["file"]
         if name not in manifest["models"]:
             manifest["models"][name] = {**spec, "path": str(path), "sha256": sha256(path) if path.exists() else None}
-        kept = None if redo else load_results(out, name, tag, ids)
+        kept = None if redo or name in redo_models else load_results(out, name, tag, ids)
         if kept is not None:
             found[name], timing = kept
             timings.append(timing)
@@ -760,6 +792,7 @@ def _run_all(names, models_dir, device, project, tiles, frame, out, tag, progres
         run_model(name, outliner, project, tiles, frame.head(2))  # warm-up (cuDNN autotuning, first allocations): not timed
         found[name], timing = run_model(name, outliner, project, tiles, frame, progress)
         timing["params"] = int(getattr(outliner, "params", 0)) or None
+        timing["precision"] = getattr(outliner, "precision", "")
         timings.append(timing)
         save_results(out, name, tag, ids, found[name], timing)
         print(f"{name}{' (' + tag + ')' if tag else ''}: {timing}", flush=True)
@@ -791,6 +824,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--threads", type=int, default=2, help="processor threads")
     parser.add_argument("--redo", action="store_true", help="run every model again (else results of an earlier pass on the same candidates are kept)")
+    parser.add_argument("--redo-models", default="", help="these models again (comma-separated)")
     parser.add_argument("--notes", default=None, help="a text file shown as the recommendation in summary.md")
     parser.add_argument("--panel-only", action="store_true", help="write the panel (panel.csv) and stop: no model is run")
     args = parser.parse_args(argv)
@@ -842,7 +876,8 @@ def main(argv: list[str] | None = None) -> None:
     manifest = {"models": {}, "device": args.device, "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
                 "project": str(project.root), "candidates_root": str(candidates.root(project)), "counts": counts, "external": external_counts,
                 "started": time.strftime("%Y-%m-%d %H:%M:%S"), "torch": torch.__version__}
-    found, timings = _run_all(names, models_dir, args.device, project, tiles, frame, out, "", progress, manifest, args.redo)
+    redo_models = {m for m in args.redo_models.split(",") if m}
+    found, timings = _run_all(names, models_dir, args.device, project, tiles, frame, out, "", progress, manifest, args.redo, redo_models)
     models = [m for m in names if m in found]
     scored = score(frame, found)
     scored.to_csv(out / "objects.csv", index=False)
@@ -858,7 +893,7 @@ def main(argv: list[str] | None = None) -> None:
     if len(external_frame):
         tag = external_state.project.name.split(":")[0].replace(" ", "_").lower()
         found_ext, _ = _run_all(names, models_dir, args.device, external_state.project, external_state.tiles, external_frame, out, tag, progress,
-                                manifest, args.redo)
+                                manifest, args.redo, redo_models)
         scored_ext = score(external_frame, found_ext)
         scored_ext.to_csv(out / "external_objects.csv", index=False)
         external = truth_table(scored_ext, [m for m in names if m in found_ext])
