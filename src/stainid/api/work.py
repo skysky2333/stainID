@@ -33,6 +33,7 @@ from fastapi.responses import JSONResponse, Response
 
 log = logging.getLogger(__name__)
 
+ASKER: contextvars.ContextVar[str | None] = contextvars.ContextVar("stainid_asker", default=None)  # set per request by the app
 WORKERS = max(2, int(os.environ.get("STAINID_WORKERS", "3")))
 WAIT_SECONDS = float(os.environ.get("STAINID_REQUEST_WAIT", "8"))  # how long a request waits for its work before answering 202
 KEEP_SECONDS = 300.0  # finished work stays known this long (its result is fetched once the page polls)
@@ -212,18 +213,23 @@ def submit(kind: str, key: Any, run: Callable[[Task], Any], priority: int = NOW,
 
 
 def _asker() -> str | None:
-    """The account of the request asking for work (set by the app for every request), None when nobody is signed in."""
+    """Who asks for the work (set by the app for every request, `session.asker`): the account's id, or a guest's own
+    anonymous id ("guest:…"), so that guests never share work; else (no request) the label attribution."""
+    found = ASKER.get()
+    if found is not None:
+        return found
     from stainid.labels import store  # noqa: PLC0415
 
     return store.ATTRIBUTION.get()
 
 
 def may_see(task: Task, account_id: str | None, admin: bool) -> bool:
-    """Whether this account may follow the task and read its result: admins every task; anyone else only work they
-    asked for themselves (someone not signed in: work asked for without an account, such as the tutorial's)."""
+    """Whether this asker (`session.asker`: an account's id or a guest's anonymous id) may follow the task and read its
+    result: admins every task; anyone else only work they asked for themselves. Nobody (no account, no guest id) is no
+    one's: never another guest's work."""
     if admin:
         return True
-    return not task.admin and account_id in task.viewers
+    return account_id is not None and not task.admin and account_id in task.viewers
 
 
 def within(seconds: float) -> Callable[[Task], bool]:

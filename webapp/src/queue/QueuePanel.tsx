@@ -81,6 +81,7 @@ function QueueRow({ job, onAct }: { job: Job; onAct: (job: Job, action: string, 
         </div>
         {(running || (waiting && done > 0)) && total > 0 && <Progress done={done} total={total} />}
         <div className="muted small ellipsis" title={facts}>{facts}</div>
+        {job.warning && <div className="small warning-text">It {job.warning}</div>}
         {running && job.running_chunks && job.running_chunks.length > 0 && (
           <div className="muted small ellipsis">Now: {job.running_chunks.map((t) => t.split(' · ').pop()).join(', ')}</div>)}
       </div>

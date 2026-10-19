@@ -93,6 +93,7 @@ KINDS: dict[str, str] = {
     "candidate_index": "Candidate positions and calls of every core (for matching labels)",
     "answers": "The app's heavy answers, kept for a quick start",
     "label_overview": "The Labels page's counts per stain",
+    "tissue": "Tissue of core images (the areas pages' \"not analysed\" layer)",
 }
 _KIND = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 _MARKER = f"{os.sep}data{os.sep}cache{os.sep}"

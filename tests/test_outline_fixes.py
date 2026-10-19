@@ -44,7 +44,7 @@ def field(points) -> list[list[float]]:
     return [[x - ORIGIN, y - ORIGIN] for x, y in points]
 
 
-def test_outline_fixes_compare_each_of_detections_outlines_with_what_people_drew(rounds_project):
+def test_outline_fixes_compare_each_of_detections_outlines_with_what_people_drew(rounds_project, monkeypatch):
     admin, (ann, _), _ = rounds_project
     project, tiles = state.get_state().project, state.get_state().tiles
     rows = [_row(x, y) for x, y in [*EDITED, *MERGED, PICKED]]
@@ -77,8 +77,37 @@ def test_outline_fixes_compare_each_of_detections_outlines_with_what_people_drew
     assert len(kept) == 6 and set(kept.closest) == {"sam_medium"}
     assert kept[kept.kind == "merge"].candidates.iloc[0].split() == [ids[xy] for xy in MERGED]
     assert kept[kept.kind == "edited"].outline.iloc[0] == text(square(*EDITED[0], 12))  # core pixels
-    shown = admin.get("/api/models/outline-fixes").json()["stains"]
+    shown = _answer(admin, "/api/models/outline-fixes")["stains"]
     assert [s["stain"] for s in shown] == ["6E10"] and shown[0]["hint"]["option"] == "sam_medium"
     table = pd.read_csv(io.StringIO(admin.get("/api/models/outline-fixes.csv").text))
     assert len(table) == 6 and {"iou_sam_medium", "ratio_shown", "closest"} <= set(table.columns)
     assert ann.get("/api/models/outline-fixes").status_code in (401, 403)  # the admin's page
+
+    # a comparison that takes long (a whole cohort) and no answer kept yet: "preparing" at once, not after seconds
+    import threading
+    import time
+
+    from stainid import disk_cache
+    from stainid.api import work
+
+    disk_cache.answer_file(project.root, "outline-fixes.json").unlink(missing_ok=True)
+    with work._COND:
+        work._BY_KEY.clear()
+        work._BY_ID.clear()
+    release, real = threading.Event(), outline_fixes.summary
+    monkeypatch.setattr(outline_fixes, "summary", lambda *args: release.wait(20) and real(*args))
+    started = time.monotonic()
+    assert admin.get("/api/models/outline-fixes").status_code == 202 and time.monotonic() - started < 2
+    release.set()
+
+
+def _answer(client, path: str) -> dict:
+    """The page's answer once its background work is done (202 "preparing" until then)."""
+    import time
+
+    answer = client.get(path)
+    deadline = time.monotonic() + 30
+    while answer.status_code == 202 and time.monotonic() < deadline:
+        time.sleep(0.1)
+        answer = client.get(path)
+    return answer.json()

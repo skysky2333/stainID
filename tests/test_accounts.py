@@ -235,11 +235,11 @@ def test_background_work_is_seen_only_by_the_account_that_asked_and_admins(clien
     from stainid.api import work
 
     def asked_by(account_id, key):
-        token = store.ATTRIBUTION.set(account_id)  # as the app does for every request
+        token = work.ASKER.set(account_id)  # as the app does for every request (`session.asker`)
         try:
             task = work.submit("test private", ("test private", key), lambda task: {"secret": key})
         finally:
-            store.ATTRIBUTION.reset(token)
+            work.ASKER.reset(token)
         assert work.wait(task, 10)
         return task.id
 
@@ -252,8 +252,20 @@ def test_background_work_is_seen_only_by_the_account_that_asked_and_admins(clien
     assert ann.get(f"/api/session/work/{ann_work}").json()["result"] == {"secret": 2}
     assert ben.get(f"/api/session/work/{ann_work}").status_code == 404 and guest.get(f"/api/session/work/{ann_work}").status_code == 404
     assert client.get(f"/api/session/work/{ann_work}").status_code == 200  # admins see all
-    guest_work = asked_by(None, 3)  # e.g. the tutorial's practice field, asked for without an account
-    assert guest.get(f"/api/session/work/{guest_work}").status_code == 200 and ann.get(f"/api/session/work/{guest_work}").status_code == 404
+    # each guest has an anonymous id of its own (a cookie, given on its first request): one guest's work (e.g. the
+    # tutorial's practice field) is never another's
+    other_guest = TestClient(client.app)
+    for someone in (guest, other_guest):
+        assert someone.get("/api/tutorial").status_code == 200 and len(someone.cookies.get(session.GUEST_COOKIE, "")) == 32
+    assert guest.cookies.get(session.GUEST_COOKIE) != other_guest.cookies.get(session.GUEST_COOKIE)
+    first_cookie = guest.cookies.get(session.GUEST_COOKIE)
+    guest.get("/api/tutorial")
+    assert guest.cookies.get(session.GUEST_COOKIE) == first_cookie  # kept, not given anew
+    guest_work = asked_by(f"guest:{first_cookie}", 3)
+    assert guest.get(f"/api/session/work/{guest_work}").json()["result"] == {"secret": 3}
+    assert other_guest.get(f"/api/session/work/{guest_work}").status_code == 404 and ann.get(f"/api/session/work/{guest_work}").status_code == 404
+    nobodys = asked_by(None, 4)  # asked with no account and no guest id: no one's (admins only)
+    assert guest.get(f"/api/session/work/{nobodys}").status_code == 404 and client.get(f"/api/session/work/{nobodys}").status_code == 200
 
 
 def test_class_examples_only_for_people_in_a_set_of_the_study(prepared):

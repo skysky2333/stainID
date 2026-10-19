@@ -90,6 +90,8 @@ def _line(info: dict) -> str:
     else:
         eta = f"{info.get('size', '')}{' ~' + took if took else ''}"
     note = info.get("waiting") or ""
+    if info.get("warning"):
+        note = f"Warning: it {info['warning']}" + (f" · {note}" if note else "")
     return f"  {info['id']}  {state:<12} {where:<4} {info['title'][:34]:<34} {info.get('project_name', '')[:28]:<28} {done:<10} {eta:<12} {note}"
 
 

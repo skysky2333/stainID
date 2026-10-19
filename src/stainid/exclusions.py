@@ -500,19 +500,34 @@ _TISSUE: OrderedDict[tuple, np.ndarray] = OrderedDict()  # (image, its signature
 def _tissue(project, image_path: str, shape: tuple[int, int] | None) -> np.ndarray | None:
     """The core image's tissue at 1/`SCALE` as the tiling finds it (`qc.core_qc.tissue_mask` of the 1/8 picture),
     on a grid of `shape` (else its own); None when the image cannot be read."""
+    from stainid import disk_cache  # noqa: PLC0415
     from stainid.imaging.core_images import read_bgr  # noqa: PLC0415
     from stainid.qc.core_qc import tissue_mask  # noqa: PLC0415
 
     path = project.root / image_path
-    key = (str(path), cache.signature(path), shape)
+    signature = cache.signature(path)
+    key = (str(path), signature, shape)
     with _LOCK:
         kept = _TISSUE.get(key)
     if kept is not None:
         return kept
-    bgr = read_bgr(path, cv2.IMREAD_REDUCED_COLOR_8)
-    if bgr is None:
-        return None
-    tissue = tissue_mask(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))[0].astype(np.uint8)
+    # kept on disk by the image's signature: a server started again reads a small picture instead of the core image
+    kept_file = disk_cache.path(project.root, "tissue", hashlib.sha1(repr((str(path), signature)).encode()).hexdigest()[:24] + ".png")
+    tissue = cv2.imread(str(kept_file), cv2.IMREAD_GRAYSCALE) if kept_file.exists() else None
+    if tissue is not None:
+        disk_cache.used(kept_file)
+        tissue = (tissue > 0).astype(np.uint8)
+    else:
+        bgr = read_bgr(path, cv2.IMREAD_REDUCED_COLOR_8)
+        if bgr is None:
+            return None
+        tissue = tissue_mask(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))[0].astype(np.uint8)
+        ok, encoded = cv2.imencode(".png", tissue * 255)
+        if ok:
+            try:
+                disk_cache.write(kept_file, encoded.tobytes())
+            except OSError:
+                pass
     if shape is not None and tissue.shape != shape:
         tissue = cv2.resize(tissue, (shape[1], shape[0]), interpolation=cv2.INTER_NEAREST)
     found = tissue > 0

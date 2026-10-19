@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import re
+import secrets
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -26,7 +27,7 @@ from stainid.api.routes import cache as cache_routes
 from stainid.api.routes import classes as label_classes
 from stainid.api.routes import outline as outline_routes
 from stainid.api.routes import rounds as round_routes
-from stainid.api.session import allowed_origins, current_account, is_admin
+from stainid.api.session import GUEST_COOKIE, GUEST_DAYS, allowed_origins, current_account, guest_id, is_admin
 from stainid.labels import store
 
 STATIC = Path(__file__).parent / "static"
@@ -106,12 +107,19 @@ def create_app() -> FastAPI:
             if not account.admin or account.must_change:
                 return JSONResponse({"detail": "choose a new password first" if account.must_change else "only admins can do this"}, status_code=403)
         token = store.ATTRIBUTION.set(account.id if account is not None else None)
+        new_guest = secrets.token_hex(16) if account is None and guest_id(request) is None else None  # a guest's own id
+        asking = work.ASKER.set(account.id if account is not None else f"guest:{new_guest or guest_id(request)}")
         practising = practice.PRACTISING.set(bool(practice.PATH.match(request.url.path)))  # the tutorial: no store is written
         try:
-            return await call_next(request)
+            response = await call_next(request)
         finally:
             practice.PRACTISING.reset(practising)
+            work.ASKER.reset(asking)
             store.ATTRIBUTION.reset(token)
+        if new_guest:
+            secure = request.url.scheme == "https" or request.headers.get("x-forwarded-proto", "") == "https"
+            response.set_cookie(GUEST_COOKIE, new_guest, max_age=GUEST_DAYS * 86400, httponly=True, samesite="lax", secure=secure)
+        return response
 
     origins = allowed_origins()
     if origins:  # a web app served from these addresses may use this server (`stainid serve --allow-origin`)

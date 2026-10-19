@@ -286,7 +286,9 @@ editing*), reject (Del), bring types back (numbers), unsure (`), a clean look (S
 merge (M), the brush (B), saving. A coach asks for one thing at a time and
 waits until it is done. *Skip tutorial* is always there and goes back home. Who finished or skipped each tutorial is kept with
 their account (`/api/session/tutorials`, on every project; the `tutorials.json` of earlier releases counts too); a guest's
-in the browser. The tutorials are public: someone without an account can try them. **Nothing of a practice is
+in the browser. The tutorials are public: someone without an account can try them. Each guest gets an anonymous id
+of its own (the HttpOnly cookie `stainid_guest`), so the background work one guest's page waits for (`/api/session/work/{id}`)
+is never another guest's. **Nothing of a practice is
 kept, whatever is clicked**: a request on a practice session (`practice-2-<stain>`, `practice-areas`) runs with
 `stainid.practice.PRACTISING` set, the practice routes answer as if saved, and every store refuses to write
 underneath (the label log, the sessions, the candidate and added-object stores, the holds and claims: 403 instead);

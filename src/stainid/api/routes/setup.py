@@ -94,10 +94,40 @@ def _remaining(steps: list[dict]) -> list[dict]:
 
 @router.get("")
 def overview():
-    project = get_state().project
+    """Where the setup stands (every screen's state, what is left to run and its estimate). Worked out on a thread of
+    its own and kept on disk: a server started again answers at once with the last one while it counts again (a cold
+    count of a large project reads every slide, image and manifest), and Home never waits for it."""
+    from stainid import disk_cache  # noqa: PLC0415
+    from stainid.api import work  # noqa: PLC0415
+
+    state = get_state()
+    return work.answer("setup", ("setup", str(state.root), _inputs_signature(state.project)), lambda task: _overview(state.project), work.NOW,
+                       "Looking at the setup", fresh=work.within(3), alone=True, saved=disk_cache.answer_file(state.root, "setup.json"),
+                       seconds=1.0)  # with nothing kept yet (a first count): "preparing" after a second, not eight
+
+
+def _inputs_signature(project) -> tuple:
+    """The settings file and every input table as they are now (a few stats): a change made on a setup screen (slides
+    registered, a map saved) is counted at once instead of within the few seconds a count is shared."""
+    from stainid import cache  # noqa: PLC0415
+    from stainid.project import CONFIG_NAME  # noqa: PLC0415
+
+    paths = [project.root / CONFIG_NAME]
+    for key in project.config.get("inputs") or {}:
+        try:
+            paths.append(project.input(key))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return tuple(cache.signature(p) for p in paths)
+
+
+def _overview(project) -> dict:
     steps = _steps()
-    if not isinstance(steps, list):  # still being counted: the page shows how far that is
-        return steps
+    while not isinstance(steps, list):  # the steps are still being counted (on their own thread): wait for them here
+        import time  # noqa: PLC0415
+
+        time.sleep(0.5)
+        steps = _steps()
     screens = guide.screens(project, steps)
     state = {s["id"]: s["state"] for s in screens}
     remaining = _remaining(steps)

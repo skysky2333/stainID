@@ -95,8 +95,8 @@ def _signals(core_id: str, stains: list[str]) -> dict | None:
 def practice_meta() -> dict:
     state = get_state()
     stains_of = areas.core_stains(state.tiles)
-    with_masks = [c for c, stains in stains_of.items() if any(exclusions.mask_path(state.project, c, s).exists() for s in stains)]
-    core = (with_masks or list(stains_of))[:1]
+    first = next((c for c, stains in stains_of.items() if any(exclusions.mask_path(state.project, c, s).exists() for s in stains)), None)
+    core = [first] if first else list(stains_of)[:1]
     if not core:
         raise HTTPException(404, "there is no core to practise on yet")
     return {"name": PRACTICE, "title": "Practice: " + areas.TITLE, "stain": "all", "kind": areas.KIND, "tools": ["area"], "ai_view": "full",
