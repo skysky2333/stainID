@@ -473,30 +473,59 @@ def outline_options(row) -> tuple[list, int]:
     return ([one] if one is not None else []), 0
 
 
-CHOICES = ("sam", "stain")  # the outlines Tab switches between, in this order: Segment Anything's (ViT-B), the stain's
+CHOICES = ("stain", "sam_small", "sam_medium", "sam_large")  # the outlines of a candidate one can choose, by name
+LEGACY_SAM = "sam"  # an outline choice of earlier releases: Segment Anything's output stage 3 kept (its `sam_default`)
 
 
 def outline_choices(row) -> tuple[list, int]:
-    """The two outlines a person switches between for a candidate (Tab, in the field tool and the Cores view), as
-    `CHOICES`: Segment Anything's — the current ViT-B output stage 3 kept (`sam_outline`; the one `outline_options`
-    shows where SAM is shown) — and the stain outline; None where the candidate has none (the page may then ask SAM
-    live). The index is the one shown first: `outline_options`' default, the stain's setting (6E10 and AT8 the stain
-    outline, NeuN Segment Anything), so the analysis' outline is always the one people start from. Rows as
-    `outline_options` takes them."""
+    """The outlines a person chooses between for a candidate (Tab, in the field tool and the Cores view), as `CHOICES`:
+    the stain outline, then Segment Anything's three outputs for its point prompt as stage 3 stored them (small, medium,
+    large; None where missing: the page may then ask SAM live). The index is the one shown first: `outline_options`'
+    default, the stain's setting (6E10 and AT8 the stain outline, NeuN Segment Anything, the output stage 3 picked), so
+    the analysis' outline is always the one people start from. Tab cycles stain -> small -> medium (`tab_cycle`); large
+    only where it is the one shown first. Rows as `outline_options` takes them."""
     get = row.get if hasattr(row, "get") else (lambda name: getattr(row, name, None))
     own = get("outline") if _given(get("outline")) else None
-    shown, default = outline_options(row)
     status = get("sam_status") if _given(get("sam_status")) else "ok"
     fell_back = (_number(get("sam_default")) or 0) < 0
-    sam = None
+    sizes: list = [None, None, None]
+    picked = None
     if status == "ok" and not fell_back:
         masks = get("sam_masks")
-        if _given(masks) and shown and 0 <= default < 3 and default < len(shown) - (own is not None):
-            sam = shown[default]  # the Segment Anything output shown first: the one stage 3 kept
+        masks = (str(masks).split("|") if isinstance(masks, str) else list(masks)) if _given(masks) else []
+        for i, m in enumerate(masks[:3]):
+            sizes[i] = m if _given(m) else None
+        shown, default = outline_options(row)
+        if any(m is not None for m in sizes) and 0 <= default < 3:
+            picked = default  # the output stage 3 kept
         elif _given(get("sam_outline")):
-            sam = get("sam_outline")
-    use_sam = sam is not None and shows_sam(get("outline_default"), status, own is not None)
-    return [sam, own], (0 if use_sam or own is None else 1)
+            kept = _number(get("sam_default"))
+            picked = int(kept) if kept is not None and 0 <= int(kept) < 3 else 1
+            if sizes[picked] is None:
+                sizes[picked] = get("sam_outline")
+    use_sam = picked is not None and shows_sam(get("outline_default"), status, own is not None)
+    return [own, *sizes], (1 + picked if use_sam or (own is None and picked is not None) else 0)
+
+
+def choice_index(name: str, row) -> int | None:
+    """The index into `outline_choices` of a choice by name (`CHOICES`, or "sam" of earlier releases: the output stage
+    3 kept); None for an unknown name."""
+    if name in CHOICES:
+        return CHOICES.index(name)
+    if name == LEGACY_SAM:  # the output stage 3 kept: the one shown first were the stain drawn with Segment Anything
+        get = row.get if hasattr(row, "get") else (lambda column: getattr(row, column, None))
+        fields = {c: get(c) for c in ("outline", "sam_outline", "sam_status", "sam_masks", "sam_scores", "sam_default")}
+        options, shown = outline_choices({**fields, "outline_default": "sam"})
+        found = [i for i in (1, 2, 3) if options[i] is not None]
+        return shown if shown > 0 else (found[0] if found else None)
+    return None
+
+
+def tab_cycle(index: int, default: int) -> int:
+    """The choice Tab moves to from `index`: stain -> SAM small -> SAM medium -> stain (SAM large in the cycle only
+    where it is the one shown first)."""
+    order = [0, 1, 2] + ([3] if default == 3 else [])
+    return order[(order.index(index) + 1) % len(order)] if index in order else 0
 
 
 def shows_sam(outline_default, sam_status, has_outline: bool = True) -> bool:

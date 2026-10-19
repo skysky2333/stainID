@@ -353,9 +353,14 @@ CHOICES = v2.CHOICES
 
 
 def choices(row) -> tuple[list[list[list[float]] | None], int]:
-    """The two outlines Tab switches between for a candidate ([Segment Anything's, the stain's], point lists, None
+    """The outlines one chooses between for a candidate ([the stain's, SAM small, medium, large], point lists, None
     where missing) and the one shown first: `candidates.outline_choices`."""
     return v2.outline_choices(row)
+
+
+def choice_index(name: str, row) -> int | None:
+    """A choice's index by name (`CHOICES`, or "sam" of earlier releases): `candidates.choice_index`."""
+    return v2.choice_index(name, row)
 
 
 def ai_outline(row) -> list[list[float]] | None:

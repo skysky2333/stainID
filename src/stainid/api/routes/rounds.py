@@ -432,7 +432,7 @@ def _field_shapes(meta: dict, tile: dict) -> tuple[list[dict], dict[str, list]]:
         identity, subtype = candidate_store.ai_call(words, r.decision, r.klass, r.subtype, r.reason)
         would = passing.get(r.candidate_id)
         if_accepted = list(candidate_store.ai_call(words, *would[:3])) if would is not None else None
-        found_masks, default = candidate_store.choices(r)  # [Segment Anything's, the stain's]: what Tab switches between
+        found_masks, default = candidate_store.choices(r)  # [the stain's, SAM small, medium, large]: what Tab cycles through
         shapes = [_shape(m) for m in found_masks]
         masks[r.candidate_id] = shapes
         objects.append({"candidate_id": r.candidate_id, "x": round(float(r.x), 1), "y": round(float(r.y), 1), "own": bool(r.own),
@@ -477,8 +477,9 @@ def field_objects(meta: dict, tile: dict) -> list[dict]:
 
 
 def field_masks(meta: dict, tile: dict) -> dict[str, list]:
-    """Both outlines of every candidate of the field (`candidate_store.CHOICES`: Segment Anything's, then the stain
-    outline; None where it has none), flat whole pixels: what the page loads after it has drawn the field, for Tab."""
+    """Every outline of every candidate of the field (`candidate_store.CHOICES`: the stain outline, then Segment
+    Anything's small, medium and large; None where it has none), flat whole pixels: what the page loads after it has
+    drawn the field, for Tab."""
     return _field_shapes(meta, tile)[1]
 
 
@@ -728,7 +729,7 @@ def clean(meta: dict, mark, person: str) -> dict | None:
             identity, subtype = candidate_store.ai_call(words, row.decision, row["class"], row.subtype, row.get("reason", ""))
             record |= {"value": identity, "subtype": (subtype or None) if asks_subtypes(meta) else None, "confirmed": True}
             return record | {"id": store.object_id("class", record["tile_id"], record["x"], record["y"])}
-        if mark.task == "outline" and not mark.deleted and mark.value in candidate_store.CHOICES:
+        if mark.task == "outline" and not mark.deleted and candidate_store.choice_index(str(mark.value or ""), row) is not None:
             record |= _chosen_outline(row, mark)
     elif not second or mark.task in ("class", "outline", objectedit.TASK):
         if not second:
@@ -755,18 +756,18 @@ def clean(meta: dict, mark, person: str) -> dict | None:
 
 
 def _chosen_outline(row, mark) -> dict:
-    """The outline label of one of a candidate's two outlines (`candidate_store.CHOICES`, by name in `mark.value`): the
-    option's own points (in the field's picture), or, for Segment Anything where the store has none, the outline the
-    page asked of it live (`mark.points`); confirmed when it is the stain's default (the one shown first), so only a
-    changed option counts as an outline fix."""
+    """The outline label of one of a candidate's outlines (`candidate_store.CHOICES`, by name in `mark.value`; "sam" of
+    earlier pages: the output stage 3 kept): the option's own points (in the field's picture), or, for Segment Anything
+    where the store has none, the outline the page asked of it live (`mark.points`); confirmed when it is the stain's
+    default (the one shown first), so only a changed option counts as an outline fix."""
     found, default = candidate_store.choices(row)
-    index = candidate_store.CHOICES.index(mark.value)
+    index = candidate_store.choice_index(str(mark.value), row)
     dx, dy = float(row.x_core) - float(row.x), float(row.y_core) - float(row.y)
     stored = found[index]
     points = _simplified([[px - dx, py - dy] for px, py in stored]) if stored else mark.points
     if not points or len(points) < 3:
         raise HTTPException(400, f"candidate {mark.candidate} has no {mark.value} outline: send the one Segment Anything drew")
-    return {"points": points, "confirmed": index == default}
+    return {"points": points, "confirmed": index == default, "value": candidate_store.CHOICES[index]}
 
 
 def mask_outline(meta: dict, mark, record: dict) -> dict | None:
@@ -897,6 +898,9 @@ def save_route(name: str, tile_id: str, body: TileSave, request: Request, person
 
 class Clicks(BaseModel):
     points: list[list[float]]  # [x, y, 1 on the object | 0 not on it], the first on it
+    box: list[float] | None = None  # x0, y0, x1, y1: the object lies within (a split piece, padded)
+    sizes: bool = False  # Segment Anything's three sizes whatever the clicks (a split piece: small and medium)
+    avoid: list[list[list[float]]] | None = None  # outlines cut out of the result (a split piece's siblings)
 
 
 def _round_meta(name: str, request: Request) -> dict:
@@ -1016,7 +1020,9 @@ def segment_status(name: str, tile_id: str, request: Request, person: str = Depe
 @router.post("/annotate/{name}/fields/{tile_id}/segment")
 def segment(name: str, tile_id: str, body: Clicks, request: Request, person: str = Depends(annotator)) -> dict:
     """Outlines Segment Anything proposes for a clicked object: one click, its three sizes (smallest first, with the one
-    it would choose); several (spots to include, 1, and to leave out, 0), the one outline that fits them all."""
+    it would choose); several (spots to include, 1, and to leave out, 0), the one outline that fits them all. A split
+    piece asks for its sizes (`sizes`) with its siblings' centres left out, a `box` around it and the siblings' outlines
+    cut out of the result (`avoid`)."""
     meta = _round_meta(name, request)
     field_tile(meta, tile_id)
     if not body.points or any(len(p) != 3 for p in body.points):
@@ -1029,9 +1035,13 @@ def segment(name: str, tile_id: str, body: Clicks, request: Request, person: str
     points = [(float(x), float(y), bool(on)) for x, y, on in body.points if 0 <= x < width and 0 <= y < height]
     if not points or (points[0][:2] != tuple(map(float, body.points[0][:2]))):
         raise HTTPException(400, "click inside the picture")
+    if body.box is not None and (len(body.box) != 4 or body.box[2] <= body.box[0] or body.box[3] <= body.box[1]):
+        raise HTTPException(400, "a box is x0, y0, x1, y1")
+    box = None if body.box is None else tuple(float(v) for v in body.box)
+    avoid = [[[float(x), float(y)] for x, y in ring] for ring in (body.avoid or []) if all(len(p) == 2 for p in ring)]
     def run(task: work.Task) -> dict:
         try:
-            return sam_embeddings.outline(state, tile_id, meta["stain"], points)
+            return sam_embeddings.outline(state, tile_id, meta["stain"], points, box=box, sizes=body.sizes, avoid=avoid)
         except IndexError:  # no click left inside the window around the first one
             return {"options": [], "chosen": 0}
         except Exception as error:  # noqa: BLE001 - the weights would not load, the model failed: a plain message

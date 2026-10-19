@@ -61,9 +61,10 @@ def versus_detection(project, stain: str, tiles: pd.DataFrame, core_id: str | No
 
 
 def fixed_outlines(project, stain: str, tiles: pd.DataFrame, core_id: str | None = None) -> pd.DataFrame:
-    """Outlines people fixed (precise editing, the other of its two outlines, drawing), the latest per person and
-    candidate: candidate_id, person, time, points (core pixels), `option` ("sam" or "stain": the other outline chosen
-    with Tab, its points kept with it; empty for a drawn one) or `mask` (pages of earlier releases: the index of the
+    """Outlines people fixed (precise editing, another of its outlines chosen with Tab, drawing), the latest per person and
+    candidate: candidate_id, person, time, points (core pixels), `option` (`candidate_store.CHOICES`: "stain",
+    "sam_small", "sam_medium", "sam_large", or "sam" of earlier pages: the outline chosen with Tab, its points kept with
+    it; empty for a drawn one) or `mask` (pages of earlier releases: the index of the
     Segment Anything mask chosen, without points)."""
     found = layer(project, stain, tiles)["fixed"]
     if core_id is None or found.empty:
@@ -147,7 +148,7 @@ def _fixed_outlines(project, stain: str, tiles: pd.DataFrame, core_id: str | Non
     for r in rows.itertuples():
         value = str(r.value or "")
         mask = int(value[5:]) if value.startswith("mask ") and value[5:].isdigit() else None
-        option = value if value in candidate_store.CHOICES else ""
+        option = value if value in candidate_store.CHOICES or value == "sam" else ""
         points = None
         if mask is None and r.points is not None and r.tile_id in boxes.index:
             x0, y0 = frames.field_origin(boxes.loc[r.tile_id], project.context_px)

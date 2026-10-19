@@ -39,7 +39,7 @@ import type { Slider } from './fieldStart'
 import { SLIDER_STEP, acceptedAt, lock, moveTo, slider, sliderText, startPick, unlock } from './fieldStart'
 import { LockIcon, ThresholdSlider } from './threshold'
 import { reasonText, whyStart } from './reasons'
-import { BackToSets, CHOICE_IDS, CHOICE_NAMES, ClassLegend, LookLegend, MaskSwitch, ROUND_TITLE, RoundProgressLine, SaveButtons, SaveState, callText, changesText, draftKey, lookOf, maskName,
+import { BackToSets, CHOICE_IDS, CHOICE_NAMES, PIECE_IDS, PIECE_NAMES, tabNext, ClassLegend, LookLegend, MaskSwitch, ROUND_TITLE, RoundProgressLine, SaveButtons, SaveState, callText, changesText, draftKey, lookOf, maskName,
   polygonArea, polygonPoints, readDraft, simplifyPolygon, stepMask, unsureClass, useCandidateKeys, useFitScreen, useLeaveGuard, useLive, useSaveKeys,
   writeDraft } from './rounds'
 
@@ -122,6 +122,11 @@ function boxesMeet(polygon: number[][], line: number[][]) {
 function circle(x: number, y: number, r: number) {
   return Array.from({ length: 20 }, (_, i) => [Math.round(x + r * Math.cos((i * Math.PI) / 10)), Math.round(y + r * Math.sin((i * Math.PI) / 10))])
 }
+
+/** Whether an outline label names one of a candidate's outlines (CHOICE_IDS, or "sam" of earlier releases). */
+const isChoice = (value: unknown) => typeof value === 'string' && (CHOICE_IDS.includes(value as typeof CHOICE_IDS[number]) || value === 'sam')
+/** Its index into the candidate's outlines; "sam" of earlier releases: the Segment Anything output shown first, else medium. */
+const choiceIndex = (value: unknown, o?: { mask: number }) => (value === 'sam' ? (o && o.mask > 0 ? o.mask : 2) : CHOICE_IDS.indexOf(value as typeof CHOICE_IDS[number]))
 
 /** `onEvent` hears what the person does (the tutorial follows it); `onFinished` replaces going to the next field; `coach`
  *  is shown at the top of the side panel (the tutorial's steps). */
@@ -280,10 +285,11 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   const [doneBy, setDoneBy] = useState<string[]>(field.done_by)
   const [progress, setProgress] = useState<RoundProgress | null>(meta.progress)
   const chosenMasks = (labels: Record<string, Mine>) => Object.fromEntries(Object.values(labels)  // the outline chosen per candidate (Tab)
-    .filter((m) => m.task === 'outline' && m.candidate && CHOICE_IDS.includes(m.value as typeof CHOICE_IDS[number]))
-    .map((m) => [m.candidate!, CHOICE_IDS.indexOf(m.value as typeof CHOICE_IDS[number])]))
+    .filter((m) => m.task === 'outline' && m.candidate && isChoice(m.value))
+    .map((m) => [m.candidate!, choiceIndex(m.value, field.objects.find((o) => o.candidate_id === m.candidate))]))
   const [masks, setMasks] = useState<Record<string, number>>(() => chosenMasks(mine))
-  const [liveSam, setLiveSam] = useState<Record<string, number[][]>>({})  // Segment Anything asked live, for a candidate the store has none for
+  const [liveSam, setLiveSam] = useState<Record<string, (number[][] | null)[]>>({})  // Segment Anything's sizes asked live, for a candidate the store has none for
+  const [pieceSam, setPieceSam] = useState<Record<string, (number[][] | null)[]>>({})  // a split piece's SAM small and medium, asked live
   const [prompts, setPrompts] = useState<Record<string, { options: number[][][]; chosen: number }>>({})  // masks of objects added in this visit
   const [fresh, setFresh] = useState<Record<string, Fresh>>({})
   const [hovered, setHovered] = useState<string | null>(null)
@@ -379,12 +385,28 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     return { pick: s.candidate ? startOf(s.candidate) : { identity: '', subtype: null }, by: 'ai' }
   }
   const samNames = (n: number) => Array.from({ length: n }, (_, i) => `SAM ${i + 1}/${n}`)  // one click: Segment Anything's own three
-  const choicesOf = (s: Shown | undefined): { list: (number[][] | null)[]; index: number; names?: string[] } => {
+  /** A split piece (an object of a split, `meta.edit`): its split outline, the outline it shows now (PIECE_IDS) and its
+   *  siblings (the other pieces of the split). */
+  const pieceOf = (s: Shown) => {
+    const m = s.added
+    if (!m || m.meta?.edit !== 'split') return null
+    const drawn = mine[outlineId(s.x, s.y)]
+    const at = PIECE_IDS.indexOf((drawn?.value ?? '') as typeof PIECE_IDS[number])
+    const split = drawn?.meta?.split_outline ?? (at > 0 ? null : drawn?.points) ?? prompts[s.key]?.options[0] ?? null
+    const siblings = added.filter((o) => o.meta?.group && o.meta.group === m.meta?.group && o.id !== m.id)
+      .map((o) => ({ x: o.x!, y: o.y!, points: mine[outlineId(o.x!, o.y!)]?.points ?? null }))
+    return { split, index: at > 0 ? at : 0, siblings, group: m.meta.group }
+  }
+  const choicesOf = (s: Shown | undefined): { list: (number[][] | null)[]; index: number; names?: string[]; first?: number } => {
     if (!s) return { list: [], index: 0 }
-    if (s.candidate) {  // its two outlines (CHOICE_IDS), the stain's default first
+    if (s.candidate) {  // its outlines (CHOICE_IDS: stain, SAM small, medium, large), the stain's default first
       const id = s.candidate.candidate_id
-      return { list: [liveSam[id] ?? s.candidate.masks[0] ?? null, s.candidate.masks[1] ?? null], index: masks[id] ?? s.candidate.mask, names: CHOICE_NAMES }
+      const m = s.candidate.masks, live = liveSam[id]
+      return { list: [m[0] ?? null, m[1] ?? live?.[0] ?? null, m[2] ?? live?.[1] ?? null, m[3] ?? live?.[2] ?? null], index: masks[id] ?? s.candidate.mask,
+        names: CHOICE_NAMES, first: s.candidate.mask }
     }
+    const piece = pieceOf(s)
+    if (piece) return { list: [piece.split, ...(pieceSam[s.key] ?? [null, null])], index: piece.index, names: PIECE_NAMES, first: 0 }
     if (s.fresh) return { list: s.fresh.options, index: s.fresh.chosen, names: samNames(s.fresh.options.length) }
     const prompt = prompts[s.key]
     return prompt ? { list: prompt.options, index: prompt.chosen, names: samNames(prompt.options.length) } : { list: [], index: 0 }
@@ -418,7 +440,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
       if (r.task === 'class' && at && r.mask != null && !noObject(r.value)) {  // the mask chosen with the call is saved with it
         const mask = Number(r.mask)
         next[outlineId(x, y)] = { mark: null, label: label(outlineId(x, y), 'outline', x, y, { value: CHOICE_IDS[mask] ?? '', points: at.masks[mask] ?? null, candidate }) }
-      } else if (r.task === 'class' && at && CHOICE_IDS.includes(changes[outlineId(x, y)]?.label?.value as typeof CHOICE_IDS[number])) {
+      } else if (r.task === 'class' && at && isChoice(changes[outlineId(x, y)]?.label?.value)) {
         next[outlineId(x, y)] = { mark: null, label: null }  // not an object (or unsure): no mask goes with it
       }
     }
@@ -442,7 +464,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
         { local: () => setFresh((all) => ({ ...all, [f.key]: f })) })
     } else if (s.candidate) {
       const drawn = mine[outlineId(s.x, s.y)]
-      const edited = drawn && !CHOICE_IDS.includes(drawn.value as typeof CHOICE_IDS[number]) && !drawn.value?.startsWith('mask')
+      const edited = drawn && !isChoice(drawn.value) && !drawn.value?.startsWith('mask')
       const shownAt = masks[s.candidate.candidate_id] ?? s.candidate.mask
       // the outline it is on goes with the call when the store has it (one Segment Anything drew live is its own outline record)
       const mask = !edited && s.candidate.masks.length > 1 && s.candidate.masks[shownAt] ? shownAt : null
@@ -472,23 +494,52 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     if (precise) return
     const { list, index } = choicesOf(s)
     if (next === index) return
-    if (s.candidate && !list[next] && s.candidate.more_masks) { setError('The other outline is still loading: press Tab again in a moment.'); return }
-    if (s.candidate && !list[next] && next === 0 && sam) {  // no Segment Anything outline stored: one click of it, at the object's centre
+    if (s.candidate && !list[next] && s.candidate.more_masks && s.candidate.masks.filter(Boolean).length <= 1) { setError('The other outlines are still loading: press Tab again in a moment.'); return }
+    if (s.candidate && !list[next] && next > 0 && sam) {  // no Segment Anything outline stored: one click of it, at the object's centre, its sizes
       const c = s.candidate
       void (async () => {
         try {
           const found = await api.post<RoundSamOptions>(`/api/annotate/${name}/fields/${enc(tile)}/segment`, { points: [[Math.round(c.x), Math.round(c.y), 1]] })
-          const points = found.options[found.chosen]?.points
-          if (!points) { setError('Segment Anything found no object there: this object keeps its stain outline.'); return }
-          setLiveSam((all) => ({ ...all, [c.candidate_id]: points }))
-          setMasks((m) => ({ ...m, [c.candidate_id]: 0 }))
-          save([{ task: 'outline', candidate: c.candidate_id, points, value: CHOICE_IDS[0] }], { local: () => setMasks((m) => ({ ...m, [c.candidate_id]: index })) })
-        } catch (e) { setError(`${(e as Error).message} This object keeps its stain outline.`) }
+          const sizes = [0, 1, 2].map((i) => found.options[i]?.points ?? null)
+          const points = sizes[next - 1]
+          if (!points) { setError(`Segment Anything found no ${CHOICE_NAMES[next]} there: this object keeps its outline.`); return }
+          setLiveSam((all) => ({ ...all, [c.candidate_id]: sizes }))
+          setMasks((m) => ({ ...m, [c.candidate_id]: next }))
+          save([{ task: 'outline', candidate: c.candidate_id, points, value: CHOICE_IDS[next] }], { local: () => setMasks((m) => ({ ...m, [c.candidate_id]: index })) })
+          tell('mask')
+        } catch (e) { setError(`${(e as Error).message} This object keeps its outline.`) }
+      })()
+      return
+    }
+    const piece = pieceOf(s)
+    if (piece) {  // a split piece: its split outline, or Segment Anything's small or medium with the split as context
+      const keep = (points: number[][]) => {
+        save([{ task: 'outline', x: s.x, y: s.y, points: points.map((q) => q.map(Math.round)), value: PIECE_IDS[next],
+          meta: { edit: 'split', group: piece.group, split_outline: piece.split ?? undefined } }], {})
+        tell('mask')
+      }
+      if (next === 0 || list[next]) { if (list[next]) keep(list[next]!); return }
+      if (!sam || !piece.split) { setError('One-click outlines are not available here: this piece keeps its split outline.'); return }
+      const xs = piece.split.map((q) => q[0]), ys = piece.split.map((q) => q[1])
+      const pad = Math.max(8, 0.15 * Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)))
+      const box = [Math.min(...xs) - pad, Math.min(...ys) - pad, Math.max(...xs) + pad, Math.max(...ys) + pad].map(Math.round)
+      const [cx, cy] = centroid(piece.split).map(Math.round)
+      void (async () => {
+        try {
+          const found = await api.post<RoundSamOptions>(`/api/annotate/${name}/fields/${enc(tile)}/segment`, {
+            points: [[cx, cy, 1], ...piece.siblings.map((o) => [Math.round(o.x), Math.round(o.y), 0])], box, sizes: true,
+            avoid: piece.siblings.map((o) => o.points).filter((p): p is number[][] => !!p && p.length >= 3) })
+          const sizes = [0, 1].map((i) => found.options[i]?.points ?? null)
+          setPieceSam((all) => ({ ...all, [s.key]: sizes }))
+          const points = sizes[next - 1]
+          if (!points) { setError(`Segment Anything found no ${PIECE_NAMES[next]} for this piece: it keeps its split outline.`); return }
+          keep(points)
+        } catch (e) { setError(`${(e as Error).message} This piece keeps its split outline.`) }
       })()
       return
     }
     if (!list[next]) {
-      if (s.candidate) setError(`This object has no ${CHOICE_NAMES[next]}${next === 0 ? ', and one-click outlines are not available here' : ''}.`)
+      if (s.candidate) setError(`This object has no ${CHOICE_NAMES[next]}${next > 0 ? ', and one-click outlines are not available here' : ''}.`)
       return
     }
     if (s.fresh) { const f = s.fresh; setFresh((all) => ({ ...all, [f.key]: { ...f, chosen: next } })); return }
@@ -502,13 +553,14 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     }
   }, [precise, save, masks, prompts])  // eslint-disable-line react-hooks/exhaustive-deps
 
-  /** Tab: the object under the mouse switches to its other outline (a candidate: Segment Anything ↔ stain outline; an
-   *  object added with one click: Segment Anything's next size). Nothing under the mouse: nothing happens. */
+  /** Tab: the object under the mouse moves to its next outline (a candidate: stain outline -> SAM small -> SAM medium;
+   *  a split piece: split outline -> SAM small -> SAM medium, asked with the other pieces as context; an object added
+   *  with one click: Segment Anything's next size). Nothing under the mouse: nothing happens. */
   const switchMask = useCallback((bigger: boolean) => {
     const s = target
     if (!s || precise) return
-    const { list, index } = choicesOf(s)
-    chooseMask(s, s.candidate ? (index === 0 ? 1 : 0) : stepMask(list, index, bigger))
+    const { list, index, names, first } = choicesOf(s)
+    chooseMask(s, names === CHOICE_NAMES || names === PIECE_NAMES ? tabNext(index, first ?? 0) : stepMask(list, index, bigger))
   }, [target, precise, chooseMask])  // eslint-disable-line react-hooks/exhaustive-deps
 
   /** Out of precise editing: the view goes back to exactly where it was before (zoom and position), the object stays
@@ -825,7 +877,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     if (precise) {  // a click adds this spot, Shift+click leaves it out; beyond the object's neighbourhood: done
       const n = neighbourhood(precise.points, 24 * p.unit)
       if (p.x < n.x || p.x > n.x + n.w || p.y < n.y || p.y > n.y + n.h) { tell('precise-out'); finishPrecise(); return }
-      if (!precise.busy && sam) { tell('precise-edit'); void refine([...precise.clicks, [p.x, p.y, event.shiftKey ? 0 : 1]]) }
+      if (!precise.busy && sam) { tell('precise-spot'); void refine([...precise.clicks, [p.x, p.y, event.shiftKey ? 0 : 1]]) }
       return
     }
     if (draft.length) {
@@ -862,7 +914,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   }, [dragging])
   const startDrag = (i: number) => {
     if (!precise) return
-    tell('precise-edit')
+    tell('precise-drag')
     setPrecise({ ...precise, history: [...precise.history, { points: precise.points, clicks: precise.clicks }] })
     setDragging(i)
   }
@@ -990,8 +1042,8 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
               {mode === 'split' && <span className="badge status-running">split — click an object, or draw a line across · Esc leaves</span>}
               {mode === 'merge' && <span className="badge status-running">merge — {chosenForMerge.length} selected · Enter to merge · Esc leaves</span>}
               {start && !start.locked && <span className="badge">Step 1: set the acceptance threshold</span>}
-              {target?.candidate && !precise && !excluding && <span className="badge outline-badge" title="Tab switches the outline of the object under the mouse">
-                Outline: {CHOICE_NAMES[choicesOf(target).index]} · Tab</span>}</span>}
+              {target && (target.candidate || pieceOf(target)) && !precise && !excluding && <span className="badge outline-badge" title="Tab switches the outline of the object under the mouse">
+                Outline: {(choicesOf(target).names ?? CHOICE_NAMES)[choicesOf(target).index]} · Tab</span>}</span>}
             focus={focus} cursor={excluding ? 'none' : mode ? 'crosshair' : precise ? 'crosshair' : target ? 'pointer' : 'copy'} onClick={click} onMove={move}
             onPress={press} onRelease={release} panLock={excluding || !!mode} onSize={setFieldSize}
             paint={!hidden && fieldSize && (excluding || brush.dirty) ? (  // each type's area now: one merged region per type (brush.ts), from the first stroke
@@ -1324,7 +1376,7 @@ const ADDED_TEXT: Record<AddedState['state'], string> = {
  *  area and which of its masks shows. */
 function TargetCard({ s, call, meta, precise, px, outline, choices, added, unsaved, onMask, why }: {
   s: Shown | undefined; call: { pick: ClassPick; by: string; who?: string[] } | null; meta: Meta; precise: Precise | null; px: number
-  outline: number[][] | null; choices: { list: (number[][] | null)[]; index: number; names?: string[] }; added: AddedState['state'] | null; unsaved: boolean
+  outline: number[][] | null; choices: { list: (number[][] | null)[]; index: number; names?: string[]; first?: number }; added: AddedState['state'] | null; unsaved: boolean
   onMask: (i: number) => void
   /** why it starts as it does when that is not the acceptance threshold alone (reasons.ts) */
   why?: string
@@ -1353,11 +1405,11 @@ function TargetCard({ s, call, meta, precise, px, outline, choices, added, unsav
           <dt>Score</dt><dd>{c.ai_probability != null ? fmt(c.ai_probability, 2) : '—'}</dd></>}
         {why && <><dt>Why</dt><dd className="target-why">{why}</dd></>}
         {outline && <><dt>Area</dt><dd>{fmt(polygonArea(outline) * px * px, 3)} µm²</dd></>}
-        {choices.list.length > 0 && !precise && choices.names !== CHOICE_NAMES && <><dt>Outline</dt><dd>{maskName(choices.index, choices.list.length, choices.names)}</dd></>}
+        {choices.list.length > 0 && !precise && choices.names !== CHOICE_NAMES && choices.names !== PIECE_NAMES && <><dt>Outline</dt><dd>{maskName(choices.index, choices.list.length, choices.names)}</dd></>}
       </dl>
       {added && added !== 'proposed' && <p className={`small added-note${added === 'could_not_be_measured' ? ' warn' : ''}`}><b>Detection never proposed this object.</b> {ADDED_TEXT[added]}</p>}
       {precise ? <p className="small precise-bar"><b>Precise editing.</b> {precise.busy ? 'Outlining…' : 'A click adds a spot, Shift+click leaves one out, drag the dots; a click beyond the faint frame (or Enter) finishes.'}</p>
-        : <MaskSwitch masks={choices.list} index={choices.index} onChange={onMask} names={choices.names} />}
+        : <MaskSwitch masks={choices.list} index={choices.index} onChange={onMask} names={choices.names} first={choices.first} />}
     </div>
   )
 }
