@@ -509,3 +509,13 @@ def test_tile_processes_write_what_one_process_writes(v2_project, capsys):
     assert "2 tile processes (2 threads each)" in capsys.readouterr().out
     assert saved() == one
     assert set(shared_arrays.folder().glob(f"{shared_arrays.PREFIX}{os.getpid()}-*")) == before
+
+
+def test_tile_processes_fit_the_queue_jobs_budget(monkeypatch):
+    """Stage 2 starts as many tile processes as the processors and the memory its queue job was given allow."""
+    monkeypatch.setenv("STAINID_JOB_CPUS", "24")
+    monkeypatch.setenv("STAINID_JOB_RAM_GB", "34")
+    assert run.default_processes(3) == int((34 - 1 - 3 * run.CORE_GB) / run.PROCESS_GB) == 22
+    assert run.default_processes(3, threads=2) == 12
+    monkeypatch.setenv("STAINID_JOB_RAM_GB", "200")
+    assert run.default_processes(3) == 24

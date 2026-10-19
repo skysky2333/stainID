@@ -2,24 +2,26 @@
 # The v2 detection run, stage by stage. Every stage is resumable and redoes only core images that are missing or out of
 # date (a changed input, parameter, model or upstream stage), so the same command continues a stopped run.
 #
-#   tools/v2_run.sh all        stage 2 proposals (CPU, $WORKERS core images at once), stage 4 calls, stage 3 outlines
+#   tools/v2_run.sh all        stage 2 proposals (CPU, $PROCESSES tile processes), stage 4 calls, stage 3 outlines
 #                              ($PER_GPU processes per GPU, $GPUS GPUs), stage 5 measures
 #   tools/v2_run.sh decide     only stages 4 and 5: after a new model, cut-off or rule (minutes, no image is read)
 #   tools/v2_run.sh proposals | calls | outlines | measures | status    one stage (or how far each has got)
 #
 # Extra arguments go to every stage, e.g. `tools/v2_run.sh all --core cores.txt` or `--stain AT8`.
 # Settings (environment): STAINID_PROJECT (the project folder), STAINID_PYTHON (python with stainid installed),
-# STAINID_SRC (a source tree to run instead of the installed one), WORKERS (default 10: ~2.2 GB each), GPUS (default 2),
-# PER_GPU (stage 3 processes per GPU, default 3: ~3.3 GB of memory each), THREADS (stage 2 filter threads per worker, default: the
-# processors the workers leave idle), TILES_AT_ONCE (stage 2 tiles in flight per worker, default 1; 2 makes a worker ~1.5x faster
-# for ~1 GB more, e.g. WORKERS=8 TILES_AT_ONCE=2 THREADS=2 on 32 processors and 25 GB). None of them changes any result.
+# STAINID_SRC (a source tree to run instead of the installed one), PROCESSES (stage 2 tile processes, default -1: as many as
+# the processors and the free memory allow, ~1.3 GB each; 0: the older layout, one process per core image), WORKERS (stage 2
+# core images in flight sharing the tile processes, default 3, ~1.4 GB each; with PROCESSES=0 processes of ~2.2 GB),
+# THREADS (stage 2 threads per tile process, default 1), TILES_AT_ONCE (with PROCESSES=0: tiles in threads per process),
+# GPUS (default 2), PER_GPU (stage 3 processes per GPU, default 3: ~3.3 GB of memory each). None of them changes any result.
 # OUTLINES=0 to skip Segment Anything. Logs: <project>/data/analysis/v2/logs/.
 set -euo pipefail
 what=${1:-all}
 shift || true
 PROJECT=${STAINID_PROJECT:-$(pwd)}
 PY=${STAINID_PYTHON:-python}
-WORKERS=${WORKERS:-10}
+WORKERS=${WORKERS:-3}
+PROCESSES=${PROCESSES:--1}
 GPUS=${GPUS:-2}
 PER_GPU=${PER_GPU:-3}
 OUTLINES=${OUTLINES:-1}
@@ -50,7 +52,7 @@ outlines() {  # stage 3 on every GPU at once, PER_GPU processes each (a process 
 
 case $what in
   all)
-    v2 proposals --workers "$WORKERS" --threads "${THREADS:-0}" --tiles-at-once "${TILES_AT_ONCE:-1}" "$@"
+    v2 proposals --workers "$WORKERS" --processes "$PROCESSES" --threads "${THREADS:-0}" --tiles-at-once "${TILES_AT_ONCE:-1}" "$@"
     v2 calls "$@"
     if [[ $OUTLINES == 1 ]]; then outlines "$@"; fi
     v2 measures
@@ -59,7 +61,7 @@ case $what in
     v2 calls "$@"
     v2 measures
     v2 status ;;
-  proposals) v2 proposals --workers "$WORKERS" --threads "${THREADS:-0}" --tiles-at-once "${TILES_AT_ONCE:-1}" "$@" ;;
+  proposals) v2 proposals --workers "$WORKERS" --processes "$PROCESSES" --threads "${THREADS:-0}" --tiles-at-once "${TILES_AT_ONCE:-1}" "$@" ;;
   outlines) outlines "$@" ;;
   calls | measures | status) v2 "$what" "$@" ;;
   *) echo "unknown: $what (all, decide, proposals, calls, outlines, measures, status)" >&2; exit 2 ;;

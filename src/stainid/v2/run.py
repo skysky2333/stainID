@@ -220,17 +220,25 @@ def _limited_threads() -> None:
         os.environ.setdefault(key, "2")
 
 
-def default_processes(cores_at_once: int, threads: int = 1, per_process_gb: float = 1.3, per_core_gb: float = 1.6,
-                      reserve_gb: float = 4.0) -> int:
-    """Tile processes for stage 2 (`threads` threads each): bounded by the processors and by the memory free now (each
-    tile process about `per_process_gb`, each core image in flight `per_core_gb` of shared memory)."""
-    try:
-        with open("/proc/meminfo") as handle:
-            info = {line.split(":")[0]: int(line.split()[1]) * 1024 for line in handle}
-        available = info.get("MemAvailable", 8 * GB) / GB
-    except OSError:
-        available = 8.0
-    return max(1, min((os.cpu_count() or 2) // max(1, threads), int((available - reserve_gb - cores_at_once * per_core_gb) / per_process_gb)))
+PROCESS_GB = 1.3  # a tile process (its fields and pictures; up to about 2 GB on a 6E10 tile with local windows)
+CORE_GB = 1.4  # a core image in flight: its picture and core-wide masks in shared memory
+PROCESSES_PER_CPU = 1.0  # tile processes per logical processor (`stainid jobs` / the scaling test: see docs/pipeline_v2.md)
+
+
+def default_processes(cores_at_once: int, threads: int = 1, reserve_gb: float = 4.0) -> int:
+    """Tile processes for stage 2 (`threads` threads each): bounded by the processors and the memory a queue job was
+    given (STAINID_JOB_CPUS, STAINID_JOB_RAM_GB), else by the processors and the memory free now."""
+    cpus = int(os.environ.get("STAINID_JOB_CPUS") or 0) or round(PROCESSES_PER_CPU * (os.cpu_count() or 2))
+    ram = float(os.environ.get("STAINID_JOB_RAM_GB") or 0)
+    if not ram:
+        try:
+            with open("/proc/meminfo") as handle:
+                info = {line.split(":")[0]: int(line.split()[1]) * 1024 for line in handle}
+            available = info.get("MemAvailable", 8 * GB) / GB
+        except OSError:
+            available = 8.0
+        ram = available - reserve_gb
+    return max(1, min(cpus // max(1, threads), int((ram - 1.0 - cores_at_once * CORE_GB) / PROCESS_GB)))
 
 
 def run_proposals(project, stains=STAINS, cores: set[str] | None = None, workers: int | None = None, shard_index: int = 0,

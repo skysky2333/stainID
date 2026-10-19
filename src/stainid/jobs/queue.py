@@ -167,8 +167,11 @@ def load_budget(directory: Path) -> Budget:
 
 
 def needs_of(workflow: str, options: dict | None = None) -> dict:
-    """What a workflow step needs. A step told to run on the processor needs no GPU; v2 proposals with a number of cores
-    at once need about 2 processors and 2.5 GB per core image."""
+    """What a workflow step needs. A step told to run on the processor needs no GPU. v2 proposals (`stainid.v2.run`):
+    with `processes` tile processes, `threads` processors and 1.3 GB each plus 1.4 GB per core image in flight
+    (`workers`, default 3); with a number of core images at once and no `processes`, 2 processors per core image
+    (the tile processes the job then starts: `default_processes`); with `processes` 0 (the older layout, one process
+    per core image), 2 processors and 2.5 GB per core image."""
     from stainid.workflows.steps import BY_ID
 
     options = options or {}
@@ -176,9 +179,15 @@ def needs_of(workflow: str, options: dict | None = None) -> dict:
     need = dict(STEP_NEEDS.get(workflow) or ({"cpus": 4, "ram_gb": 8} if step is not None and step.heavy else {"cpus": 1, "ram_gb": 2}))
     if str(options.get("device", "")).lower() == "cpu" and need.get("gpus"):
         need["gpus"], need["cpus"] = 0, max(need["cpus"], 8)
-    if workflow == "v2_proposals" and int(options.get("workers") or 0) > 0:
-        workers = int(options["workers"])
-        need["cpus"], need["ram_gb"] = 2 * workers, round(2.5 * workers + 1, 1)
+    if workflow == "v2_proposals":
+        workers, threads = int(options.get("workers") or 0), max(1, int(options.get("threads") or 1))
+        processes = int(options["processes"]) if str(options.get("processes", "")).lstrip("-").isdigit() else -1
+        if processes > 0:
+            need["cpus"], need["ram_gb"] = processes * threads, round(1.3 * processes + 1.4 * (workers or 3) + 1, 1)
+        elif processes == 0 and workers > 0:
+            need["cpus"], need["ram_gb"] = 2 * workers, round(2.5 * workers + 1, 1)
+        elif workers > 0:
+            need["cpus"], need["ram_gb"] = 2 * workers, round(1.3 * 2 * workers + 1.4 * workers + 1, 1)
     return {"cpus": 0, "gpus": 0, "ram_gb": 0, "network": False, **need}
 
 
