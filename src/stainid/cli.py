@@ -147,6 +147,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--session", default="", help="prepare every field of this labelling session")
     p.add_argument("--seed", type=int, default=0)
 
+    p = sub.add_parser("review", help="AI agent review batches: picture sheets for AI reviewers, and their labels into the label log")
+    kinds = p.add_subparsers(dest="review_kind", required=True)
+    a = kinds.add_parser("ai-batch", help="build: choose fields and write the sheets, overviews, manifest, instructions and assignments; "
+                         "ingest: import the reviewers' CSVs as the session \"AI review round N · <stain>\"")
+    a.add_argument("action", choices=("build", "ingest"))
+    a.add_argument("--stain", action="append", choices=("NeuN", "6E10", "AT8"), help="repeat for several (default: every one)")
+    a.add_argument("--round", type=int, default=4, help="the review round (its folder: <reviews>/ai_review_round<N>)")
+    a.add_argument("--fields", type=int, default=8, help="build: fields per stain")
+    a.add_argument("--seed", type=int, default=0)
+    a.add_argument("--csv", action="append", type=Path, default=[], help="ingest: these CSVs (default: the batch's review_labels_*.csv)")
+    a.add_argument("--dry-run", action="store_true", help="ingest: report what would be written, write nothing")
+
     p = sub.add_parser("train", help="train a stain model from the labels in the label store")
     p.add_argument("--stain", required=True, choices=("NeuN", "6E10", "AT8"))
     p.add_argument("--session", action="append", help="train only on the labels of this session (repeat for several; \"reference\" = the "
@@ -327,6 +339,16 @@ def run(args: argparse.Namespace, project) -> None:
         from stainid.labels.prepare import run
 
         run(project, args.action, args.stain, args.fields, args.session, args.seed)
+    elif args.command == "review":
+        from stainid.review import ai_batch, ai_ingest
+
+        stains = args.stain or ["6E10", "AT8", "NeuN"]
+        if args.action == "build":
+            ai_batch.build(project, stains, args.round, args.fields, args.seed)
+        else:
+            for stain in stains:
+                if (ai_batch.stain_folder(project, stain, args.round) / "manifest.csv").exists():
+                    ai_ingest.ingest(project, stain, args.round, list(args.csv) or None, args.dry_run)
     elif args.command == "score-segmentation":
         from stainid.segmentation.report import run as score_segmentation
 

@@ -34,7 +34,7 @@ from stainid.labels.vocabulary import Vocabulary
 from stainid.tables import write_text_atomic
 
 FOLDER = "sessions"
-KINDS = ("fields", "queue", "outline", "areas")  # areas: "Mark bad areas" (`labels.areas`)
+KINDS = ("fields", "queue", "outline", "areas", "ai_review")  # areas: "Mark bad areas" (`labels.areas`); ai_review: read-only AI reviewer labels (`review.ai_ingest`)
 FIELD_TOOLS = ("class", "point", "outline", "tag", "area")
 AI_VIEWS = ("full", "positions", "none")
 RULES = {"uncertain": "where detection is unsure (probability 0.3–0.7)", "disagree": "where people disagree with each other or with detection",

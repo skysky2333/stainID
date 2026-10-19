@@ -422,6 +422,20 @@ were imported once with `stainid labels import`, each as its own source (`import
 unchanged. Every label belongs to a session; the imported ones (no session) together form the read-only pseudo-session
 *AI reference labels* (`reference`), which the Labels page lists and lets you look inside like any other session.
 
+**AI review batches** (`stainid review ai-batch build|ingest`, `stainid.review.ai_batch` / `ai_ingest`). *build* picks,
+per stain, 8 fields from different TMAs as "Fix the field" draws them (none that people, earlier AI rounds, a session
+or the tutorial have; cores whose bad areas a person checked first; about half rich in the stain's object, a quarter
+sparse, a quarter near the model's threshold). Every own candidate outside the excluded areas is asked; a field with
+more than 80 is cut to a sub-field (and, if need be, a stratified sample), recorded in `fields.csv`. It writes
+numbered picture sheets (raw crop and the default outline, with the call, probability and rule), an overview per field
+on a field-pixel grid for missed objects, `manifest.csv`, `REVIEW_INSTRUCTIONS.md` (the stain's labels from the
+vocabulary) and two assignments (halves A and B by field, about 10 % of the objects in both) under
+`outputs.reviews/ai_review_round<N>/<stain>/`. *ingest* reads the reviewers' `review_labels_<half>.csv` into the session
+*AI review round N · <stain>* (kind `ai_review`, read-only), each reviewer the account `ai:<name>`: class labels on
+the candidates, an outline judged "ok" confirmed as the app records it, missed objects as added objects, objects of
+both halves kept where the reviewers agree and "unsure" where they do not. Like any session it can be chosen for
+training on the Models page; the annotation pages do not show `ai:` labels.
+
 ### Outline fixes
 
 How well detection outlines objects is measured on the outlines people fix in *Fix the field* (*Models → Outlines →
