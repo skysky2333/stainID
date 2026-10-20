@@ -21,6 +21,9 @@ def run(project: Project, action: str, stain: str | None, fields: int, session: 
         return
     if session:
         meta = sessions.meta(project.output("reviews"), session)
+        if sessions.label_set_only(meta):  # an AI review round: read-only labels, nobody opens its fields
+            print(f"{session} is a read-only label set: no fields to prepare", flush=True)
+            return
         pool.prepare(project, meta["stain"], meta["fields"])
         return
     if not stain:

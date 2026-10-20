@@ -35,7 +35,21 @@ from stainid.tables import write_text_atomic
 
 FOLDER = "sessions"
 KINDS = ("fields", "queue", "outline", "areas", "ai_review")  # areas: "Mark bad areas" (`labels.areas`); ai_review: read-only AI reviewer labels (`review.ai_ingest`)
+READ_ONLY_KINDS = ("ai_review",)  # label sets nobody labels in: no fields to prepare, no join key, not in anyone's sets
+KIND_TITLES = {"fields": "check whole fields", "queue": "one object at a time", "outline": "outline every object (older segmentation check)",
+               "areas": "Mark bad areas", "ai_review": "AI review · read only"}  # the Labels page shows these (`kind_title`)
 FIELD_TOOLS = ("class", "point", "outline", "tag", "area")
+
+
+def label_set_only(meta: dict) -> bool:
+    """A read-only label set (an AI review round): its labels are looked at and trained on, nobody labels in it."""
+    return meta.get("kind") in READ_ONLY_KINDS
+
+
+def kind_title(meta: dict) -> str:
+    """What kind of session it is, in words; a kind this release does not know reads as its name, never as nothing."""
+    kind = str(meta.get("kind") or "")
+    return KIND_TITLES.get(kind) or kind.replace("_", " ") or "labelling session"
 AI_VIEWS = ("full", "positions", "none")
 RULES = {"uncertain": "where detection is unsure (probability 0.3–0.7)", "disagree": "where people disagree with each other or with detection",
          "second": "objects one other person has labelled", "random": "any candidate",

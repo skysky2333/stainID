@@ -4,7 +4,7 @@ import type { AiView, AreasOverview, ClassCount, LabelsOverview, Labeller, Refer
 import { api, apiUrl, appPath, enc } from '../api'
 import { Empty, ErrorNote, HelpBox, Loaded, Modal, PageHead, Progress, fmt, timeAgo, withError } from '../components'
 import { useFetch } from '../hooks'
-import { AI_VIEW_TEXT, ConfirmDialog, CopyButton, DetectionLine, KIND_TEXT, TOOL_TEXT, objectsOf, percent } from '../labelling'
+import { AI_VIEW_TEXT, ConfirmDialog, CopyButton, DetectionLine, TOOL_TEXT, kindText, objectsOf, percent } from '../labelling'
 import { SessionAccessCard } from '../labels/access'
 import { SessionLabelsView } from '../labels/examine'
 import { FIELD_TEXT, FieldChoice, SessionFields } from '../labels/fields'
@@ -88,7 +88,7 @@ export default function Labels() {
 /* ---------- sessions ---------- */
 
 /** The annotation rounds ("Fix the field", "Mark bad areas"; old "Check detection's calls" ones as history), shown before the older kinds. */
-const isRound = (s: SessionInfo) => !!s.round || s.kind === 'areas'
+const isRound = (s: SessionInfo) => !!s.round || s.kind === 'areas' || !!s.label_set  // AI review rounds (read-only label sets) with them
 
 function Sessions({ sessions, reference, linkFor, onChanged, onNew }: {
   sessions: SessionInfo[]; reference: ReferenceLabels | null; linkFor: (name: string) => string; onChanged: () => void; onNew: () => void
@@ -98,7 +98,7 @@ function Sessions({ sessions, reference, linkFor, onChanged, onNew }: {
     <section className="card labels-section">
       <h2>Labelling sessions</h2>
       {ordered.length || reference ? <div className="session-list">
-        {ordered.filter((s) => isRound(s)).map((s) => <SessionRow key={s.name} s={s} link={linkFor(s.name)} onChanged={onChanged} />)}
+        {ordered.filter((s) => isRound(s)).map((s) => s.label_set ? <AiReviewRow key={s.name} s={s} /> : <SessionRow key={s.name} s={s} link={linkFor(s.name)} onChanged={onChanged} />)}
         {ordered.some((s) => !isRound(s)) && (ordered.some((s) => isRound(s))
           ? <details className="advanced older-sessions">
             <summary><span>Older kinds of session</span><span className="muted small"> · {ordered.filter((s) => !isRound(s)).length} (older segmentation checks, whole-field reviews, quick checks)
@@ -172,6 +172,30 @@ function ReferenceRow({ r }: { r: ReferenceLabels }) {
   )
 }
 
+/** An AI review round (`review.ai_ingest`): read-only labels by AI reviewer agents, shown like the AI reference labels
+ *  (what was labelled, by whom, how often the reviewers agreed); nobody labels in it, so no field progress. */
+function AiReviewRow({ s }: { s: SessionInfo }) {
+  const [examining, setExamining] = useState(false)
+  const a = s.ai_summary
+  return (
+    <div className="session-row reference-row ai-review-row" data-session={s.name}>
+      <div className="session-main">
+        <div className="session-title"><b>{s.title}</b> <span className="badge">read only</span></div>
+        <div className="muted small">{s.stain} · {kindText(s.kind, s.kind_title)}</div>
+        {a ? <>
+          <div className="small secondary">{a.objects.toLocaleString()} objects labelled on {a.fields.toLocaleString()} fields
+            {Object.keys(a.stains).length > 1 ? ` · ${Object.entries(a.stains).map(([st, n]) => `${st} ${n.toLocaleString()}`).join(' · ')}` : ''}</div>
+          {a.reviewers.length > 0 && <div className="small muted">{a.reviewers.map((r) => `${r.person}: ${r.objects.toLocaleString()} objects`).join(' · ')}</div>}
+          {a.agreement && <div className="small muted">Reviewers agreed on {a.agreement.agreed.toLocaleString()} of {a.agreement.objects.toLocaleString()} objects both labelled
+            {' '}({percent(a.agreement.agreed / a.agreement.objects)}).</div>}
+        </> : <div className="small muted">No labels yet.</div>}
+      </div>
+      <div className="session-actions"><button className="btn small" onClick={() => setExamining(true)}>Look at the labels</button></div>
+      {examining && <SessionLabelsView name={s.name} title={s.title} onClose={() => setExamining(false)} />}
+    </div>
+  )
+}
+
 function sessionState(s: SessionInfo): { text: string; className: string } {
   if (s.round_progress && s.round_progress.total > 0 && s.round_progress.decided >= s.round_progress.total) return { text: 'Done', className: 'status-done' }
   if (!s.round && s.kind !== 'queue' && s.fields && (s.fields_covered ?? 0) >= s.fields) return { text: 'Done', className: 'status-done' }
@@ -197,7 +221,7 @@ function SessionRow({ s, link, onChanged }: { s: SessionInfo; link: string; onCh
           {s.labelling_now > 0 && <span className="badge status-running"><span className="pulse" />{s.labelling_now} labelling now</span>}
         </div>
         <div className="muted small">{s.kind === 'areas' ? `Every stain · ${AREAS_TITLE}${s.order === 'random' ? ' · random order' : s.order ? ' · likely problems first' : ''}`
-          : `${s.stain} · ${s.round ? `Round ${s.round} · ${ROUND_TITLE[s.round]}` : KIND_TEXT[s.kind]}`}
+          : `${s.stain} · ${s.round ? `Round ${s.round} · ${ROUND_TITLE[s.round]}` : kindText(s.kind, s.kind_title)}`}
           {(s.labels_needed ?? s.per_field) > 1 ? ` · ${s.labels_needed ?? s.per_field} people per ${s.kind === 'queue' ? 'object' : s.kind === 'areas' ? 'core' : 'field'}` : ''}</div>
         <SessionProgress s={s} />
         {s.kind === 'areas' ? <CorePeople progress={s.round_progress} labellers={s.labellers} />

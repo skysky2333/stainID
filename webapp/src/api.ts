@@ -197,8 +197,12 @@ export interface Detection {
 /** Objects people added where detection proposed nothing, and whether each could be measured (so it can train the model). */
 export interface AddedObjects { objects: number; measured: number; could_not_be_measured: number; waiting: number }
 export interface AddedState { x: number; y: number; state: 'proposed' | 'measured' | 'could_not_be_measured' | 'measuring'; reason: string }
+/** The Labels page's card of an AI review round (a read-only label set): objects and fields per stain, per reviewer,
+ *  and how often the reviewers agreed where both labelled the same object. */
+export interface AiReviewSummary { objects: number; fields: number; stains: Record<string, number>; reviewers: { person: string; objects: number }[]
+  agreement: { objects: number; agreed: number } | null; round: number | null }
 export interface SessionInfo {
-  name: string; title: string; stain: string; kind: 'fields' | 'queue' | 'outline' | 'areas'; tools: string[]; ai_view: AiView; per_field: number; rule: string
+  name: string; title: string; stain: string; kind: 'fields' | 'queue' | 'outline' | 'areas' | 'ai_review' | (string & {}); tools: string[]; ai_view: AiView; per_field: number; rule: string
   instructions: string; created: number; open: boolean; people: number; labels: number
   fields?: number; fields_covered?: number; fields_prepared?: number; labellers: Labeller[]; labelling_now: number
   pictures?: QueuePictures  // quick-check queues
@@ -206,11 +210,12 @@ export interface SessionInfo {
   read_only?: boolean; imported?: { dataset: string; rater: string }  // labels imported from a dataset package
   round?: 1 | 2; round_progress?: RoundProgress; labels_needed?: number; level?: number | null; objects?: number  // annotation rounds
   cores?: number | string[]; order?: string; cores_asked?: number; cores_remaining?: number; fields_from_checked_areas?: number  // "Mark bad areas"; round 2
+  kind_title?: string; label_set?: boolean; ai_summary?: AiReviewSummary  // a read-only label set (an AI review round)
 }
 export interface Labeller { person: string; fields_done: number; labels: number; changed: number; confirmed: number; outlines: number; tags: number; last_active: number }
 export interface LabelsOverview { stains: StainOverview[]; sessions: SessionInfo[]; reference: ReferenceLabels | null }
 export interface OpenSession {
-  name: string; title: string; stain: string; kind: 'fields' | 'queue' | 'outline' | 'areas'; open: boolean; instructions: string; fields: number; done_by_me: number; my_labels: number
+  name: string; title: string; stain: string; kind: 'fields' | 'queue' | 'outline' | 'areas' | (string & {}); kind_title?: string; open: boolean; instructions: string; fields: number; done_by_me: number; my_labels: number
   round?: 1 | 2 | 'areas' | null; progress?: RoundProgress; cores?: number  // annotation rounds ("areas": Mark bad areas, by core)
 }
 export interface SessionField { tile_id: string; done_by_me: boolean; annotators_done: number; open_by_others: number; prepared: boolean }

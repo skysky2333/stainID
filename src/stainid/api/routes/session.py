@@ -276,6 +276,17 @@ def tutorial_done(body: TutorialDone, request: Request) -> dict:
         _error(error)
 
 
+def _label_set_only(project: str, name: str) -> bool:
+    from stainid.api import state  # noqa: PLC0415
+    from stainid.labels import sessions  # noqa: PLC0415
+
+    try:
+        with state.use_project(project):
+            return sessions.label_set_only(sessions.meta(state.get_state().project.output("reviews"), name))
+    except Exception:  # noqa: BLE001 - a project or session that cannot be read: as before
+        return False
+
+
 @router.get("/session/sets")
 def my_sets(request: Request, here: str = "") -> list[dict]:
     """The labelling sets in the signed-in person's collection (every project), with their progress; an admin also sees
@@ -295,5 +306,8 @@ def add_set(body: Key, request: Request) -> dict:
         project, name = accounts.join(account.id, body.key, _address(request))
     except accounts.AccountError as error:
         _error(error)
+    if _label_set_only(project, name):  # a key of an AI review round (made before they had none): nobody joins it
+        accounts.remove_member(account.id, project, name)
+        raise HTTPException(409, "this key belongs to a read-only set of AI reviewer labels: nobody labels in it")
     found = [s for s in access_routes.sets_of(account, request) if s["project"] == project and s["name"] == name]
     return found[0] if found else {"project": project, "name": name}

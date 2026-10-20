@@ -469,7 +469,13 @@ vocabulary) and two assignments (halves A and B by field, about 10 % of the obje
 *AI review round N · <stain>* (kind `ai_review`, read-only), each reviewer the account `ai:<name>`: class labels on
 the candidates, an outline judged "ok" confirmed as the app records it, missed objects as added objects, objects of
 both halves kept where the reviewers agree and "unsure" where they do not. Like any session it can be chosen for
-training on the Models page; the annotation pages do not show `ai:` labels.
+training on the Models page; the annotation pages do not show `ai:` labels. It is a read-only label set
+(`sessions.label_set_only`): the Labels page shows it like the AI reference labels (title, stain, *AI review · read
+only*, the objects labelled and on how many fields, each reviewer's objects, how often the reviewers agreed on the
+objects both labelled, from the round's `ingest_report.json`, and *Look at the labels*), with no field progress.
+Nothing prepares its fields, hands them out (*next field*), gives it a join key or puts it in anyone's labelling sets
+or on the Users page. Every session's kind is named by the server (`kind_title`, `sessions.KIND_TITLES`); an unknown
+kind reads as its own name.
 
 ### Outline fixes
 

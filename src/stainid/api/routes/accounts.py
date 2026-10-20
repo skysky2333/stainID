@@ -22,11 +22,18 @@ def _root():
 def _session(name: str) -> str:
     if name not in sessions.names(_root()):
         raise HTTPException(404, f"no labelling session {name}")
+    if sessions.label_set_only(sessions.meta(_root(), name)):
+        raise HTTPException(409, "a read-only set of AI reviewer labels: nobody joins it or labels in it")
     return name
 
 
 def _made(root, name: str) -> None:
-    """Every new session gets its join key at once (`sessions.ON_CREATE`)."""
+    """Every new session gets its join key at once (`sessions.ON_CREATE`); a read-only label set none."""
+    try:
+        if sessions.label_set_only(sessions.meta(root, name)):
+            return
+    except (OSError, ValueError):
+        pass
     accounts.access(state.get_state().id, name)
 
 
@@ -93,7 +100,7 @@ def may_label(request: Request, name: str) -> None:
         raise HTTPException(403, "choose a new password first")
     project = state.get_state().id
     if account.admin:
-        if not accounts.is_member(account.id, project, name):
+        if not accounts.is_member(account.id, project, name) and not sessions.label_set_only(sessions.meta(_root(), name)):  # looking at an AI review round joins nothing
             accounts.add_member(account.id, project, name)
         return
     if not accounts.is_member(account.id, project, name):

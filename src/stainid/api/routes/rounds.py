@@ -195,7 +195,7 @@ def assigned_fields(but: str = "") -> set[str]:
     out: set[str] = set()
     for name in sessions.names(root()):
         meta = sessions.meta(root(), name)
-        if meta.get("open") and name != but:
+        if meta.get("open") and name != but and not sessions.label_set_only(meta):
             out |= set(meta.get("fields", []))
     return out
 

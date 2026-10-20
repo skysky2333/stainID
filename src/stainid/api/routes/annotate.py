@@ -94,6 +94,44 @@ def session_meta(name: str, request: Request) -> dict:
     return meta
 
 
+def labelled_here(meta: dict) -> dict:
+    """A session people label in: not a read-only label set (an AI review round, `sessions.label_set_only`)."""
+    if sessions.label_set_only(meta):
+        raise HTTPException(409, "This is a read-only set of AI reviewer labels: look at them on the Labels page (nobody labels in it)")
+    return meta
+
+
+def ai_review_summary(meta: dict, labels: pd.DataFrame) -> dict:
+    """The Labels page's card of an AI review round (`review.ai_ingest`): the objects labelled and on how many fields,
+    per stain; per reviewer the objects they labelled; and how often the reviewers agreed on the objects both saw (from
+    the round's `ingest_report.json`, when there). No field progress: nobody labels in it."""
+    import json  # noqa: PLC0415
+
+    from stainid.review import ai_batch  # noqa: PLC0415
+
+    mine = labels[(labels.session == meta["name"]) & labels.task.isin(("class", "object"))] if len(labels) else labels
+    if len(mine):
+        where = mine.candidate.where(mine.candidate.notna() & (mine.candidate.astype(str) != ""),
+                                     mine.x.round().astype(str) + ":" + mine.y.round().astype(str)) if "candidate" in mine else mine.x.astype(str)
+        objects = mine.assign(_object=mine.tile_id.astype(str) + "|" + where.astype(str)).drop_duplicates(["stain", "_object"])
+        by_stain = {str(s): int(n) for s, n in objects.stain.value_counts().items()}
+        reviewers = [{"person": str(p), "objects": int(n)} for p, n in mine.groupby("source")["tile_id"].count().sort_index().items()]
+        fields = int(mine.tile_id.nunique())
+    else:
+        objects, by_stain, reviewers, fields = mine, {}, [], 0
+    agreement = None
+    round_ = (meta.get("ai_review") or {}).get("round")
+    if round_ is not None:
+        try:
+            report = json.loads((ai_batch.stain_folder(get_state().project, meta["stain"], int(round_)) / "ingest_report.json").read_text())
+            if report.get("overlap_objects"):
+                agreement = {"objects": int(report["overlap_objects"]), "agreed": int(report.get("overlap_agreed") or 0)}
+        except (OSError, ValueError, TypeError):
+            pass
+    return {"ai_summary": {"objects": int(len(objects)), "fields": fields, "stains": by_stain, "reviewers": reviewers, "agreement": agreement,
+                           "round": round_}}
+
+
 def writable(meta: dict) -> dict:
     """A session people may add labels to: not one of the read-only sessions imported from a dataset package."""
     if meta.get("read_only"):
@@ -159,6 +197,8 @@ def session_progress(meta: dict, labels: pd.DataFrame) -> dict:
                 "labelling_now": sum(time.time() - p["last_active"] < BUSY_SECONDS or p["person"] in now for p in people)}
     if meta["kind"] == "areas":
         return progress | {"round_progress": _areas().progress(meta, labels), "cores": len(meta.get("cores") or [])}
+    if sessions.label_set_only(meta):  # an AI review round: its labels, no fields to prepare or finish
+        return progress | ai_review_summary(meta, labels)
     if rounds.is_round(meta):
         progress |= {"round_progress": _rounds().progress(meta)}
     if rounds.is_round(meta) and meta["kind"] == "queue":
@@ -293,7 +333,8 @@ def _labels_overview() -> dict:
     listed = []
     for name in sessions.names(root()):
         meta = sessions.meta(root(), name)
-        listed.append({**{k: v for k, v in meta.items() if k != "fields"}, **session_progress(meta, labels), "link": annotate_path(name)})
+        listed.append({**{k: v for k, v in meta.items() if k != "fields"}, **session_progress(meta, labels), "link": annotate_path(name),
+                       "kind_title": sessions.kind_title(meta), "label_set": sessions.label_set_only(meta)})
     reference = labels[sessions.session_of(labels) == sessions.REFERENCE]
     objects = reference[reference.task == "class"]
     summary = {"name": sessions.REFERENCE, "title": sessions.REFERENCE_TITLE, "labels": int(len(objects)),
@@ -593,7 +634,7 @@ def set_open(name: str, body: Opening, request: Request) -> dict:
 @router.post("/labels/sessions/{name}/fields", dependencies=admin)
 def add_fields(name: str, body: MoreFields, request: Request) -> dict:
     """More fields for a session: these exact ones (`tile_ids`), or `n` that stainID picks."""
-    meta = session_meta(name, request)
+    meta = labelled_here(session_meta(name, request))
     if meta["kind"] == outline.KIND:
         from stainid.api.routes.outline import RETIRED
 
@@ -796,14 +837,14 @@ def open_sessions(request: Request, person: str | None, only: set[str] | None = 
         if only is not None and name not in only:
             continue
         meta = sessions.meta(root(), name)
-        if not meta["open"] and not is_admin(request):
+        if sessions.label_set_only(meta) or (not meta["open"] and not is_admin(request)):  # nobody labels in an AI review round
             continue
         reviewed = finished_fields(meta, labels)
         done = sum(person in reviewed.get(t, set()) for t in meta["fields"]) if person else 0
         extra = {"round": rounds.round_of(meta), "progress": _rounds().progress(meta)} if rounds.is_round(meta) else {"round": None}
         if meta["kind"] == "areas":
             extra = {"round": "areas", "progress": _areas().progress(meta, labels), "cores": len(meta.get("cores") or [])}
-        out.append({**{k: meta.get(k) for k in ("name", "title", "stain", "kind", "open", "instructions")}, **extra, "fields": len(meta["fields"]), "done_by_me": done,
+        out.append({**{k: meta.get(k) for k in ("name", "title", "stain", "kind", "open", "instructions")}, **extra, "kind_title": sessions.kind_title(meta), "fields": len(meta["fields"]), "done_by_me": done,
                     "my_labels": int(((labels.session == name) & (labels.source == person) & labels.task.isin(("class", "object"))).sum()),
                     "link": annotate_path(name)})
     return out
@@ -811,7 +852,7 @@ def open_sessions(request: Request, person: str | None, only: set[str] | None = 
 
 @router.get("/annotate/{name}")
 def session_detail(name: str, request: Request, person: str | None = Depends(viewer)) -> dict:
-    meta = session_meta(name, request)
+    meta = labelled_here(session_meta(name, request))
     if meta["kind"] == "areas":
         return {"meta": {**meta, **_areas().detail(meta, person)}, "fields": [], "annotator": person}
     labels = store.current(root())
@@ -845,7 +886,7 @@ def next_item(name: str, request: Request, person: str = Depends(annotator), cou
     page shows the first and loads the others' pictures meanwhile), held for this person for a while so others get
     other objects; with how many the rule leaves them and how many of the queue's pictures are made. An annotation
     round: the next field for this person; `skip` puts the field they are on aside (an old round-1 session: 410)."""
-    meta = session_meta(name, request)
+    meta = labelled_here(session_meta(name, request))
     if rounds.is_round(meta):
         if meta["kind"] == "queue":
             raise HTTPException(410, _rounds().NO_ROUND_ONE)

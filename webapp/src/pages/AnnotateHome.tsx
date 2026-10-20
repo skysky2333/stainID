@@ -4,7 +4,7 @@ import type { MySet } from '../api'
 import { api } from '../api'
 import { Empty, ErrorNote, Loaded, PageHead, Progress, withError } from '../components'
 import { useFetch } from '../hooks'
-import { KIND_TEXT } from '../labelling'
+import { kindText } from '../labelling'
 import { AREAS_TEXT, AREAS_TITLE } from '../labels/markareas'
 import { ROUND_TEXT, ROUND_TITLE } from '../labels/rounds'
 import { ChoosePassword, useSession } from '../session'
@@ -107,7 +107,7 @@ function SessionCard({ s }: { s: MySet }) {
     <div className="card annotate-session">
       <h2 style={{ margin: 0 }}>{s.title}</h2>
       <p className="muted small" style={{ margin: '4px 0 10px' }}>{s.round === 'areas' ? `Every stain · ${AREAS_TITLE}`
-        : `${s.stain} · ${s.round ? ROUND_TITLE[s.round] : KIND_TEXT[s.kind as keyof typeof KIND_TEXT]}`}</p>
+        : `${s.stain} · ${s.round ? ROUND_TITLE[s.round] : kindText(s.kind, s.kind_title)}`}</p>
       {s.instructions && <p className="small secondary">{s.instructions}</p>}
       {progress ? <>
         <Progress done={progress.decided} total={progress.total} />

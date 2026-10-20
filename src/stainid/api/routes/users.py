@@ -72,6 +72,8 @@ def _sets() -> list[dict]:
                 meta = sessions.meta(reviews, session_name)
             except (OSError, ValueError):
                 meta = {}
+            if sessions.label_set_only(meta):  # an AI review round: nobody is a member of it
+                continue
             out.append({"project": project_id, "project_name": name, "session": session_name, "title": meta.get("title") or session_name,
                         "stain": meta.get("stain", ""), "kind": meta.get("kind", "")})
     return out
