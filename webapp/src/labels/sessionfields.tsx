@@ -68,8 +68,6 @@ function Fold({ className, summary, open: initial, children }: { className: stri
     </details>
   )
 }
-/** A tile's width on the core map (px): big enough to see and click on a laptop; a core of 8 tiles fills a row. */
-const TILE_PX = 128
 /** Above this many fields the TMAs start folded (open one to see its cores). */
 const FOLDED_FROM = 300
 
@@ -153,9 +151,8 @@ function CoreMap({ name, layout, list, needed, me }: { name: string; layout: Lay
   }
   if (!placed) return <div className="core-row">{list.map((n) => tile(n))}</div>
   const { x, y, width, height } = layout
-  const tileWidth = list[0].f.box![2] || 2048
-  return (  // every core at one scale: a tile about TILE_PX across (narrower screens: the core shrinks to fit)
-    <div className="core-map" style={{ aspectRatio: `${width} / ${height}`, width: `${Math.round((width / tileWidth) * TILE_PX)}px` }}>
+  return (  // as wide as its column: three cores side by side fill the width (CSS), so the tiles' size follows the window
+    <div className="core-map" style={{ aspectRatio: `${width} / ${height}` }}>
       {layout.others.map(([ox, oy, w, h], k) => <span key={k} className="core-tile-other" aria-hidden="true"
         style={{ left: pct(ox - x, width), top: pct(oy - y, height), width: pct(w, width), height: pct(h, height) }} />)}
       {list.map((n) => { const [bx, by, w, h] = n.f.box!; return tile(n, { left: pct(bx - x, width), top: pct(by - y, height), width: pct(w, width), height: pct(h, height) }) })}

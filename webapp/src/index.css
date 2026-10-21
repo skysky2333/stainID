@@ -1230,7 +1230,7 @@ details.side-details.compact > summary { font-weight: 500; }
 :root { --tile-todo: #8f8d86; --tile-progress: #2a78d6; --tile-done: #1f8a4c; --tile-mine: #8a4fd8; --tile-preparing: #b9b7af; --tile-ai: #d9730d; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --tile-todo: #a5a39b; --tile-progress: #5aa0f0; --tile-done: #3fb871; --tile-mine: #b08cf0; --tile-preparing: #6c6b66; } }
 :root[data-theme="dark"] { --tile-todo: #a5a39b; --tile-progress: #5aa0f0; --tile-done: #3fb871; --tile-mine: #b08cf0; --tile-preparing: #6c6b66; }
-.session-fields { display: grid; gap: 12px; margin-top: 16px; }
+.session-fields { display: grid; gap: 12px; margin-top: 16px; container: fieldmap / inline-size; }
 .session-fields-bar { gap: 8px 16px; flex-wrap: wrap; }
 .tile-legend { list-style: none; margin: 0; padding: 0; gap: 4px 14px; flex-wrap: wrap; color: var(--text-secondary); }
 .tile-legend li { display: inline-flex; align-items: center; gap: 6px; }
@@ -1240,11 +1240,13 @@ details.side-details.compact > summary { font-weight: 500; }
 .annotate-tma > summary::marker, .core-map-card > summary::marker { content: ''; }
 .annotate-tma > summary::before, .core-map-card > summary::before { content: '▸'; color: var(--text-muted); width: 10px; display: inline-block; transition: transform .12s; }
 .annotate-tma[open] > summary::before, .core-map-card[open] > summary::before { transform: rotate(90deg); }
-.core-maps { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 8px; align-items: flex-start; }
-.core-map-card { padding: 10px 12px; display: grid; gap: 8px; flex: 0 1 auto; max-width: 100%; min-width: min(100%, 320px); box-sizing: border-box; }
+.core-maps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 8px; align-items: start; }
+@container fieldmap (max-width: 900px) { .core-maps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container fieldmap (max-width: 560px) { .core-maps { grid-template-columns: minmax(0, 1fr); } }
+.core-map-card { padding: 10px 12px; display: grid; gap: 8px; min-width: 0; box-sizing: border-box; }
 .core-map-card > summary { font-size: .9rem; }
 .core-map-card[open] > summary { margin-bottom: 8px; }
-.core-map { position: relative; max-width: 100%; }
+.core-map { position: relative; width: 100%; }
 .core-tile, .core-tile-other { position: absolute; box-sizing: border-box; border-radius: 2px; }
 .core-tile-other { background: var(--surface-0); border: 1px solid var(--border); opacity: .55; }
 .core-tile { display: block; overflow: hidden; border: 2.5px solid var(--tile-todo); background: var(--surface-0); }

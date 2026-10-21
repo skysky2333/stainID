@@ -393,8 +393,8 @@ open sessions, and on the CPU the field someone has open and their next ones. Th
 
 **The session's page** lists its fields by TMA (its name, e.g. LIP-3), then core; each level folds open and shut
 (a session of more than 300 fields starts with its TMAs folded, and a folded TMA or core loads no pictures).
-Each core is drawn as its own tiles, each at its place in the core and at one scale (a tile about 128 px across, a
-core of 8 tiles filling a row on a laptop, smaller to fit a phone): the session's fields as pictures, the
+Each core is drawn as its own tiles, each at its place in the core, three cores side by side filling the width (two,
+then one, in a narrower window; the tiles' size follows the window): the session's fields as pictures, the
 core's other tiles faint and not clickable, so the core's shape reads. A field's state is its outline colour (a
 one-line legend: To do, In progress, Finished by you, Done, Being prepared; in progress as on the admin's page:
 someone has labels on it or has it open, fewer people than needed finished it). Pointing at a tile tells its state,
