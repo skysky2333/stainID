@@ -393,8 +393,8 @@ open sessions, and on the CPU the field someone has open and their next ones. Th
 
 **The session's page** lists its fields by TMA (its name, e.g. LIP-3), then core; each level folds open and shut
 (a session of more than 300 fields starts with its TMAs folded, and a folded TMA or core loads no pictures).
-Each core is drawn as its own tiles, each at its place in the core, three cores side by side filling the width (two,
-then one, in a narrower window; the tiles' size follows the window): the session's fields as pictures, the
+Each core is drawn as its own tiles, each at its place in the core, four cores side by side filling the width (three,
+two, then one, in a narrower list; the tiles' size follows the window): the session's fields as pictures, the
 core's other tiles as their own pictures, dimmed and not selectable (a light grey cell where a tile has no picture), so the whole core shows. A field's state is its outline colour (a
 one-line legend: To do, In progress, Finished by you, Done, Being prepared; in progress as on the admin's page:
 someone has labels on it or has it open, fewer people than needed finished it). Pointing at a tile tells its state,
@@ -403,9 +403,12 @@ a click opens it. Progress shows at every level, one short line each, also while
 the whole session (TMAs, cores and fields done of all, in progress, to do, finished by you), each TMA its cores and
 fields done of all, in progress and finished by you, each core its fields done of all, in progress, to do and finished
 by you, with one state badge. A core is done when all its session fields are, a TMA when all its cores are.
-*Natural order* / *By confidence* (remembered in this browser per person): by confidence, the cores of each TMA come
-least confident first: a field weighs its objects by how close their probability sits to the acceptance threshold
-(1 at it, 0 from 0.2 away; `GET /api/annotate/{name}/confidence`), a core adds up its fields; TMAs keep their order.
+*Natural order* / *By confidence* (remembered in this browser per person): by confidence, the TMAs and core maps give
+way to one flat list of every field's tile, wrapping across the width, least confident first (the same outlines, AI
+dot, lock and hover, which also names the TMA and core; the progress line stays on top). A field weighs its objects
+by how close their probability sits to the acceptance threshold (1 at it, 0 from 0.2 away;
+`GET /api/annotate/{name}/confidence`). The list is drawn 240 tiles at a time as it is scrolled, the pictures
+loading as they come into view.
 The scores come straight from the stage-4 candidate store, one read per core of only the probability and threshold
 columns, whether or not a field is prepared (scoring prepares nothing); they are worked out in the background when
 the session's page opens and kept until a core's store file changes (4,184 fields: under 2 s the first time, at

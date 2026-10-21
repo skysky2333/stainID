@@ -1,7 +1,7 @@
 /* The fields of a session for the person labelling: by TMA, then core, each core drawn as its own tiles (each tile at
    its place in the core, the core's tiles outside the session faint), a tile's state by its outline colour, the full
    facts on hover, a click opens the field. "By confidence" puts the cores detection is least sure of first. */
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import type { FieldState, SessionDetail } from '../api'
@@ -28,11 +28,13 @@ const day = (t: number) => new Date(t * 1000).toLocaleDateString(undefined, { ye
 
 /** The hover text of a tile: its state, who is on it or has it open now, who finished it and when, how many of the
  *  people asked are done. */
-function hoverText(f: Field, i: number, needed: number, me: string | null): string {
+function hoverText(f: Field, i: number, needed: number, me: string | null, sure?: { near: number; objects: number }): string {
   const done = f.done_by ?? []
   const on = [...new Set([...(f.working ?? []), ...(f.open_by ?? [])])].filter((p) => !done.includes(p))
   return [
     `Field ${i + 1} · ${LOOK_TEXT[lookOf(f)]}`,
+    `${f.tma_name || f.tma || 'TMA ?'} · core ${f.core || '?'}`,
+    sure ? `${sure.near.toFixed(1)} of ${sure.objects} objects near the acceptance threshold` : '',
     on.length ? `Working on it now: ${who(on, me)}` : '',
     done.length ? `Finished by ${done.map((p) => `${p === me ? 'you' : p}${f.done_at?.[p] ? ` (${day(f.done_at[p])})` : ''}`).join(', ')}` : '',
     `${Math.min(done.length, needed)} of ${needed} ${needed === 1 ? 'person' : 'people'} done`,
@@ -109,10 +111,11 @@ export function SessionFieldMap({ detail }: { detail: SessionDetail }) {
     })
     return [...byTma].sort(([a], [b]) => natural(a, b)).map(([tma, cores]) => ({ tma, cores: [...cores.values()].sort((a, b) => natural(a.name, b.name)) }))
   }, [fields])
-  const near = (core: Core) => core.list.reduce((sum, { f }) => sum + (confidence.data?.[f.tile_id]?.near ?? 0), 0)
-  const ordered = order === 'confidence' && confidence.data
-    ? tmas.map((t) => ({ ...t, cores: [...t.cores].sort((a, b) => near(b) - near(a) || natural(a.name, b.name)) }))  // least confident first
-    : tmas
+  const ranked = useMemo(() => {  // By confidence: every field of the session, least confident first (then the session's order)
+    if (!confidence.data) return null
+    const sure = confidence.data
+    return fields.map((f, i) => ({ f, i })).sort((a, b) => (sure[b.f.tile_id]?.near ?? 0) - (sure[a.f.tile_id]?.near ?? 0) || a.i - b.i)
+  }, [fields, confidence.data])
   const whole = tally(fields)
   const allCores = tmas.flatMap((t) => t.cores)
   const tmasDone = tmas.filter((t) => t.cores.every((c) => c.list.every(({ f }) => stateOf(f) === 'done'))).length
@@ -128,25 +131,25 @@ export function SessionFieldMap({ detail }: { detail: SessionDetail }) {
           {fields.some((f) => f.ai_reviewed) && <li title="AI review labels exist on the field (not shown while labelling)"><span className="ai-dot in-legend" />AI reviewed</li>}
         </ul>
         <span className="spacer" />
-        <div className="segmented small" role="group" aria-label="Order of the cores">
+        <div className="segmented small" role="group" aria-label="How the fields are shown">
           <button className={`btn small${order === 'natural' ? ' chosen' : ''}`} aria-pressed={order === 'natural'} onClick={() => setOrder('natural')}>Natural order</button>
           <button className={`btn small${order === 'confidence' ? ' chosen' : ''}`} aria-pressed={order === 'confidence'} onClick={() => setOrder('confidence')}
-            title="Within each TMA, the cores detection is least sure of first: those with the most objects close to the acceptance threshold">By confidence</button>
+            title="Every field in one list, the ones detection is least sure of first: those with the most objects close to the acceptance threshold">By confidence</button>
         </div>
       </div>
       {order === 'confidence' && !confidence.data && <p className="small muted" style={{ margin: 0 }}>{confidence.error ? 'The confidence could not be read; the natural order stands.' : 'Weighing detection’s confidence…'}</p>}
-      {ordered.map(({ tma, cores }) => {
+      {order === 'confidence' && ranked ? <RankedTiles name={name} list={ranked} needed={detail.needed ?? 1} me={detail.annotator} sure={confidence.data!} />
+        : tmas.map(({ tma, cores }) => {
         return (
           <Fold key={tma} className="annotate-tma" open={fields.length <= FOLDED_FROM}
             summary={<><b>{tma}</b><span className="small muted">{tmaLine(cores)}</span></>}>
             {() => <div className="core-maps">{cores.map((core) => {
               const list = core.list.map(({ f }) => f)
               const state = coreState(list)
-              const sure = confidence.data && order === 'confidence' ? near(core) : null
               return (
                 <Fold key={core.id} className="core-map-card card" open
                   summary={<><b>Core {core.name}</b><span className={`badge ${BADGE[state]}`}>{LOOK_TEXT[state]}</span>
-                    <span className="small muted">{coreLine(list)}{sure != null ? ` · ${sure.toFixed(1)} near the threshold` : ''}</span></>}>
+                    <span className="small muted">{coreLine(list)}</span></>}>
                   {() => <CoreMap name={name} layout={detail.cores?.[core.id]} list={core.list} needed={detail.needed ?? 1} me={detail.annotator} />}
                 </Fold>
               )
@@ -160,18 +163,49 @@ export function SessionFieldMap({ detail }: { detail: SessionDetail }) {
 
 /** One core as its tiles, each at its place: the session's tiles as pictures outlined in their state's colour (a click
  *  opens the field), the core's other tiles faint. Without a layout (no squares known), the tiles in a row. */
+/** One field's tile: its picture outlined in its state's colour, the AI dot, the facts on hover; a click opens it
+ *  (not while someone else has it open). */
+function Tile({ name, n: { f, i }, needed, me, style, className = '', sure }: {
+  name: string; n: Numbered; needed: number; me: string | null; style?: React.CSSProperties; className?: string; sure?: { near: number; objects: number }
+}) {
+  const look = lookOf(f)
+  const body = <><img src={apiUrl(`/api/annotate/${name}/fields/${enc(f.tile_id)}/thumb.jpg`)} alt="" loading="lazy" decoding="async"
+    onError={(e) => { e.currentTarget.style.visibility = 'hidden' }} />{f.ai_reviewed && <span className="ai-dot" aria-hidden="true" />}</>
+  const taken = takenBy(f, me).length > 0
+  const common = { className: `core-tile look-${look}${className}${taken ? ' taken' : ''}`, style, title: hoverText(f, i, needed, me, sure), 'aria-label': `Field ${i + 1}: ${LOOK_TEXT[look]}` }
+  return f.prepared && !taken ? <Link to={`/annotate/${name}/${enc(f.tile_id)}`} {...common}>{body}</Link> : <span {...common}>{body}</span>
+}
+
+/** Ranked tiles drawn so far, and how many more each time the end of the list comes into view. */
+const RANKED_FIRST = 240
+const RANKED_MORE = 240
+
+/** By confidence: every field of the session in one wrapping list of tiles, least confident first, with no TMA or core
+ *  around them (the hover says where each is from). Drawn a few rows at a time as the list is scrolled, the pictures
+ *  loading as they come into view, so thousands of fields stay quick. */
+function RankedTiles({ name, list, needed, me, sure }: { name: string; list: Numbered[]; needed: number; me: string | null; sure: Record<string, { near: number; objects: number }> }) {
+  const [shown, setShown] = useState(RANKED_FIRST)
+  const end = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const target = end.current
+    if (!target || shown >= list.length) return
+    const seen = new IntersectionObserver((entries) => { if (entries.some((e) => e.isIntersecting)) setShown((n) => Math.min(list.length, n + RANKED_MORE)) },
+      { rootMargin: '600px 0px' })
+    seen.observe(target)
+    return () => seen.disconnect()
+  }, [shown, list.length])
+  return (
+    <div className="ranked">
+      <div className="ranked-tiles">{list.slice(0, shown).map((n) => <Tile key={n.f.tile_id} name={name} n={n} needed={needed} me={me} className=" ranked-tile" sure={sure[n.f.tile_id]} />)}</div>
+      {shown < list.length && <div ref={end} className="small muted ranked-more">{(list.length - shown).toLocaleString()} more fields below…</div>}
+    </div>
+  )
+}
+
 function CoreMap({ name, layout, list, needed, me }: { name: string; layout: Layout | undefined; list: Numbered[]; needed: number; me: string | null }) {
   const placed = layout && list.every(({ f }) => f.box)
   const pct = (v: number, of: number) => `${(100 * v) / of}%`
-  const tile = ({ f, i }: Numbered, style?: React.CSSProperties) => {
-    const look = lookOf(f)
-    const body = <><img src={apiUrl(`/api/annotate/${name}/fields/${enc(f.tile_id)}/thumb.jpg`)} alt="" loading="lazy" decoding="async"
-      onError={(e) => { e.currentTarget.style.visibility = 'hidden' }} />{f.ai_reviewed && <span className="ai-dot" aria-hidden="true" />}</>
-    const taken = takenBy(f, me).length > 0
-    const common = { className: `core-tile look-${look}${placed ? '' : ' in-row'}${taken ? ' taken' : ''}`, style, title: hoverText(f, i, needed, me), 'aria-label': `Field ${i + 1}: ${LOOK_TEXT[look]}` }
-    return f.prepared && !taken ? <Link key={f.tile_id} to={`/annotate/${name}/${enc(f.tile_id)}`} {...common}>{body}</Link>
-      : <span key={f.tile_id} {...common}>{body}</span>
-  }
+  const tile = (n: Numbered, style?: React.CSSProperties) => <Tile key={n.f.tile_id} name={name} n={n} needed={needed} me={me} style={style} className={placed ? '' : ' in-row'} />
   if (!placed) return <div className="core-row">{list.map((n) => tile(n))}</div>
   const { x, y, width, height } = layout
   return (  // as wide as its column: three cores side by side fill the width (CSS), so the tiles' size follows the window
