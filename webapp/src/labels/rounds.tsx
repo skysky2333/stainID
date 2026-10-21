@@ -118,6 +118,7 @@ export function RoundProgressLine({ progress, me }: { progress: RoundProgress | 
 export const draftKey = (person: string | null | undefined, session: string, tile: string) => `stainid.draft.${person ?? ''}.${session}.${tile}`
 
 export function readDraft<T>(key: string): T | null {
+  if (!key) return null  // no key: nothing kept (the tutorial's practice starts afresh, as its coach does)
   try {
     const raw = localStorage.getItem(key)
     return raw ? (JSON.parse(raw) as T) : null
@@ -128,6 +129,7 @@ export function readDraft<T>(key: string): T | null {
 
 /** Keeps (or with null, forgets) a draft; never sent anywhere. */
 export function writeDraft(key: string, value: unknown) {
+  if (!key) return
   try {
     if (value == null) localStorage.removeItem(key)
     else localStorage.setItem(key, JSON.stringify(value))

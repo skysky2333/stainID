@@ -176,9 +176,8 @@ export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, on
 
   return (
     <div className={`card${fit ? ' viewer-card-fit' : ''}`}>
-      <div className="row" style={{ marginBottom: 10 }}>
-        {title}
-        <span className="spacer" />
+      <div className="row viewer-head" style={{ marginBottom: 10 }}>  {/* one line always: what it says never moves or resizes the picture */}
+        <div className="viewer-title">{title}</div>
         <button className="btn small" onClick={() => zoomBy(1 / 1.5)}>−</button>
         <span className="small muted">{zoom.toFixed(1)}×</span>
         <button className="btn small" onClick={() => zoomBy(1.5)}>+</button>

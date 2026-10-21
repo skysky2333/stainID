@@ -1339,6 +1339,12 @@ details.side-details.compact > summary { font-weight: 500; }
 .threshold-mark { position: absolute; top: -3px; width: 2px; height: 22px; margin-left: -1px; background: var(--warning); border-radius: 1px; pointer-events: none; }
 .lock-icon { color: var(--text-muted); flex: none; }
 .threshold-preview .threshold-slider { margin-top: 6px; }
+/* the picture's header: one line, whatever badges come and go (a second line would push the picture down and shrink it) */
+.viewer-head { flex-wrap: nowrap; }
+.viewer-title { flex: 1 1 auto; min-width: 0; overflow: hidden; }
+.viewer-title > .row { flex-wrap: nowrap; white-space: nowrap; min-width: 0; }
+.viewer-title > .row > * { flex-shrink: 0; }
+.viewer-title > .row > :first-child { flex-shrink: 1; min-width: 4em; overflow: hidden; text-overflow: ellipsis; }
 /* the Users page */
 .users-set { display: inline-block; padding: 1px 6px; margin: 1px 4px 1px 0; border: 1px solid var(--border); border-radius: 8px; white-space: nowrap; }
 .users-manage { padding: 6px 4px 10px; }

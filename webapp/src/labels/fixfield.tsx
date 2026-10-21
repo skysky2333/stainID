@@ -256,7 +256,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   const name = meta.name
   const { vocabulary, keys, subtypes: typesAsked } = meta
   const unsure = unsureClass(vocabulary)
-  const draftAt = draftKey(detail.annotator, name, tile)
+  const draftAt = (meta as { practice?: boolean }).practice ? '' : draftKey(detail.annotator, name, tile)  // the practice keeps no draft: a reload starts it afresh with the coach
   const [saved, setSaved] = useState<Record<string, Mine>>(() => Object.fromEntries(field.mine.map((m) => [m.id, m])))  // as the server has them
   const [changes, setChanges] = useState<Record<string, Change>>(() => readDraft<{ changes: Record<string, Change> }>(draftAt)?.changes ?? {})  // not saved yet
   // step 1, the acceptance threshold: where the objects start (fieldStart.ts); locked before the first edit
@@ -303,6 +303,9 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   const [precise, setPrecise] = useState<Precise | null>(null)
   const [hidden, setHidden] = useState(false)  // Space: nothing drawn over the picture, for a clean look at the tissue
   const [dragging, setDragging] = useState<number | null>(null)
+  // precise editing, a dot being dragged: press on it, move, let go anywhere (the dot holds the pointer: `setPointerCapture`)
+  const dragRef = useRef<{ index: number; pointer: number; before: number[][]; target: Element } | null>(null)
+  const dragEndedAt = useRef(0)  // the click a drag's release makes is not a click on the picture
   const [focus, setFocus] = useState<{ x: number; y: number; key: number; back?: boolean } | null>(null)  // where precise editing zooms in (and back)
   const [draft, setDraft] = useState<number[][]>([])  // drawing a missed object by hand (when one click cannot outline it)
   const [byHand, setByHand] = useState(false)  // the next click on empty tissue starts an outline drawn by hand
@@ -653,6 +656,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
       if (draft.length >= 3) closeDraft()
     },
     onEscape: () => {
+      if (dragRef.current) { endDrag(true); return }  // during a drag: only that drag is undone, the editing goes on
       if (threading) { setThreading(false); return }  // the thread layer goes with the mode
       if (split) { setSplit(null); return }  // the preview goes; a second Esc leaves split mode
       if (mode) { leaveMode(); return }
@@ -901,6 +905,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
       return
     }
     if (precise) {  // a click adds this spot, Shift+click leaves it out; beyond the object's neighbourhood: done
+      if (dragRef.current || performance.now() - dragEndedAt.current < 300) return  // the end of a drag, wherever it is let go
       const n = neighbourhood(precise.points, 24 * p.unit)
       if (p.x < n.x || p.x > n.x + n.w || p.y < n.y || p.y > n.y + n.h) { tell('precise-out'); finishPrecise(); return }
       if (!precise.busy && sam) { tell('precise-spot'); void refine([...precise.clicks, [p.x, p.y, event.shiftKey ? 0 : 1]]) }
@@ -925,24 +930,59 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     }
     setCursor([p.x, p.y])
     if (mode && stroke) { setStroke([...stroke, [p.x, p.y]]); return }
-    if (dragging !== null && precise) { setPrecise({ ...precise, points: precise.points.map((q, i) => (i === dragging ? [p.x, p.y] : q)) }); return }
+    if (dragRef.current) return  // the dot follows the pointer itself (`dragMove`)
     if (!precise && !draft.length) {
       const now = hit(p)?.key ?? null
       if (now && now !== hovered) tell('hover')
       setHovered(now)
     }
   }
-  useEffect(() => {
+  /** The end of a dot's drag: let go anywhere (inside or beyond the frame, beyond the picture), the pointer lost, the
+   *  window left. It never ends precise editing. With `cancel` (Esc) the dot goes back to where it was. */
+  const endDrag = useCallback((cancel = false) => {
+    const d = dragRef.current
+    if (!d) return
+    dragRef.current = null
+    dragEndedAt.current = performance.now()
+    try { if (d.target.hasPointerCapture(d.pointer)) d.target.releasePointerCapture(d.pointer) } catch { /* gone already */ }
+    setDragging(null)
+    if (cancel) setPrecise((p) => (p ? { ...p, points: d.before, history: p.history.slice(0, -1) } : p))
+  }, [])
+  useEffect(() => {  // a backstop: a release the dot does not hear (another window, a lost capture) still ends the drag
     if (dragging === null) return
-    const up = () => setDragging(null)
-    window.addEventListener('mouseup', up)
-    return () => window.removeEventListener('mouseup', up)
-  }, [dragging])
-  const startDrag = (i: number) => {
-    if (!precise) return
+    const up = () => endDrag()
+    const away = () => endDrag()
+    window.addEventListener('pointerup', up, true)
+    window.addEventListener('pointercancel', up, true)
+    window.addEventListener('mouseup', up, true)
+    window.addEventListener('blur', away)
+    return () => {
+      window.removeEventListener('pointerup', up, true)
+      window.removeEventListener('pointercancel', up, true)
+      window.removeEventListener('mouseup', up, true)
+      window.removeEventListener('blur', away)
+    }
+  }, [dragging, endDrag])
+  /** A press on a dot: the drag starts (one undo step per drag); the dot holds the pointer until it is let go. */
+  const dragDown = (e: React.PointerEvent<SVGCircleElement>, i: number) => {
+    if (e.button !== 0 || !precise) return
+    e.stopPropagation()
+    e.preventDefault()  // no mousedown for the picture: it neither pans nor counts the release as a click
+    try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* the window's listeners end it then */ }
+    dragRef.current = { index: i, pointer: e.pointerId, before: precise.points, target: e.currentTarget }
     tell('precise-drag')
     setPrecise({ ...precise, history: [...precise.history, { points: precise.points, clicks: precise.clicks }] })
     setDragging(i)
+  }
+  const dragMove = (e: React.PointerEvent<SVGCircleElement>) => {
+    const d = dragRef.current
+    if (!d || e.pointerId !== d.pointer) return
+    e.stopPropagation()
+    const svg = e.currentTarget.ownerSVGElement
+    const matrix = svg?.getScreenCTM()
+    if (!svg || !matrix) return
+    const at = new DOMPoint(e.clientX, e.clientY).matrixTransform(matrix.inverse())  // the picture's px
+    setPrecise((p) => (p ? { ...p, points: p.points.map((q, k) => (k === d.index ? [at.x, at.y] : q)) } : p))
   }
 
   /** Sends these labels (and, with `finish`, finishes the field) in one request: all of them are saved, or none. */
@@ -1132,8 +1172,11 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
                   <polygon points={polygonPoints(precise.points)} fill="#ffffff" fillOpacity={0.12} stroke="#000" strokeOpacity={0.6} strokeWidth={4 * unit} />
                   <polygon points={polygonPoints(precise.points)} fill="none" stroke="#ffffff" strokeWidth={2.2 * unit} />
                   {precise.points.map((p, i) => (
-                    <circle key={i} cx={p[0]} cy={p[1]} r={3.6 * unit} fill="#fff" stroke="#000" strokeWidth={0.8 * unit} style={{ cursor: 'move' }}
-                      onMouseDown={(e) => { if (e.button !== 0) return; e.stopPropagation(); startDrag(i) }} onMouseUp={(e) => e.stopPropagation()} />
+                    <circle key={i} className="precise-dot" cx={p[0]} cy={p[1]} r={(dragging === i ? 4.6 : 3.6) * unit} fill="#fff" stroke="#000" strokeWidth={0.8 * unit}
+                      style={{ cursor: 'move', touchAction: 'none' }} data-dot={i}
+                      onPointerDown={(e) => dragDown(e, i)} onPointerMove={dragMove} onPointerUp={(e) => { e.stopPropagation(); endDrag() }}
+                      onPointerCancel={() => endDrag()} onLostPointerCapture={() => endDrag()}
+                      onMouseDown={(e) => e.stopPropagation()} onMouseUp={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()} />
                   ))}
                   {precise.clicks.map((c, i) => <circle key={`c${i}`} cx={c[0]} cy={c[1]} r={3.8 * unit} fill={c[2] ? PALETTE.markers.spot_added : PALETTE.markers.spot_removed} stroke="#000" strokeWidth={unit} />)}
                 </>}
