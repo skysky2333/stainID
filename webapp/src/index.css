@@ -1232,6 +1232,7 @@ details.side-details.compact > summary { font-weight: 500; }
 :root[data-theme="dark"] { --tile-todo: #a5a39b; --tile-progress: #5aa0f0; --tile-done: #3fb871; --tile-mine: #b08cf0; --tile-preparing: #6c6b66; }
 .session-fields { display: grid; gap: 12px; margin-top: 16px; container: fieldmap / inline-size; }
 .session-fields-bar { gap: 8px 16px; flex-wrap: wrap; }
+.session-progress { margin: 0; }
 .tile-legend { list-style: none; margin: 0; padding: 0; gap: 4px 14px; flex-wrap: wrap; color: var(--text-secondary); }
 .tile-legend li { display: inline-flex; align-items: center; gap: 6px; }
 .tile-swatch { width: 14px; height: 14px; border-radius: 3px; border: 2.5px solid var(--tile-todo); background: var(--surface-1); }

@@ -399,7 +399,10 @@ core's other tiles faint and not clickable, so the core's shape reads. A field's
 one-line legend: To do, In progress, Finished by you, Done, Being prepared; in progress as on the admin's page:
 someone has labels on it or has it open, fewer people than needed finished it). Pointing at a tile tells its state,
 who is working on it or has it open, who finished it and when, and how many of the people asked are done (1 of 2);
-a click opens it. Each TMA and core heading keeps its counts, and a core one state summarised from its fields.
+a click opens it. Progress shows at every level, one short line each, also while folded: the top of the list
+the whole session (TMAs, cores and fields done of all, in progress, to do, finished by you), each TMA its cores and
+fields done of all, in progress and finished by you, each core its fields done of all, in progress, to do and finished
+by you, with one state badge. A core is done when all its session fields are, a TMA when all its cores are.
 *Natural order* / *By confidence* (remembered in this browser per person): by confidence, the cores of each TMA come
 least confident first: a field weighs its objects by how close their probability sits to the acceptance threshold
 (1 at it, 0 from 0.2 away; `GET /api/annotate/{name}/confidence`), a core adds up its fields; TMAs keep their order.

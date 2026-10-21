@@ -49,12 +49,26 @@ function coreState(list: Field[]): FieldState {
   if (states.every((s) => s === 'not_started' || s === 'preparing')) return 'not_started'
   return 'in_progress'
 }
-/** "3 fields · 1 done · 1 in progress · 1 yours" */
-function countText(list: Field[]) {
+/** The progress of some fields: how many are done, in progress and to do, and finished by this person. A core is done
+ *  when all its session fields are; a TMA when all its cores are. */
+function tally(list: Field[]) {
   const n = (s: FieldState) => list.filter((f) => stateOf(f) === s).length
-  const mine = list.filter((f) => f.done_by_me).length
-  return [`${list.length} field${list.length === 1 ? '' : 's'}`, n('done') && `${n('done')} done`, n('in_progress') && `${n('in_progress')} in progress`,
-    mine && `${mine} by you`].filter(Boolean).join(' · ')
+  return { total: list.length, done: n('done'), progress: n('in_progress'), todo: n('not_started') + n('preparing'), mine: list.filter((f) => f.done_by_me).length }
+}
+const coresDone = (cores: Core[]) => cores.filter((c) => c.list.every(({ f }) => stateOf(f) === 'done')).length
+const progressText = (t: ReturnType<typeof tally>, todo = true) => [
+  t.progress && `${t.progress.toLocaleString()} in progress`, todo && t.todo && `${t.todo.toLocaleString()} to do`, t.mine && `${t.mine.toLocaleString()} by you`,
+].filter(Boolean).join(' · ')
+const of = (done: number, total: number, what: string) => `${done.toLocaleString()}/${total.toLocaleString()} ${what}${total === 1 ? '' : 's'}`
+/** A core's line: "3/8 fields done · 1 in progress · 4 to do · 2 by you" */
+function coreLine(list: Field[]) {
+  const t = tally(list)
+  return [`${of(t.done, t.total, 'field')} done`, progressText(t)].filter(Boolean).join(' · ')
+}
+/** A TMA's line: "2/30 cores · 120/900 fields done · 14 in progress · 40 by you" */
+function tmaLine(cores: Core[]) {
+  const t = tally(cores.flatMap((c) => c.list.map(({ f }) => f)))
+  return [of(coresDone(cores), cores.length, 'core'), `${of(t.done, t.total, 'field')} done`, progressText(t, false)].filter(Boolean).join(' · ')
 }
 
 /** A level of the list that folds open and shut; what it holds is only drawn while it is open (a session of thousands
@@ -96,8 +110,15 @@ export function SessionFieldMap({ detail }: { detail: SessionDetail }) {
   const ordered = order === 'confidence' && confidence.data
     ? tmas.map((t) => ({ ...t, cores: [...t.cores].sort((a, b) => near(b) - near(a) || natural(a.name, b.name)) }))  // least confident first
     : tmas
+  const whole = tally(fields)
+  const allCores = tmas.flatMap((t) => t.cores)
+  const tmasDone = tmas.filter((t) => t.cores.every((c) => c.list.every(({ f }) => stateOf(f) === 'done'))).length
   return (
     <div className="session-fields">
+      <p className="session-progress small" aria-label="The session's progress">
+        <b>{of(tmasDone, tmas.length, 'TMA')} · {of(coresDone(allCores), allCores.length, 'core')} · {of(whole.done, whole.total, 'field')} done</b>
+        {progressText(whole) && <span className="muted"> · {progressText(whole)}</span>}
+      </p>
       <div className="row session-fields-bar">
         <ul className="row small tile-legend" aria-label="Tile outlines">
           {LOOK_ORDER.map((look) => <li key={look}><span className={`tile-swatch look-${look}`} />{LOOK_TEXT[look]}</li>)}
@@ -112,10 +133,9 @@ export function SessionFieldMap({ detail }: { detail: SessionDetail }) {
       </div>
       {order === 'confidence' && !confidence.data && <p className="small muted" style={{ margin: 0 }}>{confidence.error ? 'The confidence could not be read; the natural order stands.' : 'Weighing detection’s confidence…'}</p>}
       {ordered.map(({ tma, cores }) => {
-        const all = cores.flatMap((c) => c.list.map(({ f }) => f))
         return (
           <Fold key={tma} className="annotate-tma" open={fields.length <= FOLDED_FROM}
-            summary={<><b>{tma}</b><span className="small muted">{cores.length} core{cores.length === 1 ? '' : 's'} · {countText(all)}</span></>}>
+            summary={<><b>{tma}</b><span className="small muted">{tmaLine(cores)}</span></>}>
             {() => <div className="core-maps">{cores.map((core) => {
               const list = core.list.map(({ f }) => f)
               const state = coreState(list)
@@ -123,7 +143,7 @@ export function SessionFieldMap({ detail }: { detail: SessionDetail }) {
               return (
                 <Fold key={core.id} className="core-map-card card" open
                   summary={<><b>Core {core.name}</b><span className={`badge ${BADGE[state]}`}>{LOOK_TEXT[state]}</span>
-                    <span className="small muted">{countText(list)}{sure != null ? ` · ${sure.toFixed(1)} near the threshold` : ''}</span></>}>
+                    <span className="small muted">{coreLine(list)}{sure != null ? ` · ${sure.toFixed(1)} near the threshold` : ''}</span></>}>
                   {() => <CoreMap name={name} layout={detail.cores?.[core.id]} list={core.list} needed={detail.needed ?? 1} me={detail.annotator} />}
                 </Fold>
               )
