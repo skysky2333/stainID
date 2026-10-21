@@ -107,7 +107,7 @@ def test_labelling_fields_come_from_full_whole_core_tiles_and_old_fields_stay_kn
              {**base, "tile_id": "C_AT8_W0002", "x_px": 4096, "y_px": 0, "width_px": 700, "height_px": 2048, "preview_tissue_fraction": 1.0},
              {**base, "tile_id": "C_AT8_W0100", "x_px": 0, "y_px": 2048, "width_px": 2048, "height_px": 2048, "preview_tissue_fraction": 0.6}]
     write_csv(project.analysis_tiles(), whole, list(whole[0]))
-    assert list(labelling_tiles(project).tile_id) == ["C_AT8_S01", "C_AT8_W0100"]  # full size, at least half tissue
+    assert list(labelling_tiles(project).tile_id) == ["C_AT8_S01", "C_AT8_W0001", "C_AT8_W0100"]  # every full-size square, whatever its tissue
     old = [{**base, "tile_id": "C_AT8_S01", "x_px": 0, "y_px": 0, "width_px": 2048, "height_px": 2048},
            {**base, "tile_id": "C_AT8_S02", "x_px": 9000, "y_px": 0, "width_px": 2048, "height_px": 2048}]
     write_csv(project.input("tile_manifest"), old, list(old[0]))  # an older project's sampled fields, named by its labels
