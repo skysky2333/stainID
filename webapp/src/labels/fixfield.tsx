@@ -26,7 +26,7 @@ import type { ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import type { AddedState, FieldAreas, Label, PeopleAreas, RoundCheck, RoundDetail, RoundField, RoundObject, RoundProgress, RoundSamOptions, RoundSaved, SessionDetail } from '../api'
 import { api, apiUrl, enc, pendingText } from '../api'
-import { ErrorNote, Loading, fmt } from '../components'
+import { ErrorNote, Loading, Modal, fmt } from '../components'
 import { PALETTE } from '../palette'
 import { useFetch, useStored } from '../hooks'
 import type { ImagePoint } from '../viewer'
@@ -1027,9 +1027,9 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     }
   }
   /** Save (stays on the field) or, with `finish`, Save and continue: the field is finished and the next one opens. */
-  const saveAll = async (finish: boolean) => {
+  const saveAll = async (finish: boolean, extra: Rec[] = []) => {
     if (saving || (!finish && !unsaved)) return
-    const marks = Object.values(changes).flatMap((c) => (c.mark ? [c.mark] : []))
+    const marks = [...Object.values(changes).flatMap((c) => (c.mark ? [c.mark] : [])), ...extra]
       .sort((a, b) => (SEND_ORDER[String(a.task)] ?? 2) - (SEND_ORDER[String(b.task)] ?? 2))
     const painted = brush.dirty
     if (painted) marks.push({ task: 'exclude', pngs: brush.pngs(), scale: BRUSH_SCALE })  // added to and taken out of each type's area
@@ -1058,6 +1058,21 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     writeDraft(draftAt, null)
     discarding.current = true
     navigate(`/annotate/${name}`)
+  }
+  /** "Mark whole field as bad…": the field's whole square as a bad area of one type, in the same store as painted
+   *  areas (so it shows and counts wherever they do), then the field is finished as by Save and continue. */
+  const [markingBad, setMarkingBad] = useState(false)
+  const [badReason, setBadReason] = useState(EXCLUDE_TYPES[0].key)
+  const wholeBad = Object.values(saved).find((m) => m.task === 'exclude' && m.meta?.whole_field)
+  const markBad = async () => {
+    setMarkingBad(false)
+    await saveAll(true, [{ task: 'exclude', meta: { whole_field: true, reason: badReason } }])
+  }
+  const unmarkBad = async () => {
+    if (await send([{ task: 'exclude', deleted: true, meta: { whole_field: true, reason: wholeBad?.meta?.reason ?? null } }], false)) {
+      resetAfter.current = areas.data ?? null
+      areas.reload()
+    }
   }
   const reopen = async () => { if (await send([{ task: 'done', deleted: true }], false)) reload() }
   const done = !!saved[`done:${tile}`]
@@ -1118,6 +1133,21 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
       </div>
       {meta.instructions && <div className="instructions">{meta.instructions}</div>}
       <ErrorNote error={error} />
+      {wholeBad && <div className="found found-warn small whole-bad" role="status">You marked this whole field as bad:
+        {' '}<b>{EXCLUDE_TYPES.find((t) => t.key === wholeBad.meta?.reason)?.name ?? 'bad'}</b>. It is left out of training and scoring.
+        {' '}<button className="link-btn small" onClick={() => void unmarkBad()} disabled={busy}>Unmark</button></div>}
+      {markingBad && <Modal title="Mark the whole field as bad" onClose={() => setMarkingBad(false)}>
+        <p className="secondary small" style={{ marginTop: 0 }}>The whole field becomes a bad area: objects in it are left out of training and
+          scoring, as for areas you paint. The field then counts as finished by you and the next one opens.</p>
+        <div className="whole-bad-reasons" role="radiogroup" aria-label="Why the field is bad">
+          {EXCLUDE_TYPES.map((t) => <label key={t.key} className="row small"><input type="radio" name="whole-bad" checked={badReason === t.key}
+            onChange={() => setBadReason(t.key)} /><span className="swatch" style={{ background: t.colour }} />{t.name}</label>)}
+        </div>
+        <div className="row" style={{ marginTop: 12, justifyContent: 'flex-end' }}>
+          <button className="btn" onClick={() => setMarkingBad(false)}>Cancel</button>
+          <button className="btn primary" onClick={() => void markBad()} disabled={busy}>Mark bad and continue →</button>
+        </div>
+      </Modal>}
       {restored > 0 && <div className="found found-warn small round-restored" role="status">{changesText(restored)} you had not saved came back from this browser.
         They are not saved yet. <button className="link-btn small" onClick={() => { setChanges({}); setUndos([]); setRestored(0) }}>Discard them</button></div>}
       {(openBy.length > 0 || doneBy.length > 0) && <div className="found found-warn small field-others" role="status">
@@ -1356,7 +1386,10 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
               <SaveButtons unsaved={unsaved} saving={busy || !!precise} onSave={() => void saveAll(false)} onContinue={() => void saveAll(true)} canContinue={canFinish}
                 continueTitle={finishTitle} />
             </div>
-            {!onFinished && <div className="row side-discard"><span className="spacer" />
+            {!onFinished && <div className="row side-discard">
+              {!wholeBad && <button className="link-btn small" onClick={() => setMarkingBad(true)} disabled={busy || !!precise}
+                title="The whole field is unusable (a fold, out of focus, an artifact, no tissue): mark it bad and go on">Mark whole field as bad…</button>}
+              <span className="spacer" />
               <button className="link-btn small" onClick={discardAndClose}
                 title="Drop your unsaved changes on this field and go back to the session’s page">Discard and close</button></div>}
           </div>

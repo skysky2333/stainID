@@ -761,6 +761,16 @@ def clean(meta: dict, mark, person: str) -> dict | None:
               "subtype": None, "points": mark.points, "tile_id": mark.tile_id, "x": mark.x, "y": mark.y, "candidate": mark.candidate or None,
               "meta": dict(mark.meta) if mark.meta else None}
     words = vocabulary(stain)
+    if mark.task == exclusions.TASK and mark.meta and mark.meta.get(exclusions.WHOLE):  # the whole field marked as bad (or, deleted, unmarked)
+        tile = field_tile(meta, mark.tile_id)
+        kind = str(mark.meta.get("reason") or "")
+        if not mark.deleted and kind not in exclusions.WHOLE_TYPES:
+            raise HTTPException(400, f"a whole field is marked bad as one of the types {', '.join(exclusions.WHOLE_TYPES)}")
+        x0, y0 = render.crop_origin(tile, get_state().project.context_px)
+        ring = exclusions.whole_ring((int(tile["x_px"]) - x0, int(tile["y_px"]) - y0, int(tile["width_px"]), int(tile["height_px"])))
+        return record | {"id": exclusions.whole_id(mark.tile_id), "x": None, "y": None, "points": [ring], "candidate": None,
+                         "value": exclusions.value_text([False], [kind or "1"]), "meta": {exclusions.WHOLE: True, "reason": kind or None},
+                         "deleted": bool(mark.deleted)}
     if mark.task == exclusions.TASK:  # an edit of the excluded areas (the brush): what was painted and cleared this time
         field_tile(meta, mark.tile_id)
         pngs = dict(mark.pngs) or ({"1": mark.png} if mark.png else {})  # one painted mask per type (`exclusions.KINDS`)
@@ -940,8 +950,9 @@ def save_tile(meta: dict, tile_id: str, marks: list, submit: bool, person: str) 
         if outline:
             cleaned.append(outline)
     practice = bool(meta.get("practice"))
+    marked_bad = any(r["task"] == exclusions.TASK and exclusions.is_whole(r) and not r["deleted"] for r in cleaned)
     if submit:
-        if not practice:
+        if not practice and not marked_bad:  # a field marked bad as a whole: nothing in it was checked
             cleaned += _confirmations(meta, tile, person, _mine_after(meta, tile_id, person, cleaned))
         cleaned.append({"id": rounds.done_id(meta, tile_id), "source": person, "stain": meta["stain"], "task": "done", "tile_id": tile_id,
                         "session": meta["name"], "value": rounds.done_kind(meta) or None})

@@ -223,6 +223,8 @@ export interface SessionField { tile_id: string; done_by_me: boolean; annotators
   box?: [number, number, number, number] | null; done_at?: Record<string, number>
   /** the AI's review labels exist on it (never shown while labelling) */
   ai_reviewed?: boolean
+  /** people who marked the whole field as bad, with the type (labels.exclusions: "1"–"4") */
+  marked_bad?: Record<string, string>
   /** where it stands for everyone (`sessions.field_states`), with who finished it and who is working on it or has it open */
   state?: FieldState | null; working?: string[]; open_by?: string[]; done_by?: string[] }
 export interface SessionDetail {
@@ -235,7 +237,7 @@ export interface Label {
   id: string; source: string; stain: string; task: 'class' | 'outline' | 'tag' | 'note' | 'done' | 'exclude' | 'threshold' | 'replaced'; tile_id: string  // exclude: an area marked as bad (points: its rings)
   x: number | null; y: number | null; value: string; subtype?: string | null; points: number[][] | null; session: string; confirmed: boolean; time: number; deleted?: boolean
   /** where the label comes from: a piece of a split or a merged object ({edit, group}), an object replaced by one ({group, into}) */
-  meta?: { edit?: 'split' | 'merge'; group?: string; into?: number[][]; split_outline?: number[][] } | null
+  meta?: { edit?: 'split' | 'merge'; group?: string; into?: number[][]; split_outline?: number[][]; whole_field?: boolean; reason?: string | null } | null
 }
 export interface FieldObjectLite { x: number; y: number; radius_px: number; ai_value?: string; ai_probability?: number }
 export interface FieldWork {

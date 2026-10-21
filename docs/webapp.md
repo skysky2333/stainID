@@ -420,6 +420,16 @@ when they close the field (another page, Discard and close, the tab closed: `POS
 move on, or when the heartbeat lapses (90 s, also for a tab left in the background), so it never sticks; a field that
 needs two people gets both, one after the other.
 
+**Mark whole field as bad…** (under the save buttons; not in the tutorial's practice) asks why, from the bad-area
+types (fold or tissue damage, artifact, no tissue, out of focus or bad staining), and saves the field's whole square
+as a bad area of that type: one `exclude` label (id `exclude:<tile>:whole`, `meta.whole_field`), in the same store
+and history as painted areas, so it shows wherever they do (the Cores view's annotations, the Labels page) and
+counts the same: it teaches and tests bad-area detection, and object labels in it leave object training and
+scoring for everyone (`exclusions.drop_excluded`). The analysis keeps using the automatic layer only. The field is
+then finished for that person as by *Save and continue*, with none of its objects confirmed, and the next one
+opens; the session's page draws it with its own outline (*Marked bad*, the reason on hover). Reopened, the page
+says so with *Unmark*, which deletes the mark (the field stays finished until *Reopen*).
+
 **Saving.** Nothing is saved until the person presses *Save* or *Save and continue*. The count at the top says how many
 unsaved changes there are, and a small orange dot marks each changed object. A draft is kept in the browser in case of
 a reload, and leaving the page with unsaved changes asks first. *Discard and close* (under the save buttons) drops the

@@ -31,6 +31,27 @@ KINDS = {"1": "fold or tissue damage", "2": "artifact (scratch, bubble, debris, 
          "-4": "taken out of the out-of-focus area"}
 
 
+WHOLE = "whole_field"  # `meta` of a person's mark of a whole field as bad: {WHOLE: True, "reason": its type ("1"–"4")}
+WHOLE_TYPES = ("1", "2", "3", "4")
+
+
+def whole_id(tile_id: str) -> str:
+    """A person's mark of a whole field as bad: one per person and field (`store.current` keeps one per source and id),
+    so Unmark (the same id, deleted) takes it back."""
+    return f"{TASK}:{tile_id}:whole"
+
+
+def whole_ring(box: tuple[float, float, float, float]) -> list[list[float]]:
+    """The field's own square (x, y, width, height in field-picture pixels) as one ring."""
+    x, y, w, h = box
+    return [[x, y], [x + w, y], [x + w, y + h], [x, y + h]]
+
+
+def is_whole(label) -> bool:
+    meta = label.get("meta") if isinstance(label, dict) else getattr(label, "meta", None)
+    return isinstance(meta, dict) and bool(meta.get(WHOLE))
+
+
 def label_id(tile_id: str) -> str:
     """A new edit's id: one per save."""
     return f"{TASK}:{tile_id}:{int(time.time() * 1000)}{secrets.token_hex(3)}"

@@ -672,6 +672,10 @@ def _with_place(meta: dict, fields: list[dict], states: dict[str, dict], labels:
     here = labels[(labels.stain == meta["stain"]) & labels.tile_id.isin({f["tile_id"] for f in fields})]
     done = here[(here.task == "done") & ~here.source.map(store.is_ai_label)]
     ai_reviewed = set(here.tile_id[here.source.map(store.is_ai_label)])  # the AI's labels: never shown while labelling, only flagged
+    bad: dict[str, dict[str, str]] = {}  # people's marks of a whole field as bad: who, and the type
+    for r in here[(here.task == "exclude") & ~here.source.map(store.is_ai_label)].itertuples():
+        if isinstance(r.meta, dict) and r.meta.get("whole_field"):
+            bad.setdefault(str(r.tile_id), {})[str(r.source)] = str(r.meta.get("reason") or "")
     when = done.groupby(["tile_id", "source"]).time.max().to_dict() if len(done) else {}
     prefix = get_state().project.tma_prefix or ""
     out = []
@@ -683,7 +687,7 @@ def _with_place(meta: dict, fields: list[dict], states: dict[str, dict], labels:
                     "box": [place[k] for k in BOX] if all(place.get(k) is not None for k in BOX) else None, "state": s.get("state"),
                     "working": s.get("working", []), "open_by": s.get("open_by", f.get("open_by", [])), "done_by": done_by,
                     "done_at": {p: float(when[(f["tile_id"], p)]) for p in done_by if (f["tile_id"], p) in when},
-                    "ai_reviewed": f["tile_id"] in ai_reviewed})
+                    "ai_reviewed": f["tile_id"] in ai_reviewed, "marked_bad": bad.get(f["tile_id"], {})})
     return out
 
 

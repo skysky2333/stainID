@@ -12,13 +12,15 @@ type Field = SessionDetail['fields'][number]
 type Layout = NonNullable<SessionDetail['cores']>[string]
 /** A field's state for this person: where it stands for everyone (`sessions.field_states`), and "mine" when they
  *  finished it while others are still asked. */
-type Look = FieldState | 'mine'
-export const LOOK_TEXT: Record<Look, string> = { not_started: 'To do', in_progress: 'In progress', done: 'Done', preparing: 'Being prepared', mine: 'Finished by you' }
-const LOOK_ORDER: Look[] = ['not_started', 'in_progress', 'mine', 'done', 'preparing']
-const BADGE: Record<Look, string> = { not_started: 'status-todo', in_progress: 'status-running', done: 'status-done', preparing: 'status-queued', mine: 'status-done' }
+type Look = FieldState | 'mine' | 'bad'
+export const LOOK_TEXT: Record<Look, string> = { not_started: 'To do', in_progress: 'In progress', done: 'Done', preparing: 'Being prepared', mine: 'Finished by you', bad: 'Marked bad' }
+const LOOK_ORDER: Look[] = ['not_started', 'in_progress', 'mine', 'done', 'bad', 'preparing']
+const BADGE: Record<Look, string> = { not_started: 'status-todo', in_progress: 'status-running', done: 'status-done', preparing: 'status-queued', mine: 'status-done', bad: 'status-outdated' }
 
 const stateOf = (f: Field): FieldState => f.state ?? (!f.prepared ? 'preparing' : f.done_by_me ? 'done' : f.open_by_others ? 'in_progress' : 'not_started')
-const lookOf = (f: Field): Look => (f.done_by_me && stateOf(f) !== 'done' ? 'mine' : stateOf(f))
+const lookOf = (f: Field): Look => (Object.keys(f.marked_bad ?? {}).length ? 'bad' : f.done_by_me && stateOf(f) !== 'done' ? 'mine' : stateOf(f))
+/** The reasons people gave for marking a whole field bad (labels.exclusions types). */
+const BAD_REASON: Record<string, string> = { '1': 'fold or tissue damage', '2': 'artifact', '3': 'no tissue', '4': 'out of focus or bad staining' }
 const who = (people: string[], me: string | null) => people.map((p) => (p === me ? 'you' : p)).join(', ')
 /** Someone else has the field open: only one person works on a field at a time. */
 const takenBy = (f: Field, me: string | null) => (f.open_by ?? []).filter((p) => p !== me)
@@ -35,6 +37,7 @@ function hoverText(f: Field, i: number, needed: number, me: string | null): stri
     done.length ? `Finished by ${done.map((p) => `${p === me ? 'you' : p}${f.done_at?.[p] ? ` (${day(f.done_at[p])})` : ''}`).join(', ')}` : '',
     `${Math.min(done.length, needed)} of ${needed} ${needed === 1 ? 'person' : 'people'} done`,
     f.ai_reviewed ? 'AI review labels exist (not shown while labelling)' : '',
+    ...Object.entries(f.marked_bad ?? {}).map(([p, k]) => `Marked bad by ${p === me ? 'you' : p}: ${BAD_REASON[k] ?? 'bad'}`),
     takenBy(f, me).length ? `Open now by ${who(takenBy(f, me), me)}: it opens for you once they close it`
       : f.prepared ? 'Click to open' : 'Being prepared: it opens once ready',
   ].filter(Boolean).join('\n')

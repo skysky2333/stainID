@@ -525,3 +525,46 @@ def test_ai_labels_make_no_field_in_progress_only_flag_it(rounds_project):
     assert mine[OTHER]["working"] == [] and mine[OTHER]["done_by"] == []
     handed = ann.get(f"/api/annotate/{name}/next").json()["tile_id"]
     assert handed in {TILE, OTHER}  # the AI's "done" does not take the field away from people
+
+
+def test_a_whole_field_marked_bad_is_a_bad_area_and_finishes_it(rounds_project):
+    """"Mark whole field as bad…": the field's square becomes a bad area of the chosen type in the same store as painted
+    areas (its objects leave scoring and training for everyone), the field is finished for that person with nothing in it
+    confirmed, the picker shows who marked it and why, and Unmark takes the area back."""
+    from stainid import exclusions
+
+    admin, (ann, ben), _ = rounds_project
+    project = state.get_state().project
+    _plain_mask(project)
+    name = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "open": True, "tile_ids": [TILE]}).json()["name"]
+    field = ann.get(f"/api/annotate/{name}/fields/{TILE}").json()
+    own = [o["candidate_id"] for o in field["objects"] if o["own"]]
+
+    def scored():
+        decisions.forget()
+        return set(decisions.state(project, "6E10", state.get_state().tiles).rows.candidate)
+
+    ann.post(f"/api/annotate/{name}/fields/{TILE}/leave")
+    assert _save(ben, name, TILE, [{"task": "class", "candidate": c, "value": "CAA"} for c in own]).status_code == 200
+    ben.post(f"/api/annotate/{name}/fields/{TILE}/leave")
+    before = scored() & set(own)
+    assert before  # some of Ben's answers count (others lie in detection's fold)
+    assert _save(ann, name, TILE, [{"task": "exclude", "meta": {"whole_field": True, "reason": "9"}}], submit=True).status_code == 400
+    marked = _save(ann, name, TILE, [{"task": "exclude", "meta": {"whole_field": True, "reason": "4"}}], submit=True)
+    assert marked.status_code == 200, marked.text
+    saved = marked.json()["saved"]
+    assert [r["task"] for r in saved] == ["exclude", "done"]  # nothing in it confirmed as checked
+    edits = exclusions.edits(project, "LIP-1_B-2", "6E10")
+    assert [(e.source, e.kinds) for e in edits] == [("Ann", ("4",))]  # one people's edit, as a painted area is
+    box = edits[0].rings[0]
+    assert (box[:, 0].min(), box[:, 1].min(), box[:, 0].max(), box[:, 1].max()) == (300, 300, 812, 812)  # the field's square, core px
+    assert not set(own) & scored()  # every object in it: out of scoring (and training), Ben's answers too
+    mine = {f["tile_id"]: f for f in ann.get(f"/api/annotate/{name}").json()["fields"]}
+    assert mine[TILE]["marked_bad"] == {"Ann": "4"} and mine[TILE]["done_by_me"]
+    again = ann.get(f"/api/annotate/{name}/fields/{TILE}").json()  # reopened: the mark is hers, Unmark takes it back
+    assert any(m["task"] == "exclude" and (m.get("meta") or {}).get("whole_field") for m in again["mine"])
+    ann.post(f"/api/annotate/{name}/fields/{TILE}/leave")
+    assert _save(ann, name, TILE, [{"task": "exclude", "deleted": True, "meta": {"whole_field": True, "reason": "4"}}]).status_code == 200
+    assert exclusions.edits(project, "LIP-1_B-2", "6E10") == []
+    assert scored() & set(own) == before
+    assert ann.get(f"/api/annotate/{name}").json()["fields"][0]["marked_bad"] == {}

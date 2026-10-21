@@ -1227,7 +1227,7 @@ details.side-details.compact > summary { font-weight: 500; }
 .side-save-buttons .btn.big { padding-top: 7px; padding-bottom: 7px; }
 .side-discard { margin-top: -2px; }
 /* the session's fields for the person labelling (labels/sessionfields.tsx): by TMA, then core, each core as its tiles */
-:root { --tile-todo: #8f8d86; --tile-progress: #2a78d6; --tile-done: #1f8a4c; --tile-mine: #8a4fd8; --tile-preparing: #b9b7af; --tile-ai: #d9730d; }
+:root { --tile-todo: #8f8d86; --tile-progress: #2a78d6; --tile-done: #1f8a4c; --tile-mine: #8a4fd8; --tile-preparing: #b9b7af; --tile-ai: #d9730d; --tile-bad: #c2410c; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --tile-todo: #a5a39b; --tile-progress: #5aa0f0; --tile-done: #3fb871; --tile-mine: #b08cf0; --tile-preparing: #6c6b66; } }
 :root[data-theme="dark"] { --tile-todo: #a5a39b; --tile-progress: #5aa0f0; --tile-done: #3fb871; --tile-mine: #b08cf0; --tile-preparing: #6c6b66; }
 .session-fields { display: grid; gap: 12px; margin-top: 16px; container: fieldmap / inline-size; }
@@ -1263,6 +1263,10 @@ a.core-tile:hover, a.core-tile:focus-visible { outline: 2px solid var(--text-pri
 .look-done { border-color: var(--tile-done); }
 .look-mine { border-color: var(--tile-mine); }
 .look-preparing { border-color: var(--tile-preparing); border-style: dashed; }
+.look-bad { border-color: var(--tile-bad); }
+.core-tile.look-bad img { opacity: .45; }
+.whole-bad-reasons { display: grid; gap: 6px; }
+.whole-bad-reasons label { gap: 8px; align-items: center; cursor: pointer; }
 .tile-swatch.look-preparing { border-style: dashed; }
 .side-foot { display: flex; align-items: center; gap: 10px; padding: 0 4px; }
 .help-toggle { min-width: 28px; font-weight: 700; border-radius: 50%; }
