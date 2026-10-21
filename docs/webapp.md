@@ -391,8 +391,10 @@ because the server makes the Segment Anything features of the session's fields a
 open sessions, and on the CPU the field someone has open and their next ones. They are kept in
 `data/cache/sam_embeddings/`, and the page says *Preparing one-click outlines…* until its field is ready.
 
-**The session's page** lists its fields by TMA (its name, e.g. LIP-3), then core; each level folds open and shut.
-Each core is drawn as its own tiles, each at its place in the core: the session's fields as small pictures, the
+**The session's page** lists its fields by TMA (its name, e.g. LIP-3), then core; each level folds open and shut
+(a session of more than 300 fields starts with its TMAs folded, and a folded TMA or core loads no pictures).
+Each core is drawn as its own tiles, each at its place in the core and at one scale (a tile about 128 px across, a
+core of 8 tiles filling a row on a laptop, smaller to fit a phone): the session's fields as pictures, the
 core's other tiles faint and not clickable, so the core's shape reads. A field's state is its outline colour (a
 one-line legend: To do, In progress, Finished by you, Done, Being prepared; in progress as on the admin's page:
 someone has labels on it or has it open, fewer people than needed finished it). Pointing at a tile tells its state,
@@ -401,6 +403,12 @@ a click opens it. Each TMA and core heading keeps its counts, and a core one sta
 *Natural order* / *By confidence* (remembered in this browser per person): by confidence, the cores of each TMA come
 least confident first: a field weighs its objects by how close their probability sits to the acceptance threshold
 (1 at it, 0 from 0.2 away; `GET /api/annotate/{name}/confidence`), a core adds up its fields; TMAs keep their order.
+The scores come straight from the stage-4 candidate store, one read per core of only the probability and threshold
+columns, whether or not a field is prepared (scoring prepares nothing); they are worked out in the background when
+the session's page opens and kept until a core's store file changes (4,184 fields: under 2 s the first time, at
+once after). The AI's labels (imported sets, the AI reviewer, AI review sessions: `store.is_ai_label`) make no field
+in progress or done and nobody working on it; a field that has them is To do with a small orange dot (*AI reviewed*;
+the labels themselves stay hidden while labelling).
 
 **One person on a field at a time.** While someone has a field open (their page's heartbeat holds it, renewed every
 few seconds), nobody else can open it: the server answers 409 "Ann is working on this field", the page says so with

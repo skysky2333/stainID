@@ -221,6 +221,8 @@ export interface OpenSession {
 export interface SessionField { tile_id: string; done_by_me: boolean; annotators_done: number; open_by_others: number; prepared: boolean; tma?: string | null; tma_name?: string | null; core_id?: string | null; core?: string | null
   /** its square in the core image: x, y, width, height (core px) */
   box?: [number, number, number, number] | null; done_at?: Record<string, number>
+  /** the AI's review labels exist on it (never shown while labelling) */
+  ai_reviewed?: boolean
   /** where it stands for everyone (`sessions.field_states`), with who finished it and who is working on it or has it open */
   state?: FieldState | null; working?: string[]; open_by?: string[]; done_by?: string[] }
 export interface SessionDetail {

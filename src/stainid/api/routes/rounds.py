@@ -45,6 +45,7 @@ from stainid.api.routes.annotate import (
     field_tile,
     free_name,
     measure_added_soon,
+    people_only,
     root,
     session_meta,
     vocabulary,
@@ -113,7 +114,7 @@ def finished_tiles(meta: dict, labels: pd.DataFrame | None = None) -> dict[str, 
     """Who finished each tile in this round (in any session of the stain)."""
     if meta.get("practice"):
         return {}
-    return store.reviewed_fields(store.current(root()) if labels is None else labels, meta["stain"], rounds.done_kind(meta))
+    return store.reviewed_fields(people_only(store.current(root()) if labels is None else labels), meta["stain"], rounds.done_kind(meta))
 
 
 def round_items(meta: dict) -> pd.DataFrame:
@@ -402,7 +403,7 @@ def session_fields(meta: dict, person: str | None) -> list[dict]:
 
 def admin_fields(meta: dict) -> list[dict]:
     labels = store.current(root())
-    working = sessions.labelled_by(labels[labels.tile_id.isin(set(meta["fields"]))], meta["stain"])
+    working = sessions.labelled_by(people_only(labels[labels.tile_id.isin(set(meta["fields"]))]), meta["stain"])
     return rounds.field_states(meta, finished_tiles(meta, labels), working, tiles_held(meta), ready_fields(meta))
 
 

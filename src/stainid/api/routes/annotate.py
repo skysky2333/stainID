@@ -146,9 +146,14 @@ def field_tile(meta: dict, tile_id: str) -> dict:
     return get_state().tile(tile_id)
 
 
+def people_only(labels: pd.DataFrame) -> pd.DataFrame:
+    """People's labels: the AI's (`store.is_ai_label`) make no field in progress or done, nor anyone working on it."""
+    return labels[~labels.source.map(store.is_ai_label)] if len(labels) else labels
+
+
 def finished_fields(meta: dict, labels: pd.DataFrame) -> dict[str, set[str]]:
     """Who finished each field of a session: marked it complete (outline sessions) or pressed Finished (reviews)."""
-    return outline.finished(labels, meta["name"]) if meta["kind"] == outline.KIND else store.reviewed_fields(labels, meta["stain"])
+    return outline.finished(labels, meta["name"]) if meta["kind"] == outline.KIND else store.reviewed_fields(people_only(labels), meta["stain"])
 
 
 def ready_fields(meta: dict) -> set[str]:
@@ -664,7 +669,9 @@ def _with_place(meta: dict, fields: list[dict], states: dict[str, dict], labels:
     tiles), its square in the core image (`box`), and where it stands for everyone (`state`, who is working on it or has
     it open, who finished it and when, as `sessions.field_states`)."""
     facts = _field_facts([f["tile_id"] for f in fields])
-    done = labels[(labels.stain == meta["stain"]) & (labels.task == "done") & labels.tile_id.isin({f["tile_id"] for f in fields})]
+    here = labels[(labels.stain == meta["stain"]) & labels.tile_id.isin({f["tile_id"] for f in fields})]
+    done = here[(here.task == "done") & ~here.source.map(store.is_ai_label)]
+    ai_reviewed = set(here.tile_id[here.source.map(store.is_ai_label)])  # the AI's labels: never shown while labelling, only flagged
     when = done.groupby(["tile_id", "source"]).time.max().to_dict() if len(done) else {}
     prefix = get_state().project.tma_prefix or ""
     out = []
@@ -675,7 +682,8 @@ def _with_place(meta: dict, fields: list[dict], states: dict[str, dict], labels:
                     "core_id": place.get("core_id"), "core": place.get("core_label") or place.get("core_id"),
                     "box": [place[k] for k in BOX] if all(place.get(k) is not None for k in BOX) else None, "state": s.get("state"),
                     "working": s.get("working", []), "open_by": s.get("open_by", f.get("open_by", [])), "done_by": done_by,
-                    "done_at": {p: float(when[(f["tile_id"], p)]) for p in done_by if (f["tile_id"], p) in when}})
+                    "done_at": {p: float(when[(f["tile_id"], p)]) for p in done_by if (f["tile_id"], p) in when},
+                    "ai_reviewed": f["tile_id"] in ai_reviewed})
     return out
 
 
@@ -686,6 +694,10 @@ def _core_layouts(meta: dict, fields: list[dict]) -> dict[str, dict]:
     cores = {f["core_id"] for f in fields if f.get("core_id")}
     if tiles.empty or not cores:
         return {}
+    key = (id(tiles), meta["name"], meta["stain"], hash(tuple(f["tile_id"] for f in fields)))
+    kept = _LAYOUTS.get(key)
+    if kept is not None:  # the page asks every few seconds: the same tiles, the same drawing
+        return kept
     mine = {f["tile_id"] for f in fields}
     rows = tiles[(tiles.stain == meta["stain"]) & tiles.core_id.astype(str).isin(cores)].drop_duplicates("tile_id")
     out = {}
@@ -695,35 +707,101 @@ def _core_layouts(meta: dict, fields: list[dict]) -> dict[str, dict]:
         others = group[~group.tile_id.isin(mine)]
         out[core_id] = {"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0,
                         "others": [[int(r.x_px), int(r.y_px), int(r.width_px), int(r.height_px)] for r in others.itertuples()]}
+    if len(_LAYOUTS) > 16:
+        _LAYOUTS.clear()
+    _LAYOUTS[key] = out
     return out
 
 
+_LAYOUTS: dict[tuple, dict[str, dict]] = {}
+
+
 NEAR_THRESHOLD = 0.2  # how far (in probability) from the acceptance threshold an object still counts as uncertain
+_CONFIDENCE: dict[tuple, dict[str, dict]] = {}  # (project, session, stain, level, fields) -> the scores and the stores' signatures
+_CONFIDENCE_LOCK = threading.Lock()
+_CONFIDENCE_BUSY: set[tuple] = set()
+
+
+def field_confidence(meta: dict) -> dict[str, dict]:
+    """How sure detection is on each field of a session: `near`, the field's own objects weighted by how close their
+    probability sits to their acceptance threshold (1 at it, 0 from `NEAR_THRESHOLD` away), and `objects`, how many it
+    has. Straight from the stage-4 candidate store, one read per core of only these columns, whether or not a field is
+    prepared (nothing is prepared to score it); kept until a core's store file changes (its signature)."""
+    from stainid import candidates as stored  # noqa: PLC0415
+
+    state = get_state()
+    tiles = state.tiles
+    rows = tiles[tiles.tile_id.isin(set(meta["fields"]))].drop_duplicates("tile_id") if not tiles.empty else tiles
+    cores = sorted({str(c) for c in rows.core_id}) if len(rows) else []
+    files = {c: stored.stored(state.project, meta["stain"], c) for c in cores}
+    signature = tuple((c, cache.signature(f) if f is not None else None) for c, f in files.items())
+    key = (state.id, meta["name"], meta["stain"], rounds.level(meta), len(meta["fields"]), hash(tuple(meta["fields"])))
+    with _CONFIDENCE_LOCK:
+        kept = _CONFIDENCE.get(key)
+        if kept is not None and kept["signature"] == signature:
+            return kept["scores"]
+    wanted = set(meta["fields"])
+    level = rounds.level(meta)
+
+    def core_scores(core: str) -> dict[str, dict]:
+        if files[core] is None:
+            return {}
+        found = stored.read_core(state.project, meta["stain"], core, columns=["tile_id", "probability", "threshold", "proposal_threshold"])
+        if found.empty:
+            return {}
+        found = found[found.tile_id.astype(str).isin(wanted)]
+        if level is not None and "proposal_threshold" in found:  # the candidates a session at this level shows (`at_level`)
+            found = found[found.proposal_threshold.isna() | (pd.to_numeric(found.proposal_threshold, errors="coerce") >= float(level) - 1e-9)]
+        probability = pd.to_numeric(found.probability, errors="coerce")
+        threshold = pd.to_numeric(found.threshold, errors="coerce").fillna(0.5) if "threshold" in found else 0.5  # none kept: the usual 0.5
+        weight = (1 - (probability - threshold).abs() / NEAR_THRESHOLD).clip(lower=0).fillna(0)
+        frame = pd.DataFrame({"tile_id": found.tile_id.astype(str), "near": weight})
+        return {t: {"near": round(float(g.near.sum()), 2), "objects": int(len(g))} for t, g in frame.groupby("tile_id")}
+
+    from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
+
+    scores: dict[str, dict] = {t: {"near": 0.0, "objects": 0} for t in meta["fields"]}
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for part in pool.map(core_scores, cores):
+            scores.update(part)
+    with _CONFIDENCE_LOCK:
+        _CONFIDENCE[key] = {"signature": signature, "scores": scores}
+    return scores
+
+
+def warm_confidence(meta: dict) -> None:
+    """Score a session's fields in the background (when its page opens), so "By confidence" answers at once."""
+    if meta.get("practice") or meta["kind"] != "fields":
+        return
+    state_id = get_state().id
+    key = (state_id, meta["name"])
+    with _CONFIDENCE_LOCK:
+        if key in _CONFIDENCE_BUSY:
+            return
+        _CONFIDENCE_BUSY.add(key)
+    from stainid.api.state import use_project  # noqa: PLC0415
+
+    def run() -> None:
+        try:
+            with use_project(state_id):
+                field_confidence(meta)
+        except Exception:  # noqa: BLE001 — a warm-up only: the request computes it again and says what failed
+            pass
+        finally:
+            with _CONFIDENCE_LOCK:
+                _CONFIDENCE_BUSY.discard(key)
+
+    threading.Thread(target=run, name=f"confidence-{meta['name']}", daemon=True).start()
 
 
 @router.get("/annotate/{name}/confidence")
 def session_confidence(name: str, request: Request, person: str | None = Depends(viewer)) -> dict:
-    """How sure detection is on each field of a session (the fields page's "By confidence" order): `near`, the field's
-    own objects weighted by how close their probability sits to their acceptance threshold (1 at it, 0 from
-    `NEAR_THRESHOLD` away), and `objects`, how many it has. More weight near the threshold: less confident."""
+    """How sure detection is on each field of a session (the fields page's "By confidence" order), `field_confidence`.
+    More weight near the threshold: less confident."""
     meta = labelled_here(session_meta(name, request))
-    out: dict[str, dict] = {}
     if meta.get("practice") or meta["kind"] != "fields":
-        return out
-    for tile_id in meta["fields"]:
-        try:
-            found = _rounds()._field_candidates(meta, field_tile(meta, tile_id))
-        except Exception:  # noqa: BLE001 — a field not readable yet has no confidence: it sorts as it is
-            continue
-        own = found[found.own] if "own" in found else found
-        if own.empty or "probability" not in own:
-            out[tile_id] = {"near": 0.0, "objects": int(len(own))}
-            continue
-        threshold = own.threshold.astype(float).fillna(0.5) if "threshold" in own else 0.5  # no threshold kept: the model's usual 0.5
-        gap = (own.probability.astype(float) - threshold).abs()
-        weight = (1 - gap / NEAR_THRESHOLD).clip(lower=0).fillna(0)
-        out[tile_id] = {"near": round(float(weight.sum()), 2), "objects": int(len(own))}
-    return out
+        return {}
+    return field_confidence(meta)
 
 
 def _field_facts(tile_ids: list[str]) -> dict[str, dict]:
@@ -752,7 +830,7 @@ def _field_states(meta: dict) -> list[dict]:
     if rounds.is_round(meta):
         return _rounds().admin_fields(meta) if meta["kind"] == "fields" else []
     labels = store.current(root())
-    working = outline.started(labels, meta["name"]) if meta["kind"] == outline.KIND else sessions.labelled_by(labels[labels.session == meta["name"]], meta["stain"])
+    working = outline.started(labels, meta["name"]) if meta["kind"] == outline.KIND else sessions.labelled_by(people_only(labels[labels.session == meta["name"]]), meta["stain"])
     return sessions.field_states(meta, finished_fields(meta, labels), working, ready_fields(meta), busy(meta["name"]))
 
 
@@ -939,6 +1017,7 @@ def session_detail(name: str, request: Request, person: str | None = Depends(vie
             _rounds().warm(meta)
     fields = _with_place(meta, fields, {} if meta.get("practice") else {s["tile_id"]: s for s in _field_states(meta)}, labels)
     layouts = _core_layouts(meta, fields)
+    warm_confidence(meta)
     words = vocabulary(meta["stain"])
     outlines = {"outline_classes": outline.classes(words)} if meta["kind"] == outline.KIND else {}
     if meta["kind"] == outline.KIND:

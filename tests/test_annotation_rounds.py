@@ -505,3 +505,23 @@ def test_one_person_on_a_field_at_a_time(rounds_project):
         assert ben.get(f"/api/annotate/{name}/fields/{TILE}").status_code == 200
     finally:
         held.clock = clock
+
+
+def test_ai_labels_make_no_field_in_progress_only_flag_it(rounds_project):
+    """The AI's labels (imported sets, the AI reviewer, AI review sessions) leave a field To do for people, with nobody
+    working on it; the field is only flagged as AI reviewed (its labels stay hidden while labelling)."""
+    from stainid.labels import store
+
+    admin, (ann, _), _ = rounds_project
+    name = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "n_fields": 2, "open": True}).json()["name"]
+    reviews = state.get_state().project.output("reviews")
+    store.append(reviews, [{"id": "class:ai", "source": "import: pilot set", "stain": "6E10", "task": "class", "tile_id": OTHER, "x": 20.0,
+                            "y": 20.0, "value": "plaque"},
+                           {"id": f"done:{OTHER}", "source": "ai:reviewer", "stain": "6E10", "task": "done", "tile_id": OTHER}])
+    admin_view = {f["tile_id"]: f for f in admin.get(f"/api/labels/sessions/{name}/fields").json()}
+    assert admin_view[OTHER]["state"] == "not_started" and admin_view[OTHER]["working"] == [] and admin_view[OTHER]["done_by"] == []
+    mine = {f["tile_id"]: f for f in ann.get(f"/api/annotate/{name}").json()["fields"]}
+    assert mine[OTHER]["state"] == "not_started" and mine[OTHER]["ai_reviewed"] and not mine[TILE]["ai_reviewed"]
+    assert mine[OTHER]["working"] == [] and mine[OTHER]["done_by"] == []
+    handed = ann.get(f"/api/annotate/{name}/next").json()["tile_id"]
+    assert handed in {TILE, OTHER}  # the AI's "done" does not take the field away from people

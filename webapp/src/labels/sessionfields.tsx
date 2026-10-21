@@ -1,7 +1,8 @@
 /* The fields of a session for the person labelling: by TMA, then core, each core drawn as its own tiles (each tile at
    its place in the core, the core's tiles outside the session faint), a tile's state by its outline colour, the full
    facts on hover, a click opens the field. "By confidence" puts the cores detection is least sure of first. */
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import type { FieldState, SessionDetail } from '../api'
 import { apiUrl, enc } from '../api'
@@ -33,6 +34,7 @@ function hoverText(f: Field, i: number, needed: number, me: string | null): stri
     on.length ? `Working on it now: ${who(on, me)}` : '',
     done.length ? `Finished by ${done.map((p) => `${p === me ? 'you' : p}${f.done_at?.[p] ? ` (${day(f.done_at[p])})` : ''}`).join(', ')}` : '',
     `${Math.min(done.length, needed)} of ${needed} ${needed === 1 ? 'person' : 'people'} done`,
+    f.ai_reviewed ? 'AI review labels exist (not shown while labelling)' : '',
     takenBy(f, me).length ? `Open now by ${who(takenBy(f, me), me)}: it opens for you once they close it`
       : f.prepared ? 'Click to open' : 'Being prepared: it opens once ready',
   ].filter(Boolean).join('\n')
@@ -54,6 +56,22 @@ function countText(list: Field[]) {
   return [`${list.length} field${list.length === 1 ? '' : 's'}`, n('done') && `${n('done')} done`, n('in_progress') && `${n('in_progress')} in progress`,
     mine && `${mine} by you`].filter(Boolean).join(' · ')
 }
+
+/** A level of the list that folds open and shut; what it holds is only drawn while it is open (a session of thousands
+ *  of fields stays quick: closed TMAs and cores load no pictures). */
+function Fold({ className, summary, open: initial, children }: { className: string; summary: ReactNode; open: boolean; children: () => ReactNode }) {
+  const [open, setOpen] = useState(initial)
+  return (
+    <details className={className} open={open} onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}>
+      <summary>{summary}</summary>
+      {open && children()}
+    </details>
+  )
+}
+/** A tile's width on the core map (px): big enough to see and click on a laptop; a core of 8 tiles fills a row. */
+const TILE_PX = 128
+/** Above this many fields the TMAs start folded (open one to see its cores). */
+const FOLDED_FROM = 300
 
 type Numbered = { f: Field; i: number }
 type Core = { id: string; name: string; list: Numbered[] }
@@ -85,6 +103,7 @@ export function SessionFieldMap({ detail }: { detail: SessionDetail }) {
       <div className="row session-fields-bar">
         <ul className="row small tile-legend" aria-label="Tile outlines">
           {LOOK_ORDER.map((look) => <li key={look}><span className={`tile-swatch look-${look}`} />{LOOK_TEXT[look]}</li>)}
+          {fields.some((f) => f.ai_reviewed) && <li title="AI review labels exist on the field (not shown while labelling)"><span className="ai-dot in-legend" />AI reviewed</li>}
         </ul>
         <span className="spacer" />
         <div className="segmented small" role="group" aria-label="Order of the cores">
@@ -97,21 +116,21 @@ export function SessionFieldMap({ detail }: { detail: SessionDetail }) {
       {ordered.map(({ tma, cores }) => {
         const all = cores.flatMap((c) => c.list.map(({ f }) => f))
         return (
-          <details key={tma} className="annotate-tma" open>
-            <summary><b>{tma}</b><span className="small muted">{countText(all)}</span></summary>
-            <div className="core-maps">{cores.map((core) => {
+          <Fold key={tma} className="annotate-tma" open={fields.length <= FOLDED_FROM}
+            summary={<><b>{tma}</b><span className="small muted">{cores.length} core{cores.length === 1 ? '' : 's'} · {countText(all)}</span></>}>
+            {() => <div className="core-maps">{cores.map((core) => {
               const list = core.list.map(({ f }) => f)
               const state = coreState(list)
               const sure = confidence.data && order === 'confidence' ? near(core) : null
               return (
-                <details key={core.id} className="core-map-card card" open>
-                  <summary><b>Core {core.name}</b><span className={`badge ${BADGE[state]}`}>{LOOK_TEXT[state]}</span>
-                    <span className="small muted">{countText(list)}{sure != null ? ` · ${sure.toFixed(1)} near the threshold` : ''}</span></summary>
-                  <CoreMap name={name} layout={detail.cores?.[core.id]} list={core.list} needed={detail.needed ?? 1} me={detail.annotator} />
-                </details>
+                <Fold key={core.id} className="core-map-card card" open
+                  summary={<><b>Core {core.name}</b><span className={`badge ${BADGE[state]}`}>{LOOK_TEXT[state]}</span>
+                    <span className="small muted">{countText(list)}{sure != null ? ` · ${sure.toFixed(1)} near the threshold` : ''}</span></>}>
+                  {() => <CoreMap name={name} layout={detail.cores?.[core.id]} list={core.list} needed={detail.needed ?? 1} me={detail.annotator} />}
+                </Fold>
               )
-            })}</div>
-          </details>
+            })}</div>}
+          </Fold>
         )
       })}
     </div>
@@ -125,7 +144,8 @@ function CoreMap({ name, layout, list, needed, me }: { name: string; layout: Lay
   const pct = (v: number, of: number) => `${(100 * v) / of}%`
   const tile = ({ f, i }: Numbered, style?: React.CSSProperties) => {
     const look = lookOf(f)
-    const body = <img src={apiUrl(`/api/annotate/${name}/fields/${enc(f.tile_id)}/thumb.jpg`)} alt="" loading="lazy" onError={(e) => { e.currentTarget.style.visibility = 'hidden' }} />
+    const body = <><img src={apiUrl(`/api/annotate/${name}/fields/${enc(f.tile_id)}/thumb.jpg`)} alt="" loading="lazy" decoding="async"
+      onError={(e) => { e.currentTarget.style.visibility = 'hidden' }} />{f.ai_reviewed && <span className="ai-dot" aria-hidden="true" />}</>
     const taken = takenBy(f, me).length > 0
     const common = { className: `core-tile look-${look}${placed ? '' : ' in-row'}${taken ? ' taken' : ''}`, style, title: hoverText(f, i, needed, me), 'aria-label': `Field ${i + 1}: ${LOOK_TEXT[look]}` }
     return f.prepared && !taken ? <Link key={f.tile_id} to={`/annotate/${name}/${enc(f.tile_id)}`} {...common}>{body}</Link>
@@ -133,8 +153,9 @@ function CoreMap({ name, layout, list, needed, me }: { name: string; layout: Lay
   }
   if (!placed) return <div className="core-row">{list.map((n) => tile(n))}</div>
   const { x, y, width, height } = layout
-  return (
-    <div className="core-map" style={{ aspectRatio: `${width} / ${height}` }}>
+  const tileWidth = list[0].f.box![2] || 2048
+  return (  // every core at one scale: a tile about TILE_PX across (narrower screens: the core shrinks to fit)
+    <div className="core-map" style={{ aspectRatio: `${width} / ${height}`, width: `${Math.round((width / tileWidth) * TILE_PX)}px` }}>
       {layout.others.map(([ox, oy, w, h], k) => <span key={k} className="core-tile-other" aria-hidden="true"
         style={{ left: pct(ox - x, width), top: pct(oy - y, height), width: pct(w, width), height: pct(h, height) }} />)}
       {list.map((n) => { const [bx, by, w, h] = n.f.box!; return tile(n, { left: pct(bx - x, width), top: pct(by - y, height), width: pct(w, width), height: pct(h, height) }) })}
