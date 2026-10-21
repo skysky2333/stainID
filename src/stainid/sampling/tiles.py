@@ -15,6 +15,8 @@ import pandas as pd
 from stainid import cache
 from stainid.project import LEGACY_INPUTS, Project
 
+LABEL_TISSUE = 0.10  # a labelling field is a full-size whole-core tile with at least this share of tissue (its preview)
+
 # identifiers stay text: a stain column holding only "6E10" would otherwise be read as the number 6e10
 TEXT_COLUMNS = {c: str for c in ("tile_id", "core_id", "tma", "core_label", "donor_id", "sample_region_id", "region", "disease_group", "stain", "image_path")}
 
@@ -56,9 +58,10 @@ def known_tile_rows(project: Project) -> dict[str, dict[str, str]]:
 
 
 def labelling_tiles(project: Project) -> pd.DataFrame:
-    """The whole-core tiles new labelling fields are drawn from: every full-size square, whatever its share of tissue
-    (a tile at the rim is labelled too), so every field shows the same area; the cut-off tiles at a core's right and
-    bottom edge stay out. In an image set every tile (the images are the size the lab chose)."""
+    """The whole-core tiles new labelling fields are drawn from: full-size squares with at least `LABEL_TISSUE` tissue
+    (rim tiles are labelled too, nearly empty ones are not), so every field shows the same area; the cut-off tiles at a
+    core's right and bottom edge stay out. In an image set every image with that much tissue (the images are the size
+    the lab chose)."""
     path = project.analysis_tiles()
     whole_squares = project.is_tma
 
@@ -66,9 +69,9 @@ def labelling_tiles(project: Project) -> pd.DataFrame:
         tiles = table(path)
         if tiles.empty:
             return tiles
-        if not whole_squares:
-            return tiles
+        tissue = tiles.preview_tissue_fraction.fillna(1.0) if "preview_tissue_fraction" in tiles else 1.0
         size = tiles.width_px.max()
-        return tiles[(tiles.width_px == size) & (tiles.height_px == size)].reset_index(drop=True)
+        full = (tiles.width_px == size) & (tiles.height_px == size) if whole_squares else True
+        return tiles[full & (tissue >= LABEL_TISSUE)].reset_index(drop=True)
 
     return cache.memo(("labelling tiles", str(path), whole_squares), [path], make)
