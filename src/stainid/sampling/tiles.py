@@ -15,7 +15,7 @@ import pandas as pd
 from stainid import cache
 from stainid.project import LEGACY_INPUTS, Project
 
-LABEL_TISSUE = 0.25  # a labelling field is a full-size whole-core tile with at least this share of tissue (its preview)
+LABEL_TISSUE = 0.10  # a labelling field is a full-size whole-core tile with at least this share of tissue (its preview)
 
 # identifiers stay text: a stain column holding only "6E10" would otherwise be read as the number 6e10
 TEXT_COLUMNS = {c: str for c in ("tile_id", "core_id", "tma", "core_label", "donor_id", "sample_region_id", "region", "disease_group", "stain", "image_path")}
