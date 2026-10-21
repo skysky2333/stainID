@@ -1249,7 +1249,9 @@ details.side-details.compact > summary { font-weight: 500; }
 .core-map-card[open] > summary { margin-bottom: 8px; }
 .core-map { position: relative; width: 100%; }
 .core-tile, .core-tile-other { position: absolute; box-sizing: border-box; border-radius: 2px; }
-.core-tile-other { background: var(--surface-0); border: 1px solid var(--border); opacity: .55; }
+/* a tile of the core not in this session: its picture dimmed (greyed and lighter), not selectable; no picture: light grey */
+.core-tile-other { background: #e4e3df; overflow: hidden; pointer-events: none; cursor: default; user-select: none; }
+.core-tile-other img { width: 100%; height: 100%; object-fit: cover; display: block; filter: grayscale(.85) brightness(1.18) contrast(.7); opacity: .5; }
 .core-tile { display: block; overflow: hidden; border: 2.5px solid var(--tile-todo); background: var(--surface-0); }
 .core-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
 a.core-tile:hover, a.core-tile:focus-visible { outline: 2px solid var(--text-primary, #222); outline-offset: 1px; z-index: 1; }

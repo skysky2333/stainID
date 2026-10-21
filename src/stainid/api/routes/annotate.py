@@ -710,7 +710,7 @@ def _core_layouts(meta: dict, fields: list[dict]) -> dict[str, dict]:
         x1, y1 = int((group.x_px + group.width_px).max()), int((group.y_px + group.height_px).max())
         others = group[~group.tile_id.isin(mine)]
         out[core_id] = {"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0,
-                        "others": [[int(r.x_px), int(r.y_px), int(r.width_px), int(r.height_px)] for r in others.itertuples()]}
+                        "others": [[int(r.x_px), int(r.y_px), int(r.width_px), int(r.height_px), str(r.tile_id)] for r in others.itertuples()]}
     if len(_LAYOUTS) > 16:
         _LAYOUTS.clear()
     _LAYOUTS[key] = out
@@ -1210,8 +1210,25 @@ def image(name: str, tile_id: str, request: Request, person: str | None = Depend
 
 @router.get("/annotate/{name}/fields/{tile_id}/thumb.jpg")
 def annotate_thumb(name: str, tile_id: str, request: Request, person: str | None = Depends(viewer)) -> FileResponse:
-    field_tile(session_meta(name, request), tile_id)
+    """A field's small picture; also of the other tiles of a core the session has fields of (the core maps draw them
+    dimmed, so the whole core shows)."""
+    meta = session_meta(name, request)
+    if tile_id not in set(meta["fields"]):
+        tiles = get_state().tiles
+        row = tiles[tiles.tile_id == tile_id] if not tiles.empty else tiles
+        if row.empty or str(row.stain.iloc[0]) != meta["stain"] or str(row.core_id.iloc[0]) not in _session_cores(meta):
+            raise HTTPException(404, f"{tile_id} is not part of this session")
     return _thumb(tile_id)
+
+
+def _session_cores(meta: dict) -> set[str]:
+    key = ("cores", get_state().id, meta["name"], len(meta["fields"]), hash(tuple(meta["fields"])))
+    kept = _LAYOUTS.get(key)
+    if kept is None:
+        tiles = get_state().tiles
+        kept = {str(c) for c in tiles[tiles.tile_id.isin(set(meta["fields"]))].core_id} if not tiles.empty else set()
+        _LAYOUTS[key] = kept
+    return kept
 
 
 @router.get("/annotate/{name}/fields/{tile_id}/layer/{layer}.png")

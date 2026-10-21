@@ -231,7 +231,7 @@ export interface SessionDetail {
   meta: SessionInfo & { fields: string[]; tags: string[]; vocabulary: Vocabulary; keys: KeyMap; subtypes: boolean }
   fields: SessionField[]; annotator: string | null
   /** each core drawn as its tiles: the frame around them and the tiles not in this session; how many people each field needs */
-  cores?: Record<string, { x: number; y: number; width: number; height: number; others: [number, number, number, number][] }>; needed?: number
+  cores?: Record<string, { x: number; y: number; width: number; height: number; others: [number, number, number, number, string][] }>; needed?: number
 }
 export interface Label {
   id: string; source: string; stain: string; task: 'class' | 'outline' | 'tag' | 'note' | 'done' | 'exclude' | 'threshold' | 'replaced'; tile_id: string  // exclude: an area marked as bad (points: its rings)

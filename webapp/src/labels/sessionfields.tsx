@@ -176,8 +176,10 @@ function CoreMap({ name, layout, list, needed, me }: { name: string; layout: Lay
   const { x, y, width, height } = layout
   return (  // as wide as its column: three cores side by side fill the width (CSS), so the tiles' size follows the window
     <div className="core-map" style={{ aspectRatio: `${width} / ${height}` }}>
-      {layout.others.map(([ox, oy, w, h], k) => <span key={k} className="core-tile-other" aria-hidden="true"
-        style={{ left: pct(ox - x, width), top: pct(oy - y, height), width: pct(w, width), height: pct(h, height) }} />)}
+      {layout.others.map(([ox, oy, w, h, id], k) => <span key={k} className="core-tile-other" aria-hidden="true"
+        style={{ left: pct(ox - x, width), top: pct(oy - y, height), width: pct(w, width), height: pct(h, height) }}>
+        {id && <img src={apiUrl(`/api/annotate/${name}/fields/${enc(id)}/thumb.jpg`)} alt="" loading="lazy" decoding="async" draggable={false}
+          onError={(e) => { e.currentTarget.style.visibility = 'hidden' }} />}</span>)}
       {list.map((n) => { const [bx, by, w, h] = n.f.box!; return tile(n, { left: pct(bx - x, width), top: pct(by - y, height), width: pct(w, width), height: pct(h, height) }) })}
     </div>
   )
