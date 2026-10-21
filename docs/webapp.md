@@ -405,9 +405,10 @@ fields done of all, in progress and finished by you, each core its fields done o
 by you, with one state badge. A core is done when all its session fields are, a TMA when all its cores are.
 *Natural order* / *By confidence* (remembered in this browser per person): by confidence, the TMAs and core maps give
 way to one flat list of every field's tile, wrapping across the width, least confident first (the same outlines, AI
-dot, lock and hover, which also names the TMA and core; the progress line stays on top). A field weighs its objects
-by how close their probability sits to the acceptance threshold (1 at it, 0 from 0.2 away;
-`GET /api/annotate/{name}/confidence`). The list is drawn 240 tiles at a time as it is scrolled, the pictures
+dot, lock and hover, which also names the TMA and core and the score, e.g. "average 0.42 closeness · 28 objects";
+the progress line stays on top). Each object weighs how close its probability sits to the acceptance threshold
+(1 at it, 0 from 0.2 away); a field's score is the average over its objects (`mean` in
+`GET /api/annotate/{name}/confidence`), highest first; fields without objects come last. The list is drawn 240 tiles at a time as it is scrolled, the pictures
 loading as they come into view.
 The scores come straight from the stage-4 candidate store, one read per core of only the probability and threshold
 columns, whether or not a field is prepared (scoring prepares nothing); they are worked out in the background when

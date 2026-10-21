@@ -727,9 +727,10 @@ _CONFIDENCE_BUSY: set[tuple] = set()
 
 
 def field_confidence(meta: dict) -> dict[str, dict]:
-    """How sure detection is on each field of a session: `near`, the field's own objects weighted by how close their
-    probability sits to their acceptance threshold (1 at it, 0 from `NEAR_THRESHOLD` away), and `objects`, how many it
-    has. Straight from the stage-4 candidate store, one read per core of only these columns, whether or not a field is
+    """How sure detection is on each field of a session: each of the field's own objects weighs how close its probability
+    sits to its acceptance threshold (1 at it, 0 from `NEAR_THRESHOLD` away); `mean` is the field's average of those
+    (the score "By confidence" ranks by: higher, less confident; None without objects), `near` their sum, `objects`
+    how many it has. Straight from the stage-4 candidate store, one read per core of only these columns, whether or not a field is
     prepared (nothing is prepared to score it); kept until a core's store file changes (its signature)."""
     from stainid import candidates as stored  # noqa: PLC0415
 
@@ -760,11 +761,12 @@ def field_confidence(meta: dict) -> dict[str, dict]:
         threshold = pd.to_numeric(found.threshold, errors="coerce").fillna(0.5) if "threshold" in found else 0.5  # none kept: the usual 0.5
         weight = (1 - (probability - threshold).abs() / NEAR_THRESHOLD).clip(lower=0).fillna(0)
         frame = pd.DataFrame({"tile_id": found.tile_id.astype(str), "near": weight})
-        return {t: {"near": round(float(g.near.sum()), 2), "objects": int(len(g))} for t, g in frame.groupby("tile_id")}
+        return {t: {"near": round(float(g.near.sum()), 2), "objects": int(len(g)), "mean": round(float(g.near.mean()), 3)}
+                for t, g in frame.groupby("tile_id")}
 
     from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
 
-    scores: dict[str, dict] = {t: {"near": 0.0, "objects": 0} for t in meta["fields"]}
+    scores: dict[str, dict] = {t: {"near": 0.0, "objects": 0, "mean": None} for t in meta["fields"]}
     with ThreadPoolExecutor(max_workers=8) as pool:
         for part in pool.map(core_scores, cores):
             scores.update(part)

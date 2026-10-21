@@ -9,6 +9,9 @@ import { apiUrl, enc } from '../api'
 import { useFetch, useStored } from '../hooks'
 
 type Field = SessionDetail['fields'][number]
+/** A field's confidence (GET …/confidence): `mean` its objects' average closeness to the threshold (1 at it, 0 from 0.2
+ *  away; None without objects), `near` their sum, `objects` how many. */
+type Sure = { near: number; objects: number; mean: number | null }
 type Layout = NonNullable<SessionDetail['cores']>[string]
 /** A field's state for this person: where it stands for everyone (`sessions.field_states`), and "mine" when they
  *  finished it while others are still asked. */
@@ -28,13 +31,13 @@ const day = (t: number) => new Date(t * 1000).toLocaleDateString(undefined, { ye
 
 /** The hover text of a tile: its state, who is on it or has it open now, who finished it and when, how many of the
  *  people asked are done. */
-function hoverText(f: Field, i: number, needed: number, me: string | null, sure?: { near: number; objects: number }): string {
+function hoverText(f: Field, i: number, needed: number, me: string | null, sure?: Sure): string {
   const done = f.done_by ?? []
   const on = [...new Set([...(f.working ?? []), ...(f.open_by ?? [])])].filter((p) => !done.includes(p))
   return [
     `Field ${i + 1} · ${LOOK_TEXT[lookOf(f)]}`,
     `${f.tma_name || f.tma || 'TMA ?'} · core ${f.core || '?'}`,
-    sure ? `${sure.near.toFixed(1)} of ${sure.objects} objects near the acceptance threshold` : '',
+    sure ? (sure.objects && sure.mean != null ? `average ${sure.mean.toFixed(2)} closeness · ${sure.objects} object${sure.objects === 1 ? '' : 's'}` : 'no objects') : '',
     on.length ? `Working on it now: ${who(on, me)}` : '',
     done.length ? `Finished by ${done.map((p) => `${p === me ? 'you' : p}${f.done_at?.[p] ? ` (${day(f.done_at[p])})` : ''}`).join(', ')}` : '',
     `${Math.min(done.length, needed)} of ${needed} ${needed === 1 ? 'person' : 'people'} done`,
@@ -99,7 +102,7 @@ export function SessionFieldMap({ detail }: { detail: SessionDetail }) {
   const { meta, fields } = detail
   const name = meta.name
   const [order, setOrder] = useStored<Order>(`stainid.fieldOrder.${detail.annotator ?? ''}`, 'natural')
-  const confidence = useFetch<Record<string, { near: number; objects: number }>>(order === 'confidence' ? `/api/annotate/${name}/confidence` : null)
+  const confidence = useFetch<Record<string, Sure>>(order === 'confidence' ? `/api/annotate/${name}/confidence` : null)
   const tmas = useMemo(() => {
     const byTma = new Map<string, Map<string, Core>>()
     fields.forEach((f, i) => {
@@ -111,10 +114,11 @@ export function SessionFieldMap({ detail }: { detail: SessionDetail }) {
     })
     return [...byTma].sort(([a], [b]) => natural(a, b)).map(([tma, cores]) => ({ tma, cores: [...cores.values()].sort((a, b) => natural(a.name, b.name)) }))
   }, [fields])
-  const ranked = useMemo(() => {  // By confidence: every field of the session, least confident first (then the session's order)
+  const ranked = useMemo(() => {  // By confidence: every field, least confident first (the highest average closeness), no objects last
     if (!confidence.data) return null
     const sure = confidence.data
-    return fields.map((f, i) => ({ f, i })).sort((a, b) => (sure[b.f.tile_id]?.near ?? 0) - (sure[a.f.tile_id]?.near ?? 0) || a.i - b.i)
+    const score = (f: Field) => { const s = sure[f.tile_id]; return s && s.objects && s.mean != null ? s.mean : -1 }
+    return fields.map((f, i) => ({ f, i })).sort((a, b) => score(b.f) - score(a.f) || a.i - b.i)
   }, [fields, confidence.data])
   const whole = tally(fields)
   const allCores = tmas.flatMap((t) => t.cores)
@@ -166,7 +170,7 @@ export function SessionFieldMap({ detail }: { detail: SessionDetail }) {
 /** One field's tile: its picture outlined in its state's colour, the AI dot, the facts on hover; a click opens it
  *  (not while someone else has it open). */
 function Tile({ name, n: { f, i }, needed, me, style, className = '', sure }: {
-  name: string; n: Numbered; needed: number; me: string | null; style?: React.CSSProperties; className?: string; sure?: { near: number; objects: number }
+  name: string; n: Numbered; needed: number; me: string | null; style?: React.CSSProperties; className?: string; sure?: Sure
 }) {
   const look = lookOf(f)
   const body = <><img src={apiUrl(`/api/annotate/${name}/fields/${enc(f.tile_id)}/thumb.jpg`)} alt="" loading="lazy" decoding="async"
@@ -183,7 +187,7 @@ const RANKED_MORE = 240
 /** By confidence: every field of the session in one wrapping list of tiles, least confident first, with no TMA or core
  *  around them (the hover says where each is from). Drawn a few rows at a time as the list is scrolled, the pictures
  *  loading as they come into view, so thousands of fields stay quick. */
-function RankedTiles({ name, list, needed, me, sure }: { name: string; list: Numbered[]; needed: number; me: string | null; sure: Record<string, { near: number; objects: number }> }) {
+function RankedTiles({ name, list, needed, me, sure }: { name: string; list: Numbered[]; needed: number; me: string | null; sure: Record<string, Sure> }) {
   const [shown, setShown] = useState(RANKED_FIRST)
   const end = useRef<HTMLDivElement>(null)
   useEffect(() => {

@@ -489,6 +489,7 @@ def test_one_person_on_a_field_at_a_time(rounds_project):
     assert mine[TILE]["box"] == [300, 300, 512, 512] and mine[TILE]["core_id"] == "LIP-1_B-2" and mine[TILE]["tma_name"]  # its place in the core
     sure = ben.get(f"/api/annotate/{name}/confidence").json()  # "By confidence": objects close to the threshold weigh most
     assert sure[TILE]["objects"] == 6 and sure[TILE]["near"] > sure[OTHER]["near"]
+    assert sure[TILE]["mean"] == round(sure[TILE]["near"] / 6, 3)  # the score ranked by: the average over the field's objects
     ben.post(f"/api/annotate/{name}/live", json={"tile_id": TILE})  # a page left open from before takes it back from nobody
     assert ben.get(f"/api/annotate/{name}/fields/{TILE}").status_code == 409
 
