@@ -5,7 +5,7 @@ import { appBase, projectId, projectPath, remote } from './api'
 import { ActivityBar, ErrorNote, Loading } from './components'
 import { useFetch, useTheme } from './hooks'
 import { ProjectProvider, ProjectSwitcher, useProject } from './project'
-import { ChoosePassword, ServerSetting, SessionContext, SignIn, signOut, useSession } from './session'
+import { AppHeader, BrandLink, ChoosePassword, ServerSetting, SessionContext, SignIn, useSession } from './session'
 import { AccountPage } from './pages/AnnotateHome'
 import AnnotateField from './pages/AnnotateField'
 import AnnotateHome from './pages/AnnotateHome'
@@ -118,11 +118,7 @@ function ToSignIn() {
 function GuestShell() {
   return (
     <div className="annotator-shell">
-      <header className="row" style={{ padding: '10px 24px', borderBottom: '1px solid var(--border)', background: 'var(--surface-2)' }}>
-        <a href="/" className="brand" style={{ margin: 0 }}><img src="/favicon.svg" alt="" />stainID</a>
-        <span className="spacer" />
-        <a className="small" href="/">Sign in</a>
-      </header>
+      <AppHeader />
       <main className="main">
         <Routes>
           <Route path="/tutorial" element={<Tutorial />} />
@@ -161,7 +157,6 @@ function NewPassword() {
  *  sets are of every project); a session's link names its project. */
 function Shell({ admin }: { admin: boolean }) {
   const { info, error } = useProject()
-  const { session: { account }, reload } = useSession()
   const { pathname } = useLocation()
   useEffect(() => { document.title = [pageLabel(pathname), info?.name, 'stainID'].filter(Boolean).join(' · ') }, [pathname, info?.name])
   if (admin && error && !info) {
@@ -177,7 +172,7 @@ function Shell({ admin }: { admin: boolean }) {
   return (
     <div className="layout">
       <aside className="sidebar">
-        <div className="brand"><img src="/favicon.svg" alt="" />stainID</div>
+        <BrandLink />
         {admin && <ProjectSwitcher />}
         {admin && <JobsIndicator />}
         <nav className="nav" aria-label="Pages">
@@ -191,11 +186,10 @@ function Shell({ admin }: { admin: boolean }) {
         </nav>
         <div className="sidebar-foot">
           <nav className="nav-group" aria-label="Settings and help">{[...(admin ? ADMIN_FOOT : []), ...FOOT_NAV].map((item) => <SideLink key={item[0]} item={item} />)}</nav>
-          <span className="row signed-in">Signed in as {account?.name ?? 'admin'}<span className="spacer" />
-            <button className="link-btn" onClick={() => signOut(reload)}>Sign out</button></span>
         </div>
       </aside>
       <main className="main">
+        <AppHeader brand={false} />
         <Routes>
           <Route path="/" element={admin ? <Home /> : <AnnotateHome />} />
           <Route path="/tutorial" element={<Tutorial />} />

@@ -3,7 +3,7 @@ import type { ProjectEntry, ProjectKind, ProjectsInfo, ProjectState } from '../a
 import { api, projectPath } from '../api'
 import { Empty, ErrorNote, FilePicker, HelpBox, Modal, PageHead, timeAgo, withError } from '../components'
 import { useFetch } from '../hooks'
-import { useSession } from '../session'
+import { AppHeader } from '../session'
 import { Advanced, ScreenData } from '../setup/parts'
 import { folderName, FromPackage, StudyPlace } from './NewFromPackage'
 
@@ -14,7 +14,6 @@ const STATE: Record<ProjectState, { word: string; tone: string }> = {
 
 /** The start screen: every study this server knows, a new study, or a project folder to open. */
 export default function Projects() {
-  const { reload: reloadSession } = useSession()
   const list = useFetch<ProjectsInfo>('/api/projects', 10000)
   const [creating, setCreating] = useState(false)
   const [opening, setOpening] = useState(false)
@@ -32,11 +31,7 @@ export default function Projects() {
 
   return (
     <div className="projects-page">
-      <header className="row projects-top">
-        <div className="brand" style={{ margin: 0 }}><img src="/favicon.svg" alt="" />stainID</div>
-        <span className="spacer" />
-        <button className="link-btn" onClick={async () => { await api.del('/api/session/admin'); reloadSession() }}>Sign out</button>
-      </header>
+      <AppHeader />
       <main className="main projects-main">
         <PageHead title="Projects" subtitle="Each study lives in its own project folder. Pick one to work on, or start a new study.">
           <button className="btn" onClick={() => setOpening(true)}>Open a folder…</button>

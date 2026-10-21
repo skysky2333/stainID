@@ -107,6 +107,30 @@ export function ChoosePassword({ title = 'Choose a new password', current = fals
   )
 }
 
+/** The stainID logo and name, top left on every page: to the project list for admins, to their labelling sets for
+ *  everyone else (they have no project list), to the sign-in for someone not signed in. */
+export function BrandLink({ style }: { style?: React.CSSProperties }) {
+  const { session } = useSession()
+  const [href, title] = !session.account ? ['/', 'Sign in'] : session.admin ? ['/projects', 'All projects'] : ['/', 'My labelling sets']
+  return <a href={href} className="brand" title={title} aria-label={`stainID: ${title}`} style={style}><img src="/favicon.svg" alt="" />stainID</a>
+}
+
+/** The one header of every page: the logo (`brand`; the pages with a sidebar have it there) and, top right, who is
+ *  signed in with Account and Sign out (or Sign in). */
+export function AppHeader({ brand = true }: { brand?: boolean }) {
+  const { session, reload } = useSession()
+  return (
+    <header className={`row app-header${brand ? ' with-brand' : ''}`}>
+      {brand && <BrandLink style={{ margin: 0, padding: 0 }} />}
+      <span className="spacer" />
+      {session.account ? <span className="row small app-account">
+        <span className="muted">Signed in as</span><a href={appPath('/account')} title="Your account"><b>{session.account.name}</b></a>
+        <button className="link-btn" onClick={() => signOut(reload)}>Sign out</button>
+      </span> : <a className="small" href="/">Sign in</a>}
+    </header>
+  )
+}
+
 export async function signOut(reload: () => void) {
   await api.post('/api/session/logout', {})
   reload()
