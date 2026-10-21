@@ -569,3 +569,23 @@ def test_a_whole_field_marked_bad_is_a_bad_area_and_finishes_it(rounds_project):
     assert exclusions.edits(project, "LIP-1_B-2", "6E10") == []
     assert scored() & set(own) == before
     assert ann.get(f"/api/annotate/{name}").json()["fields"][0]["marked_bad"] == {}
+
+
+def test_removing_fields_takes_them_out_of_the_scope_too(rounds_project):
+    """A round session's fields and scope stay the same list: removing a field takes it out of both, so it is not
+    drawn on again, its page and scores no longer list it, and it can be added back."""
+    from stainid.labels import sessions
+
+    admin, (ann, _), _ = rounds_project
+    meta = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "n_fields": 2, "open": True}).json()
+    name = meta["name"]
+    assert sorted(meta["scope"]) == sorted(meta["fields"]) == sorted([TILE, OTHER])
+    assert set(ann.get(f"/api/annotate/{name}/confidence").json()) == {TILE, OTHER}
+    removed = admin.post(f"/api/labels/sessions/{name}/fields/remove", json={"tile_ids": [OTHER]}).json()
+    assert removed["fields"] == removed["scope"] == [TILE]
+    stored = sessions.meta(state.get_state().project.output("reviews"), name)
+    assert stored["fields"] == stored["scope"] == [TILE]
+    assert [f["tile_id"] for f in ann.get(f"/api/annotate/{name}").json()["fields"]] == [TILE]
+    assert set(ann.get(f"/api/annotate/{name}/confidence").json()) == {TILE}  # the scores follow the fields
+    back = admin.post(f"/api/labels/sessions/{name}/fields", json={"tile_ids": [OTHER]}).json()
+    assert sorted(back["fields"]) == sorted(back["scope"]) == sorted([TILE, OTHER])

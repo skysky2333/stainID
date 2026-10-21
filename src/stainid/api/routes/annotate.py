@@ -659,9 +659,14 @@ def add_fields(name: str, body: MoreFields, request: Request) -> dict:
 
 @router.post("/labels/sessions/{name}/fields/remove", dependencies=admin)
 def remove_fields(name: str, body: FieldList, request: Request) -> dict:
-    """Take fields out of a session; labels already made on them are kept."""
-    session_meta(name, request)
-    return sessions.remove_fields(root(), name, body.tile_ids)
+    """Take fields out of a session (and its scope); labels already made on them are kept. A "Fix the field" session's
+    work made ahead (pictures, Segment Anything) is queued again for the fields it keeps; the caches built from its
+    fields (the confidence, the core maps) are keyed by them and follow by themselves."""
+    meta = session_meta(name, request)
+    updated = sessions.remove_fields(root(), name, body.tile_ids)
+    if rounds.is_round(meta):
+        _rounds().warm(updated, force=True)
+    return updated
 
 
 def _with_place(meta: dict, fields: list[dict], states: dict[str, dict], labels: pd.DataFrame) -> list[dict]:

@@ -168,10 +168,14 @@ def add_fields(root: Path, name: str, tile_ids: list[str]) -> dict:
 
 
 def remove_fields(root: Path, name: str, tile_ids: list[str]) -> dict:
-    """Take these fields out of a session. Labels already made on them stay in the label store."""
+    """Take these fields out of a session, and out of its `scope` (a round session's: the fields it draws on, which
+    adding fields keeps equal to them). Labels already made on them stay in the label store."""
     current = meta(root, name)
     drop = set(tile_ids)
-    return update(root, name, fields=[t for t in current["fields"] if t not in drop])
+    changes = {"fields": [t for t in current["fields"] if t not in drop]}
+    if current.get("scope") is not None:
+        changes["scope"] = [t for t in current["scope"] if t not in drop]
+    return update(root, name, **changes)
 
 
 def labelled_by(labels: pd.DataFrame, stain: str) -> dict[str, set[str]]:
