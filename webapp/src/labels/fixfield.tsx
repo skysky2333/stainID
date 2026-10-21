@@ -357,7 +357,8 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     if (live.progress) setProgress(live.progress)
   })
   const unsaved = changedThings(changes) + (brush.dirty ? 1 : 0)
-  useEffect(() => { writeDraft(draftAt, unsaved ? { changes, slider: start } : null) }, [draftAt, changes, unsaved, start])
+  const discarding = useRef(false)  // Discard and close: no draft is kept again on the way out
+  useEffect(() => { if (!discarding.current) writeDraft(draftAt, unsaved ? { changes, slider: start } : null) }, [draftAt, changes, unsaved, start])
   useEffect(() => {  // Segment Anything still preparing this field: look again until clicks answer at once
     if (samReady || !sam) return
     const timer = setInterval(() => {
@@ -1029,6 +1030,15 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     const next = await api.get<{ tile_id: string | null }>(`/api/annotate/${name}/next`).catch(() => ({ tile_id: null }))
     navigate(next.tile_id && next.tile_id !== tile ? `/annotate/${name}/${enc(next.tile_id)}` : `/annotate/${name}`)
   }
+  /** Discard and close: this field's unsaved changes (and their copy in this browser) dropped, back to the session's
+   *  page. One confirmation when there is anything to lose. */
+  const discardAndClose = () => {
+    const lost = unsavedNow()
+    if (lost && !window.confirm(`Discard ${changesText(lost)} on this field and close it? They are not saved and cannot be brought back.`)) return
+    writeDraft(draftAt, null)
+    discarding.current = true
+    navigate(`/annotate/${name}`)
+  }
   const reopen = async () => { if (await send([{ task: 'done', deleted: true }], false)) reload() }
   const done = !!saved[`done:${tile}`]
 
@@ -1061,6 +1071,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   const busy = saving || !!pending
   const px = field.pixel_size_um
   const mayLeave = useLeaveGuard(unsaved + unclassed)
+  const unsavedNow = () => unsaved + unclassed + (precise || draft.length ? 1 : 0)
   const canFinish = !busy && !precise && !draft.length  // detection's calls stand unless changed: no object needs a class first
   useSaveKeys(() => { if (!precise) void saveAll(false) }, () => { if (canFinish) void saveAll(true) })
   const finishTitle = precise ? 'Leave precise editing first (a click beyond the frame or Enter keeps the edit, Esc cancels it)'
@@ -1325,6 +1336,9 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
               <SaveButtons unsaved={unsaved} saving={busy || !!precise} onSave={() => void saveAll(false)} onContinue={() => void saveAll(true)} canContinue={canFinish}
                 continueTitle={finishTitle} />
             </div>
+            {!onFinished && <div className="row side-discard"><span className="spacer" />
+              <button className="link-btn small" onClick={discardAndClose}
+                title="Drop your unsaved changes on this field and go back to the session’s page">Discard and close</button></div>}
           </div>
           <div className="side-foot small">
             <button className={`btn small help-toggle${help ? ' chosen' : ''}`} aria-expanded={help} onClick={() => setHelp(!help)} title="How this page works">?</button>

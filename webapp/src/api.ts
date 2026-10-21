@@ -218,7 +218,9 @@ export interface OpenSession {
   name: string; title: string; stain: string; kind: 'fields' | 'queue' | 'outline' | 'areas' | (string & {}); kind_title?: string; open: boolean; instructions: string; fields: number; done_by_me: number; my_labels: number
   round?: 1 | 2 | 'areas' | null; progress?: RoundProgress; cores?: number  // annotation rounds ("areas": Mark bad areas, by core)
 }
-export interface SessionField { tile_id: string; done_by_me: boolean; annotators_done: number; open_by_others: number; prepared: boolean }
+export interface SessionField { tile_id: string; done_by_me: boolean; annotators_done: number; open_by_others: number; prepared: boolean; tma?: string | null; core?: string | null
+  /** where it stands for everyone (`sessions.field_states`), with who finished it and who is working on it or has it open */
+  state?: FieldState | null; working?: string[]; open_by?: string[]; done_by?: string[] }
 export interface SessionDetail {
   meta: SessionInfo & { fields: string[]; tags: string[]; vocabulary: Vocabulary; keys: KeyMap; subtypes: boolean }
   fields: SessionField[]; annotator: string | null

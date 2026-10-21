@@ -391,9 +391,16 @@ because the server makes the Segment Anything features of the session's fields a
 open sessions, and on the CPU the field someone has open and their next ones. They are kept in
 `data/cache/sam_embeddings/`, and the page says *Preparing one-click outlines…* until its field is ready.
 
+**The session's page** lists its fields by TMA, then core. Each field shows where it stands, as on the admin's page:
+*To do*, *In progress · who* (someone has labels on it or has it open, fewer people than needed finished it), *Done*,
+*Being prepared*, or *Finished by you* while others are still asked. Each TMA and core heading counts its fields (done,
+in progress, finished by this person) and a core shows one state summarised from its fields.
+
 **Saving.** Nothing is saved until the person presses *Save* or *Save and continue*. The count at the top says how many
 unsaved changes there are, and a small orange dot marks each changed object. A draft is kept in the browser in case of
-a reload, and leaving the page with unsaved changes asks first. *Save and continue* finishes the field:
+a reload, and leaving the page with unsaved changes asks first. *Discard and close* (under the save buttons) drops the
+field's unsaved changes and their draft, after one confirmation when there are any, and goes back to the session's page:
+the field stands as it did before. *Save and continue* finishes the field:
 
 - detection's call counts as right unless the person changed it: nothing needs a class or an answer first;
 - every candidate of the tile is then recorded as checked by this person, the ones they left as they are with

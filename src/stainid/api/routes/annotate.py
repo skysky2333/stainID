@@ -659,6 +659,18 @@ def remove_fields(name: str, body: FieldList, request: Request) -> dict:
     return sessions.remove_fields(root(), name, body.tile_ids)
 
 
+def _with_place(fields: list[dict], states: dict[str, dict]) -> list[dict]:
+    """Each field for the person labelling with its TMA and core (the fields page groups them so) and where it stands
+    for everyone (`state`, who finished it and who is working on it or has it open, as `sessions.field_states`)."""
+    facts = _field_facts([f["tile_id"] for f in fields])
+    out = []
+    for f in fields:
+        place, s = facts.get(f["tile_id"], {}), states.get(f["tile_id"], {})
+        out.append({**f, "tma": place.get("tma"), "core": place.get("core_label") or place.get("core_id"), "state": s.get("state"),
+                    "working": s.get("working", []), "open_by": s.get("open_by", f.get("open_by", [])), "done_by": s.get("done_by", f.get("done_by", []))})
+    return out
+
+
 def _field_facts(tile_ids: list[str]) -> dict[str, dict]:
     """Where each field is (core, TMA, region, group) and its square in the core image."""
     tiles = get_state().tiles
@@ -676,13 +688,17 @@ def _text(value) -> str | None:
 def session_fields(name: str, request: Request) -> list[dict]:
     """Every field of a session with where it stands (see `sessions.field_states`) and where it is."""
     meta = session_meta(name, request)
-    if rounds.is_round(meta):
-        return [{**_field_facts(meta["fields"]).get(s["tile_id"], {}), **s} for s in _rounds().admin_fields(meta)] if meta["kind"] == "fields" else []
-    labels = store.current(root())
-    working = outline.started(labels, name) if meta["kind"] == outline.KIND else sessions.labelled_by(labels[labels.session == name], meta["stain"])
-    states = sessions.field_states(meta, finished_fields(meta, labels), working, ready_fields(meta), busy(name))
     facts = _field_facts(meta["fields"])
-    return [{**facts.get(s["tile_id"], {}), **s} for s in states]
+    return [{**facts.get(s["tile_id"], {}), **s} for s in _field_states(meta)]
+
+
+def _field_states(meta: dict) -> list[dict]:
+    """Where each field of a session stands, the same for the admin's page and the person labelling (`sessions.field_states`)."""
+    if rounds.is_round(meta):
+        return _rounds().admin_fields(meta) if meta["kind"] == "fields" else []
+    labels = store.current(root())
+    working = outline.started(labels, meta["name"]) if meta["kind"] == outline.KIND else sessions.labelled_by(labels[labels.session == meta["name"]], meta["stain"])
+    return sessions.field_states(meta, finished_fields(meta, labels), working, ready_fields(meta), busy(meta["name"]))
 
 
 @router.get("/labels/picker", dependencies=admin)
@@ -866,6 +882,7 @@ def session_detail(name: str, request: Request, person: str | None = Depends(vie
         meta = {**meta, **_rounds().detail(meta, person)}
         if meta["open"]:
             _rounds().warm(meta)
+    fields = _with_place(fields, {} if meta.get("practice") else {s["tile_id"]: s for s in _field_states(meta)})
     words = vocabulary(meta["stain"])
     outlines = {"outline_classes": outline.classes(words)} if meta["kind"] == outline.KIND else {}
     if meta["kind"] == outline.KIND:

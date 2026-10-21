@@ -1225,6 +1225,14 @@ details.side-details.compact > summary { font-weight: 500; }
 .side-save-buttons { gap: 6px; flex-wrap: nowrap; }
 .side-save-buttons .btn { flex: 1 1 auto; justify-content: center; }
 .side-save-buttons .btn.big { padding-top: 7px; padding-bottom: 7px; }
+.side-discard { margin-top: -2px; }
+/* the session's fields for the person labelling, by TMA and then core */
+.annotate-tma { display: grid; gap: 10px; margin-top: 18px; }
+.annotate-tma > h2 { font-size: 1.05rem; margin: 0; gap: 10px; }
+.annotate-tma > h2 .small { font-weight: 400; }
+.annotate-core { display: grid; gap: 6px; }
+.annotate-core > h3 { font-size: .9rem; font-weight: 600; margin: 0; color: var(--text-secondary); gap: 10px; text-transform: none; letter-spacing: normal; }
+.annotate-core > h3 .small { font-weight: 400; }
 .side-foot { display: flex; align-items: center; gap: 10px; padding: 0 4px; }
 .help-toggle { min-width: 28px; font-weight: 700; border-radius: 50%; }
 .round-help .round-steps { margin-bottom: 8px; }

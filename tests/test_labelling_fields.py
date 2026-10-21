@@ -87,8 +87,11 @@ def test_sessions_take_only_ready_fields_and_list_where_each_stands(client):
     ann.post("/api/annotate/auto/labels", json={"records": [{"task": "class", "tile_id": READY, "x": 100.0, "y": 200.0, "value": "diffuse plaque"}]})
     assert client.get("/api/labels/sessions/auto/fields").json()[0] | {"state": "in_progress", "working": ["Ann"], "done_by": []} == \
         client.get("/api/labels/sessions/auto/fields").json()[0]
+    mine = ann.get("/api/annotate/auto").json()["fields"][0]  # the person labelling: by TMA and core, with the same state
+    assert (mine["tma"], mine["core"], mine["state"], mine["working"]) == ("1", "B-2", "in_progress", ["Ann"])
     ann.post(f"/api/annotate/auto/fields/{READY}/finish")
     assert client.get("/api/labels/sessions/auto/fields").json()[0]["done_by"] == ["Ann"]
+    assert ann.get("/api/annotate/auto").json()["fields"][0]["done_by"] == ["Ann"]
     assert ann.get(f"/api/annotate/auto/fields/{READY}/thumb.jpg").status_code == 200
 
     removed = client.post("/api/labels/sessions/auto/fields/remove", json={"tile_ids": [READY]}).json()
