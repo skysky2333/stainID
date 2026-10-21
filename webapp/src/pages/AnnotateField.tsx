@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import type { AddedState, FieldObjectLite, FieldState, FieldWork, Label, SessionDetail } from '../api'
+import type { AddedState, FieldObjectLite, FieldWork, Label, SessionDetail } from '../api'
 import { api, apiUrl, enc } from '../api'
 import { Empty, ErrorNote, Loaded, Loading, PageHead, Progress, fmt } from '../components'
 import { PALETTE } from '../palette'
@@ -10,10 +10,10 @@ import { AI_VIEW_FOR_LABELLERS } from '../labelling'
 import type { ClassPick } from '../labels/classKeys'
 import { classText, resolveClass, roleOf } from '../labels/classKeys'
 import { ClassChooser, ClassKeyHint, classColour, useClassKeys } from '../labels/classes'
-import { FieldThumb } from '../labels/fields'
 import { QuickCheck } from '../labels/quickcheck'
 import { FixField } from '../labels/fixfield'
 import { MarkAreas } from '../labels/markareas'
+import { SessionFieldMap } from '../labels/sessionfields'
 import { ROUND_TITLE, RoundProgressLine, useFitScreen } from '../labels/rounds'
 import type { RoundDetail } from '../api'
 import { Register, useSession } from '../session'
@@ -74,23 +74,6 @@ function SessionProblem({ error, retry }: { error: string; retry: () => void }) 
   )
 }
 
-type Field = SessionDetail['fields'][number]
-/** Where a field stands, as the admin's page has it (`sessions.field_states`: in progress = someone has labels on it or
- *  has it open, fewer people than needed finished it), in words for the person labelling. */
-const STATE: Record<FieldState, { text: string; className: string }> = {
-  done: { text: 'Done', className: 'status-done' }, in_progress: { text: 'In progress', className: 'status-running' },
-  not_started: { text: 'To do', className: 'status-todo' }, preparing: { text: 'Being prepared', className: 'status-queued' },
-}
-const stateOf = (f: Field): FieldState => f.state ?? (!f.prepared ? 'preparing' : f.done_by_me ? 'done' : f.open_by_others ? 'in_progress' : 'not_started')
-const whoText = (people: string[], me: string | null) => people.map((p) => (p === me ? 'you' : p)).join(', ')
-/** "In progress · Ben, you", "Done", "To do"; finished by this person while others still have to: "Finished by you". */
-function FieldStateLabel({ f, me }: { f: Field; me: string | null }) {
-  const state = stateOf(f)
-  if (f.done_by_me && state !== 'done') return <span className="badge status-done" title="You finished it; others are still asked to">Finished by you</span>
-  const who = state === 'in_progress' ? whoText([...new Set([...(f.working ?? []), ...(f.open_by ?? [])])], me) : ''
-  return <span className={`badge ${STATE[state].className}`}>{STATE[state].text}{who ? ` · ${who}` : ''}</span>
-}
-
 /** A session's start page for the person labelling: how far they are, the next field to do, and every field with what is
  *  done and what is left (they can open any prepared field). */
 function SessionOverview({ detail, reload }: { detail: SessionDetail; reload: () => void }) {
@@ -132,61 +115,9 @@ function SessionOverview({ detail, reload }: { detail: SessionDetail; reload: ()
         <p className="small muted" style={{ margin: 0 }}>A field is one square of tissue (about 560 µm across). {meta.stain} · {AI_VIEW_FOR_LABELLERS[meta.ai_view]}.</p>
         {nothing && <p className="small secondary" style={{ margin: 0 }}>Every field still to do is being checked by someone else right now or is still being prepared; try again in a minute.</p>}
       </div>
-      <div className="annotate-fields">{byTmaAndCore(fields).map(([tma, cores]) => (
-        <section key={tma} className="annotate-tma">
-          <h2 className="row">{/^tma/i.test(tma) || tma === 'Other fields' ? tma : `TMA ${tma}`}<span className="small muted">{countText(cores.flatMap(([, list]) => list))}</span></h2>
-          {cores.map(([core, list]) => (
-            <div key={core} className="annotate-core">
-              <h3 className="row">Core {core}<span className="small muted">{countText(list)}</span><CoreState list={list} /></h3>
-              <div className="field-grid">{list.map(({ f, i }) => {
-                const body = <>
-                  <FieldThumb src={apiUrl(`/api/annotate/${name}/fields/${enc(f.tile_id)}/thumb.jpg`)} alt={`Field ${i + 1}`} />
-                  <span className="row small field-card-state"><b>Field {i + 1}</b><span className="spacer" /><FieldStateLabel f={f} me={detail.annotator} /></span>
-                </>
-                return f.prepared
-                  ? <Link key={f.tile_id} className="field-card clickable" to={`/annotate/${name}/${enc(f.tile_id)}`} title={f.done_by_me ? 'Open again to check or change' : 'Open this field'}>{body}</Link>
-                  : <div key={f.tile_id} className="field-card is-waiting">{body}</div>
-              })}</div>
-            </div>
-          ))}
-        </section>
-      ))}</div>
+      <SessionFieldMap detail={detail} />
     </div>
   )
-}
-
-type Numbered = { f: SessionDetail['fields'][number]; i: number }
-/** The fields by TMA, then core, each in the session's order (and keeping its number in the session). */
-function byTmaAndCore(fields: SessionDetail['fields']): [string, [string, Numbered[]][]][] {
-  const tmas = new Map<string, Map<string, Numbered[]>>()
-  fields.forEach((f, i) => {
-    const tma = f.tma || 'Other fields'
-    const core = f.core || '—'
-    const cores = tmas.get(tma) ?? tmas.set(tma, new Map()).get(tma)!
-    cores.set(core, [...(cores.get(core) ?? []), { f, i }])
-  })
-  const order = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true })
-  return [...tmas].sort(([a], [b]) => order(a, b)).map(([tma, cores]) => [tma, [...cores].sort(([a], [b]) => order(a, b))])
-}
-/** A core's state from its fields' (the fields' labels): done when every field is, being prepared while none is ready,
- *  to do while none has started, else in progress. */
-function coreState(states: FieldState[]): FieldState {
-  if (states.every((s) => s === 'done')) return 'done'
-  if (states.every((s) => s === 'preparing')) return 'preparing'
-  if (states.every((s) => s === 'not_started' || s === 'preparing')) return 'not_started'
-  return 'in_progress'
-}
-function CoreState({ list }: { list: Numbered[] }) {
-  const state = coreState(list.map(({ f }) => stateOf(f)))
-  return <span className={`badge ${STATE[state].className}`}>{STATE[state].text}</span>
-}
-/** "3 fields · 1 done · 1 in progress · 1 of 3 finished by you" */
-const countText = (list: Numbered[]) => {
-  const states = list.map(({ f }) => stateOf(f))
-  const n = (s: FieldState) => states.filter((x) => x === s).length
-  const mine = list.filter(({ f }) => f.done_by_me).length
-  return [`${list.length} field${list.length === 1 ? '' : 's'}`, n('done') && `${n('done')} done`, n('in_progress') && `${n('in_progress')} in progress`,
-    `${mine} of ${list.length} finished by you`].filter(Boolean).join(' · ')
 }
 
 function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: () => void; tile: string }) {

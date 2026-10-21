@@ -141,6 +141,26 @@ export function FixField({ detail, reload, tile, onEvent, onFinished, coach }: {
   const shapes = useFetch<Record<string, (number[] | null)[]>>(work.data ? `/api/annotate/${detail.meta.name}/fields/${enc(tile)}/masks` : null)
   const field = useMemo(() => (work.data ? unflatten(work.data, shapes.data) : null), [work.data, shapes.data])
   useFitScreen()
+  const name = detail.meta.name
+  const practice = !!(detail.meta as { practice?: boolean }).practice
+  useEffect(() => {  // closing the field (another page, the next field, the tab closed) frees it for the others at once
+    if (practice) return
+    const leave = () => { void fetch(apiUrl(`/api/annotate/${name}/fields/${enc(tile)}/leave`), { method: 'POST', keepalive: true, credentials: 'include' }).catch(() => undefined) }
+    window.addEventListener('pagehide', leave)
+    return () => { window.removeEventListener('pagehide', leave); leave() }
+  }, [name, tile, practice])
+  const taken = work.error && /working on this field/.test(work.error) ? work.error.replace(/^\d{3}: /, '') : null
+  if (taken) {
+    return (
+      <div className="annotate-page">
+        <div className="card" style={{ maxWidth: 560 }}>
+          <h2 style={{ marginTop: 0 }}>{taken}</h2>
+          <p className="secondary">Only one person works on a field at a time. It opens for you again once they close it.</p>
+          <Link className="btn primary" to={`/annotate/${name}`}>Back to the session’s fields</Link>
+        </div>
+      </div>
+    )
+  }
   if (!field) {  // the picture at once, the objects when they have arrived
     return (
       <div className="annotate-page round-page fit-page">

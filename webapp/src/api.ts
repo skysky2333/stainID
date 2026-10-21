@@ -218,12 +218,16 @@ export interface OpenSession {
   name: string; title: string; stain: string; kind: 'fields' | 'queue' | 'outline' | 'areas' | (string & {}); kind_title?: string; open: boolean; instructions: string; fields: number; done_by_me: number; my_labels: number
   round?: 1 | 2 | 'areas' | null; progress?: RoundProgress; cores?: number  // annotation rounds ("areas": Mark bad areas, by core)
 }
-export interface SessionField { tile_id: string; done_by_me: boolean; annotators_done: number; open_by_others: number; prepared: boolean; tma?: string | null; core?: string | null
+export interface SessionField { tile_id: string; done_by_me: boolean; annotators_done: number; open_by_others: number; prepared: boolean; tma?: string | null; tma_name?: string | null; core_id?: string | null; core?: string | null
+  /** its square in the core image: x, y, width, height (core px) */
+  box?: [number, number, number, number] | null; done_at?: Record<string, number>
   /** where it stands for everyone (`sessions.field_states`), with who finished it and who is working on it or has it open */
   state?: FieldState | null; working?: string[]; open_by?: string[]; done_by?: string[] }
 export interface SessionDetail {
   meta: SessionInfo & { fields: string[]; tags: string[]; vocabulary: Vocabulary; keys: KeyMap; subtypes: boolean }
   fields: SessionField[]; annotator: string | null
+  /** each core drawn as its tiles: the frame around them and the tiles not in this session; how many people each field needs */
+  cores?: Record<string, { x: number; y: number; width: number; height: number; others: [number, number, number, number][] }>; needed?: number
 }
 export interface Label {
   id: string; source: string; stain: string; task: 'class' | 'outline' | 'tag' | 'note' | 'done' | 'exclude' | 'threshold' | 'replaced'; tile_id: string  // exclude: an area marked as bad (points: its rings)

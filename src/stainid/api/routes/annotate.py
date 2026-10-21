@@ -659,15 +659,70 @@ def remove_fields(name: str, body: FieldList, request: Request) -> dict:
     return sessions.remove_fields(root(), name, body.tile_ids)
 
 
-def _with_place(fields: list[dict], states: dict[str, dict]) -> list[dict]:
-    """Each field for the person labelling with its TMA and core (the fields page groups them so) and where it stands
-    for everyone (`state`, who finished it and who is working on it or has it open, as `sessions.field_states`)."""
+def _with_place(meta: dict, fields: list[dict], states: dict[str, dict], labels: pd.DataFrame) -> list[dict]:
+    """Each field for the person labelling with its TMA and core (the fields page groups them so, each core drawn as its
+    tiles), its square in the core image (`box`), and where it stands for everyone (`state`, who is working on it or has
+    it open, who finished it and when, as `sessions.field_states`)."""
     facts = _field_facts([f["tile_id"] for f in fields])
+    done = labels[(labels.stain == meta["stain"]) & (labels.task == "done") & labels.tile_id.isin({f["tile_id"] for f in fields})]
+    when = done.groupby(["tile_id", "source"]).time.max().to_dict() if len(done) else {}
+    prefix = get_state().project.tma_prefix or ""
     out = []
     for f in fields:
         place, s = facts.get(f["tile_id"], {}), states.get(f["tile_id"], {})
-        out.append({**f, "tma": place.get("tma"), "core": place.get("core_label") or place.get("core_id"), "state": s.get("state"),
-                    "working": s.get("working", []), "open_by": s.get("open_by", f.get("open_by", [])), "done_by": s.get("done_by", f.get("done_by", []))})
+        done_by = s.get("done_by", f.get("done_by", []))
+        out.append({**f, "tma": place.get("tma"), "tma_name": f"{prefix}{place['tma']}" if place.get("tma") else None,
+                    "core_id": place.get("core_id"), "core": place.get("core_label") or place.get("core_id"),
+                    "box": [place[k] for k in BOX] if all(place.get(k) is not None for k in BOX) else None, "state": s.get("state"),
+                    "working": s.get("working", []), "open_by": s.get("open_by", f.get("open_by", [])), "done_by": done_by,
+                    "done_at": {p: float(when[(f["tile_id"], p)]) for p in done_by if (f["tile_id"], p) in when}})
+    return out
+
+
+def _core_layouts(meta: dict, fields: list[dict]) -> dict[str, dict]:
+    """Each core of the session drawn as its tiles: the frame around all its tiles of the stain (core px) and the tiles
+    that are not in this session (drawn faint, so the core's shape reads)."""
+    tiles = get_state().tiles
+    cores = {f["core_id"] for f in fields if f.get("core_id")}
+    if tiles.empty or not cores:
+        return {}
+    mine = {f["tile_id"] for f in fields}
+    rows = tiles[(tiles.stain == meta["stain"]) & tiles.core_id.astype(str).isin(cores)].drop_duplicates("tile_id")
+    out = {}
+    for core_id, group in rows.groupby(rows.core_id.astype(str)):
+        x0, y0 = int(group.x_px.min()), int(group.y_px.min())
+        x1, y1 = int((group.x_px + group.width_px).max()), int((group.y_px + group.height_px).max())
+        others = group[~group.tile_id.isin(mine)]
+        out[core_id] = {"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0,
+                        "others": [[int(r.x_px), int(r.y_px), int(r.width_px), int(r.height_px)] for r in others.itertuples()]}
+    return out
+
+
+NEAR_THRESHOLD = 0.2  # how far (in probability) from the acceptance threshold an object still counts as uncertain
+
+
+@router.get("/annotate/{name}/confidence")
+def session_confidence(name: str, request: Request, person: str | None = Depends(viewer)) -> dict:
+    """How sure detection is on each field of a session (the fields page's "By confidence" order): `near`, the field's
+    own objects weighted by how close their probability sits to their acceptance threshold (1 at it, 0 from
+    `NEAR_THRESHOLD` away), and `objects`, how many it has. More weight near the threshold: less confident."""
+    meta = labelled_here(session_meta(name, request))
+    out: dict[str, dict] = {}
+    if meta.get("practice") or meta["kind"] != "fields":
+        return out
+    for tile_id in meta["fields"]:
+        try:
+            found = _rounds()._field_candidates(meta, field_tile(meta, tile_id))
+        except Exception:  # noqa: BLE001 — a field not readable yet has no confidence: it sorts as it is
+            continue
+        own = found[found.own] if "own" in found else found
+        if own.empty or "probability" not in own:
+            out[tile_id] = {"near": 0.0, "objects": int(len(own))}
+            continue
+        threshold = own.threshold.astype(float).fillna(0.5) if "threshold" in own else 0.5  # no threshold kept: the model's usual 0.5
+        gap = (own.probability.astype(float) - threshold).abs()
+        weight = (1 - gap / NEAR_THRESHOLD).clip(lower=0).fillna(0)
+        out[tile_id] = {"near": round(float(weight.sum()), 2), "objects": int(len(own))}
     return out
 
 
@@ -882,14 +937,15 @@ def session_detail(name: str, request: Request, person: str | None = Depends(vie
         meta = {**meta, **_rounds().detail(meta, person)}
         if meta["open"]:
             _rounds().warm(meta)
-    fields = _with_place(fields, {} if meta.get("practice") else {s["tile_id"]: s for s in _field_states(meta)})
+    fields = _with_place(meta, fields, {} if meta.get("practice") else {s["tile_id"]: s for s in _field_states(meta)}, labels)
+    layouts = _core_layouts(meta, fields)
     words = vocabulary(meta["stain"])
     outlines = {"outline_classes": outline.classes(words)} if meta["kind"] == outline.KIND else {}
     if meta["kind"] == outline.KIND:
         sam_embeddings.prepare_session(get_state(), meta)
     return {"meta": {**meta, "subtypes": asks_subtypes(meta), "vocabulary": words.to_api(), "keys": words.keymap(asks_subtypes(meta)), "tags": FIELD_TAGS,
                      **outlines},
-            "fields": fields, "annotator": person}
+            "fields": fields, "cores": layouts, "needed": rounds.needed(meta), "annotator": person}
 
 
 def asks_subtypes(meta: dict) -> bool:
@@ -923,6 +979,15 @@ def next_item(name: str, request: Request, person: str = Depends(annotator), cou
     _HELD.hold(held, person, [i["key"] for i in items])
     pictures = queue_pictures.prepare(state, meta, objects, labels, first=pd.DataFrame(items, columns=["tile_id", "x", "y"]))
     return {"object": items[0] if items else None, "objects": items, "remaining": remaining, "pictures": pictures}
+
+
+@router.post("/annotate/{name}/fields/{tile_id}/leave")
+def leave_field(name: str, tile_id: str, request: Request, person: str = Depends(annotator)) -> dict:
+    """The person closed this field: the others may open it now (else its hold lapses by itself)."""
+    meta = session_meta(name, request)
+    if rounds.is_round(meta):
+        _rounds().leave_field(meta, tile_id, person)
+    return {"left": tile_id}
 
 
 @router.get("/annotate/{name}/fields/{tile_id}")

@@ -58,6 +58,7 @@ def _writes(client: TestClient) -> dict[str, tuple[str, dict]]:
         "/api/annotate/{name}/labels": (f"/api/annotate/{FIELD}/labels", {"records": [{"task": "class", "tile_id": TILE, "x": 20.0, "y": 20.0, "value": "CAA"}]}),
         "/api/annotate/{name}/fields/{tile_id}/finish": (f"/api/annotate/{FIELD}/fields/{TILE}/finish", {}),
         "/api/annotate/{name}/live": (f"/api/annotate/{FIELD}/live", {"tile_id": TILE}),
+        "/api/annotate/{name}/fields/{tile_id}/leave": (f"/api/annotate/{FIELD}/fields/{TILE}/leave", {}),
         "/api/annotate/{name}/tiles/{tile_id}/save": (f"/api/annotate/{FIELD}/tiles/{TILE}/save",
                                                        {"records": [{"task": "class", "candidate": own["candidate_id"], "value": "CAA"},
                                                                     {"task": "class", "tile_id": TILE, "x": 30.0, "y": 30.0, "value": "CAA"}], "submit": True}),

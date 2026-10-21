@@ -1226,13 +1226,39 @@ details.side-details.compact > summary { font-weight: 500; }
 .side-save-buttons .btn { flex: 1 1 auto; justify-content: center; }
 .side-save-buttons .btn.big { padding-top: 7px; padding-bottom: 7px; }
 .side-discard { margin-top: -2px; }
-/* the session's fields for the person labelling, by TMA and then core */
-.annotate-tma { display: grid; gap: 10px; margin-top: 18px; }
-.annotate-tma > h2 { font-size: 1.05rem; margin: 0; gap: 10px; }
-.annotate-tma > h2 .small { font-weight: 400; }
-.annotate-core { display: grid; gap: 6px; }
-.annotate-core > h3 { font-size: .9rem; font-weight: 600; margin: 0; color: var(--text-secondary); gap: 10px; text-transform: none; letter-spacing: normal; }
-.annotate-core > h3 .small { font-weight: 400; }
+/* the session's fields for the person labelling (labels/sessionfields.tsx): by TMA, then core, each core as its tiles */
+:root { --tile-todo: #8f8d86; --tile-progress: #2a78d6; --tile-done: #1f8a4c; --tile-mine: #8a4fd8; --tile-preparing: #b9b7af; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --tile-todo: #a5a39b; --tile-progress: #5aa0f0; --tile-done: #3fb871; --tile-mine: #b08cf0; --tile-preparing: #6c6b66; } }
+:root[data-theme="dark"] { --tile-todo: #a5a39b; --tile-progress: #5aa0f0; --tile-done: #3fb871; --tile-mine: #b08cf0; --tile-preparing: #6c6b66; }
+.session-fields { display: grid; gap: 12px; margin-top: 16px; }
+.session-fields-bar { gap: 8px 16px; flex-wrap: wrap; }
+.tile-legend { list-style: none; margin: 0; padding: 0; gap: 4px 14px; flex-wrap: wrap; color: var(--text-secondary); }
+.tile-legend li { display: inline-flex; align-items: center; gap: 6px; }
+.tile-swatch { width: 14px; height: 14px; border-radius: 3px; border: 2.5px solid var(--tile-todo); background: var(--surface-1); }
+.annotate-tma > summary, .core-map-card > summary { cursor: pointer; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.annotate-tma > summary { font-size: 1.05rem; padding: 4px 0; }
+.annotate-tma > summary::marker, .core-map-card > summary::marker { content: ''; }
+.annotate-tma > summary::before, .core-map-card > summary::before { content: '▸'; color: var(--text-muted); width: 10px; display: inline-block; transition: transform .12s; }
+.annotate-tma[open] > summary::before, .core-map-card[open] > summary::before { transform: rotate(90deg); }
+.core-maps { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; margin-top: 8px; align-items: start; }
+.core-map-card { padding: 10px 12px; display: grid; gap: 8px; }
+.core-map-card > summary { font-size: .9rem; }
+.core-map-card[open] > summary { margin-bottom: 8px; }
+.core-map { position: relative; width: 100%; max-width: 300px; }
+.core-tile, .core-tile-other { position: absolute; box-sizing: border-box; border-radius: 2px; }
+.core-tile-other { background: var(--surface-0); border: 1px solid var(--border); opacity: .55; }
+.core-tile { display: block; overflow: hidden; border: 2.5px solid var(--tile-todo); background: var(--surface-0); }
+.core-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+a.core-tile:hover, a.core-tile:focus-visible { outline: 2px solid var(--text-primary, #222); outline-offset: 1px; z-index: 1; }
+.core-tile.taken { cursor: not-allowed; }
+.core-tile.taken img { opacity: .55; }
+.core-tile.in-row { position: relative; display: inline-block; width: 56px; height: 56px; margin: 0 4px 4px 0; }
+.look-not_started { border-color: var(--tile-todo); }
+.look-in_progress { border-color: var(--tile-progress); }
+.look-done { border-color: var(--tile-done); }
+.look-mine { border-color: var(--tile-mine); }
+.look-preparing { border-color: var(--tile-preparing); border-style: dashed; }
+.tile-swatch.look-preparing { border-style: dashed; }
 .side-foot { display: flex; align-items: center; gap: 10px; padding: 0 4px; }
 .help-toggle { min-width: 28px; font-weight: 700; border-radius: 50%; }
 .round-help .round-steps { margin-bottom: 8px; }

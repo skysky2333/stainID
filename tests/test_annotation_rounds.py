@@ -170,6 +170,10 @@ def test_round_two_fields_are_claimed_and_saved_as_a_whole(rounds_project):
     assert ann.get(f"/api/annotate/{name}/next").json()["tile_id"] == a  # still hers
     cy = _person(admin, "Cy")
     assert cy.get(f"/api/annotate/{name}/next").json() == {"tile_id": None, "waiting": 0, "taken": 2}
+    if b["tile_id"] == TILE:  # Ben was handed TILE: he closes it, so Ann may open it (one person on a field at a time)
+        assert ann.get(f"/api/annotate/{name}/fields/{TILE}").status_code == 409
+        ben.post(f"/api/annotate/{name}/fields/{TILE}/leave")
+        ann.get(f"/api/annotate/{name}/next")
 
     field = ann.get(f"/api/annotate/{name}/fields/{TILE}").json()
     own = [o for o in field["objects"] if o["own"]]
@@ -179,7 +183,7 @@ def test_round_two_fields_are_claimed_and_saved_as_a_whole(rounds_project):
     assert flipped.status_code == 200, flipped.text
     live = ann.post(f"/api/annotate/{name}/live", json={"tile_id": TILE}).json()
     assert live["checked"][target["candidate_id"]]["by"] == ["Ben"] and live["checked"][target["candidate_id"]]["identity"] == "CAA"
-    assert live["open_by"] == ["Ben"]  # he saved here: the field is his too now
+    assert live["open_by"] == []  # he saved here, but the field stays hers alone while she has it open
 
     before = _log_lines()
     saved = _save(ann, name, TILE, [{"task": "class", "x": 50, "y": 60, "value": "plaque"},
@@ -433,6 +437,8 @@ def test_the_tutorial_needs_no_account_and_admins_open_any_session(rounds_projec
     made = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "open": True, "tile_ids": [TILE]}).json()
     assert guest.get(f"/api/annotate/{made['name']}/fields/{TILE}").status_code == 401
     assert admin.get(f"/api/annotate/{made['name']}/fields/{TILE}").status_code == 200
+    assert ann.get(f"/api/annotate/{made['name']}/fields/{TILE}").status_code == 409  # one person on a field at a time
+    admin.post(f"/api/annotate/{made['name']}/fields/{TILE}/leave")
     assert ann.get(f"/api/annotate/{made['name']}/fields/{TILE}").status_code == 200
 
 
@@ -464,3 +470,38 @@ def test_the_labels_page_keys_objects_as_training_and_the_rounds_do(rounds_proje
     assert len(one.labels) == 3  # the history keeps every label
     counted = decisions.consensus(project, "6E10", frames.in_field_frame(labels, tiles, project.context_px), tiles)
     assert counted.object.tolist() == [one.object] and int(counted.n.iloc[0]) == one.n
+
+
+def test_one_person_on_a_field_at_a_time(rounds_project):
+    """While someone has a field open nobody else may open it (409, naming them); the same person again (a second tab)
+    may. It is free again once they close it, save and move on, or their page's heartbeat lapses; a field that needs
+    two people gets both, one after the other."""
+    from stainid.api.routes import rounds as round_routes
+
+    admin, (ann, ben), _ = rounds_project
+    name = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "n_fields": 2, "open": True, "labels_needed": 2}).json()["name"]
+    assert ann.get(f"/api/annotate/{name}/fields/{TILE}").status_code == 200
+    refused = ben.get(f"/api/annotate/{name}/fields/{TILE}")
+    assert refused.status_code == 409 and refused.json()["detail"] == "Ann is working on this field"
+    assert ann.get(f"/api/annotate/{name}/fields/{TILE}").status_code == 200  # her second tab
+    mine = {f["tile_id"]: f for f in ben.get(f"/api/annotate/{name}").json()["fields"]}
+    assert mine[TILE]["open_by"] == ["Ann"]  # the picker shows who has it (and does not open it)
+    assert mine[TILE]["box"] == [300, 300, 512, 512] and mine[TILE]["core_id"] == "LIP-1_B-2" and mine[TILE]["tma_name"]  # its place in the core
+    sure = ben.get(f"/api/annotate/{name}/confidence").json()  # "By confidence": objects close to the threshold weigh most
+    assert sure[TILE]["objects"] == 6 and sure[TILE]["near"] > sure[OTHER]["near"]
+    ben.post(f"/api/annotate/{name}/live", json={"tile_id": TILE})  # a page left open from before takes it back from nobody
+    assert ben.get(f"/api/annotate/{name}/fields/{TILE}").status_code == 409
+
+    ann.post(f"/api/annotate/{name}/fields/{TILE}/leave")  # she closed it
+    assert ben.get(f"/api/annotate/{name}/fields/{TILE}").status_code == 200
+    assert ann.get(f"/api/annotate/{name}/fields/{TILE}").status_code == 409
+    assert _save(ben, name, TILE, [], submit=True).status_code == 200  # Save and continue: free again, the second person's turn
+    assert ann.get(f"/api/annotate/{name}/fields/{TILE}").status_code == 200
+
+    held = round_routes._TILES_HELD
+    clock = held.clock
+    try:  # her heartbeat lapses (the tab closed without a word): free again
+        held.clock = lambda: clock() + rounds.TILE_HOLD_SECONDS + 1
+        assert ben.get(f"/api/annotate/{name}/fields/{TILE}").status_code == 200
+    finally:
+        held.clock = clock

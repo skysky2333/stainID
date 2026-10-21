@@ -88,6 +88,27 @@ def tiles_held(meta: dict) -> dict[str, set[str]]:
     return {} if meta.get("practice") else _TILES_HELD.held(tile_hold(meta))
 
 
+def working_text(people: set[str]) -> str:
+    names = sorted(people)
+    return f"{', '.join(names[:-1])} and {names[-1]} are working on this field" if len(names) > 1 else f"{names[0]} is working on this field"
+
+
+def refuse_if_taken(meta: dict, tile_id: str, person: str) -> None:
+    """One person on a field at a time: someone else has it open (their page's heartbeat holds it, `_TILES_HELD`, until
+    they close it, save and move on, or the hold lapses) → 409. The same person again (a second tab) may."""
+    if meta.get("practice"):
+        return
+    others = tiles_held(meta).get(tile_id, set()) - {person}
+    if others:
+        raise HTTPException(409, working_text(others))
+
+
+def leave_field(meta: dict, tile_id: str, person: str) -> None:
+    """The person closed the field (left the page, Discard and close): it is free for the others at once."""
+    if not meta.get("practice"):
+        _TILES_HELD.release(tile_hold(meta), person, [tile_id])
+
+
 def finished_tiles(meta: dict, labels: pd.DataFrame | None = None) -> dict[str, set[str]]:
     """Who finished each tile in this round (in any session of the stain)."""
     if meta.get("practice"):
@@ -576,6 +597,7 @@ def open_field(meta: dict, tile_id: str, person: str):
     tile = field_tile(meta, tile_id)
     practice = bool(meta.get("practice"))
     if not practice:
+        refuse_if_taken(meta, tile_id, person)
         _TILES_HELD.hold(tile_hold(meta), person, [tile_id])
         busy(meta["name"], tile_id, person)
     if not field_prepared(meta, tile):
@@ -656,8 +678,10 @@ def live(meta: dict, body: Live, person: str) -> dict:
     out: dict = {"time": time.time()}
     if body.tile_id:
         tile = tile_of(meta, body.tile_id)
-        _TILES_HELD.hold(tile_hold(meta), person, [body.tile_id])
-        busy(meta["name"], body.tile_id, person)
+        holders = tiles_held(meta).get(body.tile_id, set())
+        if person in holders or not holders:  # someone else took it while this page's hold had lapsed: not taken back
+            _TILES_HELD.hold(tile_hold(meta), person, [body.tile_id])
+            busy(meta["name"], body.tile_id, person)
         finished = finished_tiles(meta)
         out |= {"open_by": sorted(tiles_held(meta).get(body.tile_id, set()) - {person}),
                 "done_by": sorted(finished.get(body.tile_id, set()) - {person})}
@@ -926,7 +950,7 @@ def save_tile(meta: dict, tile_id: str, marks: list, submit: bool, person: str) 
     saved = store.append(root(), cleaned) if cleaned else []
     if submit:
         _TILES_HELD.release(tile_hold(meta), person, [tile_id])
-    else:
+    elif not tiles_held(meta).get(tile_id, set()) - {person}:  # one person on a field at a time: a save takes it from nobody
         _TILES_HELD.hold(tile_hold(meta), person, [tile_id])
     if any(r["task"] == "class" and not r.get("candidate") and not r["deleted"] for r in saved):
         measure_added_soon(get_state().project, meta["stain"])

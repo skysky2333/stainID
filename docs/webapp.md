@@ -391,10 +391,23 @@ because the server makes the Segment Anything features of the session's fields a
 open sessions, and on the CPU the field someone has open and their next ones. They are kept in
 `data/cache/sam_embeddings/`, and the page says *Preparing one-click outlines…* until its field is ready.
 
-**The session's page** lists its fields by TMA, then core. Each field shows where it stands, as on the admin's page:
-*To do*, *In progress · who* (someone has labels on it or has it open, fewer people than needed finished it), *Done*,
-*Being prepared*, or *Finished by you* while others are still asked. Each TMA and core heading counts its fields (done,
-in progress, finished by this person) and a core shows one state summarised from its fields.
+**The session's page** lists its fields by TMA (its name, e.g. LIP-3), then core; each level folds open and shut.
+Each core is drawn as its own tiles, each at its place in the core: the session's fields as small pictures, the
+core's other tiles faint and not clickable, so the core's shape reads. A field's state is its outline colour (a
+one-line legend: To do, In progress, Finished by you, Done, Being prepared; in progress as on the admin's page:
+someone has labels on it or has it open, fewer people than needed finished it). Pointing at a tile tells its state,
+who is working on it or has it open, who finished it and when, and how many of the people asked are done (1 of 2);
+a click opens it. Each TMA and core heading keeps its counts, and a core one state summarised from its fields.
+*Natural order* / *By confidence* (remembered in this browser per person): by confidence, the cores of each TMA come
+least confident first: a field weighs its objects by how close their probability sits to the acceptance threshold
+(1 at it, 0 from 0.2 away; `GET /api/annotate/{name}/confidence`), a core adds up its fields; TMAs keep their order.
+
+**One person on a field at a time.** While someone has a field open (their page's heartbeat holds it, renewed every
+few seconds), nobody else can open it: the server answers 409 "Ann is working on this field", the page says so with
+the way back, and the tile is not clickable in the picker. The same person in a second tab may. It is free again
+when they close the field (another page, Discard and close, the tab closed: `POST …/fields/{tile}/leave`), save and
+move on, or when the heartbeat lapses (90 s, also for a tab left in the background), so it never sticks; a field that
+needs two people gets both, one after the other.
 
 **Saving.** Nothing is saved until the person presses *Save* or *Save and continue*. The count at the top says how many
 unsaved changes there are, and a small orange dot marks each changed object. A draft is kept in the browser in case of
