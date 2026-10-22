@@ -37,6 +37,7 @@ import { keyGroups, resolveClass, roleOf } from './classKeys'
 import type { RoundEvent } from './rounds'
 import { BRUSH_KEY, BRUSH_PX, BRUSH_SCALE, CLEARED, EXCLUDE_TYPES, INCLUDE, brushStep, useBrush } from './brush'
 import { SimpleFixer } from './simplefield'
+import { FieldStrip, useLevels, useStripShown } from './fieldstrip'
 import type { Slider } from './fieldStart'
 import { SLIDER_STEP, acceptedAt, lock, moveTo, slider, sliderText, startPick, unlock } from './fieldStart'
 import { LockIcon, ThresholdSlider } from './threshold'
@@ -371,6 +372,8 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   const [help, setHelp] = useStored<boolean>('stainid.round2.help', false)
   const [note, setNote] = useState(() => field.mine.find((m) => m.task === 'note')?.value ?? '')
   const sam = meta.segment_anything && field.segment_anything
+  const levels = useLevels()  // the whole core and the middle zoom level beside the field (fieldstrip.tsx)
+  const [stripOn, setStripOn] = useStripShown()
   // the brush (B): bad areas painted on a mask, saved with the field's other changes as people's areas
   const [excluding, setExcluding] = useState(false)
   const [brushSize, setBrushSize] = useStored<number>(BRUSH_KEY, BRUSH_PX.start)  // the brush's diameter on screen (px)
@@ -1234,7 +1237,9 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
             current={callOf(byKey.get(menu.key)!).pick} onPick={pickFromMenu} onClose={() => setMenu(null)} />}
           <ZoomViewer fit src={apiUrl(`/api/annotate/${name}/fields/${enc(tile)}/image.jpg`)}
             layers={hidden ? [] : field.layers.filter((l) => layers[l]).map((l) => apiUrl(`/api/annotate/${name}/fields/${enc(tile)}/layer/${l}.png`))}
-            title={<span className="row"><span className="muted small">{tile}</span>{done && <span className="badge status-done">finished</span>}
+            title={<span className="row">{!(meta as { practice?: boolean }).practice && <button className={`btn small levels-toggle${stripOn ? ' chosen' : ''}`} onClick={() => setStripOn(!stripOn)} aria-pressed={stripOn}
+              title={stripOn ? 'Hide the whole core and the middle zoom level' : 'Show the whole core and a middle zoom level beside the field'}>Overview</button>}
+              <span className="muted small">{tile}</span>{done && <span className="badge status-done">finished</span>}
               {precise && <span className="badge status-running">precise editing — click beyond the frame or Enter to finish, Esc cancels</span>}
               {hidden && <span className="badge">Overlays hidden · <span className="kbd">Space</span></span>}
               {pending && <span className="small muted">Outlining…</span>}
@@ -1246,6 +1251,9 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
             focus={focus} cursor={readOnly || threading ? 'default' : excluding ? 'none' : mode ? 'crosshair' : precise ? 'crosshair' : target ? 'pointer' : 'copy'}
             onClick={threading || readOnly ? undefined : click} onMove={move} onContext={openMenu}
             onPress={readOnly ? undefined : press} onRelease={readOnly ? undefined : release} panLock={excluding || !!mode} onSize={setFieldSize}
+            onView={levels.onView} control={levels.control}
+            aside={stripOn && !(meta as { practice?: boolean }).practice ? <FieldStrip name={name} tile={tile} fields={detail.fields} levels={levels}
+              onOpen={(t) => { if (mayLeave()) navigate(`/annotate/${name}/${enc(t)}`) }} /> : null}
             paint={!hidden && fieldSize && (excluding || brush.dirty) ? (  // each type's area now: one merged region per type (brush.ts), from the first stroke
               <div ref={brush.host} className="exclude-painted" style={{ position: 'absolute', left: 0, top: 0,
                 width: `${(100 * Math.ceil(fieldSize.w / BRUSH_SCALE) * BRUSH_SCALE) / fieldSize.w}%`, height: `${(100 * Math.ceil(fieldSize.h / BRUSH_SCALE) * BRUSH_SCALE) / fieldSize.h}%` }} />

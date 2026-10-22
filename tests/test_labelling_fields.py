@@ -93,6 +93,10 @@ def test_sessions_take_only_ready_fields_and_list_where_each_stands(client):
     assert client.get("/api/labels/sessions/auto/fields").json()[0]["done_by"] == ["Ann"]
     assert ann.get("/api/annotate/auto").json()["fields"][0]["done_by"] == ["Ann"]
     assert ann.get(f"/api/annotate/auto/fields/{READY}/thumb.jpg").status_code == 200
+    core = ann.get(f"/api/annotate/auto/fields/{READY}/core").json()  # the smaller zoom levels beside the field
+    assert core["width"] > 0 and core["height"] > 0 and core["field"][0] > 0 and core["field"][1] > 0
+    assert 0 <= core["origin"][0] < core["width"] and 0 <= core["origin"][1] < core["height"]
+    assert ann.get(core["thumb"]).headers["content-type"] == "image/jpeg"
 
     removed = client.post("/api/labels/sessions/auto/fields/remove", json={"tile_ids": [READY]}).json()
     assert removed["fields"] == [] and client.get("/api/labels/sessions/auto/fields").json() == []

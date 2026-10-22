@@ -1500,3 +1500,23 @@ p.area-size { display: block; line-height: 1.7; }
 .simple-editor-row input[type="color"] { width: 36px; height: 28px; padding: 0; border: none; background: none; }
 .simple-mapping select { max-width: 100%; }
 .simple-list li { flex-wrap: wrap; }
+
+/* ---------- three zoom levels: the whole core, a middle level, the detailed view (levelmap.tsx, labels/fieldstrip.tsx) ---------- */
+.viewer-row { flex: 1 1 auto; min-height: 0; min-width: 0; display: flex; gap: 8px; }
+.viewer-row > .viewer-room { flex: 1 1 auto; min-width: 0; }
+.level-strip { flex: none; width: clamp(150px, 12.5vw, 240px); display: flex; flex-direction: column; gap: 8px; overflow-y: auto; min-height: 0; }
+.level-card { padding: 6px; display: grid; gap: 4px; box-shadow: none; background: var(--surface-1); }
+.level-title { line-height: 1.3; }
+.level-map { display: block; width: 100%; aspect-ratio: 1 / 1; border-radius: 6px; background: #111; cursor: crosshair; touch-action: none; user-select: none; }
+.level-map .level-square.opens { cursor: pointer; }
+.level-legend { display: flex; flex-wrap: wrap; gap: 2px 8px; font-size: 11px; }
+.level-legend i { display: inline-block; width: 9px; height: 9px; border: 2px solid; border-radius: 2px; margin-right: 3px; vertical-align: -1px; }
+.level-wait { padding: 10px; }
+.levels-toggle { padding: 1px 8px; }
+.core-mid .level-map { max-width: 256px; margin-inline: auto; }
+@media (max-width: 900px) { .level-strip { display: none; } }
+@media (max-height: 820px) and (min-width: 901px) {  /* the Cores view's two smaller levels both in sight on a laptop */
+  .minimap-card .minimap, .core-mid .level-map { max-width: 168px; }
+  .minimap-card > p.muted { display: none; }
+  .minimap-card, .core-mid { padding: 8px 10px; }
+}

@@ -23,6 +23,8 @@ export const RASTER_LAYERS: Record<string, { label: string; color: string }> = {
 }
 
 export interface ImagePoint { x: number; y: number; unit: number }
+/** What the smaller zoom levels may do to a viewer: centre it on a spot (image px), at least at a zoom. */
+export interface ViewControl { centre: (x: number, y: number, zoom?: number) => void }
 
 type View = { zoom: number; x: number; y: number }
 
@@ -35,7 +37,8 @@ type View = { zoom: number; x: number; y: number }
  * takes all the room its card is given (the annotation pages size that to the window), the picture fitted inside it
  * and centred, so a zoomed-in picture uses the whole room; else the picture is as wide as the card.
  */
-export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, onMove, children, fit = false, onPress, onRelease, onWheelOver, onSize, panLock = false, under, paint, onContext }: {
+export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, onMove, children, fit = false, onPress, onRelease, onWheelOver, onSize, panLock = false, under, paint, onContext,
+  onView, control, aside }: {
   src: string
   layers?: string[]
   title: ReactNode
@@ -60,6 +63,12 @@ export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, on
   paint?: ReactNode
   /** the right button on the picture (a menu at the pointer) */
   onContext?: (point: ImagePoint, event: React.MouseEvent) => void
+  /** the part of the picture in view (image px), whenever it changes: the smaller zoom levels beside it (levelmap.tsx) */
+  onView?: (rect: { x0: number; y0: number; x1: number; y1: number }) => void
+  /** set here: `centre(x, y, zoom)` centres the view on a spot (image px), at least at `zoom` (the smaller zoom levels move it) */
+  control?: { current: ViewControl | null }
+  /** beside the picture, in the same room (the smaller zoom levels) */
+  aside?: ReactNode
 }) {
   // the view: `x`, `y` move the picture from where it sits centred at 1× (screen px), `zoom` scales it
   const [view, setView] = useState<View>({ zoom: 1, x: 0, y: 0 })
@@ -145,6 +154,36 @@ export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, on
     setView({ zoom: 4, x: b.w / 2 - o.x - focus.x * scale * 4, y: b.h / 2 - o.y - focus.y * scale * 4 })
   }, [focus, size.w])
 
+  const imageWidth = useRef(size.w)
+  imageWidth.current = size.w
+  const imageHeight = useRef(size.h)
+  imageHeight.current = size.h
+  useEffect(() => {  // a smaller zoom level moves the view: straight to the viewer, nothing else is drawn again
+    if (!control) return
+    control.current = {
+      centre: (x, y, least = 1) => {
+        const { origin: o, shown: s, boxSize: b } = layout.current
+        const scale = s.width / imageWidth.current
+        const z = Math.min(MAX_ZOOM, Math.max(least, viewNow.current.zoom))
+        if (z <= 1) { setView({ zoom: 1, x: 0, y: 0 }); return }
+        const w = imageWidth.current, h = imageHeight.current
+        const keep = (at: number, half: number, most: number) => (most <= 2 * half ? most / 2 : Math.min(most - half, Math.max(half, at)))  // the view stays on the picture
+        const cx = keep(x, b.w / 2 / (scale * z), w), cy = keep(y, b.h / 2 / (scale * z), h)
+        setView({ zoom: z, x: b.w / 2 - o.x - cx * scale * z, y: b.h / 2 - o.y - cy * scale * z })
+      },
+    }
+    return () => { control.current = null }
+  }, [control])
+  const viewHeard = useRef(onView)
+  viewHeard.current = onView
+  useEffect(() => {  // the part in view, for the smaller zoom levels
+    if (!viewHeard.current || !loaded) return
+    const per = size.w / Math.max(1, shown.width) / view.zoom
+    const at = (sx: number, sy: number) => [(sx - origin.x - view.x) * per, (sy - origin.y - view.y) * per]
+    const [x0, y0] = at(0, 0), [x1, y1] = at(boxSize.w, boxSize.h)
+    viewHeard.current({ x0: Math.max(0, x0), y0: Math.max(0, y0), x1: Math.min(size.w, x1), y1: Math.min(size.h, y1) })
+  }, [view, boxSize.w, boxSize.h, shown.width, origin.x, origin.y, size.w, size.h, loaded])
+
   const zoomBy = (factor: number) => setView((v) => zoomedAt(v, factor, layout.current.boxSize.w / 2, layout.current.boxSize.h / 2))
   const keys = useViewKeys({ zoomBy, panBy: (dx, dy) => setView((v) => (v.zoom > 1 ? { ...v, x: v.x + dx, y: v.y + dy } : v)) })
 
@@ -201,7 +240,7 @@ export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, on
         <button className="btn small" onClick={() => zoomBy(1.5)} title={`Zoom in (+), up to ${MAX_ZOOM}×`} aria-label="Zoom in">+</button>
         <button className="btn small" onClick={() => setView({ zoom: 1, x: 0, y: 0 })} title="The whole picture">Reset</button>
       </div>
-      {fit ? <div ref={room} className="viewer-room">{viewer}</div> : viewer}
+      {fit ? <div className={`viewer-row${aside ? ' with-aside' : ''}`}>{aside}<div ref={room} className="viewer-room">{viewer}</div></div> : viewer}
     </div>
   )
 }

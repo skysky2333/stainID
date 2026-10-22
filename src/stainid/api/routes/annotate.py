@@ -1241,6 +1241,46 @@ def image(name: str, tile_id: str, request: Request, person: str | None = Depend
     return FileResponse(render.field_jpeg(get_state(), tile_id), headers={"Cache-Control": "private, max-age=86400"})
 
 
+MID_PX = 2048  # the middle zoom level's picture of the core, at most this many px across
+
+
+def _field_core(name: str, tile_id: str, request: Request) -> tuple[dict, dict]:
+    tile = field_tile(session_meta(name, request), tile_id)
+    try:
+        core = get_state().core_image(str(tile["core_id"]), str(tile["stain"]))
+    except (KeyError, IndexError) as error:
+        raise HTTPException(404, f"no core image for {tile_id}") from error
+    return tile, core
+
+
+@router.get("/annotate/{name}/fields/{tile_id}/core")
+def field_core(name: str, tile_id: str, request: Request, person: str | None = Depends(viewer)) -> dict:
+    """The field's core for the smaller zoom levels beside it (webapp/src/labels/fieldstrip.tsx): the core's size (core
+    px), where the field's picture lies in it (`origin`, `field`: its size), and its pictures (whole core, middle level)."""
+    tile, core = _field_core(name, tile_id, request)
+    width, height = int(core["native_width_px"]), int(core["native_height_px"])
+    x0, y0 = render.crop_origin(tile, get_state().project.context_px)
+    context = get_state().project.context_px
+    x1 = min(int(tile["x_px"]) + int(tile["width_px"]) + context, width)
+    y1 = min(int(tile["y_px"]) + int(tile["height_px"]) + context, height)
+    base = f"/api/annotate/{name}/fields/{tile_id}/core.jpg"
+    return {"core_id": str(tile["core_id"]), "width": width, "height": height, "origin": [x0, y0], "field": [x1 - x0, y1 - y0],
+            "thumb": f"{base}?size=512", "mid": f"{base}?size={MID_PX}"}
+
+
+@router.get("/annotate/{name}/fields/{tile_id}/core.jpg")
+def field_core_picture(name: str, tile_id: str, request: Request, size: int = 512, person: str | None = Depends(viewer)) -> FileResponse:
+    """The field's whole core, at most `size` px across (the smaller zoom levels)."""
+    tile, _ = _field_core(name, tile_id, request)
+    from stainid.api import pyramid  # noqa: PLC0415
+
+    try:
+        return FileResponse(render.core_thumbnail(get_state(), str(tile["core_id"]), str(tile["stain"]), max(64, min(size, MID_PX, pyramid.THUMB_BASE))),
+                            headers={"Cache-Control": "private, max-age=86400"})
+    except (KeyError, FileNotFoundError) as error:
+        raise HTTPException(404, str(error)) from error
+
+
 @router.get("/annotate/{name}/fields/{tile_id}/thumb.jpg")
 def annotate_thumb(name: str, tile_id: str, request: Request, person: str | None = Depends(viewer)) -> FileResponse:
     """A field's small picture; also of the other tiles of a core the session has fields of (the core maps draw them

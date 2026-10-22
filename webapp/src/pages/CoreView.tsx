@@ -5,6 +5,7 @@ import { apiUrl, coreThumb, enc } from '../api'
 import { ErrorNote, GroupBadge, Loaded, Loading, PageHead, Progress, fmt } from '../components'
 import type { Line, Mark, Pyramid, ViewTarget } from '../deepzoom'
 import { DeepZoom } from '../deepzoom'
+import { LevelMap, middleWindow } from '../levelmap'
 import { useFetch, useStored } from '../hooks'
 import { useProject } from '../project'
 import { Advanced } from '../setup/parts'
@@ -478,8 +479,19 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
           <FixedOutlineHint key={i} box={pictureBox.current} view={viewRect} points={points} color={fixed.color} />))}
       </div>
       <div className="core-side">
-        <Minimap core={core.core_id} stain={stain} status={status} view={viewRect}
-          onJump={(x, y) => go(x, y, screenScale())} onOpen={openTile} />
+        {(() => {  // three zoom levels: the whole core (the minimap: the middle level's extent), the middle level (the view's), the picture
+          const size = status.data?.width && status.data.height ? { w: status.data.width, h: status.data.height } : null
+          const mid = size && viewRect ? middleWindow(viewRect, size.w, size.h, 3.5) : null
+          return <>
+            <Minimap core={core.core_id} stain={stain} status={status} view={mid ?? viewRect}
+              onJump={(x, y) => go(x, y, screenScale())} onOpen={openTile} />
+            {size && mid && <div className="card level-card core-mid">
+              <div className="level-title small"><b>Around the view</b><span className="muted"> · click or drag to move the picture</span></div>
+              <LevelMap src={apiUrl(`/api/images/cores/${enc(core.core_id)}/${enc(stain)}.jpg?size=2048`)} width={size.w} height={size.h} window={mid}
+                next={viewRect} onMove={(x, y) => go(x, y, screenScale())} label="Around the part of the core in view" />
+            </div>}
+          </>
+        })()}
         <div className="card">
           <h3>On the picture</h3>
           <Detections status={found.data} error={found.error} stain={stain} tma={core.tma} tissue={image?.tissue_status} />

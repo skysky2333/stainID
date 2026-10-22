@@ -26,6 +26,7 @@ import { BackToSets, RoundProgressLine, SaveButtons, SaveState, changesText, dra
   writeDraft } from './rounds'
 import type { ThreadLadder } from './threads'
 import { nearestSegment, segmentsOf, wandGroup } from './wand'
+import { FieldStrip, useLevels, useStripShown } from './fieldstrip'
 
 type Meta = SessionDetail['meta'] & RoundDetail
 type Mine = Label & { candidate?: string | null }
@@ -111,6 +112,8 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
   const [layers, setLayers] = useStored<Record<string, boolean>>('stainid.simple.layers', { box: true })
   const start = field.simple?.start ?? {}
   const sam = meta.segment_anything && field.segment_anything
+  const levels = useLevels()  // the whole core and the middle zoom level beside the field (fieldstrip.tsx)
+  const [stripOn, setStripOn] = useStripShown()
   const wandOn = !!wandClass && active === wandClass.id
   const ladder = useFetch<ThreadLadder>(wandClass && !practice ? `/api/annotate/${name}/fields/${enc(tile)}/threads` : null)
   const lines = ladder.data?.status === 'done' && ladder.data.steps.length ? ladder.data.steps[ladder.data.detection].lines : null
@@ -395,7 +398,9 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
             onPick={(value) => { const s = byKey.get(menu.key)!; setMenu(null); giveClass(s, value); tell('menu') }} onClose={() => setMenu(null)} />}
           <ZoomViewer fit src={apiUrl(`/api/annotate/${name}/fields/${enc(tile)}/image.jpg`)}
             layers={hidden ? [] : field.layers.filter((l) => layers[l]).map((l) => apiUrl(`/api/annotate/${name}/fields/${enc(tile)}/layer/${l}.png`))}
-            title={<span className="row"><span className="muted small">{tile}</span>{done && <span className="badge status-done">finished</span>}
+            title={<span className="row">{!practice && <button className={`btn small levels-toggle${stripOn ? ' chosen' : ''}`} onClick={() => setStripOn(!stripOn)} aria-pressed={stripOn}
+              title={stripOn ? 'Hide the whole core and the middle zoom level' : 'Show the whole core and a middle zoom level beside the field'}>Overview</button>}
+              <span className="muted small">{tile}</span>{done && <span className="badge status-done">finished</span>}
               {activeClass && !readOnly && <span className="badge pass-badge" style={{ borderColor: activeClass.colour }}>
                 <span className="look-swatch" style={{ borderColor: activeClass.colour, background: activeClass.colour }} />{activeClass.name}
                 {wandOn ? ' — click threads' : ' — click to add or take out'}</span>}
@@ -403,6 +408,9 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
               {pending && <span className="small muted">Outlining…</span>}</span>}
             cursor={readOnly ? 'default' : wandOn ? 'crosshair' : target ? 'pointer' : 'copy'}
             onClick={readOnly ? undefined : click} onMove={move} onContext={openMenu}
+            onView={levels.onView} control={levels.control}
+            aside={stripOn && !practice ? <FieldStrip name={name} tile={tile} fields={detail.fields} levels={levels}
+              onOpen={(t) => { if (mayLeave()) navigate(`/annotate/${name}/${enc(t)}`) }} /> : null}
             under={(zoom, _s, rawUnit) => hidden ? null : <SimpleLayer items={drawn} unit={Number.isFinite(rawUnit) && rawUnit > 0 ? rawUnit : 1} zoom={zoom}
               active={wandOn ? null : active} dim={wandOn ? 0.55 : 1} />}>
             {(zoom, size, rawUnit) => {
