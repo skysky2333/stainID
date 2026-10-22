@@ -10,12 +10,17 @@ image is saved, the NeuN area carried over), and saving a stain image (its whole
 at (`edit` to work on it again). The pictures, tiles, thumbnails and detection's objects (the NeuN neurons as a guide)
 are the core routes of `routes.areas`.
 
-Admin: where the round stands (stain images saved per stain, people's agreement on the double-checked cores). Like
-every human annotation the areas only train and evaluate models; the analysis never reads them.
+Each core is done by one person. The tutorial practises on `practice-matter` (`stainid.tutorial.matter`: a public
+NeuN image and the same tissue on another stain): its saves are checked and echoed, never kept, and the page sends the
+NeuN area it painted to be carried (`…/carry`), as nothing of it is on the server.
+
+Admin: where the round stands (stain images saved per stain). Like every human annotation the areas only train and
+evaluate models; the analysis never reads them.
 """
 from __future__ import annotations
 
 import secrets
+import time
 
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -82,21 +87,36 @@ def create(body: NewSession) -> dict:
     name = body.name or free_name(body.title or "grey white matter", "all", matter.KIND)
     meta = sessions.create(root(), name, title=body.title or name, stain="all", kind=matter.KIND, tools=["area"], ai_view="full", per_field=1,
                            rule="random", fields=[], instructions=body.instructions, source=matter.SOURCE, cores=chosen,
-                           stains_of={c: stains_of[c] for c in chosen}, second=areas.second_checks(chosen, seed, matter.SECOND_SHARE),
+                           stains_of={c: stains_of[c] for c in chosen}, second=[],
                            order="random", seed=seed, cores_asked=n, cores_remaining=len(left))
     return sessions.update(root(), name, open=True) if body.open else meta
 
 
 # ---------------------------------------------------------------- the round pages (annotators)
 
+def practice_meta() -> dict:
+    """The made-up session of the "Grey / white matter" tutorial: the tutorial's NeuN core and its other stain."""
+    from stainid import tutorial  # noqa: PLC0415
+
+    found = tutorial.matter()
+    if not found:
+        raise HTTPException(404, "The Grey / white matter practice is not set up on this server yet (stainid tutorial matter).")
+    core, stains = found["core_id"], matter.ordered(found["stains"])
+    return {"name": matter.PRACTICE, "title": "Practice: " + matter.TITLE, "stain": "all", "kind": matter.KIND, "tools": ["area"], "ai_view": "full",
+            "per_field": 1, "rule": "random", "fields": [], "source": matter.SOURCE, "cores": [core], "stains_of": {core: stains}, "second": [],
+            "order": "random", "instructions": "", "open": True, "created": 0.0, "practice": True, "credit": found.get("credit", "")}
+
+
 def matter_meta(name: str, request: Request) -> dict:
-    meta = session_meta(name, request)
+    meta = practice_meta() if name == matter.PRACTICE else session_meta(name, request)
     if not matter.is_matter(meta):
         raise HTTPException(404, f"{name} is not a {matter.TITLE} session")
     return meta
 
 
 def progress(meta: dict, labels: pd.DataFrame | None = None) -> dict:
+    if meta.get("practice"):
+        return areas.progress(meta, {}, {})
     return areas.progress(meta, areas.finished(meta, session_checked(meta, labels)), held(meta))
 
 
@@ -112,9 +132,9 @@ def core_rows(meta: dict, person: str | None, labels: pd.DataFrame | None = None
     """The picker: each core of the session with its TMA and label, where it stands for everyone (to do, in progress,
     done), who finished it, who has it open and the stain images this person saved."""
     labels = session_labels(meta) if labels is None else labels
-    found = session_checked(meta, labels)
+    found = {} if meta.get("practice") else session_checked(meta, labels)
     done = areas.finished(meta, found)
-    now = held(meta)
+    now = {} if meta.get("practice") else held(meta)
     places = _places()
     out = []
     for core in meta.get("cores") or []:
@@ -124,13 +144,12 @@ def core_rows(meta: dict, person: str | None, labels: pd.DataFrame | None = None
         state = "done" if len(by) >= areas.needed(meta, core) else "in_progress" if now.get(core) or started else "not_started"
         out.append({"core_id": core, **places.get(core, {"tma": "", "core": core}), "stains": stains, "state": state, "done_by": sorted(by),
                     "open_by": sorted(now.get(core, set())), "done_by_me": bool(person) and person in by,
-                    "saved_by_me": [s for s in stains if person and person in found.get((core, s), set())],
-                    "second_check": core in set(meta.get("second") or [])})
+                    "saved_by_me": [s for s in stains if person and person in found.get((core, s), set())]})
     return out
 
 
 def detail(meta: dict, person: str | None) -> dict:
-    labels = session_labels(meta)
+    labels = store.current(root()).iloc[:0] if meta.get("practice") else session_labels(meta)
     rows = core_rows(meta, person, labels)
     return {"round": matter.KIND, "progress": progress(meta, labels), "done_by_me": sum(r["done_by_me"] for r in rows), "core_rows": rows}
 
@@ -150,6 +169,8 @@ def _stain(meta: dict, core_id: str, stain: str) -> list[str]:
 
 
 def refuse_if_taken(meta: dict, core_id: str, person: str) -> None:
+    if meta.get("practice"):
+        return
     others = held(meta).get(core_id, set()) - {person}
     if others:
         raise HTTPException(409, working_text(others))
@@ -159,6 +180,8 @@ def refuse_if_taken(meta: dict, core_id: str, person: str) -> None:
 def next_core(name: str, request: Request, skip: str = "", person: str = Depends(annotator)) -> dict:
     """The next core for this person (None when none is left for them)."""
     meta = matter_meta(name, request)
+    if meta.get("practice"):
+        return {"core_id": meta["cores"][0], "taken": 0, "progress": progress(meta)}
     done = areas.finished(meta, session_checked(meta))
     now = held(meta)
     if skip:
@@ -177,11 +200,12 @@ def open_core(name: str, core_id: str, request: Request, edit: bool = False, per
 
     meta = matter_meta(name, request)
     stains = _core(meta, core_id)
-    labels = session_labels(meta)
-    found = session_checked(meta, labels)
+    practice = bool(meta.get("practice"))
+    labels = store.current(root()).iloc[:0] if practice else session_labels(meta)
+    found = {} if practice else session_checked(meta, labels)
     by = areas.finished(meta, found).get(core_id, set())
     looking = (person in by or len(by) >= areas.needed(meta, core_id)) and not edit
-    if not looking:
+    if not looking and not practice:
         refuse_if_taken(meta, core_id, person)
         _HELD.hold(hold_key(meta), person, [core_id])
     state = get_state()
@@ -196,13 +220,15 @@ def open_core(name: str, core_id: str, request: Request, edit: bool = False, per
                        "saved_by_me": person in found.get((core_id, stain), set()), "mine": mine.to_api() if mine else None})
     place = _places().get(core_id, {"tma": "", "core": core_id})
     return {"core_id": core_id, **place, "images": images, "source": matter.source_of(stains), "read_only": looking, "done_by": sorted(by),
-            "second_check": core_id in set(meta.get("second") or []), "progress": progress(meta, labels), "pixel_size_um": state.project.pixel_size_um}
+            "progress": progress(meta, labels), "pixel_size_um": state.project.pixel_size_um, "practice": practice}
 
 
 @router.post("/annotate/{name}/matter/cores/{core_id}/hold")
 def hold_core(name: str, core_id: str, request: Request, person: str = Depends(annotator)) -> dict:
     meta = matter_meta(name, request)
     _core(meta, core_id)
+    if meta.get("practice"):
+        return {"held": False}
     refuse_if_taken(meta, core_id, person)
     _HELD.hold(hold_key(meta), person, [core_id])
     return {"held": True}
@@ -212,7 +238,8 @@ def hold_core(name: str, core_id: str, request: Request, person: str = Depends(a
 def leave_core(name: str, core_id: str, request: Request, person: str = Depends(annotator)) -> dict:
     """The person closed the core: free for the others at once."""
     meta = matter_meta(name, request)
-    _HELD.release(hold_key(meta), person, [core_id])
+    if not meta.get("practice"):
+        _HELD.release(hold_key(meta), person, [core_id])
     return {"left": True}
 
 
@@ -245,11 +272,8 @@ def stain_area(name: str, core_id: str, stain: str, request: Request, look: bool
     matter) or "waiting" (the source stain is not saved yet)."""
     meta = matter_meta(name, request)
     stains = _stain(meta, core_id, stain)
-    labels = session_labels(meta)
-    width, height = _size(core_id, stain)
-    scale = matter.SCALE
-    shape = (-(-height // scale), -(-width // scale))
-    base = {"status": "done", "scale": scale, "x": 0, "y": 0, "width": shape[1] * scale, "height": shape[0] * scale}
+    labels = store.current(root()).iloc[:0] if meta.get("practice") else session_labels(meta)
+    width, height, base = _base(core_id, stain)
     mine = matter.latest(labels, core_id, stain, person) or (matter.latest(labels, core_id, stain) if look else None)
     if mine is not None:
         return {**base, "kinds": {matter.AREA: matter.png(mine.rings, mine.holes, width, height)}, "from": "saved", "saved": mine.to_api()}
@@ -262,6 +286,40 @@ def stain_area(name: str, core_id: str, stain: str, request: Request, look: bool
     area, rings, carry = found
     return {**base, "kinds": {matter.AREA: matter.png(rings, area.holes, width, height)} if rings else {}, "from": "carried",
             "carried_from": source, "registration": carry.to_api()}
+
+
+def _base(core_id: str, stain: str) -> tuple[int, int, dict]:
+    """A stain image's size and the brush's frame for it (one mask px per `matter.SCALE` core px)."""
+    width, height = _size(core_id, stain)
+    scale = matter.SCALE
+    shape = (-(-height // scale), -(-width // scale))
+    return width, height, {"status": "done", "scale": scale, "x": 0, "y": 0, "width": shape[1] * scale, "height": shape[0] * scale}
+
+
+class Painted(BaseModel):
+    png: str = ""  # the source stain's white matter as painted (a PNG at 1/`scale` of its core image); empty: none
+    scale: float = matter.SCALE
+
+
+@router.post("/annotate/{name}/matter/cores/{core_id}/{stain}/carry")
+def carry_area(name: str, core_id: str, stain: str, body: Painted, request: Request, person: str = Depends(annotator)) -> dict:
+    """A white-matter area painted on the source stain, carried to `stain` (the brush's form, `from` "carried"): what
+    the tutorial's page asks for, as its NeuN area is kept nowhere. Nothing is written."""
+    meta = matter_meta(name, request)
+    stains = _stain(meta, core_id, stain)
+    source = matter.source_of(stains)
+    try:
+        rings, holes = marks.from_png(body.png, body.scale) if body.png else ([], [])
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+    try:
+        carry = registration.carry(get_state(), core_id, source, stain)
+    except (KeyError, FileNotFoundError, ValueError) as error:
+        raise HTTPException(409, f"the {source} and {stain} images of {core_id} could not be lined up: {error}") from error
+    width, height, base = _base(core_id, stain)
+    moved = carry.apply(rings)
+    return {**base, "kinds": {matter.AREA: matter.png(moved, holes, width, height)} if moved else {}, "from": "carried", "carried_from": source,
+            "registration": carry.to_api()}
 
 
 class MatterSave(BaseModel):
@@ -277,10 +335,18 @@ def save_stain(name: str, core_id: str, stain: str, body: MatterSave, request: R
     is saved by this person now (the core is let go)."""
     meta = matter_meta(name, request)
     stains = _stain(meta, core_id, stain)
+    source = matter.source_of(stains)
+    if meta.get("practice"):  # the tutorial: checked, echoed, nothing kept
+        try:
+            rings, holes = marks.from_png(body.png, body.scale) if body.png and not body.accepted else ([], [])
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from error
+        stamp = {"source": person, "session": meta["name"], "tile_id": core_id, "x": None, "y": None, "time": time.time(), "confirmed": False, "deleted": False}
+        return {"saved": matter.records(core_id, stain, rings, holes, stamp, None if stain == source else source, body.accepted, None),
+                "finished": False, "progress": progress(meta)}
     writable(meta)
     refuse_if_taken(meta, core_id, person)
     labels = session_labels(meta)
-    source = matter.source_of(stains)
     carried_from, status = None, None
     if stain != source:
         found = _carried(meta, labels, core_id, stain, source, person)
@@ -312,8 +378,8 @@ def save_stain(name: str, core_id: str, stain: str, body: MatterSave, request: R
 
 @router.get("/labels/matter", dependencies=admin)
 def matter_overview() -> dict:
-    """Where "Grey / white matter" stands: stain images saved per stain (of those with analysed tiles) and people's
-    agreement on the double-checked ones."""
+    """Where "Grey / white matter" stands: stain images saved per stain (of those with analysed tiles) and the cores
+    with every stain image saved."""
     state = get_state()
     labels = store.current(root())
     found = matter.checked(labels)
@@ -321,14 +387,11 @@ def matter_overview() -> dict:
     per_stain: dict[str, dict] = {}
     for core, stains in stains_of.items():
         for stain in stains:
-            entry = per_stain.setdefault(stain, {"stain": stain, "images": 0, "saved": 0, "double_checked": 0})
+            entry = per_stain.setdefault(stain, {"stain": stain, "images": 0, "saved": 0})
             entry["images"] += 1
-            people = found.get((core, stain), set())
-            entry["saved"] += bool(people)
-            entry["double_checked"] += len(people) >= 2
+            entry["saved"] += bool(found.get((core, stain)))
     return {"stains": [per_stain[s] for s in matter.ordered(per_stain)], "cores": len(stains_of),
-            "cores_done": sum(all(found.get((c, s)) for s in stains) for c, stains in stains_of.items()),
-            "agreement": matter.agreement(state.project, labels, found)}
+            "cores_done": sum(all(found.get((c, s)) for s in stains) for c, stains in stains_of.items())}
 
 
 def core_matter(core_id: str, stain: str) -> dict | None:

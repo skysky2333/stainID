@@ -158,6 +158,9 @@ export class MatterMask {
     return true
   }
 
+  /** The area as it is now was saved: nothing to save any more, nothing to take back. */
+  saved() { this.changed = false; this.undos = [] }
+
   /** Puts the area's canvas into `host` (positioned, the size of the picture), or takes it out (null). */
   attach(host: HTMLElement | null) {
     if (host) { if (this.shown.parentElement !== host) host.appendChild(this.shown) } else this.shown.remove()

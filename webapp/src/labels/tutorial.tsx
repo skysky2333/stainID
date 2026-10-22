@@ -1,7 +1,8 @@
 /* The tutorials (/tutorial), offered on everyone's home and on Help (`TutorialCards`): "Fix the field" (about 3–5
    minutes) on the practice field, `?kind=threads`, "AT8 threads" (threads mode of Fix the field: H, the thread-threshold
    slider, Enter; on an AT8 field of a CC0 dataset, labels/threads.tsx), when the server's tutorial has it, and
-   `?kind=areas`, "Mark bad areas", on the practice core (labels/markareas.tsx): the
+   `?kind=areas`, "Mark bad areas", on the practice core (labels/markareas.tsx), `?kind=matter`, "Grey / white matter"
+   (labels/matter.tsx: a public NeuN image and the same tissue on another stain), when the server's tutorial has it: the
    one tutorial of the server (`stainid tutorial build`, a public dataset's field and core, the same for every project),
    with its credit line. Nothing is saved: the practice sessions (`practice-2-<stain>`, `practice-areas`)
    keep nothing on the server, whatever is clicked. A coach asks for one thing at a time and waits until the person has
@@ -16,6 +17,8 @@ import { useFetch } from '../hooks'
 import { FixField } from './fixfield'
 import type { AreaEvent } from './markareas'
 import { MarkAreas, PRACTICE_AREAS } from './markareas'
+import type { MatterEvent } from './matter'
+import { MatterCorePage, PRACTICE_MATTER } from './matter'
 import type { RoundEvent } from './rounds'
 import { useSession } from '../session'
 import { ZoomViewer } from '../viewer'
@@ -29,9 +32,11 @@ interface TutorialInfo {
   practice: { stain: string; tile_id: string; round2: string; credit?: string; hint?: { text?: string; key?: string } } | null
   /** the AT8 threads practice, when the tutorial has one */
   threads?: { tile_id: string; credit?: string } | null
+  /** the Grey / white matter practice, when the tutorial has one */
+  matter?: { core_id: string; stains: string[]; credit?: string } | null
 }
-export type TutorialKind = 'objects' | 'areas' | 'threads' | 'simple'
-interface Done { objects: boolean; areas: boolean; threads?: boolean; simple?: boolean; kept: boolean }
+export type TutorialKind = 'objects' | 'areas' | 'threads' | 'simple' | 'matter'
+interface Done { objects: boolean; areas: boolean; threads?: boolean; simple?: boolean; matter?: boolean; kept: boolean }
 /** One step: done once the page reports one of `done` (`times` of them: "reject a few"). */
 interface Step { title: string; text: string; done: RoundEvent[]; times?: number }
 
@@ -89,7 +94,8 @@ export function useTutorialsDone() {
   const server = useFetch<Done>('/api/session/tutorials')
   const kept = !!server.data?.kept
   return { objects: kept ? server.data!.objects : guestDone('objects'), areas: kept ? server.data!.areas : guestDone('areas'),
-    threads: kept ? !!server.data!.threads : guestDone('threads'), simple: kept ? !!server.data!.simple : guestDone('simple'), loaded: !!server.data || !!server.error }
+    threads: kept ? !!server.data!.threads : guestDone('threads'), simple: kept ? !!server.data!.simple : guestDone('simple'),
+    matter: kept ? !!server.data!.matter : guestDone('matter'), loaded: !!server.data || !!server.error }
 }
 
 /** Remember that this person finished or skipped a tutorial (`done` false: offer it again). */
@@ -103,6 +109,7 @@ const TUTORIALS: { kind: TutorialKind; title: string; text: string; minutes: str
   { kind: 'simple', title: 'Fix the field (simple)', minutes: '2 minutes', text: 'The simple version: a few plain classes, one at a time — click what belongs to each, add what detection missed.' },
   { kind: 'threads', title: 'AT8 threads', minutes: '1 minute', text: 'AT8 only: in Fix the field, H shows the detected thread network; one slider sets where it matches the threads you see, Enter keeps it.' },
   { kind: 'areas', title: 'Mark bad areas', minutes: '2 minutes', text: 'The brush: paint folds, artifacts, missing tissue and blur that should not be counted, core by core with every stain.' },
+  { kind: 'matter', title: 'Grey / white matter', minutes: '1–2 minutes', text: 'Paint the white matter on NeuN with the neurons as a guide; it is carried to the other stain, where you accept or adjust it.' },
 ]
 
 /** The address of a tutorial: in the page's project, else in the project of the person's first set, else the project
@@ -120,7 +127,7 @@ export function TutorialCards({ sets, compact = false }: { sets?: MySet[] | null
   const info = useFetch<TutorialInfo>('/api/tutorial')
   return (
     <div className={`grid grid-2 tutorial-cards${compact ? ' compact' : ''}`}>
-      {TUTORIALS.filter((t) => t.kind !== 'threads' || info.data?.threads).map((t) => {
+      {TUTORIALS.filter((t) => (t.kind !== 'threads' || info.data?.threads) && (t.kind !== 'matter' || info.data?.matter)).map((t) => {
         const { to, href } = tutorialPath(t.kind, sets)
         const label = done[t.kind] ? 'See it again' : 'Start the tutorial'
         return (
@@ -152,8 +159,10 @@ export function Tutorial() {
   const areas = params.get('kind') === 'areas'
   const threads = params.get('kind') === 'threads'
   const simple = params.get('kind') === 'simple'
-  const info = useFetch<TutorialInfo>(!areas && !threads ? '/api/tutorial' : null)  // public: no account needed, nothing is kept
+  const matter = params.get('kind') === 'matter'
+  const info = useFetch<TutorialInfo>(!areas && !threads && !matter ? '/api/tutorial' : null)  // public: no account needed, nothing is kept
   if (areas) return <AreasCoached preview={preview} next={next} />
+  if (matter) return <MatterCoached preview={preview} next={next} />
   if (threads) return <ThreadsCoached preview={preview} next={next} />
   return (
     <Loaded state={info} label="Opening the tutorial…">
@@ -312,6 +321,69 @@ function AreasCoached({ preview, next }: { preview: boolean; next: string }) {
           <Link className="btn" to={next}>Back</Link></Empty></>
         : !detail.data ? <Loading label="Opening the practice core…" />
           : <MarkAreas detail={detail.data} onEvent={onEvent} coach={coach} onFinished={() => setIndex((i) => Math.max(i, steps.length))} />}
+    </div>
+  )
+}
+
+/* ---------- the tutorial of "Grey / white matter" ---------- */
+
+const MATTER_STEPS: { title: string; text: string; done: MatterEvent[] }[] = [
+  { title: 'The neurons are your guide', text: 'This is a NeuN image: the grey matter is where the neurons are (detection’s neurons are outlined in yellow), the white matter is the paler tissue with few of them. Untick “Show detection’s neurons” to see the tissue alone, then tick it again.', done: ['guide'] },
+  { title: 'Paint the white matter', text: 'Drag over the white matter: it is hatched in violet. Tab makes the brush smaller, Shift+Tab bigger; the wheel zooms, the middle mouse button moves the picture.', done: ['paint'] },
+  { title: 'The eraser', text: 'Painted too far? Press E for the eraser (or hold Shift) and drag over the part that is grey matter after all. Press B to paint again; Z takes back a stroke.', done: ['erase'] },
+  { title: 'Save NeuN', text: 'When the white matter looks right, press Enter (or “Save NeuN”). The other stain of this core opens next.', done: ['saved-source'] },
+  { title: 'Accept or adjust', text: 'The white matter you painted on NeuN is carried to this stain, where the two images line up. If it fits, press “Accept as carried” (or Enter). If not, paint or erase until it does, then save it. (In this practice nothing is kept.)', done: ['accepted', 'saved-other'] },
+]
+
+function MatterCoached({ preview, next }: { preview: boolean; next: string }) {
+  const navigate = useNavigate()
+  const detail = useFetch<SessionDetail>(`/api/annotate/${PRACTICE_MATTER}`)
+  const meta = detail.data?.meta as { cores?: string[]; credit?: string } | undefined
+  const [index, setIndex] = useState(0)
+  const [cheer, setCheer] = useState(false)
+  const finished = index >= MATTER_STEPS.length
+  const remember = useCallback(() => { if (!preview) void rememberTutorial('matter').catch(() => undefined) }, [preview])
+  useEffect(() => { if (finished) remember() }, [finished, remember])
+  const at = useRef(0)
+  at.current = index
+  const onEvent = useCallback((event: MatterEvent) => {
+    const i = at.current
+    if (i < MATTER_STEPS.length && MATTER_STEPS[i].done.includes(event)) { at.current = i + 1; setIndex(i + 1); setCheer(true) }
+  }, [])
+  useEffect(() => { if (!cheer) return; const timer = setTimeout(() => setCheer(false), 1200); return () => clearTimeout(timer) }, [cheer])
+  const leave = () => { if (preview) window.history.length > 1 ? window.history.back() : window.close(); else navigate(next) }
+  const step = MATTER_STEPS[Math.min(index, MATTER_STEPS.length - 1)]
+  const coach = (
+    <aside className="card tutorial-coach in-panel" role="dialog" aria-label="Tutorial">
+      <div className="row small"><b>Tutorial</b><span className="muted">{preview ? 'preview — what annotators see; nothing is saved' : 'practice — nothing here is saved'}</span>
+        <span className="spacer" />
+        {!finished && <button className="link-btn small" onClick={() => { remember(); leave() }}>{preview ? 'Close' : 'Skip tutorial'}</button>}</div>
+      {finished ? <>
+        <h3>You are ready</h3>
+        <p className="small secondary">Core by core: paint the white matter on NeuN, save, then accept or adjust it on each other stain. What you mark teaches and
+          tests a grey / white matter model; the analysis does not use it.</p>
+        {preview ? <button className="btn primary" onClick={leave}>Close the preview</button> : <Link className="btn primary" to={next}>Start →</Link>}
+      </> : <>
+        <div className="tutorial-step small muted">Step {index + 1} of {MATTER_STEPS.length}{cheer && <span className="good-text"> · well done ✓</span>}</div>
+        <h3>{step.title}</h3>
+        <p className="small">{step.text}</p>
+        <div className="tutorial-dots" aria-hidden="true">{MATTER_STEPS.map((s, i) => <span key={s.title} className={i < index ? 'done' : i === index ? 'now' : ''} />)}</div>
+        <div className="row">
+          <button className="btn small" disabled={index === 0} onClick={() => setIndex(index - 1)}>Back</button>
+          <button className="link-btn small" onClick={() => setIndex(index + 1)}>I did it / next</button>
+        </div>
+      </>}
+      {meta?.credit && <p className="small muted tutorial-credit">{meta.credit}</p>}
+    </aside>
+  )
+  const core = meta?.cores?.[0]
+  return (
+    <div className="tutorial">
+      {detail.error ? <><PageHead title="Tutorial: Grey / white matter" subtitle="Nothing to practise on yet." />
+        <Empty><p style={{ marginTop: 0 }}>This practice is not set up on this server yet: an admin adds it once with <code>stainid tutorial matter</code>.</p>
+          <ErrorNote error={detail.error} /><Link className="btn" to={next}>Back</Link></Empty></>
+        : !detail.data || !core ? <Loading label="Opening the practice core…" />
+          : <MatterCorePage detail={detail.data} core={core} onEvent={onEvent} coach={coach} onFinished={() => setIndex((i) => Math.max(i, MATTER_STEPS.length))} />}
     </div>
   )
 }

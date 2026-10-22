@@ -22,11 +22,14 @@ import { useFetch, useStored } from '../hooks'
 import { PALETTE } from '../palette'
 import { BRUSH_KEY, BRUSH_PX, CLEARED, brushStep } from './brush'
 import { AreaProgressLine } from './markareas'
-import { MATTER_COLOUR, MatterMask } from './mattermask'
+import { MATTER_COLOUR, MATTER_SCALE, MatterMask } from './mattermask'
 import { BackToSets, useFitScreen, useLeaveGuard } from './rounds'
 
 export const MATTER_TITLE = 'Grey / white matter'
 export const MATTER_TEXT = 'One core at a time: paint the white matter on the NeuN image, then check it on the other stains, where it is carried over for you.'
+export const PRACTICE_MATTER = 'practice-matter'  // the tutorial's practice (labels/tutorial.tsx): nothing is kept
+/** What someone does on a core page, as the tutorial follows it. */
+export type MatterEvent = 'guide' | 'paint' | 'erase' | 'undo' | 'stain' | 'saved-source' | 'accepted' | 'saved-other' | 'finished'
 const HOLD_MS = 10000
 const NEURON_COLOUR = PALETTE.classes[1]
 const STATE_TEXT: Record<MatterCoreRow['state'] | 'mine', string> = { not_started: 'To do', in_progress: 'In progress', done: 'Done', mine: 'Finished by you' }
@@ -43,7 +46,8 @@ function Heading({ meta, core, progress, me }: { meta: Meta; core?: string; prog
   return (
     <div className="annotate-top">
       <div className="annotate-heading">
-        <span className="row small"><BackToSets />{core && <Link to={`/annotate/${meta.name}`}>All cores of this session</Link>}</span>
+        <span className="row small"><BackToSets />{core && meta.name !== PRACTICE_MATTER && <Link to={`/annotate/${meta.name}`}>All cores of this session</Link>}
+          {meta.name !== PRACTICE_MATTER && <Link to={`/tutorial?kind=matter&next=${enc(`/annotate/${meta.name}`)}`} title="The short tutorial of this page again">Tutorial</Link>}</span>
         <h1>{meta.title}</h1>
         <div className="muted small">{MATTER_TITLE}{core ? ` · core ${core}` : ''}</div>
       </div>
@@ -109,10 +113,15 @@ export function MatterSession({ detail }: { detail: SessionDetail }) {
 }
 
 /** One core of the session: its stain tabs (NeuN first), the picture of the chosen stain and the brush. */
-export function MatterCorePage({ detail, core }: { detail: SessionDetail; core: string }) {
+export function MatterCorePage({ detail, core, onEvent, coach, onFinished }: {
+  detail: SessionDetail; core: string; onEvent?: (e: MatterEvent) => void; coach?: ReactNode; onFinished?: () => void
+}) {
   useFitScreen()
   const meta = detail.meta as Meta
   const name = meta.name
+  const practice = name === PRACTICE_MATTER  // the tutorial: saves are echoed; what was saved is kept on this page only
+  const [practised, setPractised] = useState<Record<string, string>>({})  // practice: each saved stain's area (its PNG)
+  const tell = useCallback((e: MatterEvent) => onEvent?.(e), [onEvent])
   const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
   const edit = params.get('edit') === '1'
@@ -133,7 +142,7 @@ export function MatterCorePage({ detail, core }: { detail: SessionDetail; core: 
   const [progress, setProgress] = useState<RoundProgress | null>(meta.progress ?? null)
   const masks = useRef(new Map<string, MatterMask>())
   const [areaOf, setAreaOf] = useState<Record<string, MatterArea | undefined>>({})
-  const images = useMemo(() => data?.images ?? [], [data])
+  const images = useMemo(() => (data?.images ?? []).map((i) => (practice ? { ...i, saved_by_me: i.stain in practised } : i)), [data, practice, practised])
   const image = images[at] ?? null
   const source = data?.source ?? 'NeuN'
   const sourceSaved = !!images.find((i) => i.stain === source)?.saved_by_me
@@ -142,12 +151,12 @@ export function MatterCorePage({ detail, core }: { detail: SessionDetail; core: 
   const mayLeave = useLeaveGuard(saving || readOnly ? 0 : painted.length)
   useEffect(() => { if (data) setProgress(data.progress) }, [data])
   useEffect(() => {  // keep the core this person's while the page is open; closing it frees it for the others at once
-    if (!data || readOnly) return
+    if (!data || readOnly || practice) return
     const timer = setInterval(() => { if (!document.hidden) api.post(`${base}/hold`, {}).catch(() => undefined) }, HOLD_MS)
     const leave = () => { void fetch(apiUrl(`${base}/leave`), { method: 'POST', keepalive: true, credentials: 'include' }).catch(() => undefined) }
     window.addEventListener('pagehide', leave)
     return () => { clearInterval(timer); window.removeEventListener('pagehide', leave); leave() }
-  }, [data, readOnly, base])
+  }, [data, readOnly, practice, base])
 
   const locked = (stain: string) => !readOnly && stain !== source && !sourceSaved
   const go = (i: number) => {
@@ -155,6 +164,7 @@ export function MatterCorePage({ detail, core }: { detail: SessionDetail; core: 
     const k = (i + images.length) % images.length
     if (locked(images[k].stain)) { setError(`Paint and save ${source} first: the other stains start from its white matter.`); return }
     setError(null)
+    if (k !== at) tell('stain')
     setAt(k)
   }
   const area = image ? areaOf[image.stain] : undefined
@@ -171,6 +181,18 @@ export function MatterCorePage({ detail, core }: { detail: SessionDetail; core: 
       accepted ? { accepted: true } : { png: m!.png(), scale: m!.scale }), setError)
     setSaving(false)
     if (!done) return
+    tell(image.stain === source ? 'saved-source' : accepted ? 'accepted' : 'saved-other')
+    if (practice) {  // nothing is on the server: the page keeps what was saved, the other stains are carried from it
+      const png = accepted ? area?.kinds?.white ?? '' : m!.png()
+      const now = { ...practised, [image.stain]: png }
+      m?.saved()
+      setPractised(now)
+      if (image.stain === source) for (const [stain, other] of masks.current) if (stain !== source && !other.dirty) masks.current.delete(stain)
+      const next = images.findIndex((i) => !(i.stain in now))
+      if (next < 0) { setFinished(true); tell('finished'); onFinished?.(); return }
+      setAt(next)
+      return
+    }
     setProgress(done.progress)
     if (image.stain === source) for (const [stain, other] of masks.current) if (stain !== source && !other.dirty) masks.current.delete(stain)  // they start from the new carry
     const left = images.findIndex((i, k) => k !== at && !i.saved_by_me)
@@ -186,7 +208,7 @@ export function MatterCorePage({ detail, core }: { detail: SessionDetail; core: 
     if (found?.core_id) navigate(`/annotate/${name}/${enc(found.core_id)}`)
     else if (found) navigate(`/annotate/${name}`)
   }
-  const undo = () => { if (image && masks.current.get(image.stain)?.undo()) setTick((t) => t + 1) }
+  const undo = () => { if (image && masks.current.get(image.stain)?.undo()) { setTick((t) => t + 1); tell('undo') } }
   const enter = () => { if (!image || readOnly || locked(image.stain)) return; void save(carried && !dirty) }
   const latest = useRef({ go, at, undo, enter, hidden, brushSize })
   latest.current = { go, at, undo, enter, hidden, brushSize }
@@ -235,16 +257,16 @@ export function MatterCorePage({ detail, core }: { detail: SessionDetail; core: 
           : image.stain === source ? <>Paint the white matter: the paler tissue with few neurons. Nothing painted means no white matter on this core.</> : null
   return (
     <div className="annotate-page round-page fit-page areas-page matter-page">
-      <Heading meta={meta} core={data.core} progress={progress} me={detail.annotator} />
+      <Heading meta={meta} core={data.core} progress={practice ? null : progress} me={detail.annotator} />
       {meta.instructions && <div className="instructions">{meta.instructions}</div>}
-      {(data.second_check || readOnly) && <div className={`found ${readOnly ? 'found-good' : 'found-warn'} small field-others`} role="status">
-        {readOnly ? <>{data.done_by.includes(detail.annotator ?? '') ? 'You finished this core' : `Done by ${data.done_by.join(', ')}`}: it opens to look at.{' '}
-          {data.done_by.includes(detail.annotator ?? '') && <button className="link-btn small" onClick={() => { masks.current.clear(); setAreaOf({}); setParams({ edit: '1' }) }}>Redo this core</button>}</>
-          : <>This core is a <b>second check</b>: someone else marks it too, so we learn how well people agree. Mark what you see yourself.</>}
+      {readOnly && <div className="found found-good small field-others" role="status">
+        {data.done_by.includes(detail.annotator ?? '') ? 'You finished this core' : `Done by ${data.done_by.join(', ')}`}: it opens to look at.{' '}
+        {data.done_by.includes(detail.annotator ?? '') && <button className="link-btn small" onClick={() => { masks.current.clear(); setAreaOf({}); setParams({ edit: '1' }) }}>Redo this core</button>}
       </div>}
       <ErrorNote error={error} />
-      {finished && <div className="found found-good small" role="status">This core is done — thank you.{' '}
-        <button className="btn small primary" onClick={() => void nextCore()}>Next core</button>{' '}<Link className="btn small" to={`/annotate/${name}`}>All cores</Link></div>}
+      {finished && (practice ? <div className="found found-good small" role="status">Saved (this practice keeps nothing). In a real session the next core opens now.</div>
+        : <div className="found found-good small" role="status">This core is done — thank you.{' '}
+          <button className="btn small primary" onClick={() => void nextCore()}>Next core</button>{' '}<Link className="btn small" to={`/annotate/${name}`}>All cores</Link></div>)}
       <div className="annotate-workspace">
         <div className="annotate-image" onContextMenu={(e) => e.preventDefault()}>
           <div className="area-tabs" role="tablist" aria-label="Stains of this core">
@@ -261,9 +283,11 @@ export function MatterCorePage({ detail, core }: { detail: SessionDetail; core: 
           </div>
           {image && <MatterView key={`${image.stain}:${readOnly}:${saves}`} name={name} core={core} stain={image.stain} picture={image.picture} masks={masks.current}
             readOnly={readOnly} erase={erase} brushRadius={brushSize / 2} hidden={hidden} neurons={neuronsOn && image.stain === source}
-            onArea={(a) => setAreaOf((was) => ({ ...was, [image.stain]: a }))} onStroke={() => setTick((t) => t + 1)} />}
+            carryFrom={practice && image.stain !== source ? practised[source] ?? '' : undefined}
+            onArea={(a) => setAreaOf((was) => ({ ...was, [image.stain]: a }))} onStroke={(erased) => { setTick((t) => t + 1); tell(erased ? 'erase' : 'paint') }} />}
         </div>
         <aside className="annotate-side round-side" aria-label="The brush, this stain and the keys">
+          {coach}
           {readOnly ? (image?.stain === source && <div className="card side-block"><label className="layer-toggle"><input type="checkbox" checked={neuronsOn} onChange={(e) => setNeuronsOn(e.target.checked)} />
             <span className="swatch" style={{ background: 'transparent', border: `2px solid ${NEURON_COLOUR}`, borderRadius: '50%' }} />Show detection’s neurons (a guide)</label></div>)
             : <div className="card side-block">
@@ -276,7 +300,7 @@ export function MatterCorePage({ detail, core }: { detail: SessionDetail; core: 
             </div>
             <p className="small secondary area-size" style={{ margin: '6px 0 0' }}>Brush <b>{brushSize} px</b> · <span className="kbd">Tab</span> smaller,
               {' '}<span className="kbd">Shift</span>+<span className="kbd">Tab</span> bigger · zoom in for a finer one</p>
-            {image?.stain === source && <label className="layer-toggle" style={{ marginTop: 6 }}><input type="checkbox" checked={neuronsOn} onChange={(e) => setNeuronsOn(e.target.checked)} />
+            {image?.stain === source && <label className="layer-toggle" style={{ marginTop: 6 }}><input type="checkbox" checked={neuronsOn} onChange={(e) => { setNeuronsOn(e.target.checked); tell('guide') }} />
               <span className="swatch" style={{ background: 'transparent', border: `2px solid ${NEURON_COLOUR}`, borderRadius: '50%' }} />Show detection’s neurons (a guide)</label>}
           </div>}
           <div className="card side-block">
@@ -290,7 +314,7 @@ export function MatterCorePage({ detail, core }: { detail: SessionDetail; core: 
             </div>}
             {painted.length > 0 && !readOnly && <p className="small muted" style={{ marginBottom: 0 }}>Painted, not saved yet: {painted.join(', ')}.</p>}
             {!readOnly && <p className="small muted" style={{ marginBottom: 0 }}>{images.filter((i) => i.saved_by_me).length} of {images.length} stains saved.{' '}
-              <button className="link-btn small" onClick={() => { if (mayLeave()) void nextCore() }}>Take another core</button></p>}
+              {!practice && <button className="link-btn small" onClick={() => { if (mayLeave()) void nextCore() }}>Take another core</button>}</p>}
           </div>
           <div className="card side-block key-help small">
             <h3>Keys</h3>
@@ -308,9 +332,11 @@ export function MatterCorePage({ detail, core }: { detail: SessionDetail; core: 
 
 /** One stain image: the picture, its white matter (the brush's start: saved, carried or none) and on NeuN detection's
  *  neurons as a guide. */
-function MatterView({ name, core, stain, picture, masks, readOnly, erase, brushRadius, hidden, neurons, onArea, onStroke }: {
+function MatterView({ name, core, stain, picture, masks, readOnly, erase, brushRadius, hidden, neurons, carryFrom, onArea, onStroke }: {
   name: string; core: string; stain: string; picture: PictureState | null; masks: Map<string, MatterMask>; readOnly: boolean; erase: boolean
-  brushRadius: number; hidden: boolean; neurons: boolean; onArea: (a: MatterArea) => void; onStroke: () => void
+  brushRadius: number; hidden: boolean; neurons: boolean; onArea: (a: MatterArea) => void; onStroke: (erased: boolean) => void
+  /** the tutorial: the source stain's area as painted on this page (nothing of it is on the server), carried here */
+  carryFrom?: string
 }) {
   const where = `/api/annotate/${name}/cores/${enc(core)}/${enc(stain)}`
   const [poll, setPoll] = useState(!picture?.ready)
@@ -318,7 +344,17 @@ function MatterView({ name, core, stain, picture, masks, readOnly, erase, brushR
   const state = picture?.ready ? picture : fetched.data
   const pyramid = state?.ready ? state : null
   useEffect(() => { if (pyramid || (state && !state.ready && state.state === 'failed')) setPoll(false) }, [pyramid, state])
-  const area = useFetch<MatterArea>(`/api/annotate/${name}/matter/cores/${enc(core)}/${enc(stain)}/area${readOnly ? '?look=true' : ''}`)
+  const stainBase = `/api/annotate/${name}/matter/cores/${enc(core)}/${enc(stain)}`
+  const asked = useFetch<MatterArea>(carryFrom === undefined ? `${stainBase}/area${readOnly ? '?look=true' : ''}` : null)
+  const [carriedHere, setCarriedHere] = useState<{ data: MatterArea | null; error: string | null }>({ data: null, error: null })
+  useEffect(() => {
+    if (carryFrom === undefined) return
+    let live = true
+    api.post<MatterArea>(`${stainBase}/carry`, { png: carryFrom, scale: MATTER_SCALE })
+      .then((data) => { if (live) setCarriedHere({ data, error: null }) }).catch((e: Error) => { if (live) setCarriedHere({ data: null, error: e.message }) })
+    return () => { live = false }
+  }, [carryFrom, stainBase])
+  const area = carryFrom === undefined ? asked : carriedHere
   const objects = useFetch<{ rows: [number, number, boolean, number[][] | null][] }>(neurons ? `${where}/objects` : null)
   const marks = useMemo<Mark[]>(() => (neurons && !hidden ? (objects.data?.rows ?? []).filter(([, , accepted]) => accepted).map(([x, y, , rings]) => ({
     x, y, r: 6, color: NEURON_COLOUR, rings: rings ?? undefined, circle: rings?.length ? false : undefined,
@@ -396,7 +432,7 @@ function MatterView({ name, core, stain, picture, masks, readOnly, erase, brushR
         if (p && m?.painting) m.extend(p.x, p.y)
       }}
       onRelease={readOnly ? undefined : () => {
-        if (masks.get(stain)?.end()) onStroke()
+        if (masks.get(stain)?.end()) onStroke(erasing.current)
         erasing.current = false
       }}
       over={(unit) => (

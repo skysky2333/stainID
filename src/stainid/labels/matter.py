@@ -12,8 +12,7 @@ carried with one click.
 - The one say per stain image (`final`) is the latest saved label of anyone; the Cores view shows it.
 - Every stain image saved also gets a `done` label (value `DONE`, id `done:matter:<core>:<stain>`); a core is finished
   for a person when all its stain images are (`labels.areas.finished`, `next_core` and `progress` work on these sessions
-  as on "Mark bad areas"). A share of the cores (`SECOND_SHARE`) is checked by a second person independently, to
-  measure agreement (`agreement`).
+  as on "Mark bad areas"). Each core is done by one person.
 - Like every human annotation these areas only train and evaluate models (a grey / white matter model); the analysis
   never reads them.
 """
@@ -35,7 +34,7 @@ AREA = "white"  # the area type: white matter
 SOURCE = "matter"
 STAIN_ORDER = ("NeuN", "6E10", "AT8")  # NeuN first: the neurons show where the grey matter is
 HOLD_SECONDS = 120.0
-SECOND_SHARE = 0.10
+PRACTICE = "practice-matter"  # the tutorial's practice session (`stainid.tutorial.matter`): nothing is kept
 SCALE = exclusions.SCALE  # core px per mask px
 
 
@@ -159,24 +158,3 @@ def regions(area: Area | None, shape: tuple[int, int] | None, scale: int = SCALE
         return []
     codes = area.mask(shape, scale).astype(np.uint8)
     return exclusions.regions_of(codes, scale, {1: AREA})
-
-
-def agreement(project, labels: pd.DataFrame, found: dict[tuple[str, str], set[str]], min_cells: int = 4) -> dict:
-    """How well two people who saved the same stain image agree: the overlap (IoU) of their white matter (both none:
-    agreeing); under 0.5 is a disagreement, listed for an admin."""
-    rows = []
-    for (core, stain), people in sorted(found.items()):
-        if len(people) < 2:
-            continue
-        shape = exclusions._grid_shape(project, core, stain)
-        first, second = sorted(people)[:2]
-        a, b = latest(labels, core, stain, first), latest(labels, core, stain, second)
-        if shape is None or a is None or b is None:
-            continue
-        ma, mb = a.mask(shape), b.mask(shape)
-        either = int((ma | mb).sum())
-        iou = 1.0 if either < min_cells else float((ma & mb).sum()) / either
-        rows.append({"core_id": core, "stain": stain, "people": [first, second], "iou": round(iou, 3), "agree": iou >= 0.5})
-    agreeing = [r for r in rows if r["agree"]]
-    return {"pairs": len(rows), "agree": len(agreeing), "agreement": (len(agreeing) / len(rows)) if rows else None,
-            "mean_iou": float(np.mean([r["iou"] for r in rows])) if rows else None, "disagreements": [r for r in rows if not r["agree"]]}

@@ -5,7 +5,6 @@ saved per stain image, "accept as carried" in one click; one person on a core at
 at; the Cores view shows each stain image's one say; the analysis' layers are untouched."""
 from __future__ import annotations
 
-import numpy as np
 import pytest
 
 pytest.importorskip("fastapi")
@@ -106,14 +105,36 @@ def test_white_matter_is_painted_on_neun_carried_to_the_other_stains_and_saved_p
     assert overview["cores_done"] == 1 and [s["stain"] for s in overview["stains"]][0] == "NeuN"
 
 
-def test_two_people_s_white_matter_is_compared(rounds_project):
+def test_one_person_per_core_no_second_checks(rounds_project):
+    admin, _, _ = rounds_project
+    meta = admin.post("/api/labels/sessions", json={"stain": "all", "kind": "matter", "open": True, "seed": 3}).json()
+    assert meta["second"] == []
+    assert "agreement" not in admin.get("/api/labels/matter").json()
+
+
+def test_the_tutorial_practises_on_a_neun_core_and_keeps_nothing(rounds_project):
+    from fastapi.testclient import TestClient
+
+    from stainid import tutorial
+
+    admin, _, _ = rounds_project
     project = state.get_state().project
-    a = matter.records(CORE, "NeuN", [[[0, 0], [400, 0], [400, 400], [0, 400]]], [False], {"source": "Ann", "session": "s", "tile_id": CORE}, None, False, None)
-    b = matter.records(CORE, "NeuN", [[[0, 0], [400, 0], [400, 200], [0, 200]]], [False], {"source": "Ben", "session": "s", "tile_id": CORE}, None, False, None)
-    store.append(project.output("reviews"), a + b)
-    labels = store.current(project.output("reviews"))
-    found = matter.checked(labels)
-    assert found[(CORE, "NeuN")] == {"Ann", "Ben"}
-    result = matter.agreement(project, labels, found)
-    assert result["pairs"] == 1 and result["agree"] == 1 and result["mean_iou"] == pytest.approx(0.5, abs=0.03)
-    assert np.isclose(result["agreement"], 1.0)
+    entry = tutorial.add_matter(project.root, CORE, "6E10", "Images: synthetic test project")
+    assert entry["stains"] == ["NeuN", "6E10"] and tutorial.matter()["core_id"] == CORE
+    guest = TestClient(admin.app)  # anyone: the tutorial needs no account
+    assert guest.get("/api/tutorial").json()["matter"]["core_id"] == CORE
+    log = store.history(project.output("reviews"))
+    name = matter.PRACTICE
+    detail = guest.get(f"/api/annotate/{name}").json()["meta"]
+    assert detail["kind"] == "matter" and detail["core_rows"][0]["core_id"] == CORE
+    core = guest.get(f"/api/annotate/{name}/matter/cores/{CORE}").json()
+    assert core["practice"] and not core["read_only"] and core["source"] == "NeuN"
+    assert guest.get(f"/api/annotate/{name}/matter/cores/{CORE}/NeuN/area").json()["from"] == "new"
+    painted = _square(150, (100, 150, 40, 80))
+    saved = guest.post(f"/api/annotate/{name}/matter/cores/{CORE}/NeuN/save", json={"png": painted, "scale": 8})
+    assert saved.status_code == 200 and saved.json()["saved"][0]["task"] == matter.TASK  # echoed
+    carried = guest.post(f"/api/annotate/{name}/matter/cores/{CORE}/6E10/carry", json={"png": painted, "scale": 8})
+    assert carried.status_code == 200 and carried.json()["from"] == "carried" and carried.json()["kinds"].get(matter.AREA)
+    assert guest.post(f"/api/annotate/{name}/matter/cores/{CORE}/6E10/save", json={"accepted": True}).status_code == 200
+    assert guest.post(f"/api/annotate/{name}/matter/cores/{CORE}/hold").status_code == 200
+    assert store.history(project.output("reviews")).equals(log)  # nothing kept

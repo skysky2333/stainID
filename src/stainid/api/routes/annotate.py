@@ -88,6 +88,8 @@ def _matter():
 def session_meta(name: str, request: Request) -> dict:
     if name == "practice-areas":  # the tutorial's practice of "Mark bad areas" (`routes.areas`): nothing is saved
         return _areas().practice_meta()
+    if name == "practice-matter":  # the tutorial's practice of "Grey / white matter" (`routes.matter`): nothing is saved
+        return _matter().practice_meta()
     if name.startswith("practice-"):  # the tutorial's practice (`routes.rounds`): nothing is saved
         return _rounds().practice_meta(name)
     if not re.fullmatch(r"[A-Za-z0-9_\-]+", name) or name not in sessions.names(root()):

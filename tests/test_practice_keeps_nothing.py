@@ -68,10 +68,11 @@ def _writes(client: TestClient) -> dict[str, tuple[str, dict]]:
         "/api/annotate/{name}/fields/{tile_id}/segment": (f"/api/annotate/{FIELD}/fields/{TILE}/segment", {"points": [[20.0, 20.0, 1]]}),
         "/api/annotate/{name}/cores/{core_id}/hold": (f"/api/annotate/{CORES}/cores/{core}/hold", {}),
         "/api/annotate/{name}/cores/{core_id}/save": (f"/api/annotate/{CORES}/cores/{core}/save", {"checked": stains, "edits": {}}),
-        # "Grey / white matter" has no practice session: its writes on a practice name are refused (404), keeping nothing
+        # "Grey / white matter" on the bad areas' practice name: refused (404), keeping nothing (its own practice: test_grey_white_matter)
         "/api/annotate/{name}/matter/cores/{core_id}/hold": (f"/api/annotate/{CORES}/matter/cores/{core}/hold", {}),
         "/api/annotate/{name}/matter/cores/{core_id}/leave": (f"/api/annotate/{CORES}/matter/cores/{core}/leave", {}),
         "/api/annotate/{name}/matter/cores/{core_id}/{stain}/save": (f"/api/annotate/{CORES}/matter/cores/{core}/{stains[0]}/save", {"accepted": True}),
+        "/api/annotate/{name}/matter/cores/{core_id}/{stain}/carry": (f"/api/annotate/{CORES}/matter/cores/{core}/{stains[0]}/carry", {}),
     }
 
 
@@ -125,10 +126,10 @@ def test_a_guest_opens_the_practice_session_its_field_and_its_picture(rounds_pro
 
 def test_tutorials_are_kept_with_the_account_and_admins_sets_are_the_ones_they_opened(rounds_project):
     admin, (ann, ben), _ = rounds_project
-    assert ann.get("/api/session/tutorials").json() == {"objects": False, "areas": False, "threads": False, "simple": False, "kept": True}
+    assert ann.get("/api/session/tutorials").json() == {"objects": False, "areas": False, "threads": False, "simple": False, "matter": False, "kept": True}
     assert ann.post("/api/session/tutorials", json={"kind": "areas", "done": True}).json()["areas"] is True
     assert ann.post("/api/tutorial", json={"done": True}).json() == {"done": True}
-    assert ann.get("/api/session/tutorials").json() == {"objects": True, "areas": True, "threads": False, "simple": False, "kept": True}
+    assert ann.get("/api/session/tutorials").json() == {"objects": True, "areas": True, "threads": False, "simple": False, "matter": False, "kept": True}
     assert ann.get("/api/tutorial").json()["done"] is True and ben.get("/api/tutorial").json()["done"] is False
     guest = TestClient(admin.app)
     assert guest.post("/api/session/tutorials", json={"kind": "objects"}).json()["kept"] is False  # a guest's stays in the browser

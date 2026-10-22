@@ -1425,7 +1425,8 @@ def tutorial(request: Request, person: str = Depends(annotator)) -> dict:
     when the tutorial has one. Nothing of the project is read."""
     from stainid import tutorial as shared  # noqa: PLC0415
 
-    return {"done": _done(request, person), "practice": shared.practice(), "threads": (shared.info() or {}).get("threads")}
+    return {"done": _done(request, person), "practice": shared.practice(), "threads": (shared.info() or {}).get("threads"),
+            "matter": {k: v for k, v in (shared.matter() or {}).items() if k in ("core_id", "stains", "credit")} or None}
 
 
 def _done(request: Request, person: str) -> bool:

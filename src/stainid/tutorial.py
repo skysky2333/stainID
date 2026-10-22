@@ -138,6 +138,128 @@ def add_threads(source_root: Path | str, field_tile: str, credit: str, out: Path
     return found
 
 
+MATTER = "matter"  # tutorial.json's key of the "Grey / white matter" practice core
+
+
+def add_matter(source_root: Path | str, core_id: str, other: str, credit: str, out: Path | str | None = None) -> dict:
+    """Add the "Grey / white matter" practice to a tutorial folder (the built one by default): the NeuN image `core_id`
+    of `source_root` (read only; only images whose licence allows public display) with detection's outputs for it
+    (the neurons drawn as a guide), and the same tissue on an `other` stain. When the source has that stain image of
+    the core it is copied; when its core images are regions of whole slides (another slide of the same donor and
+    region for `other`), the matching region is cut from the other slide where the two slides line up (the rigid
+    registration of `stainid.registration.rigid` on the whole slides). How the two pictures line up is kept as the
+    tutorial's registration table (`stainid.registration.cores`), so the carry needs nothing at run time. Replaces an
+    earlier one; returns tutorial.json's `matter` entry."""
+    import cv2  # noqa: PLC0415
+
+    from stainid.imaging.chromogens import Recipe, to_analysis_rgb  # noqa: PLC0415
+    from stainid.imaging.core_images import is_link, read_bgr, read_link  # noqa: PLC0415
+    from stainid.imaging.sources import open_source  # noqa: PLC0415
+    from stainid.labels import candidate_store  # noqa: PLC0415
+    from stainid.project import load_project  # noqa: PLC0415
+    from stainid.registration import rigid  # noqa: PLC0415
+
+    source = load_project(source_root)
+    target = Path(out) if out is not None else folder()
+    if not (target / INFO).exists():
+        raise FileNotFoundError(f"no tutorial in {target} yet: stainid tutorial build first")
+    images_path = source.input("core_images")
+    images = _read(images_path)
+    found = images[(images.core_id == core_id) & (images.stain == "NeuN")]
+    if found.empty:
+        raise KeyError(f"{core_id} has no NeuN image in {source.root}")
+    neun = found.iloc[0].to_dict()
+    pictures = Path("data/images/tutorial")
+    neun_picture = pictures / f"matter_{core_id}_NeuN"
+    width, height = _copy_picture(source, neun, target / neun_picture)
+    neun_file = next(q for q in (target / neun_picture).parent.iterdir() if q.stem == neun_picture.name)
+    other_file = target / pictures / f"matter_{core_id}_{other}.jpg"
+    same = images[(images.core_id == core_id) & (images.stain == other)]
+    placed = None  # the whole slides' registration, when the other picture is cut where they line up
+    if not same.empty:
+        other_row = same.iloc[0].to_dict()
+        _copy_picture(source, other_row, other_file.with_suffix(""))
+        other_file = next(q for q in other_file.parent.iterdir() if q.stem == other_file.stem)
+    else:
+        link_path = source.root / neun["image_path"]
+        if not is_link(link_path):
+            raise KeyError(f"{core_id} has no {other} image and is not a region of a whole slide")
+        here = read_link(link_path)
+        peers = images[(images.stain == other) & (images.donor_id == neun.get("donor_id")) & (images.region == neun.get("region"))]
+        if peers.empty:
+            raise KeyError(f"no {other} slide of donor {neun.get('donor_id')} ({neun.get('region')}) in {source.root}")
+        other_row = peers.iloc[0].to_dict()
+        there = read_link(source.root / other_row["image_path"])
+        a, b = open_source(here["source"]), open_source(there["source"])
+        pa, _ = a.thumbnail(2048)
+        pb, _ = b.thumbnail(2048)
+        whole = placed = rigid.register_previews(pa, pb)  # the other slide's pixels -> the NeuN slide's
+        m = np.vstack([rigid.native_matrix(whole.matrix, pa.shape[:2], (a.height, a.width), (b.height, b.width)), [0, 0, 1]])
+        x, y, w, h = (int(v) for v in here["box"])
+        cx, cy, _ = np.linalg.inv(m) @ [x + w / 2, y + h / 2, 1]
+        box = (int(round(cx - w / 2)), int(round(cy - h / 2)), w, h)
+        rgb = b.region(box, float(here["scale"]))
+        if (rgb.shape[1], rgb.shape[0]) != (width, height):
+            rgb = cv2.resize(rgb, (width, height), interpolation=cv2.INTER_LINEAR)
+        rgb = to_analysis_rgb(rgb, Recipe.from_dict(there["recipe"]))
+        other_file.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(other_file), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 92])
+
+    # how the two pictures line up: the other stain's pixels -> NeuN's (the registration table's form). A picture cut
+    # where the whole slides line up is already in place (their registration's status and overlap); a copied one is
+    # registered here (a region full of tissue gives the tissue masks little to go on: such a fit is kept only when
+    # it passes)
+    if placed is not None:
+        fit, native = placed, np.eye(3)[:2]
+    else:
+        first = cv2.cvtColor(read_bgr(neun_file), cv2.COLOR_BGR2RGB)
+        second = cv2.cvtColor(read_bgr(other_file), cv2.COLOR_BGR2RGB)
+        small = 1024 / max(width, height)
+        pa = cv2.resize(first, (round(width * small), round(height * small)), interpolation=cv2.INTER_AREA)
+        pb = cv2.resize(second, (round(second.shape[1] * small), round(second.shape[0] * small)), interpolation=cv2.INTER_AREA)
+        fit = rigid.register_previews(pa, pb)
+        native = rigid.native_matrix(fit.matrix, pa.shape[:2], (height, width), second.shape[:2])
+    registration = target / "data" / "registration" / "all_triplets.csv"
+    table = _read(registration)
+    row = {"core_id": core_id, "moving_stain": other, "reference_stain": "NeuN", "method": ("whole slides: " if placed is not None else "") + fit.method,
+           "status": fit.status,
+           "registered_tissue_dice": f"{fit.final_dice:.6f}", **{f"native_m{i}{j}": f"{native[i][j]:.8f}" for i in range(2) for j in range(3)}}
+    table = pd.concat([table[table.core_id != core_id] if len(table) else table, pd.DataFrame([row])], ignore_index=True)
+    _write(table, registration)
+
+    # the core image rows (pictures as plain files) and detection's outputs of the NeuN image
+    rows = []
+    for stain, picture, base in (("NeuN", neun_file, neun), (other, other_file, {**neun, **{k: other_row.get(k, "") for k in ("antibody", "image_id", "slide_id")}})):
+        rows.append({**base, "stain": stain, "image_path": str(Path(picture).relative_to(target)), "native_width_px": str(width), "native_height_px": str(height),
+                     **{k: "" for k in ("source_path", "source_box", "source_pixel_size_um") if k in base}, **({"scale": "1"} if "scale" in base else {})})
+    tutorial_images = target / _rel(source, images_path)
+    kept = _read(tutorial_images)
+    kept = pd.concat([kept[kept.core_id != core_id] if len(kept) else kept, pd.DataFrame(rows)], ignore_index=True).fillna("")
+    _write(kept, tutorial_images)
+    stages = candidate_store.folder(source, "NeuN").parent.parent
+    for stage in sorted(q for q in stages.iterdir() if q.is_dir()):
+        for path in sorted((stage / "NeuN").glob(f"{core_id}.*")) if (stage / "NeuN").is_dir() else []:
+            if path.stem == core_id:
+                copy = target / _rel(source, path)
+                copy.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(path, copy)
+
+    raw = yaml.safe_load((source.root / "stainid.yaml").read_text()) or {}
+    dataset = raw.get("dataset") or {}
+    entry = {"core_id": core_id, "stains": ["NeuN", other], "credit": credit, "registration": {"status": fit.status, "dice": round(float(fit.final_dice), 3)},
+             "source": {k: dataset.get(k) for k in ("id", "title", "licence", "citation", "doi") if dataset.get(k)}}
+    meta = json.loads((target / INFO).read_text())
+    meta[MATTER] = entry
+    (target / INFO).write_text(json.dumps(meta, indent=1))
+    _INFO.clear()
+    return entry
+
+
+def matter() -> dict | None:
+    """The "Grey / white matter" practice (None when the tutorial has none): its core, stains and credit line."""
+    return (info() or {}).get(MATTER)
+
+
 def practice() -> dict | None:
     """What the "Fix the field" tutorial practises on: {stain, tile_id, round2}, the credit line and the hint."""
     found = info()
@@ -332,10 +454,20 @@ def add_parser(sub) -> None:
         parser.add_argument("--threads-credit", default="", required=required, help="its credit line")
         if parser is not b:
             parser.add_argument("--out", type=Path, default=None, help="the tutorial folder (default: $STAINID_TUTORIAL or ~/.stainid/tutorial)")
+    m = what.add_parser("matter", help="add (or replace) the Grey / white matter practice of a built tutorial")
+    m.add_argument("--from", dest="source", type=Path, required=True, help="the project its NeuN image comes from")
+    m.add_argument("--core", required=True, help="the core id of the NeuN image (grey and white matter both in it)")
+    m.add_argument("--other", default="6E10", help="the other stain the white matter is carried to (default 6E10)")
+    m.add_argument("--credit", required=True, help="its credit line")
+    m.add_argument("--out", type=Path, default=None, help="the tutorial folder (default: $STAINID_TUTORIAL or ~/.stainid/tutorial)")
     what.add_parser("show", help="what the built tutorial practises on")
 
 
 def run(args) -> None:
+    if args.tutorial_command == "matter":
+        found = add_matter(args.source, args.core, args.other, args.credit, args.out)
+        print(f"grey / white matter practice added: {found['core_id']} ({', '.join(found['stains'])}), registration {found['registration']}; {found['credit']}")
+        return
     if args.tutorial_command == "threads":
         found = add_threads(args.threads_from, args.threads_field, args.threads_credit, args.out)
         target = (Path(args.out) if args.out is not None else folder()) / INFO
