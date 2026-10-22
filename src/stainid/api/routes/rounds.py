@@ -913,8 +913,10 @@ def clean(meta: dict, mark, person: str) -> dict | None:
 
 def clean_simple(meta: dict, mark, person: str) -> dict:
     """A label of a simple session (`labels.simple`): a candidate's simple class (or an added object's, at x, y), or
-    the wand's thread segments of a field (`meta.segments`: their indices in detection's thread lines, which the server
-    reads again: `points` are those lines)."""
+    the neurite brush's thread segments of a field (`meta.pieces`: [step, index] of each, a segment of the thread
+    network at that step of the thread ladder, `labels.thread_threshold.FACTORS`, which the server reads again:
+    `points` are those lines; `meta.factor` the thread level the slider was at, as the threads step keeps it; an older
+    page's `meta.segments` are pieces of detection's own step)."""
     stain = meta["stain"]
     words = simple.of(get_state().project, stain)
     record = {"source": person, "stain": stain, "task": mark.task, "session": meta["name"], "deleted": bool(mark.deleted), "value": mark.value,
@@ -924,21 +926,32 @@ def clean_simple(meta: dict, mark, person: str) -> dict:
         if chosen is None or chosen.kind != simple.WAND:
             raise HTTPException(400, f"{mark.value!r} is not a class chosen with the wand")
         tile = field_tile(meta, mark.tile_id)
-        segments = sorted({int(i) for i in (mark.meta or {}).get("segments") or []})
+        given = mark.meta or {}
+        try:
+            pieces = sorted({(int(a), int(b)) for a, b in given.get("pieces") or []}
+                            | {(thread_threshold.DETECTION, int(i)) for i in given.get("segments") or []})
+        except (TypeError, ValueError):
+            raise HTTPException(400, "the chosen thread segments are not [step, index] pairs") from None
         lines: list = []
-        if segments and not mark.deleted:
+        factor = _number(given.get("factor"))
+        ladder: dict = {}
+        if pieces and not mark.deleted:
             ladder = thread_threshold.field_ladder(get_state().project, tile) if stain == "AT8" else {"status": "unavailable"}
             steps = ladder.get("steps") or []
             if ladder.get("status") != "done" or not steps:
                 raise HTTPException(409, "The threads of this field are not ready yet: try again in a moment.")
-            found = steps[ladder.get("detection", thread_threshold.DETECTION)]["lines"]
-            if segments[-1] >= len(found) or segments[0] < 0:
-                raise HTTPException(400, "a chosen thread segment is not one of this field's")
-            lines = [found[i] for i in segments]
-        reach = _number((mark.meta or {}).get("reach_um"))
+            for step, index in pieces:
+                if not (0 <= step < len(steps)) or not (0 <= index < len(steps[step]["lines"])):
+                    raise HTTPException(400, "a chosen thread segment is not one of this field's")
+                lines.append(steps[step]["lines"][index])
+        kept = None
+        if lines:
+            level = thread_threshold.record(ladder, factor if factor is not None else 1.0)["points"]
+            kept = {"pieces": [list(p) for p in pieces], "factor": level["factor"], "thread_threshold": level["thread_threshold"],
+                    "detection_threshold": level["detection_threshold"],
+                    "factors": sorted({float(thread_threshold.FACTORS[p[0]]) for p in pieces})}
         return record | {"id": f"{simple.AREA_TASK}:{mark.tile_id}:{chosen.id}", "value": chosen.id, "x": None, "y": None, "candidate": None,
-                         "points": lines or None, "deleted": bool(mark.deleted) or not lines,
-                         "meta": {"segments": segments, "reach_um": reach} if lines else None}
+                         "points": lines or None, "deleted": bool(mark.deleted) or not lines, "meta": kept}
     if not mark.deleted and mark.value != simple.NONE and (chosen is None or chosen.kind != simple.OBJECTS):
         raise HTTPException(400, f"{mark.value!r} is not a simple class of {stain}")
     if mark.candidate:

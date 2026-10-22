@@ -25,7 +25,7 @@ export const ROUND_TEXT: Record<1 | 2, string> = {
 export type RoundEvent = 'hover' | 'class' | 'subtype' | 'unsure' | 'remove' | 'undo' | 'mask' | 'add' | 'added' | 'precise-in' | 'precise-spot' | 'precise-drag'
   | 'precise-out' | 'save' | 'finish' | 'keep' | 'exclude' | 'overlays' | 'threshold' | 'start' | 'reset' | 'split-mode' | 'split-preview' | 'split'
   | 'merge-mode' | 'merge-pick' | 'merge' | 'brush-size' | 'threads-mode' | 'threads-step' | 'threads-saved'
-  | 'pass' | 'next-pass' | 'pick' | 'unpick' | 'menu' | 'wand'  // the simple mode (simplefield.tsx)
+  | 'pass' | 'next-pass' | 'pick' | 'unpick' | 'menu' | 'wand' | 'wand-level'  // the simple mode (simplefield.tsx)
 /** The way back from a labelling page: the person's sets, or, for a guest on a practice page (no account, no sets),
  *  the sign-in. */
 export function BackToSets() {

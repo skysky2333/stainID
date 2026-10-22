@@ -3,9 +3,12 @@
    already, the person only fixes them. A click on a candidate puts it in the class or, when it is in it, takes it out;
    a click on empty tissue adds a missed object to the class (one click: Segment Anything outlines it). A candidate has
    one class: the last click wins (it moves). Members of the other classes show faint in their own colour; what is in
-   no class is dotted grey ("not an object"). Then the next class. AT8 "neurite" is a magic wand over the thread
-   segments detection found: a click takes a segment and the ones near it (one slider: how far), Shift+click takes them
-   out; the thread lines show only in that pass. There is no outline editing: outlines stay detection's.
+   no class is dotted grey ("not an object"). Then the next class. AT8 "neurite" is a brush over the thread network
+   (wand.ts): a stroke takes every thread segment under it that exists at the thread level the slider is at (the thread
+   ladder of threads mode, its factor on the DAB cut: further right a lower factor, so more and fainter lines count),
+   Shift-painting or the eraser takes them out, and painting again over a part redoes it at the slider's level. The
+   lines show only in that pass; each chosen piece is [step, index] of the ladder, the slider's factor is saved with
+   them. There is no outline editing: outlines stay detection's.
    Nothing is sent before Save progress; Finish field finishes the field, and every candidate left as it started is saved
    in the class it started in, those in no class as "not an object". Locks, the read-only finished field with Redo /
    Add an extra annotation, the draft in this browser and the progress are those of the detailed mode (fixfield.tsx). */
@@ -26,7 +29,10 @@ import type { RoundEvent } from './rounds'
 import { BackToSets, ClosedNote, FINISH_NOTE, LabellingBar, RoundProgressLine, SaveButtons, SaveState, changesText, draftKey, polygonPoints, readDraft, useLeaveGuard, useLive, useSaveKeys,
   writeDraft } from './rounds'
 import type { ThreadLadder } from './threads'
-import { nearestSegment, segmentsOf, wandGroup } from './wand'
+import { ThreadSlider, stepOf, threadKeyStep } from './threads'
+import type { Segment } from './wand'
+import { segmentsOf, underStroke } from './wand'
+import { BRUSH_KEY, BRUSH_PX, brushStep } from './brush'
 import { FieldStrip, useLevels, useStripShown } from './fieldstrip'
 
 type Meta = SessionDetail['meta'] & RoundDetail
@@ -42,8 +48,14 @@ const VIEW_KEYS = new Set([' ', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown
 interface Shown { key: string; x: number; y: number; r: number; candidate?: RoundObject; added?: Mine }
 /** An unsaved change of one label: what to send on Save, and how it looks on the page meanwhile (null: taken away). */
 interface Change { mark: Rec | null; label: Mine | null }
-/** One step back with Z: the changes and the wand's segments as they were. */
-interface Undo { changes: Record<string, Change>; segments: number[] }
+/** One step back with Z: the changes and the neurite pieces as they were. */
+interface Undo { changes: Record<string, Change>; segments: string[] }
+/** A chosen neurite piece: `step:index`, a segment of the thread network at that step of the thread ladder. */
+const pieceKey = (step: number, index: number) => `${step}:${index}`
+const pieceOf = (key: string) => key.split(':').map(Number) as [number, number]
+const LEGACY_STEP = 8  // labels.thread_threshold.DETECTION: the magic wand of earlier pages chose segments of detection's step
+const piecesOf = (meta: { pieces?: number[][]; segments?: number[] } | null | undefined): string[] =>
+  meta?.pieces ? meta.pieces.map(([a, b]) => pieceKey(a, b)) : (meta?.segments ?? []).map((i) => pieceKey(LEGACY_STEP, i))
 interface Hooks { onEvent?: (event: RoundEvent) => void; onFinished?: () => void; coach?: ReactNode
   /** Reset (`fresh`: the field as detection made it, unsaved) and Undo reset (`onReset(false)`) */
   fresh?: boolean; onReset?: (on: boolean) => void }
@@ -93,15 +105,20 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
   }, [readOnly])
 
   const draftAt = practice ? '' : draftKey(detail.annotator, name, tile)
-  const kept = readOnly ? null : readDraft<{ changes: Record<string, Change>; segments?: number[] }>(draftAt)
+  const kept = readOnly ? null : readDraft<{ changes: Record<string, Change>; pieces?: string[] }>(draftAt)
   const [saved, setSaved] = useState<Record<string, Mine>>(() => Object.fromEntries(field.mine.map((m) => [m.id, m])))
   const [changes, setChanges] = useState<Record<string, Change>>(() => kept?.changes ?? {})
   const [restored, setRestored] = useState(() => Object.keys(kept?.changes ?? {}).length)
   const savedArea = Object.values(saved).find((m) => m.task === 'simple_area' && m.value === wandClass?.id)
-  const [segmentsOn, setSegmentsOn] = useState<number[]>(() => kept?.segments ?? savedArea?.meta?.segments ?? [])
-  const [segmentsSaved, setSegmentsSaved] = useState<number[]>(() => savedArea?.meta?.segments ?? [])
+  const areaMeta = savedArea?.meta
+  const [segmentsOn, setSegmentsOn] = useState<string[]>(() => kept?.pieces ?? piecesOf(areaMeta))
+  const [segmentsSaved, setSegmentsSaved] = useState<string[]>(() => piecesOf(areaMeta))
   const [active, setActive] = useState<string>(objectClasses[0]?.id ?? '')
-  const [reach, setReach] = useStored<number>('stainid.simple.wand.reach', vocab.wand.start)
+  const [level, setLevel] = useState<number | null>(null)  // the thread level (a step of the ladder) the next stroke uses
+  const [brushSize, setBrushSize] = useStored<number>(BRUSH_KEY, BRUSH_PX.start)
+  const [erasing, setErasing] = useState(false)
+  const [stroke, setStroke] = useState<{ points: number[][]; erase: boolean; radius: number } | null>(null)
+  const [ring, setRing] = useState<[number, number, number] | null>(null)  // the brush under the pointer: x, y, radius
   const [hovered, setHovered] = useState<string | null>(null)
   const [hidden, setHidden] = useState(false)
   const [undos, setUndos] = useState<Undo[]>([])
@@ -120,9 +137,18 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
   const [stripOn, setStripOn] = useStripShown()
   const wandOn = !!wandClass && active === wandClass.id
   const ladder = useFetch<ThreadLadder>(wandClass && !practice ? `/api/annotate/${name}/fields/${enc(tile)}/threads` : null)
-  const lines = ladder.data?.status === 'done' && ladder.data.steps.length ? ladder.data.steps[ladder.data.detection].lines : null
-  const segments = useMemo(() => (lines ? segmentsOf(lines) : []), [lines])
-  const px = field.pixel_size_um
+  const ladderDone = ladder.data?.status === 'done' && ladder.data.steps.length ? ladder.data : null
+  const step = ladderDone ? (level ?? stepOf(ladderDone.factors, areaMeta?.factor, ladderDone.detection)) : 0
+  const lines = ladderDone ? ladderDone.steps[step]?.lines ?? null : null
+  const segmentCache = useMemo(() => new Map<number, Segment[]>(), [ladderDone])
+  const segmentsAt = (s: number): Segment[] => {
+    if (!ladderDone) return []
+    let found = segmentCache.get(s)
+    if (!found) { found = segmentsOf(ladderDone.steps[s]?.lines ?? []); segmentCache.set(s, found) }
+    return found
+  }
+  const chosenLines = useMemo(() => (ladderDone ? segmentsOn.map((k) => { const [a, b] = pieceOf(k); return ladderDone.steps[a]?.lines[b] }).filter(Boolean) as number[][] : []),
+    [ladderDone, segmentsOn])
 
   useLive(name, { tile_id: tile, view: readOnly, own: !!field.own }, (live) => {
     if (live.simple_checked) setChecked(live.simple_checked)
@@ -148,11 +174,11 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
     }
     return out
   }, [saved, changes])
-  const segmentsDirty = segmentsOn.length !== segmentsSaved.length || segmentsOn.some((s) => !segmentsSaved.includes(s))
+  const segmentsDirty = segmentsOn.length !== segmentsSaved.length || segmentsOn.some((k) => !segmentsSaved.includes(k))
   const [resetPending, setResetPending] = useState(!!fresh)  // Reset: unsaved until the next save (which deletes the earlier labels first)
   const unsaved = Object.keys(changes).filter((id) => !id.startsWith('outline:')).length + (segmentsDirty ? 1 : 0) + (resetPending ? 1 : 0)
   const discarding = useRef(false)
-  useEffect(() => { if (!discarding.current) writeDraft(draftAt, unsaved ? { changes, segments: segmentsOn } : null) }, [draftAt, changes, segmentsOn, unsaved])
+  useEffect(() => { if (!discarding.current) writeDraft(draftAt, unsaved ? { changes, pieces: segmentsOn } : null) }, [draftAt, changes, segmentsOn, unsaved])
 
   const own = useMemo(() => field.objects.filter((o) => o.own), [field.objects])
   const added = [...myCalls.values()].filter((m) => !m.candidate && m.value !== NONE && m.x != null)
@@ -237,26 +263,43 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
       setPending(null)
     }
   }
-  const wandClick = (p: ImagePoint, shift: boolean) => {
-    if (!segments.length) { setError(ladder.pending ? 'The threads of this field are still being drawn: try again in a moment.' : 'No threads were found on this field.'); return }
-    const at = nearestSegment(segments, p.x, p.y, 8 * p.unit)
-    if (at < 0) { setError('Click right on a thread (the thin white lines) to choose it.'); return }
+  /** The neurite brush: a stroke takes every thread segment under it at the slider's level (and the pieces chosen
+   *  before under it, at any level, go: painting again redoes a part); erasing only takes out. One stroke, one Z. */
+  const brushRadius = (unit: number) => (brushSize / 2) * unit
+  const press = (p: ImagePoint, event: React.MouseEvent) => {
+    if (!wandOn || readOnly || event.button !== 0) return
+    if (!ladderDone) { setError(ladder.pending ? 'The threads of this field are still being drawn: try again in a moment.' : 'No threads were found on this field.'); return }
     setError(null)
-    const group = wandGroup(segments, at, reach / px)
+    setStroke({ points: [[p.x, p.y]], erase: erasing || event.shiftKey, radius: brushRadius(p.unit) })
+  }
+  const release = () => {
+    const done = stroke
+    setStroke(null)
+    if (!done || !ladderDone) return
+    const chosen = segmentsOn.map((k) => { const [a, b] = pieceOf(k); return { key: k, segment: segmentsAt(a)[b] } }).filter((c) => c.segment)
+    const under = new Set(underStroke(chosen.map((c) => c.segment), done.points, done.radius).map((i) => chosen[i].key))
+    const taken = done.erase ? [] : underStroke(segmentsAt(step), done.points, done.radius).map((i) => pieceKey(step, i))
+    const next = [...new Set([...segmentsOn.filter((k) => !under.has(k)), ...taken])].sort()
+    const before = [...segmentsOn].sort()
+    if (next.length === before.length && next.every((k, i) => k === before[i])) return
     remember()
-    setSegmentsOn((on) => (shift ? on.filter((i) => !group.includes(i)) : [...new Set([...on, ...group])]))
+    setSegmentsOn(next)
     tell('wand')
   }
   const click = (p: ImagePoint, event: React.MouseEvent) => {
     if (event.button !== 0 || readOnly) return
     setMenu(null)
-    if (wandOn) { wandClick(p, event.shiftKey); return }
+    if (wandOn) return  // the brush: press, drag, let go
     if (!active) return
     const on = hit(p)
     if (on) { if (!on.candidate?.excluded) toggle(on); return }
     if (!pending) void addAt(p.x, p.y)
   }
   const move = (p: ImagePoint) => {
+    if (wandOn && !readOnly) {
+      setRing([p.x, p.y, stroke?.radius ?? brushRadius(p.unit)])
+      if (stroke) setStroke({ ...stroke, points: [...stroke.points, [p.x, p.y]] })
+    }
     const now = wandOn ? null : hit(p)?.key ?? null
     if (now && now !== hovered) tell('hover')
     setHovered(now)
@@ -283,6 +326,12 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
       if (e.key === 'Escape') { setMenu(null); return }
       if (readOnly) return
       if ((e.key === 'Delete' || e.key === 'Backspace') && target) { e.preventDefault(); giveClass(target, NONE); tell('unpick'); return }
+      if (wandOn) {  // the neurite brush: B brush, E eraser, Tab / Shift+Tab its size, [ ] the thread level
+        if (e.key === 'Tab') { e.preventDefault(); setBrushSize(brushStep(brushSize, e.shiftKey)); return }
+        if (e.key.toLowerCase() === 'b') { setErasing(false); return }
+        if (e.key.toLowerCase() === 'e') { setErasing(true); return }
+        if ((e.key === '[' || e.key === ']') && ladderDone) { e.preventDefault(); setLevel(threadKeyStep(ladderDone, step, e.key)); tell('wand-level'); return }
+      }
       if (e.key.toLowerCase() === 'z' && !e.repeat) { e.preventDefault(); undo() }
     }
     window.addEventListener('keydown', onKey)
@@ -317,7 +366,10 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
     if (saving || (!finish && !unsaved)) return !saving
     const marks = Object.values(changes).flatMap((c) => (c.mark ? [c.mark] : []))
       .map((m) => (m.candidate ? { task: m.task, candidate: m.candidate, value: m.value, deleted: m.deleted } : m))
-    if (segmentsDirty && wandClass) marks.push({ task: 'simple_area', value: wandClass.id, meta: { segments: segmentsOn, reach_um: reach }, deleted: !segmentsOn.length })
+    if (segmentsDirty && wandClass) {
+      marks.push({ task: 'simple_area', value: wandClass.id, deleted: !segmentsOn.length,
+        meta: { pieces: segmentsOn.map(pieceOf), factor: ladderDone ? ladderDone.factors[step] : 1 } })  // the slider's thread level, as the threads step keeps it
+    }
     if (!(await send(marks, finish))) return false
     setChanges({}); setUndos([]); setRestored(0); setSegmentsSaved(segmentsOn)
     writeDraft(draftAt, null)
@@ -405,7 +457,7 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
       {!readOnly && !field.own && (openBy.length > 0 || doneBy.length > 0) && <div className="found found-warn small field-others" role="status">
         {doneBy.length > 0 ? `${doneBy.join(', ')} already finished this field.` : `${openBy.join(', ')} ${openBy.length === 1 ? 'is' : 'are'} working on this field right now.`}</div>}
       <div className="annotate-workspace">
-        <div className="annotate-image" onContextMenu={(e) => e.preventDefault()} onMouseLeave={() => { if (!menu) setHovered(null) }}>
+        <div className="annotate-image" onContextMenu={(e) => e.preventDefault()} onMouseLeave={() => { setRing(null); if (!menu) setHovered(null) }}>
           {menu && byKey.get(menu.key) && <SimpleMenu at={menu} classes={objectClasses} current={callOf(byKey.get(menu.key)!).value}
             onPick={(value) => { const s = byKey.get(menu.key)!; setMenu(null); giveClass(s, value); tell('menu') }} onClose={() => setMenu(null)} />}
           <ZoomViewer fit src={apiUrl(`/api/annotate/${name}/fields/${enc(tile)}/image.jpg`)}
@@ -415,11 +467,12 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
               <span className="muted small">{tile}</span>{done && <span className="badge status-done">finished</span>}
               {activeClass && !readOnly && <span className="badge pass-badge" style={{ borderColor: activeClass.colour }}>
                 <span className="look-swatch" style={{ borderColor: activeClass.colour, background: activeClass.colour }} />{activeClass.name}
-                {wandOn ? ' — click threads' : ' — click to add or take out'}</span>}
+                {wandOn ? (erasing ? ' — paint to take threads out' : ' — paint over threads') : ' — click to add or take out'}</span>}
               {hidden && <span className="badge">Overlays hidden · <span className="kbd">Space</span></span>}
               {pending && <span className="small muted">Outlining…</span>}</span>}
             cursor={readOnly ? 'default' : wandOn ? 'crosshair' : target ? 'pointer' : 'copy'}
             onClick={readOnly ? undefined : click} onMove={move} onContext={openMenu}
+            onPress={readOnly ? undefined : press} onRelease={readOnly ? undefined : release} panLock={wandOn && !readOnly}
             onView={levels.onView} control={levels.control}
             aside={stripOn && !practice ? <FieldStrip name={name} tile={tile} fields={detail.fields} levels={levels}
               onOpen={(t) => leave(() => navigate(`/annotate/${name}/${enc(t)}`))} /> : null}
@@ -434,7 +487,11 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
               const litCall = lit ? callOf(lit) : null
               const colour = litCall ? byId.get(litCall.value)?.colour ?? INACTIVE_GREY : '#fff'
               return <>
-                {wandOn && lines && <WandLines lines={lines} on={segmentsOn} unit={unit} colour={wandClass!.colour} />}
+                {wandOn && lines && <WandLines lines={lines} picked={chosenLines} unit={unit} colour={wandClass!.colour} />}
+                {wandOn && stroke && <polyline points={polygonPoints(stroke.points)} fill="none" stroke={stroke.erase ? '#ffffff' : wandClass!.colour} strokeOpacity={0.28}
+                  strokeWidth={stroke.radius * 2} strokeLinecap="round" strokeLinejoin="round" pointerEvents="none" />}
+                {wandOn && ring && !readOnly && <circle className="brush-ring" cx={ring[0]} cy={ring[1]} r={ring[2]} fill="none" stroke={erasing ? '#ffffff' : wandClass!.colour}
+                  strokeWidth={1.5 * unit} strokeDasharray={erasing ? `${4 * unit} ${3 * unit}` : undefined} pointerEvents="none" />}
                 {layers.box && <>
                   <path d={`M0 0H${size.w}V${size.h}H0Z M${box.x} ${box.y}v${box.height}h${box.width}v${-box.height}Z`} fill="#000" fillOpacity={0.22} fillRule="evenodd" />
                   <rect x={box.x} y={box.y} width={box.width} height={box.height} fill="none" stroke={BOX_COLOR} strokeWidth={1.5 * unit} strokeDasharray={`${12 * unit} ${8 * unit}`} />
@@ -481,15 +538,25 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
                 : <span className="small secondary">Last class: when the field looks right, Finish field.</span>}
             </div>}
           </div>
-          {wandOn && <div className="card side-block wand-card" role="group" aria-label="The magic wand">
-            <h3>Magic wand</h3>
-            <p className="small" style={{ margin: '0 0 6px' }}>Click a thread: it and the threads near it are chosen. Click another thread to add more,
-              {' '}<span className="kbd">Shift</span>+click to take some out.</p>
-            <label className="field small">How far it reaches: <b>{reach.toFixed(0)} µm</b>
-              <input type="range" min={vocab.wand.from} max={vocab.wand.to} step={1} value={reach} onChange={(e) => setReach(Number(e.target.value))} /></label>
+          {wandOn && <div className="card side-block wand-card" role="group" aria-label="The neurite brush">
+            <h3>Neurite brush</h3>
+            {!readOnly && <p className="small" style={{ margin: '0 0 6px' }}>Paint over the neurites: every thread line under the brush is chosen, as the
+              thread level below finds them. <span className="kbd">Shift</span>-paint or the eraser takes lines out; painting a part again redoes it at the level you are at.</p>}
+            {ladderDone && <>
+              <ThreadSlider ladder={ladderDone} index={step} onChange={(i) => { setLevel(i); tell('wand-level') }} disabled={readOnly} />
+              <p className="small muted" style={{ margin: '2px 0 6px' }}>It applies to your next stroke; the white lines show what it finds now.</p>
+            </>}
+            {!readOnly && <div className="area-types">
+              <button className={`area-type${!erasing ? ' chosen' : ''}`} onMouseDown={(e) => e.preventDefault()} onClick={() => setErasing(false)} aria-pressed={!erasing}>
+                <span className="kbd">B</span><span className="swatch" style={{ background: wandClass!.colour }} />brush</button>
+              <button className={`area-type${erasing ? ' chosen' : ''}`} onMouseDown={(e) => e.preventDefault()} onClick={() => setErasing(true)} aria-pressed={erasing}>
+                <span className="kbd">E</span><span className="swatch" style={{ background: '#ffffff' }} />eraser (or <span className="kbd">Shift</span>-paint)</button>
+            </div>}
+            {!readOnly && <p className="small secondary" style={{ margin: '6px 0 0' }}>Brush <b>{brushSize} px</b> · <span className="kbd">Tab</span> smaller,
+              {' '}<span className="kbd">Shift</span>+<span className="kbd">Tab</span> bigger · <span className="kbd">[</span> <span className="kbd">]</span> the thread level</p>}
             {ladder.pending && <Loading inline label={pendingText(ladder.pending)} />}
             {ladder.data && ladder.data.status !== 'done' && <p className="small muted">No threads were found on this field.</p>}
-            <p className="small muted" style={{ margin: '4px 0 0' }}>{segmentsOn.length} of {segments.length} thread pieces chosen.
+            <p className="small muted" style={{ margin: '4px 0 0' }}>{segmentsOn.length} thread pieces chosen.
               {segmentsOn.length > 0 && !readOnly && <> <button className="link-btn small" onClick={() => { remember(); setSegmentsOn([]) }}>Clear</button></>}</p>
           </div>}
           <div className="card side-block">
@@ -571,16 +638,16 @@ const SimpleLayer = memo(function SimpleLayer({ items, unit, zoom, active, dim }
   )
 })
 
-/** The thread segments of the wand's pass: the chosen ones in the class's colour, the others faint white. */
-const WandLines = memo(function WandLines({ lines, on, unit, colour }: { lines: number[][]; on: number[]; unit: number; colour: string }) {
-  const chosen = useMemo(() => new Set(on), [on])
-  const path = (keep: (i: number) => boolean) => lines.map((l, i) => {
-    if (!keep(i)) return ''
+/** The neurite pass: the thread network at the slider's level faint white (what the next stroke can take), the chosen
+ *  pieces (of whatever level they were painted at) in the class's colour on top. */
+const WandLines = memo(function WandLines({ lines, picked: chosen, unit, colour }: { lines: number[][]; picked: number[][]; unit: number; colour: string }) {
+  const path = (list: number[][]) => list.map((l) => {
     let out = `M${l[0]} ${l[1]}`
     for (let k = 2; k < l.length; k += 2) out += `L${l[k]} ${l[k + 1]}`
     return l.length === 2 ? `${out}h0.01` : out
   }).join('')
-  const rest = path((i) => !chosen.has(i)), picked = path((i) => chosen.has(i))
+  const rest = useMemo(() => path(lines), [lines]), picked = useMemo(() => path(chosen), [chosen])  // eslint-disable-line react-hooks/exhaustive-deps
+  const on = chosen
   return (
     <g className="wand-lines" pointerEvents="none">
       <path d={rest} fill="none" stroke="#000" strokeOpacity={0.35} strokeWidth={3 * unit} strokeLinecap="round" strokeLinejoin="round" />

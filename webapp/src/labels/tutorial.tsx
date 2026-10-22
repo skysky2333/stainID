@@ -23,7 +23,7 @@ import type { RoundEvent } from './rounds'
 import { useSession } from '../session'
 import { ZoomViewer } from '../viewer'
 import type { ThreadLadder } from './threads'
-import { THREAD_KEY, ThreadLines, ThreadsCard } from './threads'
+import { THREAD_KEY, ThreadLines, ThreadsCard, threadKeyStep } from './threads'
 
 /** `/api/tutorial`: the one tutorial of the server (`stainid.tutorial`, the same for every project): its field, the
  *  credit line of its images and the hint of the "Change the type" step; null before `stainid tutorial build`. */
@@ -47,7 +47,7 @@ interface Step { title: string; text: string; done: RoundEvent[]; times?: number
  *  stain's key line (`Vocabulary.keymap` summary); `typed`: its objects have several types to choose from. */
 function stepsFor(typed: boolean, counted: string, hint = ''): Step[] {
   const steps: Step[] = [
-    { title: 'Step 1: the acceptance threshold', text: 'Every field starts with the slider at the top of the panel, at detection’s own threshold (marked on the track). Drag it (or press [ and ]): objects scoring at or above it turn solid, those below dotted grey. It only sets where this field starts; the analysis keeps detection’s threshold.', done: ['threshold'] },
+    { title: 'Step 1: the acceptance threshold', text: 'Every field starts with the slider at the top of the panel, at detection’s own threshold (marked on the track). Drag it to the right (or press ]) and more objects count; to the left (or [) fewer: objects scoring at or above the threshold turn solid, those below dotted grey. It only sets where this field starts; the analysis keeps detection’s threshold.', done: ['threshold'] },
     { title: 'Start editing', text: 'When the field starts about right, press “Start editing” (or Enter). The slider locks and shows a lock; your first edit would lock it too. Only “Reset field” unlocks it again: it puts the field back to detection’s output, as if you had never labelled it (it asks first, and nothing changes until you save).', done: ['start'] },
     { title: 'A clean look', text: 'Press Space to hide everything drawn over the picture and see the tissue alone. Press Space again to bring it back.', done: ['overlays'] },
     { title: 'Point at an object', text: 'Move the mouse over an outlined object. It lights up, its name shows beside it, and what detection said about it shows on the right. Every key acts on the object under the mouse.', done: ['hover'] },
@@ -392,8 +392,8 @@ function MatterCoached({ preview, next }: { preview: boolean; next: string }) {
 
 const THREAD_STEPS: { title: string; text: string; done: RoundEvent }[] = [
   { title: 'Open threads mode', text: 'Press H. The thread network detection found on this AT8 field is drawn in cyan (only in this mode: while you fix objects it stays hidden).', done: 'threads-mode' },
-  { title: 'Match the threads', text: 'Drag the thread-threshold slider (or press [ and ]): lower finds fainter threads, higher keeps only the darkest. Stop where the lines match the threads you see. The mark on the track is detection’s own setting. Lighter areas are not counted (glass, folds, artifacts): their lines are faded, so judge it on the rest.', done: 'threads-step' },
-  { title: 'Threads look right', text: 'Press Enter (or “Threads look right”). Left untouched, Enter says detection’s threshold is right. You never edit single threads.', done: 'threads-saved' },
+  { title: 'Match the threads', text: 'Drag the thread level (or press [ and ]): to the right more and fainter lines count as threads, to the left only the darkest stay. Stop where the lines match the threads you see. The mark on the track is detection’s own setting. Lighter areas are not counted (glass, folds, artifacts): their lines are faded, so judge it on the rest.', done: 'threads-step' },
+  { title: 'Threads look right', text: 'Press Enter (or “Threads look right”). Left untouched, Enter says detection’s level is right. You never edit single threads.', done: 'threads-saved' },
 ]
 
 /** The threads practice: the tutorial's AT8 field (`stainid tutorial threads`), its thread network at every step,
@@ -429,7 +429,7 @@ function ThreadsCoached({ preview, next }: { preview: boolean; next: string }) {
       if (e.key === 'Escape') { setThreading(false); return }
       if (e.key === 'Enter') { e.preventDefault(); confirm(); return }
       if ((e.key === '[' || e.key === ']') && data) {
-        e.preventDefault(); setStep(Math.max(0, Math.min(data.factors.length - 1, at + (e.key === ']' ? 1 : -1)))); tell('threads-step')
+        e.preventDefault(); setStep(threadKeyStep(data, at, e.key)); tell('threads-step')
       }
     }
     window.addEventListener('keydown', onKey)

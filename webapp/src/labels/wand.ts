@@ -1,6 +1,6 @@
-/* The magic wand of "Fix the field (simple)" (simplefield.tsx): over the thread segments detection found on an AT8
-   field (stage 2's lines, field px, flat [x0, y0, x1, y1, …]), a click takes the segment under it and every segment
-   reached from it in steps of at most `reach` px. Plain functions: tests/js/wand.test.ts runs them. */
+/* The neurite brush of "Fix the field (simple)" (simplefield.tsx): over the thread segments of an AT8 field (stage 2's
+   lines at one step of the thread ladder, field px, flat [x0, y0, x1, y1, …]), a brush stroke takes every segment it
+   touches. Plain functions: tests/js/wand.test.ts runs them. */
 
 export interface Segment { points: number[][]; box: [number, number, number, number] }
 
@@ -13,52 +13,70 @@ export function segmentsOf(lines: number[][]): Segment[] {
   })
 }
 
-/** The shortest distance between two segments' points (px; long ones sampled), Infinity when their boxes are further
- *  apart than `most`. */
-export function gap(a: Segment, b: Segment, most: number): number {
-  if (a.box[0] - most > b.box[2] || b.box[0] - most > a.box[2] || a.box[1] - most > b.box[3] || b.box[1] - most > a.box[3]) return Infinity
-  let best = Infinity
-  const stepA = Math.max(1, Math.floor(a.points.length / 40)), stepB = Math.max(1, Math.floor(b.points.length / 40))
-  for (let i = 0; i < a.points.length; i += stepA) {
-    for (let j = 0; j < b.points.length; j += stepB) {
-      const d = Math.hypot(a.points[i][0] - b.points[j][0], a.points[i][1] - b.points[j][1])
-      if (d < best) best = d
-    }
-  }
-  return best
+/** The shortest distance from a point to the line between a and b. */
+function toLine(px: number, py: number, a: number[], b: number[]): number {
+  const dx = b[0] - a[0], dy = b[1] - a[1]
+  const length = dx * dx + dy * dy
+  const t = length ? Math.max(0, Math.min(1, ((px - a[0]) * dx + (py - a[1]) * dy) / length)) : 0
+  return Math.hypot(px - (a[0] + t * dx), py - (a[1] + t * dy))
 }
 
-/** The segment nearest a point, within `most` px (else -1). */
-export function nearestSegment(segments: Segment[], x: number, y: number, most: number): number {
-  let found = -1, best = most
-  segments.forEach((s, i) => {
-    if (x < s.box[0] - most || x > s.box[2] + most || y < s.box[1] - most || y > s.box[3] + most) return
-    for (const p of s.points) { const d = Math.hypot(p[0] - x, p[1] - y); if (d <= best) { best = d; found = i } }
+/** The stroke's points close enough together that a segment passing between two of them is not missed (at most
+ *  half the radius apart). */
+export function densify(stroke: number[][], radius: number): number[][] {
+  const step = Math.max(1, radius / 2)
+  const out: number[][] = []
+  stroke.forEach((p, i) => {
+    if (i === 0) { out.push(p); return }
+    const q = stroke[i - 1]
+    const n = Math.ceil(Math.hypot(p[0] - q[0], p[1] - q[1]) / step)
+    for (let k = 1; k <= n; k++) out.push([q[0] + ((p[0] - q[0]) * k) / n, q[1] + ((p[1] - q[1]) * k) / n])
   })
-  return found
+  return out
 }
 
-/** This segment and every one reached from it in steps of at most `reach` px (at least 2 px: touching ones). The
- *  segments are put in a grid first, so each step looks only at its neighbours (a field has thousands of segments). */
-export function wandGroup(segments: Segment[], start: number, reach: number): number[] {
-  const most = Math.max(2, reach)
-  const cell = Math.max(most, 24)
-  const grid = new Map<string, number[]>()
-  const cells = (box: [number, number, number, number], pad: number) => {
-    const out: string[] = []
-    for (let cx = Math.floor((box[0] - pad) / cell); cx <= Math.floor((box[2] + pad) / cell); cx++) {
-      for (let cy = Math.floor((box[1] - pad) / cell); cy <= Math.floor((box[3] + pad) / cell); cy++) out.push(`${cx}:${cy}`)
+/** Every segment the brush (`radius` px around each point of `stroke`) touches: a segment is under the stroke when
+ *  some part of it is within the radius. The stroke's points go in a grid first, so a field of thousands of segments
+ *  answers at once. */
+export function underStroke(segments: Segment[], stroke: number[][], radius: number): number[] {
+  if (!stroke.length || radius <= 0) return []
+  const dabs = densify(stroke, radius)
+  const cell = Math.max(radius, 8)
+  const grid = new Map<string, number[][]>()
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
+  for (const p of dabs) {
+    const key = `${Math.floor(p[0] / cell)}:${Math.floor(p[1] / cell)}`
+    const list = grid.get(key)
+    if (list) list.push(p); else grid.set(key, [p])
+    x0 = Math.min(x0, p[0]); y0 = Math.min(y0, p[1]); x1 = Math.max(x1, p[0]); y1 = Math.max(y1, p[1])
+  }
+  const near = (x: number, y: number) => {
+    const cx = Math.floor(x / cell), cy = Math.floor(y / cell)
+    for (let i = cx - 1; i <= cx + 1; i++) for (let j = cy - 1; j <= cy + 1; j++) {
+      for (const p of grid.get(`${i}:${j}`) ?? []) if (Math.hypot(p[0] - x, p[1] - y) <= radius) return true
     }
-    return out
+    return false
   }
-  segments.forEach((s, i) => { for (const c of cells(s.box, 0)) { const list = grid.get(c); if (list) list.push(i); else grid.set(c, [i]) } })
-  const seen = new Set([start])
-  const queue = [start]
-  while (queue.length) {
-    const at = queue.shift()!
-    const near = new Set<number>()
-    for (const c of cells(segments[at].box, most)) for (const i of grid.get(c) ?? []) near.add(i)
-    for (const i of near) if (!seen.has(i) && gap(segments[at], segments[i], most) <= most) { seen.add(i); queue.push(i) }
-  }
-  return [...seen].sort((a, b) => a - b)
+  const out: number[] = []
+  segments.forEach((s, i) => {
+    if (s.box[0] > x1 + radius || s.box[2] < x0 - radius || s.box[1] > y1 + radius || s.box[3] < y0 - radius) return
+    const pts = s.points
+    if (pts.length === 1) { if (near(pts[0][0], pts[0][1])) out.push(i); return }
+    for (let k = 1; k < pts.length; k++) {
+      const a = pts[k - 1], b = pts[k]
+      const n = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / Math.max(1, radius / 2)))
+      let hit = false
+      for (let m = 0; m <= n && !hit; m++) hit = near(a[0] + ((b[0] - a[0]) * m) / n, a[1] + ((b[1] - a[1]) * m) / n)
+      if (hit) { out.push(i); return }
+    }
+  })
+  return out
+}
+
+/** Whether a point is within `most` px of a segment (its pieces between points). */
+export function nearSegment(s: Segment, x: number, y: number, most: number): boolean {
+  if (x < s.box[0] - most || x > s.box[2] + most || y < s.box[1] - most || y > s.box[3] + most) return false
+  if (s.points.length === 1) return Math.hypot(s.points[0][0] - x, s.points[0][1] - y) <= most
+  for (let k = 1; k < s.points.length; k++) if (toLine(x, y, s.points[k - 1], s.points[k]) <= most) return true
+  return false
 }

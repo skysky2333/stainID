@@ -78,24 +78,31 @@ export const ThreadLines = memo(function ThreadLines({ lines, unit, areas }: { l
   )
 })
 
-/** The thread-threshold slider: the ladder's steps, detection's marked on the track. */
+/** The thread level: one step of the ladder (`index`; its factor on the slide's DAB threshold, both cuts of the thread
+ *  filter), detection's marked on the track. Shown the way people expect: further right a lower factor, so more and
+ *  fainter lines count as threads (neurite). Detailed threads mode and the simple neurite brush share it. */
 export function ThreadSlider({ ladder, index, onChange, disabled }: { ladder: ThreadLadder; index: number; onChange: (index: number) => void; disabled?: boolean }) {
   const last = Math.max(1, ladder.factors.length - 1)
-  const at = ladder.detection / last
+  const at = (last - ladder.detection) / last
   const factor = ladder.factors[index] ?? 1
   return (
     <label className="threshold-slider small">
-      <span className="row"><span>Thread threshold</span><span className="spacer" /><b>{factor === 1 ? 'detection’s' : `${factor.toFixed(2)}× detection’s`}</b></span>
+      <span className="row"><span>Thread level</span><span className="spacer" /><b>{factor === 1 ? 'detection’s' : `${factor.toFixed(2)}× detection’s cut`}</b></span>
       <span className="threshold-track">
-        <input type="range" min={0} max={last} step={1} value={index} disabled={disabled} aria-label="Thread threshold"
-          onChange={(e) => onChange(Number(e.target.value))}
+        <input type="range" min={0} max={last} step={1} value={last - index} disabled={disabled} aria-label="Thread level"
+          aria-valuetext={factor === 1 ? 'detection’s' : `${factor.toFixed(2)} times detection’s cut`}
+          onChange={(e) => onChange(last - Number(e.target.value))}
           onPointerUp={(e) => e.currentTarget.blur()} />{/* let go: Enter, H and [ ] go to the page again */}
-        <span className="threshold-mark" style={{ left: `calc(${at * 100}% + ${(0.5 - at) * 14}px)` }} title="detection’s thread threshold" />
+        <span className="threshold-mark" style={{ left: `calc(${at * 100}% + ${(0.5 - at) * 14}px)` }} title="detection’s thread level" />
       </span>
-      <span className="row muted"><span>{ladder.factors[0]}× more</span><span className="spacer" /><span>detection’s (marked)</span><span className="spacer" />
-        <span>{ladder.factors[last]}× fewer</span></span>
+      <span className="row muted"><span>← fewer</span><span className="spacer" /><span>More counted as neurite →</span></span>
     </label>
   )
+}
+
+/** One step of the thread level with [ / ]: `]` to the right (more counted), `[` to the left. */
+export function threadKeyStep(ladder: ThreadLadder, index: number, key: string): number {
+  return Math.max(0, Math.min(ladder.factors.length - 1, index + (key === ']' ? -1 : 1)))
 }
 
 /** What the slider gives: the thread length in the field against detection's. */
@@ -113,9 +120,9 @@ export function ThreadsCard({ ladder, pending, error, index, onChange, onConfirm
   onConfirm: () => void; saving?: boolean; saved?: number | null; practice?: boolean; notCounted?: boolean
 }) {
   return (
-    <div className="card side-block start-card threads-card" role="group" aria-label="Threads mode: the thread threshold">
+    <div className="card side-block start-card threads-card" role="group" aria-label="Threads mode: the thread level">
       <h3>Threads</h3>
-      <p className="small muted" style={{ margin: '0 0 4px' }}>The thread network detection found, at one thread threshold · <span className="kbd">H</span> or <span className="kbd">Esc</span> to leave</p>
+      <p className="small muted" style={{ margin: '0 0 4px' }}>The thread network detection found, at one thread level · <span className="kbd">H</span> or <span className="kbd">Esc</span> to leave</p>
       {error ? <p className="small bad-text">{error}</p>
         : !ladder ? <p className="small muted">{pending ?? 'Drawing the threads of this field…'}</p>
           : ladder.status !== 'done' || !ladder.steps.length ? <p className="small muted">No thread network here: detection has not run on this core yet.</p>
@@ -123,12 +130,12 @@ export function ThreadsCard({ ladder, pending, error, index, onChange, onConfirm
               <ThreadSlider ladder={ladder} index={index} onChange={onChange} disabled={saving} />
               <p className="small" style={{ margin: '4px 0' }}>{threadText(ladder, index)}</p>
               {notCounted && <p className="small muted" style={{ margin: '0 0 4px' }}>Lighter areas are not counted (fold, artifact, no tissue): their threads are drawn faded. Judge the slider on the rest.</p>}
-              <p className="small muted" style={{ margin: '0 0 6px' }}>Move it until the lines match the threads you see (lower: fainter threads join; higher: only the
-                darkest stay), then press Enter. Untouched, Enter says detection’s threshold is right. You never edit single threads.
+              <p className="small muted" style={{ margin: '0 0 6px' }}>Move it until the lines match the threads you see (to the right more and fainter lines count;
+                to the left only the darkest stay), then press Enter. Untouched, Enter says detection’s level is right. You never edit single threads.
                 {practice ? ' In this practice nothing is saved.' : ' It tunes the thread detector (Models page); the analysis keeps detection’s threshold.'}</p>
               <div className="row"><button className="btn primary" onClick={onConfirm} disabled={saving}>Threads look right</button>
                 <span className="small muted"><span className="kbd">Enter</span> · <span className="kbd">[</span> <span className="kbd">]</span> one step</span></div>
-              {saved != null && <p className="small good-text" style={{ margin: '6px 0 0' }}>✓ Saved: {saved === 1 ? 'detection’s threshold' : `${saved.toFixed(2)}× detection’s`}</p>}
+              {saved != null && <p className="small good-text" style={{ margin: '6px 0 0' }}>✓ Saved: {saved === 1 ? 'detection’s thread level' : `${saved.toFixed(2)}× detection’s cut`}</p>}
             </>}
     </div>
   )

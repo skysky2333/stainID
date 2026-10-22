@@ -145,6 +145,35 @@ def test_candidates_on_the_wand_s_threads_are_in_its_class():
     assert routes._near_lines(10, 2, [line], 3) and not routes._near_lines(10, 9, [line], 3)
 
 
+def test_the_neurite_brush_keeps_pieces_of_any_thread_level_and_the_slider_s_factor(rounds_project, monkeypatch):
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+
+    from stainid.api.routes import rounds as routes
+    from stainid.labels import thread_threshold
+
+    steps = [{"factor": f, "length_um": 1.0, "lines": [[k, 0, k + 5, 0], [k, 9, k + 5, 9]]} for k, f in enumerate(thread_threshold.FACTORS)]
+    ladder = {"status": "done", "factors": list(thread_threshold.FACTORS), "detection": thread_threshold.DETECTION, "steps": steps, "dab_threshold": 0.2}
+    monkeypatch.setattr(routes, "field_tile", lambda meta, tile_id: {"tile_id": tile_id, "core_id": "C"})
+    monkeypatch.setattr(routes.thread_threshold, "field_ladder", lambda project, tile: ladder)
+    meta = {"stain": "AT8", "name": "s"}
+
+    def mark(**given):
+        return SimpleNamespace(task=simple.AREA_TASK, value="neurite", deleted=False, tile_id="T", x=None, y=None, candidate=None, points=None, meta=given)
+
+    low = thread_threshold.FACTORS.index(min(thread_threshold.FACTORS))  # 0.5×: further right on the slider, more lines
+    record = routes.clean_simple(meta, mark(pieces=[[low, 1], [thread_threshold.DETECTION, 0]], factor=0.5), "Ann")
+    assert record["points"] == [steps[low]["lines"][1], steps[thread_threshold.DETECTION]["lines"][0]]  # each piece at its own level
+    assert record["meta"]["pieces"] == [[low, 1], [thread_threshold.DETECTION, 0]] and record["meta"]["factor"] == 0.5
+    assert record["meta"]["thread_threshold"] == pytest.approx(thread_threshold.RIDGE * 0.2 * 0.5) and not record["deleted"]
+    older = routes.clean_simple(meta, mark(segments=[1]), "Ann")  # an earlier page's wand: pieces of detection's step
+    assert older["meta"]["pieces"] == [[thread_threshold.DETECTION, 1]] and older["meta"]["factor"] == 1.0
+    with pytest.raises(HTTPException):
+        routes.clean_simple(meta, mark(pieces=[[low, 7]]), "Ann")
+    assert routes.clean_simple(meta, mark(pieces=[]), "Ann")["deleted"]
+
+
 def test_the_wand_logic():
     node = shutil.which("node") or str(Path.home() / ".local/node/bin/node")
     if not Path(node).exists():

@@ -45,7 +45,7 @@ import { LockIcon, ThresholdSlider } from './threshold'
 import { reasonText, whyStart } from './reasons'
 import { peopleChecks } from './aiLabels'
 import type { NotCounted, ThreadLadder } from './threads'
-import { THREAD_KEY, ThreadLines, ThreadsCard, stepOf } from './threads'
+import { THREAD_KEY, ThreadLines, ThreadsCard, stepOf, threadKeyStep } from './threads'
 import { BackToSets, CHOICE_IDS, ClosedNote, FINISH_NOTE, LabellingBar, CHOICE_NAMES, PIECE_IDS, PIECE_NAMES, tabNext, ClassLegend, LookLegend, MaskSwitch, ROUND_TITLE, RoundProgressLine, SaveButtons, SaveState, callText, changesText, draftKey, lookOf, maskName,
   polygonArea, polygonPoints, readDraft, simplifyPolygon, stepMask, unsureClass, useCandidateKeys, useFitScreen, useLeaveGuard, useLive, useSaveKeys,
   writeDraft } from './rounds'
@@ -757,8 +757,8 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
       if (e.key === '[' || e.key === ']') {
         if (threading && ladderDone) {  // threads mode: one step of the thread threshold
           e.preventDefault()
-          setThreadStep(Math.max(0, Math.min(ladderDone.factors.length - 1, threadIndex + (e.key === ']' ? 1 : -1)))); tell('threads-step')
-        } else if (start && !start.locked) { e.preventDefault(); setStart((s) => (s ? moveTo(s, s.value + (e.key === ']' ? SLIDER_STEP : -SLIDER_STEP)) : s)); tell('threshold') }
+          setThreadStep(threadKeyStep(ladderDone, threadIndex, e.key)); tell('threads-step')
+        } else if (start && !start.locked) { e.preventDefault(); setStart((s) => (s ? moveTo(s, s.value + (e.key === ']' ? -SLIDER_STEP : SLIDER_STEP)) : s)); tell('threshold') }
         return
       }
       if (e.repeat) return
@@ -1369,10 +1369,10 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
               <ThresholdSlider value={start.value} detection={start.detection} onChange={(v) => { setStart((s) => (s ? moveTo(s, v) : s)); tell('threshold') }} />
               <p className="small" style={{ margin: '4px 0' }}>{sliderText(acceptedAt(startable, start.value, start.detection, meta.remove_class, positive), start.value,
                 acceptedAt(startable, start.detection, start.detection, meta.remove_class, positive), start.detection)}</p>
-              <p className="small muted" style={{ margin: '0 0 6px' }}>Objects scoring at or above it start solid in detection’s type, those below dotted grey (at 0 every object that no rule of detection decided; point at one to see its rule).
+              <p className="small muted" style={{ margin: '0 0 6px' }}>Further right, more is counted: objects scoring at or above the threshold start solid in detection’s type, those below dotted grey (at the right end, 0, every object that no rule of detection decided; point at one to see its rule).
                 It only sets where this field starts (it is saved with the field to tune thresholds later); the analysis keeps detection’s threshold.</p>
               <div className="row"><button className="btn primary" onClick={() => { lockStart(); tell('start') }}>Start editing</button>
-                <span className="small muted"><span className="kbd">Enter</span> · <span className="kbd">[</span> <span className="kbd">]</span> fine steps</span></div>
+                <span className="small muted"><span className="kbd">Enter</span> · <span className="kbd">[</span> <span className="kbd">]</span> fine steps (<span className="kbd">]</span> more)</span></div>
             </div>
           ) : (
             <div className="card side-block start-card locked small row">

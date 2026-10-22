@@ -8,8 +8,10 @@ the field nobody put in a class is saved as `NONE` ("not an object"), as the det
 
 The simple labels are their own vocabulary, kept as they are: task `TASK` ("simple"), `value` the simple class's id.
 They are never rewritten as detailed classes in the label log. A class of kind `WAND` (AT8 "neurite") is not a
-candidate class: its pass selects the thread segments the pipeline found (a magic wand, one label per field, task
-`AREA_TASK`, the chosen segments' lines in `points`); candidates left in no class that lie on those segments are saved
+candidate class: its pass selects thread segments with a brush (one label per field, task `AREA_TASK`, the chosen
+segments' lines in `points`): a stroke takes every segment under it of the thread network at the slider's thread level
+(the thread ladder of threads mode, `labels.thread_threshold`: higher on the slider is a lower factor, so more and
+fainter lines count), Shift-painting takes them out; candidates left in no class that lie on those segments are saved
 as that class.
 
 Training (`training.train.labelled`) and the Models page read them through `training_rows`: each simple class maps onto
@@ -33,11 +35,11 @@ TASK = "simple"
 AREA_TASK = "simple_area"
 NONE = "none"  # "not an object": what a candidate left in no class is saved as
 NONE_NAME = "not an object"
-OBJECTS, WAND = "objects", "wand"  # a class of candidates; a class of thread segments (the magic wand)
+OBJECTS, WAND = "objects", "wand"  # a class of candidates; a class of thread segments (the neurite brush)
 MODE = "simple"  # `mode` of a simple session's meta
 UNUSED = ""  # a simple class that trains nothing
 NEAR_SEGMENT_UM = 3.0  # a candidate within this of a chosen thread segment (its centre) is in the wand's class
-WAND_REACH_UM = (0.0, 40.0, 8.0)  # the wand's slider: from, to, where it starts (µm between segments taken together)
+WAND_REACH_UM = (0.0, 40.0, 8.0)  # the magic wand of earlier pages (µm between segments taken together); the brush has none
 
 
 @dataclass(frozen=True)
@@ -76,7 +78,7 @@ DEFAULTS: dict[str, tuple[SimpleClass, ...]] = {
         _c("tangle", "tangles", "A neuron whose cell body holds brown tau: grainy, flame-shaped or globe-shaped.", "1", "#ffe600", ("tau+ neuron",)),
         _c("neuritic_plaque", "neuritic plaque", "A ring or cluster of swollen brown nerve endings, with no cell body in the middle.", "2", "#b98cff",
            ("neuritic plaque",)),
-        _c("neurite", "neurite", "Brown threads and fibres (neuropil threads): chosen with the magic wand on the threads detection found.", "3",
+        _c("neurite", "neurite", "Brown threads and fibres (neuropil threads): painted with the brush over the threads detection found.", "3",
            "#7cff3a", kind=WAND),
     ),
     "NeuN": (

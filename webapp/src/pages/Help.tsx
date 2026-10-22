@@ -46,7 +46,7 @@ const FAQ: [string, ReactNode][] = [
     browser; their home offers both tutorials. Each person is handed a field nobody else is on, so no one does the same work twice; you follow their progress and download the labels on the
     same page.</>],
   ['How does labelling work?', <>Each field starts with <b>step 1</b>: the <b>acceptance threshold</b> slider at detection’s own threshold. Moving it changes
-    which objects start solid and which dotted grey; <b>Start editing</b> (or Enter, or your first edit) locks it, and only <b>Reset field</b> frees it again:
+    which objects start solid and which dotted grey (further right, more are counted); <b>Start editing</b> (or Enter, or your first edit) locks it, and only <b>Reset field</b> frees it again:
     it puts the field back to detection’s output, as if you had never labelled it (every call, added object, outline, painted area, note and tag you made
     on it goes). It asks once; until you save it, <b>Undo reset</b> or Discard brings your saved work back, and Save progress or Finish field replaces it.
     Other people’s work is not touched. Grey/white sets have <b>Reset this core</b>, the same. It is saved with the field as a label; the analysis keeps detection’s threshold.

@@ -118,7 +118,7 @@ function SimpleEditor({ stain, data, onSaved }: { stain: string; data: SimpleSet
     <>
       <ul className="class-legend small simple-list">{data.classes.map((c) => (
         <li key={c.id}><span className="kbd key-slot">{c.key}</span><span className="look-swatch" style={{ borderColor: c.colour, background: c.colour }} />
-          <b>{c.name}</b>{c.kind === 'wand' && <span className="badge">magic wand on threads</span>}
+          <b>{c.name}</b>{c.kind === 'wand' && <span className="badge">brush on threads</span>}
           <span className="muted">{c.starts_from.length ? `starts from ${c.starts_from.join(', ').replace(/\//g, ' · ')}` : 'starts empty'}</span></li>
       ))}</ul>
       <Advanced title="Change the simple classes" hint="names, descriptions, keys, colours, where candidates start, hide, add">
