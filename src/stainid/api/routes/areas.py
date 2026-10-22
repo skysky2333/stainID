@@ -121,6 +121,17 @@ def areas_meta(name: str, request: Request) -> dict:
     return meta
 
 
+def core_meta(name: str, request: Request) -> dict:
+    """A session whose unit is a whole core with its stain images: "Mark bad areas" or "Grey / white matter"
+    (`routes.matter`), for the core pictures, tiles, thumbnails and detection's objects."""
+    from stainid.labels import matter  # noqa: PLC0415
+
+    meta = practice_meta() if name == PRACTICE else session_meta(name, request)
+    if not (areas.is_areas(meta) or matter.is_matter(meta)):
+        raise HTTPException(404, f"{name} is not a session of whole cores")
+    return meta
+
+
 def progress(meta: dict, labels: pd.DataFrame | None = None) -> dict:
     if meta.get("practice"):
         return areas.progress(meta, {}, {})
@@ -199,7 +210,7 @@ def hold_core(name: str, core_id: str, request: Request, person: str = Depends(a
 
 @router.get("/annotate/{name}/cores/{core_id}/{stain}/picture")
 def core_picture(name: str, core_id: str, stain: str, request: Request, person: str = Depends(annotator)) -> dict:
-    meta = areas_meta(name, request)
+    meta = core_meta(name, request)
     if stain not in _core(meta, core_id):
         raise HTTPException(404, f"{core_id} has no {stain} image in this session")
     try:
@@ -211,7 +222,7 @@ def core_picture(name: str, core_id: str, stain: str, request: Request, person: 
 @router.get("/annotate/{name}/cores/{core_id}/{stain}/tiles/{level}/{col}_{row}.jpg")
 def core_tile(name: str, core_id: str, stain: str, level: int, col: int, row: int, request: Request, v: str = "",
               person: str = Depends(annotator)) -> Response:
-    meta = areas_meta(name, request)
+    meta = core_meta(name, request)
     if stain not in _core(meta, core_id):
         raise HTTPException(404, f"{core_id} has no {stain} image in this session")
     try:
@@ -223,7 +234,7 @@ def core_tile(name: str, core_id: str, stain: str, level: int, col: int, row: in
 
 @router.get("/annotate/{name}/cores/{core_id}/{stain}/thumb.jpg")
 def core_thumb(name: str, core_id: str, stain: str, request: Request, size: int = 256, person: str = Depends(annotator)) -> FileResponse:
-    meta = areas_meta(name, request)
+    meta = core_meta(name, request)
     if stain not in _core(meta, core_id):
         raise HTTPException(404, f"{core_id} has no {stain} image in this session")
     try:
@@ -283,7 +294,7 @@ def core_objects(name: str, core_id: str, stain: str, request: Request, person: 
     from stainid.labels import candidate_store  # noqa: PLC0415
     from stainid.labels import vocabulary as vocab  # noqa: PLC0415
 
-    meta = areas_meta(name, request)
+    meta = core_meta(name, request)
     if stain not in _core(meta, core_id):
         raise HTTPException(404, f"{core_id} has no {stain} image in this session")
     project = get_state().project
@@ -459,7 +470,10 @@ def core_annotations(core_id: str, stain: str) -> dict:
     known = set(found.candidate_id) if len(found) else set()
     objects += [{"candidate_id": c, "core_id": core_id, "kind": "outline", "outline_fixed": v} for c, v in outlines.items() if c not in known]
     edits = compare.object_edits(state.project, stain, state.tiles, core_id)
+    from stainid.api.routes import matter as matter_routes  # noqa: PLC0415
+
     return {"objects": objects, "added": added.to_dict("records"), "areas": store_view.people_areas(state.project, core_id, stain), "edits": edits,
+            "matter": matter_routes.core_matter(core_id, stain),
             "counts": {**{k: int((found.kind == k).sum()) if len(found) else 0 for k in compare.KINDS}, "added": int(len(added)),
                        "outline_fixed": len(outlines), "split": sum(e["kind"] == "split" for e in edits),
                        "merge": sum(e["kind"] == "merge" for e in edits)}}

@@ -13,6 +13,7 @@ import { ClassChooser, ClassKeyHint, classColour, useClassKeys } from '../labels
 import { QuickCheck } from '../labels/quickcheck'
 import { FixField } from '../labels/fixfield'
 import { MarkAreas } from '../labels/markareas'
+import { MatterCorePage, MatterSession } from '../labels/matter'
 import { SessionFieldMap } from '../labels/sessionfields'
 import { ROUND_TITLE, RoundProgressLine, useFitScreen } from '../labels/rounds'
 import type { RoundDetail } from '../api'
@@ -50,6 +51,7 @@ export default function AnnotatePage() {
   if (!detail.data) return <Loading label="Opening the session…" />
   const round = (detail.data.meta as Partial<RoundDetail>).round
   if (round === 'areas' || detail.data.meta.kind === 'areas') return <MarkAreas detail={detail.data} />
+  if (detail.data.meta.kind === 'matter') return tile ? <MatterCorePage key={tile} detail={detail.data} core={tile} /> : <MatterSession detail={detail.data} />
   if (round === 1) return <><PageHead title={detail.data.meta.title} subtitle="Check detection’s calls" />
     <Empty><p style={{ marginTop: 0 }}>This kind of session is no longer used: its labels stay in the label log for training and evaluation.
       Ask for a “Fix the field” session instead.</p><Link className="btn" to="/">My labelling sets</Link></Empty></>

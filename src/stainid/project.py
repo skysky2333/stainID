@@ -77,6 +77,7 @@ DEFAULTS: dict = {
         "calibration": "data/analysis/slide_dab_calibration.csv",
         "donor_metadata": "data/donor_metadata.csv",
         "tma_layout": "data/tma_layout.csv",
+        "registration": "data/registration/all_triplets.csv",  # how each core's stain images line up (`stainid.registration.cores`)
     },
     "models": {
         "neun": "data/validation/neun_final_predictions/model.joblib",

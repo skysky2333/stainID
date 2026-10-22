@@ -1520,3 +1520,15 @@ p.area-size { display: block; line-height: 1.7; }
   .minimap-card > p.muted { display: none; }
   .minimap-card, .core-mid { padding: 8px 10px; }
 }
+/* "Grey / white matter" (labels/matter.tsx): the session's cores by TMA, each a small picture with where it stands */
+.matter-home .card { margin-bottom: 12px; }
+.matter-start .row { gap: 10px; align-items: center; }
+.matter-tma h3 { margin: 0 0 8px; }
+.matter-cores { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; }
+.matter-core { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 6px; border: 1px solid var(--border); border-radius: 8px;
+  color: inherit; text-decoration: none; background: var(--surface-1); }
+.matter-core:hover { border-color: var(--accent); }
+.matter-core img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 5px; background: var(--surface-2); }
+.matter-core-name { font-weight: 600; font-size: 13px; }
+.matter-core.is-taken { opacity: 0.6; }
+.area-tab:disabled { opacity: 0.45; cursor: not-allowed; }

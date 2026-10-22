@@ -219,7 +219,7 @@ export interface Labeller { person: string; fields_done: number; labels: number;
 export interface LabelsOverview { stains: StainOverview[]; sessions: SessionInfo[]; reference: ReferenceLabels | null }
 export interface OpenSession {
   name: string; title: string; stain: string; kind: 'fields' | 'queue' | 'outline' | 'areas' | (string & {}); kind_title?: string; open: boolean; instructions: string; fields: number; done_by_me: number; my_labels: number
-  round?: 1 | 2 | 'areas' | null; progress?: RoundProgress; cores?: number  // annotation rounds ("areas": Mark bad areas, by core)
+  round?: 1 | 2 | 'areas' | 'matter' | null; progress?: RoundProgress; cores?: number  // annotation rounds ("areas": Mark bad areas, by core)
 }
 export interface SessionField { tile_id: string; done_by_me: boolean; annotators_done: number; open_by_others: number; prepared: boolean; tma?: string | null; tma_name?: string | null; core_id?: string | null; core?: string | null
   /** its square in the core image: x, y, width, height (core px) */
@@ -532,7 +532,7 @@ export interface ImportedLabels {
 export interface RoundProgress { total: number; decided: number; people: { person: string; decided: number }[]; open_now?: number; left?: number
   images_checked?: number; second_checks?: number }  // "Mark bad areas": by core
 /** What a round session's pages get besides the session's settings. */
-export interface RoundDetail { round: 1 | 2 | 'areas'; labels_needed: number; level: number | null; remove_class: string; segment_anything: boolean; progress: RoundProgress
+export interface RoundDetail { round: 1 | 2 | 'areas' | 'matter'; labels_needed: number; level: number | null; remove_class: string; segment_anything: boolean; progress: RoundProgress
   /** Fix the field: the detailed classes, or the simple classes in passes (labels/simplefield.tsx) */
   mode?: 'detailed' | 'simple'; simple?: SimpleVocab }
 /** A simple class ("Fix the field (simple)", labels/simple.py): `objects` a class of candidates, `wand` one of thread
@@ -633,6 +633,21 @@ export interface AreasOverview {
   agreement: { pairs: number; agree: number; agreement: number | null; mean_iou: number | null
     disagreements: { core_id: string; stain: string; people: string[]; iou: number; cells_changed: number }[] }
 }
+/** "Grey / white matter" (routes/matter.py): the picker's row of a core (by TMA and core) and where it stands. */
+export interface MatterCoreRow { core_id: string; tma: string; core: string; stains: string[]; state: 'not_started' | 'in_progress' | 'done'
+  done_by: string[]; open_by: string[]; done_by_me: boolean; saved_by_me: string[]; second_check: boolean }
+/** Who saved a stain image's white matter, and how (carried from the source stain, accepted as carried). */
+export interface MatterSaved { person: string; time: number; session: string; carried_from: string | null; accepted: boolean; registration: string | null }
+export interface MatterImage { stain: string; picture: PictureState | null; saved_by: string[]; saved_by_me: boolean; mine: MatterSaved | null }
+/** One core: its stain images (NeuN first: `source`, which the others start from) and whether it opens to look at. */
+export interface MatterCore { core_id: string; tma: string; core: string; images: MatterImage[]; source: string; read_only: boolean; done_by: string[]
+  second_check: boolean; progress: RoundProgress; pixel_size_um?: number }
+/** How a core's two stain images line up (registration/cores.py): status pass / review / fail / same, from the table or computed. */
+export interface Registration { status: string; how: string; dice: number | null; matrix: number[][] }
+/** What the brush starts from on a stain image (`kinds.white`: the area as a PNG): saved, carried, new or waiting (the source not saved yet). */
+export interface MatterArea extends FieldAreas { from: 'saved' | 'carried' | 'new' | 'waiting'; carried_from?: string; registration?: Registration; saved?: MatterSaved }
+export interface MatterOverview { stains: { stain: string; images: number; saved: number; double_checked: number }[]; cores: number; cores_done: number
+  agreement: { pairs: number; agree: number; agreement: number | null; mean_iou: number | null; disagreements: { core_id: string; stain: string; people: string[]; iou: number }[] } }
 export interface BadAreaRow { stain: string; type: string; type_name: string; images: number; added_mm2: number; cleared_mm2: number; f1: number | null; tma?: string; donor_id?: string }
 /** The bad-area detector (today: detection's rules) against people's areas. */
 export interface BadAreas { images: number; by_tma: BadAreaRow[]; by_donor: BadAreaRow[]; detector?: string; model: unknown | null }

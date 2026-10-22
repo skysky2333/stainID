@@ -68,6 +68,10 @@ def _writes(client: TestClient) -> dict[str, tuple[str, dict]]:
         "/api/annotate/{name}/fields/{tile_id}/segment": (f"/api/annotate/{FIELD}/fields/{TILE}/segment", {"points": [[20.0, 20.0, 1]]}),
         "/api/annotate/{name}/cores/{core_id}/hold": (f"/api/annotate/{CORES}/cores/{core}/hold", {}),
         "/api/annotate/{name}/cores/{core_id}/save": (f"/api/annotate/{CORES}/cores/{core}/save", {"checked": stains, "edits": {}}),
+        # "Grey / white matter" has no practice session: its writes on a practice name are refused (404), keeping nothing
+        "/api/annotate/{name}/matter/cores/{core_id}/hold": (f"/api/annotate/{CORES}/matter/cores/{core}/hold", {}),
+        "/api/annotate/{name}/matter/cores/{core_id}/leave": (f"/api/annotate/{CORES}/matter/cores/{core}/leave", {}),
+        "/api/annotate/{name}/matter/cores/{core_id}/{stain}/save": (f"/api/annotate/{CORES}/matter/cores/{core}/{stains[0]}/save", {"accepted": True}),
     }
 
 

@@ -4,7 +4,7 @@
    Advanced, with the older kinds of session (whole-field review and quick check of the label pool). */
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import type { AreasOverview, RoundScope, SessionInfo, Vocabulary } from '../api'
+import type { AreasOverview, MatterOverview, RoundScope, SessionInfo, Vocabulary } from '../api'
 import { api } from '../api'
 import { ErrorNote, Loaded, Modal, withError } from '../components'
 import { useFetch } from '../hooks'
@@ -12,6 +12,7 @@ import { useProject } from '../project'
 import { Advanced } from '../setup/parts'
 import { FieldPicker } from './fields'
 import { AREAS_TEXT, AREAS_TITLE } from './markareas'
+import { MATTER_TEXT, MATTER_TITLE } from './matter'
 import { ROUND_TEXT, ROUND_TITLE } from './rounds'
 import { byKey } from './classKeys'
 
@@ -31,7 +32,7 @@ export function NewRoundSession({ stains, onClose, onCreated, onOlder }: {
   const { tmaName, info } = useProject()
   const words = WORDS[info?.kind ?? 'tma'] ?? WORDS.tma
   const [stain, setStain] = useState(stains[0] ?? 'NeuN')
-  const [round, setRound] = useState<2 | 'areas'>(2)  // the field tool is the default: every object of a field, corrected in place
+  const [round, setRound] = useState<2 | 'areas' | 'matter'>(2)  // the field tool is the default: every object of a field, corrected in place
   const [mode, setMode] = useState<'detailed' | 'simple'>('detailed')  // Fix the field: every class and type, or the simple classes in passes
   const [order, setOrder] = useState<'problems' | 'random'>('problems')  // "Mark bad areas": likely problems first
   const [where, setWhere] = useState<Where>('all')
@@ -52,14 +53,17 @@ export function NewRoundSession({ stains, onClose, onCreated, onOlder }: {
   const scope = useFetch<RoundScope>(`/api/labels/rounds/scope?stain=${encodeURIComponent(stain)}`)
   const defaults = useFetch<{ vocabularies: Record<string, Vocabulary> }>('/api/labels/defaults')
   const areasNow = useFetch<AreasOverview>(round === 'areas' ? '/api/labels/areas' : null)
-  const areas = round === 'areas'
+  const matterNow = useFetch<MatterOverview>(round === 'matter' ? '/api/labels/matter' : null)
+  const matter = round === 'matter'
+  const areas = round === 'areas' || matter  // whole cores with every stain: Mark bad areas, Grey / white matter
+  const coresNow = matter ? { data: matterNow.data ? { cores: matterNow.data.cores, cores_checked: matterNow.data.cores_done } : null, error: matterNow.error } : areasNow
   const day = new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
-  const placeholder = areas ? `${AREAS_TITLE} – ${day}` : `${stain} · ${ROUND_TITLE[round]}${mode === 'simple' ? ' (simple)' : ''} – ${day}`
+  const placeholder = areas ? `${matter ? MATTER_TITLE : AREAS_TITLE} – ${day}` : `${stain} · ${ROUND_TITLE[round]}${mode === 'simple' ? ' (simple)' : ''} – ${day}`
   const nothing = (where === 'pick' && !chosen.length && !areas) || (where === 'tmas' && !tmas.length)
   const create = async () => {
     setBusy(true)
     const body = areas
-      ? { stain: 'all', kind: 'areas', title: title.trim() || placeholder, name, open, instructions, n_fields: fieldCount, order,
+      ? { stain: 'all', kind: round, title: title.trim() || placeholder, name, open, instructions, n_fields: fieldCount, order,
         seed: seed.trim() === '' ? null : Number(seed), tmas: where === 'tmas' ? tmas : null }
       : { stain, round, mode, title: title.trim() || placeholder, name, open, instructions, subtypes, labels_needed: needed,
         level: level === 'all' ? null : Number(level), n_fields: fieldCount, spread, seed: seed.trim() === '' ? null : Number(seed),
@@ -90,16 +94,22 @@ export function NewRoundSession({ stains, onClose, onCreated, onOlder }: {
               <span><b>{ROUND_TITLE[2]} (simple)</b><span className="small secondary">A few plain classes, one at a time: click what belongs to each class
                 (detection’s are lit already), add what it missed. No outlines to fix. For people new to the stains.</span></span>
             </label>
-            <label className={`choice-card${areas ? ' chosen' : ''}`}>
-              <input type="radio" name="round" checked={areas} onChange={() => { setRound('areas'); if (where === 'pick') setWhere('all') }} />
+            <label className={`choice-card${round === 'areas' ? ' chosen' : ''}`}>
+              <input type="radio" name="round" checked={round === 'areas'} onChange={() => { setRound('areas'); if (where === 'pick') setWhere('all') }} />
               <span><b>{AREAS_TITLE}</b><span className="small secondary">{AREAS_TEXT}</span></span>
             </label>
+            <label className={`choice-card${matter ? ' chosen' : ''}`}>
+              <input type="radio" name="round" checked={matter} onChange={() => { setRound('matter'); if (where === 'pick') setWhere('all') }} />
+              <span><b>{MATTER_TITLE}</b><span className="small secondary">{MATTER_TEXT}</span></span>
+            </label>
           </div>
-          <p className="small muted" style={{ margin: '6px 0 0' }}>{areas
+          <p className="small muted" style={{ margin: '6px 0 0' }}>{matter
+            ? 'NeuN first, with detection’s neurons as a guide; the other stains start from the NeuN area, carried over through the registration. A sample is enough: the areas teach and test a grey / white matter model; the analysis does not use them. About 1 core in 10 also goes to a second person.'
+            : areas
             ? 'Every stain of a core in one go. A sample is enough: the areas people mark teach and test the bad-area detection; the analysis keeps detection’s own areas. About 1 core in 10 also goes to a second person, to see how well people agree.'
             : 'People work one field at a time: a field someone is on, or has finished, is not handed to anyone else. Every session’s answers on a candidate count together, whoever gave them.'}</p>
         </fieldset>
-        {areas ? <AreasScope scope={scope.data} overview={areasNow} where={where} setWhere={setWhere} tmas={tmas} setTmas={setTmas}
+        {areas ? <AreasScope matter={matter} scope={scope.data} overview={coresNow} where={where} setWhere={setWhere} tmas={tmas} setTmas={setTmas}
           count={fieldCount} setCount={setFieldCount} order={order} setOrder={setOrder} words={words} tmaName={info?.kind === 'tma' || !info?.kind ? tmaName : (t) => t} /> : (
         <Loaded state={scope} label="Looking at which cores are ready…">
           {(s) => <>
@@ -190,8 +200,8 @@ export function NewRoundSession({ stains, onClose, onCreated, onOlder }: {
 
 /** "Mark bad areas": which cores (every one, or some TMAs), how many (every one not checked yet, or a sample) and in
  *  which order (likely problems first, or at random). */
-function AreasScope({ scope, overview, where, setWhere, tmas, setTmas, count, setCount, order, setOrder, words, tmaName }: {
-  scope: RoundScope | null; overview: { data: AreasOverview | null; error: string | null }
+function AreasScope({ matter = false, scope, overview, where, setWhere, tmas, setTmas, count, setCount, order, setOrder, words, tmaName }: {
+  matter?: boolean; scope: RoundScope | null; overview: { data: { cores: number; cores_checked: number } | null; error: string | null }
   where: Where; setWhere: (w: Where) => void; tmas: string[]; setTmas: (t: string[]) => void
   count: number; setCount: (n: number) => void; order: 'problems' | 'random'; setOrder: (o: 'problems' | 'random') => void
   words: (typeof WORDS)[keyof typeof WORDS]; tmaName: (tma: string) => string
@@ -200,8 +210,7 @@ function AreasScope({ scope, overview, where, setWhere, tmas, setTmas, count, se
   const left = o ? o.cores - o.cores_checked : null
   return <>
     <fieldset className="field"><legend>Which {words.pictures}?</legend>
-      {o && <p className="small secondary" style={{ margin: '0 0 8px' }}>{o.cores_checked.toLocaleString()} of {o.cores.toLocaleString()} {words.pictures} have
-        been checked for bad areas so far.</p>}
+      {o && <p className="small secondary" style={{ margin: '0 0 8px' }}>{o.cores_checked.toLocaleString()} of {o.cores.toLocaleString()} {words.pictures} {matter ? 'have their grey and white matter marked' : 'have been checked for bad areas'} so far.</p>}
       <div className="segmented">
         <button type="button" className={`btn${where !== 'tmas' ? ' chosen' : ''}`} onClick={() => setWhere('all')}>Every {words.pictures.slice(0, -1)}</button>
         <button type="button" className={`btn${where === 'tmas' ? ' chosen' : ''}`} onClick={() => setWhere('tmas')}>Some {words.groups}</button>
@@ -224,7 +233,7 @@ function AreasScope({ scope, overview, where, setWhere, tmas, setTmas, count, se
       <p className="small muted" style={{ margin: '6px 0 0' }}>People stop whenever they like: the session is a sample, it does not need every {words.pictures.slice(0, -1)} checked.
         {' '}{words.pictures[0].toUpperCase() + words.pictures.slice(1)} someone checked already, or in another open session, are left out.</p>
     </fieldset>
-    <fieldset className="field"><legend>Order</legend>
+    {!matter && <fieldset className="field"><legend>Order</legend>
       <div className="segmented">
         <button type="button" className={`btn${order === 'problems' ? ' chosen' : ''}`} onClick={() => setOrder('problems')}>Likely problems first</button>
         <button type="button" className={`btn${order === 'random' ? ' chosen' : ''}`} onClick={() => setOrder('random')}>Random</button>
@@ -232,7 +241,7 @@ function AreasScope({ scope, overview, where, setWhere, tmas, setTmas, count, se
       <p className="small muted" style={{ margin: '6px 0 0' }}>{order === 'problems'
         ? `${words.pictures[0].toUpperCase() + words.pictures.slice(1)} where detection found much to leave out, or little tissue, come first; then the rest at random.`
         : `${words.pictures[0].toUpperCase() + words.pictures.slice(1)} in a random order: a fair sample for testing the bad-area detection.`}</p>
-    </fieldset>
+    </fieldset>}
     <ErrorNote error={overview.error} />
   </>
 }

@@ -76,7 +76,11 @@ interface CoreAnnotations {
   objects: AnnotatedObject[]; added: AddedObject[]; edits?: ObjectEdit[]
   counts: { agree: number; changed: number; rejected: number; unsure: number; added: number; outline_fixed: number; split?: number; merge?: number }
   areas?: { regions: PeopleArea[]; agreement: AreaAgreement | null; edits: { person: string; time: number; kinds: string[] }[] }
+  /** The image's white matter ("Grey / white matter", labels/matter.py): the latest anyone saved, as regions in core px */
+  matter?: WhiteMatter | null
 }
+interface WhiteMatter { person: string; time: number; carried_from: string | null; accepted: boolean; regions: PeopleArea[] }
+const MATTER_COLOUR = PALETTE.areas.white_matter
 /** The review status of a core image's tiles (GET …/status, labels/status.py: the reader the Labels page uses too). */
 type TileState = 'reviewed' | 'in_progress' | 'not_annotated'
 interface StatusTile { tile_id: string; x: number; y: number; width: number; height: number; state: TileState; by: string[]; working: string[] }
@@ -381,6 +385,11 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
         rings: area.rings.map(flat), circle: false })
       about.push({ area })
     }
+    for (const area of notes.matter?.regions ?? []) {  // white matter: outlined in its colour
+      if (!area.rings.length || !area.rings[0].length) continue
+      out.push({ x: area.rings[0][0][0], y: area.rings[0][0][1], color: MATTER_COLOUR, rings: area.rings.map(flat), circle: false })
+      about.push({ matter: notes.matter! })
+    }
     return { marks: out, about }
   }, [layers.annotations, notes, objectOf, objects, vocabulary])
   const shown = useMemo(() => (hidden ? [] : [...marks, ...regions, ...annotated.marks]), [hidden, marks, regions, annotated.marks])
@@ -432,6 +441,7 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
     setFixed(null)
     if (about?.added) return `+ Added by ${about.added.person} (${day(about.added.time)}): ${className(vocabulary, about.added.identity, about.added.subtype)} — detection missed it`
     if (about?.area) return `People’s area: ${AREA_NAMES[about.area.kind] ?? about.area.kind}`
+    if (about?.matter) return `White matter, by ${about.matter.person} (${day(about.matter.time)})${about.matter.carried_from ? (about.matter.accepted ? `: carried from ${about.matter.carried_from} and accepted` : `: adjusted from ${about.matter.carried_from}`) : ''}`
     if (about?.edit) {  // pointing at a split or merged object: the people's outlines of the new objects
       const shapes = about.edit.pieces.flatMap((q) => (q.points && q.points.length >= 3 ? [q.points] : []))
       if (shapes.length) setFixed({ points: shapes[0], more: shapes.slice(1), color: EDIT_COLOUR })
@@ -575,7 +585,7 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
 }
 
 /** What a mark of the Annotations layer is about (for its tooltip and for clicking it). */
-interface AnnotationMark { object?: AnnotatedObject; at?: Found; added?: AddedObject; area?: PeopleArea; edit?: ObjectEdit }
+interface AnnotationMark { object?: AnnotatedObject; at?: Found; added?: AddedObject; area?: PeopleArea; edit?: ObjectEdit; matter?: WhiteMatter }
 const EDIT_COLOUR = PALETTE.markers.edit  // the badge of a split (solid) or merged (dashed) object
 
 /** The page fits the window (no scrolling): the square picture takes the height left below the page's head, the side
@@ -729,6 +739,12 @@ function AnnotationsToggle({ on, onToggle, state, vocabulary }: {
           people’s areas{agreement ? <>: {agreement.f1 == null ? '' : `F1 ${agreement.f1.toFixed(2)} with detection’s; `}
             {(100 * agreement.cleared_auto_cells / cells).toFixed(1)}% taken out, {(100 * agreement.painted_new_cells / cells).toFixed(1)}% added</> : ''}
           <span className="spacer" /><span className="muted">{data!.areas!.regions.length.toLocaleString()}</span>
+        </div>
+      )}
+      {on && (data?.matter?.regions.length ?? 0) > 0 && (
+        <div className="layer-toggle indent wrap" title="The white matter people marked on this stain image (Grey / white matter): the latest anyone saved. It trains and tests a grey / white matter model; the analysis does not use it.">
+          <span className="swatch" style={{ background: 'transparent', border: `2px solid ${MATTER_COLOUR}` }} />
+          white matter · {data!.matter!.person}{data!.matter!.carried_from ? ` (from ${data!.matter!.carried_from}${data!.matter!.accepted ? ', accepted' : ', adjusted'})` : ''}
         </div>
       )}
       {on && state.error && <div className="layer-toggle indent wrap"><ErrorNote error={state.error} />

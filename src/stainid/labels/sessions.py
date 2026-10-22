@@ -34,10 +34,11 @@ from stainid.labels.vocabulary import Vocabulary
 from stainid.tables import write_text_atomic
 
 FOLDER = "sessions"
-KINDS = ("fields", "queue", "outline", "areas", "ai_review")  # areas: "Mark bad areas" (`labels.areas`); ai_review: read-only AI reviewer labels (`review.ai_ingest`)
+KINDS = ("fields", "queue", "outline", "areas", "matter", "ai_review")  # areas: "Mark bad areas" (`labels.areas`); matter: "Grey / white matter"
+# (`labels.matter`); ai_review: read-only AI reviewer labels (`review.ai_ingest`)
 READ_ONLY_KINDS = ("ai_review",)  # label sets nobody labels in: no fields to prepare, no join key, not in anyone's sets
 KIND_TITLES = {"fields": "check whole fields", "queue": "one object at a time", "outline": "outline every object (older segmentation check)",
-               "areas": "Mark bad areas", "ai_review": "AI review · read only"}  # the Labels page shows these (`kind_title`)
+               "areas": "Mark bad areas", "matter": "Grey / white matter", "ai_review": "AI review · read only"}  # the Labels page shows these (`kind_title`)
 FIELD_TOOLS = ("class", "point", "outline", "tag", "area")
 
 

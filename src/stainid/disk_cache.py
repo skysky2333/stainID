@@ -89,6 +89,7 @@ KINDS: dict[str, str] = {
     "slide_pictures": "Scan pictures",
     "core_tiles": "Zoomable core pictures (older format)",
     "images": "Images at the analysis scale (image sets)",
+    "registration": "How each core's stain images line up (where the registration table has no row)",
     "sam_embeddings": "Prepared fields for click-to-outline",
     "candidate_index": "Candidate positions and calls of every core (for matching labels)",
     "answers": "The app's heavy answers, kept for a quick start",

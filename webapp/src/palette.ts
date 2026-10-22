@@ -6,7 +6,7 @@ import colours from '../../src/stainid/palette.json' with { type: 'json' }
 export const PALETTE = colours as {
   classes: string[]
   states: { inactive: string; unsure: string; unknown: string }
-  areas: Record<'1' | '2' | '3' | '4' | 'taken_out' | 'edge_guard' | 'not_analysed', string>
+  areas: Record<'1' | '2' | '3' | '4' | 'taken_out' | 'edge_guard' | 'not_analysed' | 'white_matter', string>
   overlays: { unproposed: string; threads: string; dab: string; tiles: string; excluded: string }
   markers: { edit: string; others: string; reference: string; spot_added: string; spot_removed: string; box: string; split_a: string; split_b: string; merge: string; unsaved: string }
 }

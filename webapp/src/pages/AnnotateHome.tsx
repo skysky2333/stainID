@@ -6,6 +6,7 @@ import { Empty, ErrorNote, Loaded, PageHead, Progress, withError } from '../comp
 import { useFetch } from '../hooks'
 import { kindText } from '../labelling'
 import { AREAS_TEXT, AREAS_TITLE } from '../labels/markareas'
+import { MATTER_TEXT, MATTER_TITLE } from '../labels/matter'
 import { ROUND_TEXT, ROUND_TITLE } from '../labels/rounds'
 import { ChoosePassword, useSession } from '../session'
 import { TutorialCards } from '../labels/tutorial'
@@ -38,7 +39,7 @@ function MySets({ list, admin }: { list: ReturnType<typeof useFetch<MySet[]>>; a
   return (
       <Loaded state={list} label="Loading your sets…">
         {(sets) => sets.length ? (() => {
-          const rank = (s: MySet) => (s.round === 'areas' ? 0.5 : s.round ?? 0)  // the field tool first, then calls, then bad areas
+          const rank = (s: MySet) => (s.round === 'areas' ? 0.5 : s.round === 'matter' ? 0.4 : s.round ?? 0)  // the field tool first, then calls, then bad areas, grey / white matter
           const projects = [...new Set(sets.map((s) => s.project))]
           return projects.map((p) => {
             const mine = sets.filter((s) => s.project === p)
@@ -106,15 +107,15 @@ function SessionCard({ s }: { s: MySet }) {
   return (
     <div className="card annotate-session">
       <h2 style={{ margin: 0 }}>{s.title}</h2>
-      <p className="muted small" style={{ margin: '4px 0 10px' }}>{s.round === 'areas' ? `Every stain · ${AREAS_TITLE}`
+      <p className="muted small" style={{ margin: '4px 0 10px' }}>{s.round === 'areas' ? `Every stain · ${AREAS_TITLE}` : s.round === 'matter' ? `Every stain · ${MATTER_TITLE}`
         : `${s.stain} · ${s.round ? ROUND_TITLE[s.round] : kindText(s.kind, s.kind_title)}`}</p>
       {s.instructions && <p className="small secondary">{s.instructions}</p>}
       {progress ? <>
         <Progress done={progress.decided} total={progress.total} />
         <p className="small secondary">{finished ? 'Everything here has been checked — thank you!'
-          : s.round === 'areas' ? `${progress.decided.toLocaleString()} of ${progress.total.toLocaleString()} cores checked by everyone`
+          : s.round === 'areas' || s.round === 'matter' ? `${progress.decided.toLocaleString()} of ${progress.total.toLocaleString()} cores ${s.round === 'areas' ? 'checked' : 'done'} by everyone`
             : `${progress.decided.toLocaleString()} of ${progress.total.toLocaleString()} fields done by everyone${s.my_labels ? ` · ${s.my_labels.toLocaleString()} answers by you` : ''}`}</p>
-        <p className="small muted" style={{ marginTop: 0 }}>{s.round === 'areas' ? AREAS_TEXT : s.round === 1 ? ROUND_TEXT[1] : ROUND_TEXT[2]}</p>
+        <p className="small muted" style={{ marginTop: 0 }}>{s.round === 'areas' ? AREAS_TEXT : s.round === 'matter' ? MATTER_TEXT : s.round === 1 ? ROUND_TEXT[1] : ROUND_TEXT[2]}</p>
       </> : s.kind !== 'queue' ? <>
         <Progress done={s.done_by_me} total={s.fields} />
         <p className="small secondary">{finished ? 'You have finished every field — thank you!' : `${s.done_by_me} of ${s.fields} fields finished by you`}</p>

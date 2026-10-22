@@ -78,6 +78,13 @@ def _areas():
     return area_routes
 
 
+def _matter():
+    """The routes of "Grey / white matter" (imported late: they build on this module)."""
+    from stainid.api.routes import matter as matter_routes
+
+    return matter_routes
+
+
 def session_meta(name: str, request: Request) -> dict:
     if name == "practice-areas":  # the tutorial's practice of "Mark bad areas" (`routes.areas`): nothing is saved
         return _areas().practice_meta()
@@ -209,6 +216,8 @@ def session_progress(meta: dict, labels: pd.DataFrame) -> dict:
                 "labelling_now": sum(time.time() - p["last_active"] < BUSY_SECONDS or p["person"] in now for p in people)}
     if meta["kind"] == "areas":
         return progress | {"round_progress": _areas().progress(meta, labels), "cores": len(meta.get("cores") or [])}
+    if meta["kind"] == "matter":
+        return progress | {"round_progress": _matter().progress(meta, labels), "cores": len(meta.get("cores") or [])}
     if sessions.label_set_only(meta):  # an AI review round: its labels, no fields to prepare or finish
         return progress | ai_review_summary(meta, labels)
     if rounds.is_round(meta):
@@ -610,6 +619,8 @@ def _create_session(body: NewSession) -> dict:
         raise HTTPException(400, f"{sessions.REFERENCE} is the name of the imported reference labels; choose another name")
     if body.kind == "areas":
         return _areas().create(body)
+    if body.kind == "matter":
+        return _matter().create(body)
     if body.round:
         return _rounds().create_round_session(body)
     if body.kind == outline.KIND:
@@ -1027,6 +1038,8 @@ def open_sessions(request: Request, person: str | None, only: set[str] | None = 
         extra = {"round": rounds.round_of(meta), "progress": _rounds().progress(meta)} if rounds.is_round(meta) else {"round": None}
         if meta["kind"] == "areas":
             extra = {"round": "areas", "progress": _areas().progress(meta, labels), "cores": len(meta.get("cores") or [])}
+        if meta["kind"] == "matter":
+            extra = {"round": "matter", "progress": _matter().progress(meta, labels), "cores": len(meta.get("cores") or [])}
         out.append({**{k: meta.get(k) for k in ("name", "title", "stain", "kind", "open", "instructions")}, **extra, "kind_title": sessions.kind_title(meta), "fields": len(meta["fields"]), "done_by_me": done,
                     "my_labels": int(((labels.session == name) & (labels.source == person) & labels.task.isin(("class", "object"))).sum()),
                     "link": annotate_path(name)})
@@ -1038,6 +1051,8 @@ def session_detail(name: str, request: Request, person: str | None = Depends(vie
     meta = labelled_here(session_meta(name, request))
     if meta["kind"] == "areas":
         return {"meta": {**meta, **_areas().detail(meta, person)}, "fields": [], "annotator": person}
+    if meta["kind"] == "matter":
+        return {"meta": {**meta, **_matter().detail(meta, person)}, "fields": [], "annotator": person}
     labels = session_labels(meta)
     reviewed = finished_fields(meta, labels)
     prepared = ready_fields(meta)

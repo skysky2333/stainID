@@ -2,7 +2,7 @@
   "_about": "Every colour the pages draw with, all distinct, also from the white highlight and the dark edge of drawn shapes (tests/test_review_consistency.py): label classes by colour slot, the inactive / unsure / unknown states, the bad-area types, the layers drawn over the tissue and the markers. Served at /api/palette; the web app imports this file, the server draws the excluded-areas picture with it.",
   "classes": ["#ff2bd6", "#ffe600", "#00e5ff", "#7cff3a", "#b98cff", "#ff4d4d", "#ff9ecf", "#9dffe0", "#c6ff00"],
   "states": {"inactive": "#d0d4da", "unsure": "#ffa94d", "unknown": "#78716c"},
-  "areas": {"1": "#ea580c", "2": "#854d0e", "3": "#334155", "4": "#0891b2", "taken_out": "#4d7c0f", "edge_guard": "#14b8a6", "not_analysed": "#312e81"},
+  "areas": {"1": "#ea580c", "2": "#854d0e", "3": "#334155", "4": "#0891b2", "taken_out": "#4d7c0f", "edge_guard": "#14b8a6", "not_analysed": "#312e81", "white_matter": "#6d28d9"},
   "overlays": {"unproposed": "#d9f99d", "threads": "#00ffa3", "dab": "#be123c", "tiles": "#5c3d2e", "excluded": "#7f1d1d"},
   "markers": {"edit": "#ec4899", "others": "#60a5fa", "reference": "#84cc16", "spot_added": "#16a34a", "spot_removed": "#fca5a5",
               "box": "#fde68a", "split_a": "#7dd3fc", "split_b": "#fb7185", "merge": "#6366f1", "unsaved": "#fbbf24"}

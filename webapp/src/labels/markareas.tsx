@@ -35,13 +35,13 @@ const typing = (e: KeyboardEvent) => {
 }
 
 /** The core-by-core progress: cores done by anyone, in progress, and the people. */
-export function AreaProgressLine({ progress, me }: { progress: RoundProgress | null; me?: string | null }) {
+export function AreaProgressLine({ progress, me, verb = 'checked' }: { progress: RoundProgress | null; me?: string | null; verb?: string }) {
   if (!progress) return null
   const open = progress.open_now ?? 0
   const others = progress.people.slice(0, 4)
   return (
     <div className="round-progress">
-      <span className="small secondary"><b>{progress.decided.toLocaleString()}</b> of {progress.total.toLocaleString()} core{progress.total === 1 ? '' : 's'} checked
+      <span className="small secondary"><b>{progress.decided.toLocaleString()}</b> of {progress.total.toLocaleString()} core{progress.total === 1 ? '' : 's'} {verb}
         {open > 0 && <> · {open.toLocaleString()} in progress</>}
         {others.length > 0 && <span className="muted"> · {others.map((p) => `${p.person === me ? 'you' : p.person} ${p.decided.toLocaleString()}`).join(' · ')}</span>}</span>
       <Progress done={progress.decided} total={progress.total} />

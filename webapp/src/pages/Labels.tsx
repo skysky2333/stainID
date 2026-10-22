@@ -9,6 +9,7 @@ import { SessionAccessCard } from '../labels/access'
 import { SessionLabelsView } from '../labels/examine'
 import { FIELD_TEXT, FieldChoice, SessionFields } from '../labels/fields'
 import { AREAS_TITLE } from '../labels/markareas'
+import { MATTER_TITLE } from '../labels/matter'
 import { NewRoundSession } from '../labels/newround'
 import { ROUND_TITLE } from '../labels/rounds'
 import { byKey } from '../labels/classKeys'
@@ -71,7 +72,7 @@ export default function Labels() {
                   fields_from_checked_areas?: number; cores?: string[]; second?: string[] }
                 const n = Array.isArray(d.fields) ? d.fields.length : d.fields ?? 0
                 const fromAreas = d.fields_from_checked_areas ? ` ${n.toLocaleString()} fields: ${d.fields_from_checked_areas.toLocaleString()} from cores with checked areas.` : ''
-                const drawn = s.kind === 'areas' ? ` It has ${(d.cores?.length ?? 0).toLocaleString()} cores${d.second?.length ? `, ${d.second.length.toLocaleString()} of them also for a second person` : ''}.`
+                const drawn = wholeCores(s) ? ` It has ${(d.cores?.length ?? 0).toLocaleString()} cores${d.second?.length ? `, ${d.second.length.toLocaleString()} of them also for a second person` : ''}.`
                   : d.fields_asked == null || d.fields_remaining == null ? fromAreas
                   : (d.fields_asked < 0 ? ` It has all ${n.toLocaleString()} remaining fields (in a random order, seed ${d.field_seed}).`
                     : d.fields_asked > d.fields_remaining ? ` Only ${d.fields_remaining.toLocaleString()} fields remained, so it has all of them (seed ${d.field_seed}).`
@@ -88,7 +89,9 @@ export default function Labels() {
 /* ---------- sessions ---------- */
 
 /** The annotation rounds ("Fix the field", "Mark bad areas"; old "Check detection's calls" ones as history), shown before the older kinds. */
-const isRound = (s: SessionInfo) => !!s.round || s.kind === 'areas' || !!s.label_set  // AI review rounds (read-only label sets) with them
+/** A session whose unit is a whole core with all its stains: Mark bad areas, Grey / white matter. */
+const wholeCores = (s: { kind: string }) => s.kind === 'areas' || s.kind === 'matter'
+const isRound = (s: SessionInfo) => !!s.round || wholeCores(s) || !!s.label_set  // AI review rounds (read-only label sets) with them
 
 function Sessions({ sessions, reference, linkFor, onChanged, onNew }: {
   sessions: SessionInfo[]; reference: ReferenceLabels | null; linkFor: (name: string) => string; onChanged: () => void; onNew: () => void
@@ -220,13 +223,13 @@ function SessionRow({ s, link, onChanged }: { s: SessionInfo; link: string; onCh
           <b>{s.title}</b> {s.read_only ? <span className="badge" title="Imported from a dataset package; the labels stay as they were">read only</span> : <span className={`badge ${state.className}`}>{state.text}</span>}
           {s.labelling_now > 0 && <span className="badge status-running"><span className="pulse" />{s.labelling_now} labelling now</span>}
         </div>
-        <div className="muted small">{s.kind === 'areas' ? `Every stain · ${AREAS_TITLE}${s.order === 'random' ? ' · random order' : s.order ? ' · likely problems first' : ''}`
+        <div className="muted small">{s.kind === 'matter' ? `Every stain · ${MATTER_TITLE}` : s.kind === 'areas' ? `Every stain · ${AREAS_TITLE}${s.order === 'random' ? ' · random order' : s.order ? ' · likely problems first' : ''}`
           : `${s.stain} · ${s.round ? `Round ${s.round} · ${ROUND_TITLE[s.round]}${s.mode === 'simple' ? ' (simple)' : ''}` : kindText(s.kind, s.kind_title)}`}
-          {(s.labels_needed ?? s.per_field) > 1 ? ` · ${s.labels_needed ?? s.per_field} people per ${s.kind === 'queue' ? 'object' : s.kind === 'areas' ? 'core' : 'field'}` : ''}</div>
+          {(s.labels_needed ?? s.per_field) > 1 ? ` · ${s.labels_needed ?? s.per_field} people per ${s.kind === 'queue' ? 'object' : wholeCores(s) ? 'core' : 'field'}` : ''}</div>
         <SessionProgress s={s} />
         {s.simple_classes && Object.keys(s.simple_classes).length > 0 && <div className="small muted simple-counts">In its simple classes:{' '}
           {Object.entries(s.simple_classes).map(([c, n]) => `${c} ${n.toLocaleString()}`).join(' · ')}</div>}
-        {s.kind === 'areas' ? <CorePeople progress={s.round_progress} labellers={s.labellers} />
+        {wholeCores(s) ? <CorePeople progress={s.round_progress} labellers={s.labellers} />
           : <People people={s.labellers} fields={s.kind !== 'queue' ? s.fields ?? 0 : null} />}
       </div>
       <div className="session-actions">
@@ -242,7 +245,7 @@ function SessionRow({ s, link, onChanged }: { s: SessionInfo; link: string; onCh
 }
 
 function SessionProgress({ s }: { s: SessionInfo }) {
-  if (s.kind === 'areas' && s.round_progress) {
+  if (wholeCores(s) && s.round_progress) {
     const p = s.round_progress
     return (
       <div className="session-progress">
@@ -348,7 +351,7 @@ function SessionMore({ s, onChanged, onError }: { s: SessionInfo; onChanged: () 
       </div>
       {s.instructions && <p className="small secondary"><b>Note for labellers:</b> {s.instructions}</p>}
       {!s.read_only && <SessionAccessCard name={s.name} />}
-      {s.kind === 'areas' ? <p className="small secondary">{typeof s.cores === 'number' ? s.cores.toLocaleString() : (s.cores?.length ?? 0).toLocaleString()} cores, each with
+      {wholeCores(s) ? <p className="small secondary">{typeof s.cores === 'number' ? s.cores.toLocaleString() : (s.cores?.length ?? 0).toLocaleString()} cores, each with
         all its stains; a core is handed to one person at a time{s.round_progress?.second_checks ? `, and ${s.round_progress.second_checks.toLocaleString()} also go to a second person` : ''}.
         {' '}To check other cores, make a new session.</p>
         : s.kind !== 'queue' && <SessionFields s={s} onChanged={onChanged} />}
