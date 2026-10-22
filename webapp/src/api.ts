@@ -571,6 +571,10 @@ export interface RoundField<Shape = number[][]> {
   tile_id: string; box: { x: number; y: number; width: number; height: number }; objects: RoundObject<Shape>[]; checked: Record<string, RoundCheck>
   layers: string[]; mine: (Label & { candidate?: string | null })[]; added: AddedState[]; segment_anything: boolean; segment_ready: boolean
   open_by: string[]; done_by: string[]; pixel_size_um: number
+  /** who finished the field in this session and when; `complete`: finished for this person (they did, or as many as
+   *  it needs); `read_only`: opened to look at (Redo this field / Add an extra annotation open it to work on);
+   *  `own`: an extra annotation, starting from detection's output and this person's own labels only */
+  finished?: { person: string; time: number }[]; complete?: boolean; read_only?: boolean; own?: boolean
   /** detection's acceptance threshold on this field, and the one this person locked (saved), if any */
   detection_threshold?: number | null; threshold?: number | null
   /** AT8 threads mode (H): the thread threshold this person set on the field (a factor on detection's), null before; none on other stains */

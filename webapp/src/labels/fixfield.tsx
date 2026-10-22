@@ -136,7 +136,10 @@ const choiceIndex = (value: unknown, o?: { mask: number }) => (value === 'sam' ?
 interface Hooks { onEvent?: (event: RoundEvent) => void; onFinished?: () => void; coach?: ReactNode }
 
 export function FixField({ detail, reload, tile, onEvent, onFinished, coach }: { detail: SessionDetail; reload: () => void; tile: string } & Hooks) {
-  const work = useFetch<RoundField<number[]>>(`/api/annotate/${detail.meta.name}/fields/${enc(tile)}`)
+  // a finished field opens to look at; Redo this field (`edit`) or Add an extra annotation (`own`) open it to work on
+  const [opening, setOpening] = useState<{ tile: string; how: 'edit' | 'own' } | null>(null)
+  const how = opening?.tile === tile ? opening.how : null
+  const work = useFetch<RoundField<number[]>>(`/api/annotate/${detail.meta.name}/fields/${enc(tile)}${how ? `?${how}=true` : ''}`)
   // every outline of every object, after the field is drawn (the field brings only each object's default one)
   const shapes = useFetch<Record<string, (number[] | null)[]>>(work.data ? `/api/annotate/${detail.meta.name}/fields/${enc(tile)}/masks` : null)
   const field = useMemo(() => (work.data ? unflatten(work.data, shapes.data) : null), [work.data, shapes.data])
@@ -180,7 +183,8 @@ export function FixField({ detail, reload, tile, onEvent, onFinished, coach }: {
       </div>
     )
   }
-  return <Fixer key={tile} detail={detail} reload={reload} tile={tile} field={field} onEvent={onEvent} onFinished={onFinished} coach={coach} />
+  return <Fixer key={`${tile}:${how ?? ''}:${field.read_only ? 'look' : 'work'}`} detail={detail} reload={reload} tile={tile} field={field} onEvent={onEvent}
+    onFinished={onFinished} coach={coach} onOpen={(h) => setOpening({ tile, how: h })} />
 }
 
 /** The field with its outlines as [x, y] corners: the server sends them flat ([x0, y0, x1, y1, …], whole pixels), the
@@ -268,8 +272,25 @@ const ObjectLayer = memo(function ObjectLayer({ items, unit, dim }: { items: Dra
   )
 })
 
-function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coach }: { detail: SessionDetail; reload: () => void; tile: string; field: RoundField } & Hooks) {
+/** When people finished a field: "Ann on 21 Oct 2026, Ben on 22 Oct 2026". */
+function finishedText(finished: { person: string; time: number }[]): string {
+  return finished.map((f) => `${f.person} on ${new Date(f.time * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}`).join(', ')
+}
+
+function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coach, onOpen }: { detail: SessionDetail; reload: () => void; tile: string; field: RoundField
+  onOpen: (how: 'edit' | 'own') => void } & Hooks) {
   const field = useMemo(() => lighter(arrived), [arrived])
+  const readOnly = !!field.read_only  // a finished field, looked at: nothing changes until Redo / Add an extra annotation
+  const ownOnly = field.own ? '?own=true' : ''  // an extra annotation: the bad areas it starts from are this person's own
+  useEffect(() => {  // looking only: no key edits anything (Space still hides the overlays)
+    if (!readOnly) return
+    const stop = (e: KeyboardEvent) => {
+      if (e.key === ' ' || ['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement).tagName)) return
+      e.stopImmediatePropagation()
+    }
+    window.addEventListener('keydown', stop, true)
+    return () => window.removeEventListener('keydown', stop, true)
+  }, [readOnly])
   const tell = (event: RoundEvent) => onEvent?.(event)
   const navigate = useNavigate()
   const meta = detail.meta as Meta
@@ -278,7 +299,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   const unsure = unsureClass(vocabulary)
   const draftAt = (meta as { practice?: boolean }).practice ? '' : draftKey(detail.annotator, name, tile)  // the practice keeps no draft: a reload starts it afresh with the coach
   const [saved, setSaved] = useState<Record<string, Mine>>(() => Object.fromEntries(field.mine.map((m) => [m.id, m])))  // as the server has them
-  const [changes, setChanges] = useState<Record<string, Change>>(() => readDraft<{ changes: Record<string, Change> }>(draftAt)?.changes ?? {})  // not saved yet
+  const [changes, setChanges] = useState<Record<string, Change>>(() => (field.read_only ? null : readDraft<{ changes: Record<string, Change> }>(draftAt)?.changes) ?? {})  // not saved yet
   // step 1, the acceptance threshold: where the objects start (fieldStart.ts); locked before the first edit
   const [start, setStart] = useState<Slider | null>(() => {
     const detection = field.detection_threshold
@@ -295,7 +316,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   const ladder = useFetch<ThreadLadder>(threadsHere && threadsAsked ? `/api/annotate/${name}/fields/${enc(tile)}/threads` : null)
   const [threadSaved, setThreadSaved] = useState<number | null>(field.threads?.factor ?? null)
   const [threadStep, setThreadStep] = useState<number | null>(null)
-  const notCounted = useFetch<NotCounted>(threadsHere && threadsAsked ? `/api/annotate/${name}/fields/${enc(tile)}/threads/areas` : null)
+  const notCounted = useFetch<NotCounted>(threadsHere && threadsAsked ? `/api/annotate/${name}/fields/${enc(tile)}/threads/areas${ownOnly}` : null)
   const ladderDone = ladder.data?.status === 'done' && ladder.data.steps.length ? ladder.data : null
   const threadIndex = ladderDone ? (threadStep ?? stepOf(ladderDone.factors, threadSaved, ladderDone.detection)) : 0
   const [split, setSplit] = useState<{ key: string; pieces: number[][][]; busy: boolean } | null>(null)  // the preview of a split
@@ -347,9 +368,9 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   // what the analysis leaves out over the field: its part of detection's automatic layer, as on the Cores view
   const excluded = useFetch<FieldExcluded>(`/api/annotate/${name}/fields/${enc(tile)}/excluded`)
   // people's areas over the field (painted and marked fine), outlined; they never change the layer above
-  const people = useFetch<PeopleAreas>(`/api/annotate/${name}/fields/${enc(tile)}/annotated`)
+  const people = useFetch<PeopleAreas>(`/api/annotate/${name}/fields/${enc(tile)}/annotated${ownOnly}`)
   // each brush type's current area (detection's with people's saved edits merged in): what the brush adds to and takes from
-  const areas = useFetch<FieldAreas>(`/api/annotate/${name}/fields/${enc(tile)}/areas`)
+  const areas = useFetch<FieldAreas>(`/api/annotate/${name}/fields/${enc(tile)}/areas${ownOnly}`)
   const brushType = EXCLUDE_TYPES.find((t) => t.key === brushKind) ?? EXCLUDE_TYPES[0]
   const [shiftDown, setShiftDown] = useState(false)  // Shift held while the brush is on: it erases (the cursor shows it)
   useEffect(() => {
@@ -370,7 +391,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     brush.reset()
   }, [areas.data, brush.reset])
 
-  useLive(name, { tile_id: tile }, (live) => {
+  useLive(name, { tile_id: tile, view: readOnly, own: !!field.own }, (live) => {
     if (live.checked) setChecked(peopleChecks(live.checked))
     if (live.open_by) setOpenBy(live.open_by)
     if (live.done_by) setDoneBy(live.done_by)
@@ -1010,7 +1031,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   const send = async (records: Rec[], finish: boolean) => {
     setSaving(true)
     try {
-      const result = await api.post<RoundSaved>(`/api/annotate/${name}/tiles/${enc(tile)}/save`, { records: records.map((r) => ({ tile_id: tile, ...r })), submit: finish })
+      const result = await api.post<RoundSaved>(`/api/annotate/${name}/tiles/${enc(tile)}/save`, { records: records.map((r) => ({ tile_id: tile, ...r })), submit: finish, own: !!field.own })
       setSaved((current) => {
         const next = { ...current }
         for (const r of result.saved) { if (r.deleted) delete next[r.id]; else next[r.id] = r }
@@ -1074,8 +1095,24 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
       areas.reload()
     }
   }
-  const reopen = async () => { if (await send([{ task: 'done', deleted: true }], false)) reload() }
   const done = !!saved[`done:${tile}`]
+  const finishedBy = field.finished ?? []
+  const iFinished = finishedBy.some((f) => f.person === detail.annotator)
+  /** A finished field, worked on again: Redo this field (the person who finished it, from their own labels) or Add an
+   *  extra annotation (someone else: an independent second opinion, from detection's output and their own labels). */
+  const workOnIt = () => {
+    const ask = iFinished
+      ? 'Redo this field? You change your own saved labels on it; the field stays yours while you work on it.'
+      : `Add an extra annotation of this field? You start from detection’s output and your own labels only; ${finishedBy.map((f) => f.person).join(', ')}’s labels stay as they are.`
+    if (window.confirm(ask)) onOpen(iFinished ? 'edit' : 'own')
+  }
+  /** Skip for now: the server hands the next field (as Save and continue does), this one put aside. */
+  const skip = async () => {
+    if (!mayLeave()) return
+    const next = await api.get<{ tile_id: string | null }>(`/api/annotate/${name}/next?skip=${enc(tile)}`).catch(() => ({ tile_id: null }))
+    if (next.tile_id && next.tile_id !== tile) navigate(`/annotate/${name}/${enc(next.tile_id)}`)
+    else setError('No other field is waiting for you right now.')
+  }
 
   const addedState = (s: Shown) => addedStates.find((a) => rkey(a.x, a.y) === rkey(s.x, s.y))?.state ?? 'measuring'
   const measuring = !(meta as { practice?: boolean }).practice && added.some((m) => saved[m.id] && addedStates.find((a) => rkey(a.x, a.y) === rkey(m.x!, m.y!))?.state !== 'measured')
@@ -1096,7 +1133,6 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
 
   const fields = detail.fields
   const position = fields.findIndex((f) => f.tile_id === tile)
-  const later = [...fields.slice(position + 1), ...fields.slice(0, position)].find((f) => !f.done_by_me && f.prepared && !f.open_by_others && f.tile_id !== tile)
   const changed = Object.values(mine).filter((m) => (m.task === 'class' || m.task === 'outline') && !m.confirmed).length
   const checkedNow = own.filter((o) => mine[classId(o.x, o.y)] || checked[o.candidate_id]).length
   const startable = own.filter((o) => !o.excluded)  // what step 1 counts: the field's own objects, not those in excluded areas
@@ -1126,9 +1162,8 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
           <RoundProgressLine progress={progress} me={detail.annotator} />
         </div>
         <div className="annotate-actions">
-          <button className="btn" onClick={() => later && mayLeave() && navigate(`/annotate/${name}/${enc(later.tile_id)}`)} disabled={!later || !!precise}
-            title={locked ?? (later ? 'Come back to this field later' : 'No other field is waiting for you')}>Skip for now</button>
-          {done && <button className="btn" onClick={reopen} disabled={busy || !!precise} title={locked ?? 'Count this field as not finished by you yet'}>Reopen</button>}
+          <button className="btn" onClick={() => void skip()} disabled={!!precise || busy}
+            title={locked ?? 'Come back to this field later: the next field waiting for you opens'}>Skip for now</button>
         </div>
       </div>
       {meta.instructions && <div className="instructions">{meta.instructions}</div>}
@@ -1150,7 +1185,15 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
       </Modal>}
       {restored > 0 && <div className="found found-warn small round-restored" role="status">{changesText(restored)} you had not saved came back from this browser.
         They are not saved yet. <button className="link-btn small" onClick={() => { setChanges({}); setUndos([]); setRestored(0) }}>Discard them</button></div>}
-      {(openBy.length > 0 || doneBy.length > 0) && <div className="found found-warn small field-others" role="status">
+      {readOnly && <div className="found found-good field-finished" role="status">
+        <span><b>Done by {finishedText(finishedBy)}.</b> You are looking at it: nothing here can be changed.</span>
+        <span className="spacer" />
+        {openBy.length > 0 ? <span className="small">{openBy.join(', ')} {openBy.length === 1 ? 'is' : 'are'} working on it now.</span>
+          : <button className="btn small primary" onClick={workOnIt}>{iFinished ? 'Redo this field' : 'Add an extra annotation'}</button>}
+      </div>}
+      {field.own && <div className="found small field-others" role="status">Extra annotation: you start from detection’s output and your own labels only.
+        {' '}{finishedBy.length ? `${finishedBy.map((f) => f.person).join(', ')}’s labels stay as they are; yours are added alongside.` : ''}</div>}
+      {!readOnly && !field.own && (openBy.length > 0 || doneBy.length > 0) && <div className="found found-warn small field-others" role="status">
         {doneBy.length > 0 ? `${checkedByText(doneBy)} already finished this field.` : `${openBy.join(', ')} ${openBy.length === 1 ? 'is' : 'are'} working on this field right now.`}
         {' '}You can still look and change things here, or <button className="link-btn small" onClick={() => void (async () => {
           if (!mayLeave()) return
@@ -1167,11 +1210,12 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
               {pending && <span className="small muted">Outlining…</span>}
               {mode === 'split' && <span className="badge status-running">split — click an object, or draw a line across · Esc leaves</span>}
               {mode === 'merge' && <span className="badge status-running">merge — {chosenForMerge.length} selected · Enter to merge · Esc leaves</span>}
-              {start && !start.locked && <span className="badge">Step 1: set the acceptance threshold</span>}
+              {start && !start.locked && !readOnly && <span className="badge">Step 1: set the acceptance threshold</span>}
               {target && (target.candidate || pieceOf(target)) && !precise && !excluding && <span className="badge outline-badge" title="Tab switches the outline of the object under the mouse">
                 Outline: {(choicesOf(target).names ?? CHOICE_NAMES)[choicesOf(target).index]} · Tab</span>}</span>}
-            focus={focus} cursor={threading ? 'default' : excluding ? 'none' : mode ? 'crosshair' : precise ? 'crosshair' : target ? 'pointer' : 'copy'} onClick={threading ? undefined : click} onMove={move}
-            onPress={press} onRelease={release} panLock={excluding || !!mode} onSize={setFieldSize}
+            focus={focus} cursor={readOnly || threading ? 'default' : excluding ? 'none' : mode ? 'crosshair' : precise ? 'crosshair' : target ? 'pointer' : 'copy'}
+            onClick={threading || readOnly ? undefined : click} onMove={move}
+            onPress={readOnly ? undefined : press} onRelease={readOnly ? undefined : release} panLock={excluding || !!mode} onSize={setFieldSize}
             paint={!hidden && fieldSize && (excluding || brush.dirty) ? (  // each type's area now: one merged region per type (brush.ts), from the first stroke
               <div ref={brush.host} className="exclude-painted" style={{ position: 'absolute', left: 0, top: 0,
                 width: `${(100 * Math.ceil(fieldSize.w / BRUSH_SCALE) * BRUSH_SCALE) / fieldSize.w}%`, height: `${(100 * Math.ceil(fieldSize.h / BRUSH_SCALE) * BRUSH_SCALE) / fieldSize.h}%` }} />
@@ -1265,7 +1309,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
         </div>
         <aside className="annotate-side round-side" aria-label="The object, the keys and this field">
           {coach}
-          {start && (!start.locked ? (
+          {start && !readOnly && (!start.locked ? (
             <div className="card side-block start-card" role="group" aria-label="Step 1: the acceptance threshold">
               <h3>Step 1: set the acceptance threshold</h3>
               <ThresholdSlider value={start.value} detection={start.detection} onChange={(v) => { setStart((s) => (s ? moveTo(s, v) : s)); tell('threshold') }} />
@@ -1344,11 +1388,11 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
             <details className="side-details compact">
               <summary className="small">Tags and a note</summary>
               <div className="tag-list">{meta.tags.map((t) => (
-                <label key={t} className="layer-toggle"><input type="checkbox" checked={!!mine[`tag:${tile}:${t}`]} disabled={!!precise}
+                <label key={t} className="layer-toggle"><input type="checkbox" checked={!!mine[`tag:${tile}:${t}`]} disabled={!!precise || readOnly}
                   onChange={() => save([{ task: 'tag', value: t, deleted: !!mine[`tag:${tile}:${t}`] }])} />{t}</label>
               ))}</div>
               <label className="field" style={{ marginTop: 6 }}>Note (optional)
-                <textarea rows={2} value={note} disabled={!!precise} onChange={(e) => setNote(e.target.value)}
+                <textarea rows={2} value={note} disabled={!!precise || readOnly} onChange={(e) => setNote(e.target.value)}
                   onBlur={() => { if (note !== (Object.values(mine).find((m) => m.task === 'note')?.value ?? '')) save([{ task: 'note', value: note, deleted: !note }]) }} /></label>
             </details>
           </div>
@@ -1380,7 +1424,12 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
               </div>
             )
           })()}
-          <div className="card side-block side-save">
+          {readOnly ? <div className="card side-block side-save">
+            <p className="small" style={{ margin: '0 0 6px' }}>Done by {finishedText(finishedBy)}.</p>
+            <div className="row">{openBy.length > 0 ? <span className="small muted">{openBy.join(', ')} {openBy.length === 1 ? 'is' : 'are'} working on it now.</span>
+              : <button className="btn primary" onClick={workOnIt}>{iFinished ? 'Redo this field' : 'Add an extra annotation'}</button>}
+              <span className="spacer" /><Link className="link-btn small" to={`/annotate/${name}`}>Back to the fields</Link></div>
+          </div> : <div className="card side-block side-save">
             <SaveState unsaved={unsaved} saving={saving} />
             <div className="row side-save-buttons">
               <SaveButtons unsaved={unsaved} saving={busy || !!precise} onSave={() => void saveAll(false)} onContinue={() => void saveAll(true)} canContinue={canFinish}
@@ -1392,7 +1441,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
               <span className="spacer" />
               <button className="link-btn small" onClick={discardAndClose}
                 title="Drop your unsaved changes on this field and go back to the session’s page">Discard and close</button></div>}
-          </div>
+          </div>}
           <div className="side-foot small">
             <button className={`btn small help-toggle${help ? ' chosen' : ''}`} aria-expanded={help} onClick={() => setHelp(!help)} title="How this page works">?</button>
             {!onFinished && <Link to="/tutorial">Tutorial</Link>}
@@ -1420,7 +1469,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
               {sam && !samReady && <p className="small muted">Preparing one-click outlines for this field… the first clicks may take a few seconds.</p>}
               {sam && (byHand ? <p className="small precise-bar">Drawing by hand: click the corners of the object, then the first corner or press Enter.
                 {' '}<button className="link-btn small" onClick={() => setByHand(false)}>Cancel</button></p>
-                : <button className="btn small" disabled={!!precise} onClick={() => { setPrecise(null); setDraft([]); setByHand(true) }}
+                : <button className="btn small" disabled={!!precise || readOnly} onClick={() => { setPrecise(null); setDraft([]); setByHand(true) }}
                   title="The last resort, when one click and precise editing cannot outline it">Draw an object by hand…</button>)}
               <details className="side-details compact">
                 <summary className="small">Display options</summary>

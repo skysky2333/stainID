@@ -1101,10 +1101,13 @@ def leave_field(name: str, tile_id: str, request: Request, person: str = Depends
 
 
 @router.get("/annotate/{name}/fields/{tile_id}")
-def open_field(name: str, tile_id: str, request: Request, person: str = Depends(annotator)) -> dict:
+def open_field(name: str, tile_id: str, request: Request, edit: bool = False, own: bool = False, person: str = Depends(annotator)) -> dict:
+    """A field to label. An annotation round's field that is finished (by this person, or by as many as it needs) opens
+    to look at (`read_only`); `edit` (Redo this field: the person who finished it, from their own labels) or `own` (Add
+    an extra annotation: someone else, from detection's output and their own labels only) open it to work on."""
     meta = session_meta(name, request)
     if rounds.is_round(meta):
-        out = _rounds().open_field(meta, tile_id, person)
+        out = _rounds().open_field(meta, tile_id, person, edit, own)
         return out if isinstance(out, Response) else fast_json(request, out)
     tile = field_tile(meta, tile_id)
     objects = field_objects(meta, tile_id)
@@ -1220,7 +1223,7 @@ def finish(name: str, tile_id: str, request: Request, person: str = Depends(anno
             final.setdefault(key, words.positive(o.ai_value))
         if "outline" in meta["tools"]:
             edited = set(mine.id[mine.task == "outline"])
-            for outline in open_field(name, tile_id, request, person)["outlines"]:
+            for outline in open_field(name, tile_id, request, person=person)["outlines"]:
                 key = store.object_id("outline", tile_id, outline["x"], outline["y"])
                 if key not in edited and final.get(store.object_id("class", tile_id, outline["x"], outline["y"]), words.positive(NEGATIVE[meta["stain"]])):
                     records.append({"id": key, "source": person, "stain": meta["stain"], "task": "outline", "tile_id": tile_id, "x": outline["x"],

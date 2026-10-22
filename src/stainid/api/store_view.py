@@ -301,7 +301,7 @@ def field_excluded(project, tile: dict) -> tuple[dict, bytes | None]:
 PAINTED_TYPES = ("1", "2", "3", "4")  # the types the brush paints (labels.exclusions.KINDS)
 
 
-def field_areas(project, tile: dict, session: str | None = None) -> dict:
+def field_areas(project, tile: dict, session: excluded_areas.Scope = None) -> dict:
     """Each brush type's current area over a field (`current_areas`), placed in the field picture's pixels. `session`:
     detection's areas with that labelling session's edits only."""
     from stainid.labels import frames  # noqa: PLC0415
@@ -311,7 +311,7 @@ def field_areas(project, tile: dict, session: str | None = None) -> dict:
     return current_areas(project, str(tile["core_id"]), str(tile["stain"]), (x0, y0, x1, y1), ai=False, session=session)
 
 
-def not_counted(project, tile: dict, session: str | None = None) -> dict:
+def not_counted(project, tile: dict, session: excluded_areas.Scope = None) -> dict:
     """AT8 threads mode: where the field is not counted, so the page shades it and fades the thread lines there (people
     judge the thread threshold on counted tissue only). Detection's automatic areas (fold, artifact, no tissue, focus,
     the edge guard, …) with people's saved edits on top (`exclusions.final_say`, without AI areas), as one
@@ -352,7 +352,7 @@ def not_counted(project, tile: dict, session: str | None = None) -> dict:
 
 
 def current_areas(project, core_id: str, stain: str, box: tuple[int, int, int, int] | None = None, ai: bool = True,
-                  session: str | None = None) -> dict:
+                  session: excluded_areas.Scope = None) -> dict:
     """Each brush type's current area, as the one brush (field tool and "Mark bad areas") starts from it: detection's
     area of that type with every edit people saved merged in (`exclusions.final_say`, one region set per type), a
     white-on-transparent PNG per type (data URL, one pixel per layer cell) and where it lies (`x`, `y`, `width`,
@@ -384,7 +384,7 @@ def current_areas(project, core_id: str, stain: str, box: tuple[int, int, int, i
 
 
 def people_areas(project, core_id: str, stain: str, origin: tuple[int, int] = (0, 0),
-                 box: tuple[float, float, float, float] | None = None, ai: bool = True, session: str | None = None) -> dict:
+                 box: tuple[float, float, float, float] | None = None, ai: bool = True, session: excluded_areas.Scope = None) -> dict:
     """People's areas of a core image for the Annotations layers (`stainid.exclusions.annotated`; they train and evaluate
     models, the analysis never reads them): each painted or cleared area as polygons (core px less `origin`; only those
     reaching into `box`, x0 y0 x1 y1 core px), how they compare with detection's areas, and the edits (who, when, type,

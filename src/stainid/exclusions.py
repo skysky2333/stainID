@@ -144,13 +144,18 @@ def all_edits(project) -> dict[tuple[str, str], list[Edit]]:
     return cache.memo(("exclusion edits", str(project.root)), [_log(project), *_tile_paths(project)], make)
 
 
-def edits(project, core_id: str, stain: str, ai: bool = True, session: str | None = None) -> list[Edit]:
+Scope = str | tuple[str, str] | None  # a labelling session, or (session, person): one person's edits in it
+
+
+def edits(project, core_id: str, stain: str, ai: bool = True, session: Scope = None) -> list[Edit]:
     """The edits of one core image and stain, oldest first (the history: who, when, which type). `ai` False: people's
     only, without the AI reviewer's (`labels.store.is_ai_label`), as the annotation pages start from them. `session`: only
-    the edits saved in that labelling session (inside a session nothing another session said counts)."""
+    the edits saved in that labelling session (inside a session nothing another session said counts); (session, person):
+    only that person's there (an extra annotation of a finished field starts from detection's areas and their own)."""
     found = all_edits(project).get((stain, str(core_id)), [])
     if session is not None:
-        found = [e for e in found if e.session == session]
+        name, person = session if isinstance(session, tuple) else (session, None)
+        found = [e for e in found if e.session == name and (person is None or e.source == person)]
     if ai:
         return found
     from stainid.labels.store import is_ai_label  # noqa: PLC0415
@@ -340,7 +345,7 @@ def digests(project, stain: str, core_ids) -> dict[str, str | None]:
     return {str(c): digest(project, str(c), stain) for c in core_ids}
 
 
-def edits_digest(project, core_id: str, stain: str, ai: bool = True, session: str | None = None) -> str:
+def edits_digest(project, core_id: str, stain: str, ai: bool = True, session: Scope = None) -> str:
     """People's edits of a core image, as a short text: changes exactly when one is saved."""
     keys = [e.key() for e in edits(project, core_id, stain, ai, session)]
     return hashlib.sha1(json.dumps(keys, default=str).encode()).hexdigest()[:16]
@@ -411,7 +416,7 @@ def _grid_shape(project, core_id: str, stain: str) -> tuple[int, int] | None:
     return None
 
 
-def annotated(project, core_id: str, stain: str, ai: bool = True, session: str | None = None) -> Annotated | None:
+def annotated(project, core_id: str, stain: str, ai: bool = True, session: Scope = None) -> Annotated | None:
     """People's areas of one core image and stain (every edit in time order, the latest winning); None when the image
     is unknown. Only training and evaluation read them. `ai` False: without the AI reviewer's (the annotation pages)."""
     shape = _grid_shape(project, core_id, stain)
@@ -461,7 +466,7 @@ _SHARES_LIMIT = 100_000  # every core image and stain of a cohort (a pass over a
 _LOCK = threading.Lock()
 
 
-def _layer(project, core_id: str, stain: str, people: bool, ai: bool = True, session: str | None = None) -> Layer | None:
+def _layer(project, core_id: str, stain: str, people: bool, ai: bool = True, session: Scope = None) -> Layer | None:
     path = mask_path(project, core_id, stain)
     made_from = digest(project, core_id, stain)
     if made_from is None:
@@ -498,7 +503,7 @@ def automatic(project, core_id: str, stain: str) -> Layer | None:
     return _layer(project, core_id, stain, people=False)
 
 
-def final_say(project, core_id: str, stain: str, ai: bool = True, session: str | None = None) -> Layer | None:
+def final_say(project, core_id: str, stain: str, ai: bool = True, session: Scope = None) -> Layer | None:
     """People's final say over detection's areas: detection's areas with every edit on top in time order (a painted
     part excluded with its type, a cleared part counted). It is the label set for training and evaluating (objects there
     are left out of training and scoring, `drop_excluded`), never an analysis input; None before stage 2. `ai` False
@@ -653,7 +658,7 @@ def _known(project, stain: str, core_id: str, quick: tuple | None = None) -> dic
 
 
 def shares(project, stain: str, core_id: str, ids, quick: tuple | None = None, ai: bool = True,
-           session: str | None = None) -> dict[str, float]:
+           session: Scope = None) -> dict[str, float]:
     """The excluded share of these candidates of one core in people's final say (`final_say`, `Layer.fractions` of their stain
     outlines; a candidate the store no longer has by the cell at the position in its id); empty before stage 2. Only
     the candidates asked about are worked out (and kept until the layer or the store changes). `ai` False: in the final

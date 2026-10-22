@@ -59,6 +59,7 @@ from stainid.api.routes.annotate import (
 from stainid.api.session import PREVIEW, annotator, require_admin
 from stainid.api.state import get_state
 from stainid.api.util import fast_json
+from stainid.exclusions import Scope as exclusions_scope
 from stainid.labels import (
     added,
     candidate_store,
@@ -503,7 +504,13 @@ def _field_shapes(meta: dict, tile: dict) -> tuple[list[dict], dict[str, list]]:
     return objects, masks
 
 
-def excluded_ids(meta: dict, ids) -> set[str]:
+def area_scope(meta: dict, person: str | None = None) -> exclusions_scope:
+    """Whose bad areas a field page starts from: the session's people's, or with `person` (an extra annotation of a
+    finished field, an independent second opinion) that person's own only."""
+    return (meta["name"], person) if person else meta["name"]
+
+
+def excluded_ids(meta: dict, ids, own: str | None = None) -> set[str]:
     """Which of these candidates lie in an excluded area (`stainid.exclusions`: share at least `EXCLUDED_AT`): drawn
     faded on the round pages and not asked about."""
     from stainid import exclusions as excluded_areas  # noqa: PLC0415
@@ -517,16 +524,17 @@ def excluded_ids(meta: dict, ids) -> set[str]:
     out: set[str] = set()
     for core_id, group in by_core.items():
         shares = excluded_areas.shares(get_state().project, meta["stain"], core_id, group, ai=False,
-                                       session=meta["name"])  # this session's people's areas, not the AI reviewer's
+                                       session=area_scope(meta, own))  # this session's people's areas, not the AI reviewer's
         out |= {c for c, v in shares.items() if v >= excluded_areas.EXCLUDED_AT}
     return out
 
 
-def field_objects(meta: dict, tile: dict) -> list[dict]:
+def field_objects(meta: dict, tile: dict, own: str | None = None) -> list[dict]:
     """The field's candidates with only their default outline (flat whole pixels; the others: `field_masks`), each
-    with whether it lies in an excluded area (`excluded`: drawn faded, not asked about)."""
+    with whether it lies in an excluded area (`excluded`: drawn faded, not asked about; `own`: by that person's areas
+    only, `area_scope`)."""
     found = _field_shapes(meta, tile)[0]
-    out = excluded_ids(meta, [o["candidate_id"] for o in found])
+    out = excluded_ids(meta, [o["candidate_id"] for o in found], own)
     return [{**o, "excluded": o["candidate_id"] in out} for o in found]
 
 
@@ -597,7 +605,23 @@ def prefetch(meta: dict, tile_id: str, person: str) -> None:
                             "Preparing the threads of a field")
 
 
-def open_field(meta: dict, tile_id: str, person: str):
+def finishers(meta: dict, labels: pd.DataFrame, tile_id: str) -> list[dict]:
+    """Who finished a field in this session and when (their `done` label), oldest first."""
+    if meta.get("practice") or labels.empty:
+        return []
+    done = labels[(labels.task == "done") & (labels.tile_id == tile_id) & (labels.stain == meta["stain"])]
+    done = people_only(done[done.value.fillna("").astype(str) == rounds.done_kind(meta)])
+    times = pd.to_numeric(done.time, errors="coerce").fillna(0.0)
+    return [{"person": str(p), "time": float(t)} for p, t in sorted(zip(done.source, times), key=lambda pt: pt[1])]
+
+
+def is_complete(meta: dict, finished: dict[str, set[str]], tile_id: str, person: str) -> bool:
+    """A field that is finished for this person: they finished it, or enough people did. It opens to look at."""
+    by = finished.get(tile_id, set())
+    return not meta.get("practice") and (person in by or len(by) >= rounds.needed(meta))
+
+
+def open_field(meta: dict, tile_id: str, person: str, edit: bool = False, own: bool = False):
     """Round 2: a field with every candidate of the session's level (the field's own and, faded, its neighbours' in the
     margin), the AI's call and outline of each, who decided it already, this person's own saved labels there, and who
     else is on it or finished it. Opening a field holds it for this person. A field that is not ready yet (its core not
@@ -605,7 +629,12 @@ def open_field(meta: dict, tile_id: str, person: str):
     state = get_state()
     tile = field_tile(meta, tile_id)
     practice = bool(meta.get("practice"))
-    if not practice:
+    labels = session_labels(meta)
+    finished = finished_tiles(meta, labels)
+    complete = is_complete(meta, finished, tile_id, person)
+    looking = complete and not (edit or own)  # a finished field opens to look at: no edits, nothing held
+    own = own and person not in finished.get(tile_id, set())  # an extra annotation is someone else's: the finisher redoes their own
+    if not practice and not looking:
         refuse_if_taken(meta, tile_id, person)
         _TILES_HELD.hold(tile_hold(meta), person, [tile_id])
         busy(meta["name"], tile_id, person)
@@ -615,15 +644,13 @@ def open_field(meta: dict, tile_id: str, person: str):
         if isinstance(made, Response):
             return made
     found = _field_candidates(meta, tile)
-    objects = field_objects(meta, tile)
-    decided = decided_by_people(meta)  # this session's people only: never the AI's labels nor another session's
+    objects = field_objects(meta, tile, person if own else None)
+    decided = decisions.State() if own else decided_by_people(meta)  # this session's people only (an extra annotation: nobody's)
     x0, y0 = render.crop_origin(tile, state.project.context_px)
-    labels = session_labels(meta)
     mine = labels[(labels.source == person) & (labels.tile_id == tile_id) & (labels.stain == meta["stain"])]
     if practice:
         mine = mine.iloc[:0]
     box = {"x": int(tile["x_px"]) - x0, "y": int(tile["y_px"]) - y0, "width": int(tile["width_px"]), "height": int(tile["height_px"])}
-    finished = finished_tiles(meta, labels)
     sam = sam_embeddings.prepare_field(state, meta, tile_id, {t for t, people in finished.items() if person in people})
     prefetch(meta, tile_id, person)
     thresholds = [o["threshold"] for o in objects if o.get("threshold") is not None]
@@ -637,6 +664,7 @@ def open_field(meta: dict, tile_id: str, person: str):
             "mine": mine.replace({np.nan: None}).to_dict(orient="records"), "added": added_states(meta, tile, mine, found),
             "segment_anything": sam["state"] != "unavailable", "segment_ready": bool(sam.get("ready")),
             "open_by": sorted(tiles_held(meta).get(tile_id, set()) - {person}), "done_by": sorted(finished.get(tile_id, set()) - {person}),
+            "finished": finishers(meta, labels, tile_id), "complete": complete, "read_only": looking, "own": own,
             "pixel_size_um": state.project.pixel_size_um}
 
 
@@ -677,6 +705,8 @@ def added_states(meta: dict, tile: dict, mine: pd.DataFrame, found: pd.DataFrame
 
 class Live(BaseModel):
     tile_id: str = ""  # the tile on the page (held for this person while the page keeps asking)
+    view: bool = False  # a finished field looked at, not worked on: held for nobody
+    own: bool = False  # an extra annotation of a finished field: nobody else's checks
 
 
 def live(meta: dict, body: Live, person: str) -> dict:
@@ -688,13 +718,13 @@ def live(meta: dict, body: Live, person: str) -> dict:
     if body.tile_id:
         tile = tile_of(meta, body.tile_id)
         holders = tiles_held(meta).get(body.tile_id, set())
-        if person in holders or not holders:  # someone else took it while this page's hold had lapsed: not taken back
+        if not body.view and (person in holders or not holders):  # someone else took it while this page's hold had lapsed: not taken back
             _TILES_HELD.hold(tile_hold(meta), person, [body.tile_id])
             busy(meta["name"], body.tile_id, person)
         finished = finished_tiles(meta)
         out |= {"open_by": sorted(tiles_held(meta).get(body.tile_id, set()) - {person}),
                 "done_by": sorted(finished.get(body.tile_id, set()) - {person})}
-        if rounds.round_of(meta) == 2:
+        if rounds.round_of(meta) == 2 and not body.own:
             out["checked"] = checks(_field_candidates(meta, tile), decided_by_people(meta, stale_ok=True))
     return out | {"progress": progress(meta)}
 
@@ -879,6 +909,7 @@ def mask_outline(meta: dict, mark, record: dict) -> dict | None:
 class TileSave(BaseModel):
     records: list[Mark] = []  # every change on the page since the last save
     submit: bool = False  # "Save and continue": the tile is finished for this round
+    own: bool = False  # an extra annotation of a finished field (its objects faded by this person's own areas only)
 
 
 def _mine_after(meta: dict, tile_id: str, person: str, batch: list[dict]) -> pd.DataFrame:
@@ -891,14 +922,15 @@ def _mine_after(meta: dict, tile_id: str, person: str, batch: list[dict]) -> pd.
     return pd.DataFrame([r for r in latest.values() if not r.get("deleted")], columns=mine.columns)
 
 
-def _confirmations(meta: dict, tile: dict, person: str, mine: pd.DataFrame) -> list[dict]:
+def _confirmations(meta: dict, tile: dict, person: str, mine: pd.DataFrame, own: bool = False) -> list[dict]:
     """Round 2, finishing a field: the whole field counts as checked by this person. Every candidate of it they left
     untouched gets detection's call as their answer (confirmed; whatever others decided), and so do detection's outlines
     of the objects that stay positive."""
     tile_id = str(tile["tile_id"])
     found = _field_candidates(meta, tile)
+    alone = person if own else None
     own = found[found.own]
-    own = own[~own.candidate_id.isin(excluded_ids(meta, list(own.candidate_id)))]  # in an excluded area: not asked, not confirmed
+    own = own[~own.candidate_id.isin(excluded_ids(meta, list(own.candidate_id), alone))]  # in an excluded area: not asked, not confirmed
     words = vocabulary(meta["stain"])
     classes = mine[mine.task == "class"]
     said = {k: words.positive(v, s) for k, v, s in zip(classes.id, classes.value, classes.subtype)}
@@ -906,7 +938,7 @@ def _confirmations(meta: dict, tile: dict, person: str, mine: pd.DataFrame) -> l
     replaced = set(mine.candidate[(mine.task == objectedit.TASK)].dropna().astype(str)) if "candidate" in mine else set()
     chosen = mine[mine.task == starting.TASK]
     threshold = _number(chosen.value.iloc[-1]) if len(chosen) else None
-    starts = {o["candidate_id"]: o for o in field_objects(meta, tile)} if threshold is not None else {}
+    starts = {o["candidate_id"]: o for o in field_objects(meta, tile, alone)} if threshold is not None else {}
     reject = (candidate_store.negative_class(words), "")
     records = []
     stamp = {"source": person, "stain": meta["stain"], "tile_id": tile_id, "session": meta["name"]}
@@ -936,7 +968,7 @@ def _confirmations(meta: dict, tile: dict, person: str, mine: pd.DataFrame) -> l
     return records
 
 
-def save_tile(meta: dict, tile_id: str, marks: list, submit: bool, person: str) -> dict:
+def save_tile(meta: dict, tile_id: str, marks: list, submit: bool, person: str, own: bool = False) -> dict:
     """Save everything this person changed on a tile, all at once (or nothing, when one label is wrong). With `submit`
     ("Save and continue") the field is finished: the calls and outlines left as the AI made them are confirmed. The field
     stays this person's until it is finished. An old round-1 session takes no more labels."""
@@ -961,7 +993,7 @@ def save_tile(meta: dict, tile_id: str, marks: list, submit: bool, person: str) 
     marked_bad = any(r["task"] == exclusions.TASK and exclusions.is_whole(r) and not r["deleted"] for r in cleaned)
     if submit:
         if not practice and not marked_bad:  # a field marked bad as a whole: nothing in it was checked
-            cleaned += _confirmations(meta, tile, person, _mine_after(meta, tile_id, person, cleaned))
+            cleaned += _confirmations(meta, tile, person, _mine_after(meta, tile_id, person, cleaned), own)
         cleaned.append({"id": rounds.done_id(meta, tile_id), "source": person, "stain": meta["stain"], "task": "done", "tile_id": tile_id,
                         "session": meta["name"], "value": rounds.done_kind(meta) or None})
     if practice:  # nothing of the tutorial is kept
@@ -979,7 +1011,7 @@ def save_tile(meta: dict, tile_id: str, marks: list, submit: bool, person: str) 
 
 @router.post("/annotate/{name}/tiles/{tile_id}/save")
 def save_route(name: str, tile_id: str, body: TileSave, request: Request, person: str = Depends(annotator)) -> dict:
-    return save_tile(_round_meta(name, request), tile_id, body.records, body.submit, person)
+    return save_tile(_round_meta(name, request), tile_id, body.records, body.submit, person, body.own)
 
 
 # ---------- one-click outlines ----------
@@ -1023,7 +1055,7 @@ def thread_detector() -> dict:
 
 
 @router.get("/annotate/{name}/fields/{tile_id}/threads/areas")
-def field_threads_areas(name: str, tile_id: str, request: Request, person: str = Depends(annotator)) -> dict:
+def field_threads_areas(name: str, tile_id: str, request: Request, own: bool = False, person: str = Depends(annotator)) -> dict:
     """Threads mode's "not counted" shade (`store_view.not_counted`): detection's automatic areas with people's saved
     edits (no AI areas), where the thread lines are drawn faded."""
     from stainid.api import store_view  # noqa: PLC0415
@@ -1031,7 +1063,7 @@ def field_threads_areas(name: str, tile_id: str, request: Request, person: str =
     meta = _round_meta(name, request)
     if meta["stain"] != "AT8":
         raise HTTPException(404, "threads are an AT8 step")
-    return store_view.not_counted(get_state().project, field_tile(meta, tile_id), session=meta["name"])
+    return store_view.not_counted(get_state().project, field_tile(meta, tile_id), session=area_scope(meta, person if own else None))
 
 
 @router.get("/annotate/practice-threads/ladder")
@@ -1079,7 +1111,7 @@ def field_excluded_png(name: str, tile_id: str, request: Request, person: str = 
 
 
 @router.get("/annotate/{name}/fields/{tile_id}/annotated")
-def field_annotated(name: str, tile_id: str, request: Request, person: str = Depends(annotator)) -> dict:
+def field_annotated(name: str, tile_id: str, request: Request, own: bool = False, person: str = Depends(annotator)) -> dict:
     """People's areas over a field (`store_view.people_areas`, field-picture px): painted areas by type and the parts
     marked fine, with how they compare with detection's. They train and evaluate models; the analysis never reads them."""
     from stainid.api import store_view  # noqa: PLC0415
@@ -1090,17 +1122,17 @@ def field_annotated(name: str, tile_id: str, request: Request, person: str = Dep
     x1 = int(tile["x_px"]) + int(tile["width_px"]) + get_state().project.context_px
     y1 = int(tile["y_px"]) + int(tile["height_px"]) + get_state().project.context_px
     return store_view.people_areas(get_state().project, str(tile["core_id"]), str(tile["stain"]), (x0, y0), (x0, y0, x1, y1), ai=False,
-                                   session=meta["name"])
+                                   session=area_scope(meta, person if own else None))
 
 
 @router.get("/annotate/{name}/fields/{tile_id}/areas")
-def field_areas(name: str, tile_id: str, request: Request, person: str = Depends(annotator)) -> dict:
+def field_areas(name: str, tile_id: str, request: Request, own: bool = False, person: str = Depends(annotator)) -> dict:
     """Each brush type's current area over a field (`store_view.field_areas`: detection's area of the type with
     people's saved edits merged in), what the brush adds to and takes from."""
     from stainid.api import store_view  # noqa: PLC0415
 
     meta = _round_meta(name, request)
-    return store_view.field_areas(get_state().project, field_tile(meta, tile_id), session=meta["name"])
+    return store_view.field_areas(get_state().project, field_tile(meta, tile_id), session=area_scope(meta, person if own else None))
 
 
 class Split(BaseModel):
