@@ -23,7 +23,7 @@ from sklearn.model_selection import LeaveOneGroupOut, StratifiedGroupKFold
 from sklearn.pipeline import make_pipeline
 
 from stainid import exclusions as excluded_areas
-from stainid.labels import added, candidate_store, decisions, frames, pool, store
+from stainid.labels import added, candidate_store, decisions, frames, pool, simple, store
 from stainid.labels import sessions as label_sessions
 from stainid.labels.tasks import MODEL_KEY
 from stainid.project import Project, save_project
@@ -48,7 +48,10 @@ def labelled(project: Project, stain: str, sessions: list[str] | None = None) ->
     counts = added.measure(project, stain)
     if any(counts.values()):
         print(f"measured {counts['measured']} object(s) people added; {counts['could_not_be_measured']} could not be measured", flush=True)
-    truth = decisions.consensus(project, stain, label_sessions.in_sessions(labels, sessions), known_tiles(project))  # by candidate
+    chosen = label_sessions.in_sessions(labels, sessions)
+    mapping = simple.used_mapping(chosen, project, stain)  # simple sessions' labels train through the mapping on the Models page
+    chosen = simple.with_training_rows(chosen, project, stain)
+    truth = decisions.consensus(project, stain, chosen, known_tiles(project))  # by candidate
     truth = truth[truth.positive.notna()]
     names = pool.feature_names(project, stain)
     tiles = known_tiles(project)
@@ -76,6 +79,7 @@ def labelled(project: Project, stain: str, sessions: list[str] | None = None) ->
     data = pd.DataFrame(rows).drop_duplicates(["tile_id", "x", "y"]).reset_index(drop=True)
     data["added_by_person"] = data.added_by_person.astype(bool)
     data.attrs["unmeasured"] = unmeasured
+    data.attrs["simple_mapping"] = mapping
     return data, names
 
 
@@ -225,7 +229,8 @@ def train_model(project: Project, stain: str, sessions: list[str] | None = None,
               "slide_scaled": bool(scaled),
               "new_model": metrics(y, oof, threshold), "current_model": metrics(y, current, threshold) if current is not None else None,
               "current_model_path": project.relative(project.model(MODEL_KEY[stain])),
-              "sessions": trained_on(project, stain, sessions), "person_added": person_added(data, oof, threshold)}
+              "sessions": trained_on(project, stain, sessions), "person_added": person_added(data, oof, threshold),
+              "simple_mapping": data.attrs.get("simple_mapping")}  # how simple labels mapped onto the classes (None: none used)
     (folder / "report.json").write_text(json.dumps(report, indent=1))
     new = report["new_model"]
     print(f"[3/3] new model: AUC {new['auc']:.2f}, precision {new['precision']:.2f}, recall {new['recall']:.2f} -> {project.relative(folder)}", flush=True)
@@ -237,7 +242,8 @@ def trained_on(project: Project, stain: str, sessions: list[str] | None) -> list
     how many objects each labelled, for the model's report."""
     root = project.output("reviews")
     titles = {name: label_sessions.meta(root, name).get("title", name) for name in label_sessions.names(root)}
-    used = label_sessions.label_sets(label_sessions.in_sessions(excluded_areas.drop_excluded(project, store.current(root)), sessions), stain, titles)
+    used = label_sessions.label_sets(label_sessions.in_sessions(excluded_areas.drop_excluded(project, store.current(root)), sessions), stain, titles,
+                                     simple=simple.of(project, stain))
     return [{"name": s["name"], "title": s["title"], "objects": s["objects"]} for s in used]
 
 

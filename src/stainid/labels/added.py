@@ -77,7 +77,7 @@ def additions(project: Project, stain: str, labels: pd.DataFrame | None = None) 
     per position (tile_id, x, y)."""
     if labels is None:
         labels = frames.in_field_frame(store.current(project.output("reviews")), known_tiles(project), project.context_px)
-    mine = labels[(labels.stain == stain) & (labels.task == "class") & labels.x.notna() & (session_of(labels) != REFERENCE)]
+    mine = labels[(labels.stain == stain) & labels.task.isin(("class", "simple")) & labels.x.notna() & (session_of(labels) != REFERENCE)]  # simple: `labels.simple`
     if "candidate" in mine:  # a decision on a candidate of the v2 store is no addition
         mine = mine[mine.candidate.fillna("").astype(str) == ""]
     tiles = known_tiles(project)

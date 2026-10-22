@@ -49,6 +49,8 @@ def label_set_only(meta: dict) -> bool:
 def kind_title(meta: dict) -> str:
     """What kind of session it is, in words; a kind this release does not know reads as its name, never as nothing."""
     kind = str(meta.get("kind") or "")
+    if kind == "fields" and meta.get("mode") == "simple":
+        return "Fix the field (simple)"
     return KIND_TITLES.get(kind) or kind.replace("_", " ") or "labelling session"
 AI_VIEWS = ("full", "positions", "none")
 RULES = {"uncertain": "where detection is unsure (probability 0.3–0.7)", "disagree": "where people disagree with each other or with detection",
@@ -71,10 +73,11 @@ def in_sessions(labels: pd.DataFrame, chosen: list[str] | None) -> pd.DataFrame:
     return labels[session_of(labels).isin(set(chosen))] if chosen else labels
 
 
-def label_sets(labels: pd.DataFrame, stain: str, titles: dict[str, str], vocabulary: Vocabulary | None = None) -> list[dict]:
+def label_sets(labels: pd.DataFrame, stain: str, titles: dict[str, str], vocabulary: Vocabulary | None = None, simple=None) -> list[dict]:
     """Every session with object labels of this stain: how many labels of each class (identity and subtype, as
     `Vocabulary.display` names them), from how many objects, fields and people. `titles` names the real sessions; the
-    reference labels come last."""
+    reference labels come last. Simple sessions' labels (`labels.simple`) count in their own simple classes (`simple`:
+    the project's, else the built-in ones), marked `simple`."""
     vocabulary = vocabulary or vocab.defaults(stain)
     mine = store.classes(labels, stain, vocabulary)
     groups = session_of(mine)
@@ -85,6 +88,16 @@ def label_sets(labels: pd.DataFrame, stain: str, titles: dict[str, str], vocabul
         out.append({"name": name, "title": REFERENCE_TITLE if name == REFERENCE else titles.get(name, name), "reference": name == REFERENCE,
                     "labels": int(len(group)), "objects": int(len(objects)), "fields": int(group.tile_id.nunique()),
                     "classes": {str(k): int(v) for k, v in shown.value_counts().items()}, "people": sorted(set(group.source))})
+    from stainid.labels import simple as simple_classes  # noqa: PLC0415
+
+    plain = simple_classes.labels_of(labels, stain)  # the simple sessions' labels, in their own classes (trained through a mapping)
+    if len(plain):
+        words = simple_classes.from_config(stain, None, vocabulary) if simple is None else simple
+        for name, group in plain.groupby(session_of(plain)):
+            objects = group.drop_duplicates(["tile_id", "x", "y"])
+            out.append({"name": name, "title": titles.get(name, name), "reference": False, "simple": True, "labels": int(len(group)),
+                        "objects": int(len(objects)), "fields": int(group.tile_id.nunique()), "classes": simple_classes.counts(group, stain, words),
+                        "people": sorted(set(group.source))})
     return sorted(out, key=lambda s: (s["reference"], s["title"].lower()))
 
 

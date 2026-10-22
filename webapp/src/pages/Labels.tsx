@@ -221,9 +221,11 @@ function SessionRow({ s, link, onChanged }: { s: SessionInfo; link: string; onCh
           {s.labelling_now > 0 && <span className="badge status-running"><span className="pulse" />{s.labelling_now} labelling now</span>}
         </div>
         <div className="muted small">{s.kind === 'areas' ? `Every stain · ${AREAS_TITLE}${s.order === 'random' ? ' · random order' : s.order ? ' · likely problems first' : ''}`
-          : `${s.stain} · ${s.round ? `Round ${s.round} · ${ROUND_TITLE[s.round]}` : kindText(s.kind, s.kind_title)}`}
+          : `${s.stain} · ${s.round ? `Round ${s.round} · ${ROUND_TITLE[s.round]}${s.mode === 'simple' ? ' (simple)' : ''}` : kindText(s.kind, s.kind_title)}`}
           {(s.labels_needed ?? s.per_field) > 1 ? ` · ${s.labels_needed ?? s.per_field} people per ${s.kind === 'queue' ? 'object' : s.kind === 'areas' ? 'core' : 'field'}` : ''}</div>
         <SessionProgress s={s} />
+        {s.simple_classes && Object.keys(s.simple_classes).length > 0 && <div className="small muted simple-counts">In its simple classes:{' '}
+          {Object.entries(s.simple_classes).map(([c, n]) => `${c} ${n.toLocaleString()}`).join(' · ')}</div>}
         {s.kind === 'areas' ? <CorePeople progress={s.round_progress} labellers={s.labellers} />
           : <People people={s.labellers} fields={s.kind !== 'queue' ? s.fields ?? 0 : null} />}
       </div>
@@ -336,8 +338,8 @@ function SessionMore({ s, onChanged, onError }: { s: SessionInfo; onChanged: () 
     <div className="session-more">
       <div className="row">
         <a className="btn small" href={appPath(`/annotate/${s.name}`)} target="_blank" rel="noreferrer">Open the labelling page</a>
-        <button className="btn small" onClick={() => setExamining(true)} disabled={!s.labels}
-          title={s.labels ? 'Every labelled object, field by field' : 'Nobody has labelled anything in this session yet'}>Look at the labels</button>
+        {s.mode !== 'simple' && <button className="btn small" onClick={() => setExamining(true)} disabled={!s.labels}
+          title={s.labels ? 'Every labelled object, field by field' : 'Nobody has labelled anything in this session yet'}>Look at the labels</button>}
         <a className="btn small" href={apiUrl(`/api/labels/export.csv?session=${s.name}`)}>Download this session’s labels</a>
         {s.kind === 'queue' && !s.round && <button className="btn small" disabled={adding} onClick={prepareMore} title="Prepares 10 more fields the queue can draw objects from">
           {adding ? 'Preparing…' : 'Prepare 10 more fields'}</button>}

@@ -22,6 +22,7 @@ from stainid.api import label_crops
 from stainid.api.routes.annotate import viewer
 from stainid.api.session import require_admin
 from stainid.api.state import get_state, reload_project
+from stainid.labels import simple
 from stainid.labels import vocabulary as vocab
 from stainid.project import Project, save_project
 
@@ -163,3 +164,60 @@ def example(stain: str, file: str, request: Request, person: str | None = Depend
     if not FILE.fullmatch(file) or stain not in get_state().project.stains or not path.is_file():
         raise HTTPException(404, "no such example picture")
     return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
+
+
+# ---------- the simple classes ("Fix the field (simple)", `labels.simple`) and how they train ----------
+
+class SimpleChange(BaseModel):
+    classes: list[dict] | None = None  # the simple classes (None: keep them as they are)
+    training: dict[str, str] | None = None  # simple class -> detailed "identity[/subtype]", "" unused (None: keep)
+    reset: bool = False  # back to the built-in simple classes and the proposed mapping
+
+
+def _detailed_targets(words: vocab.Vocabulary) -> list[dict]:
+    """What a simple class can train as: each shown detailed class, and each of its shown types."""
+    out = []
+    for c in words.visible:
+        out.append({"value": c.id, "name": c.name, "role": c.role})
+        out += [{"value": f"{c.id}/{s.id}", "name": f"{c.name} · {s.name}", "role": c.role} for s in c.subtypes if not s.hidden]
+    return out
+
+
+def all_simple() -> dict:
+    project = get_state().project
+    out = {}
+    for stain in project.stains:
+        words = vocab.of(project, stain)
+        out[stain] = simple.of(project, stain).to_api() | {"targets": _detailed_targets(words), "proposed": simple.default_training(stain, words),
+                                                          "builtin": [c.to_api() for c in simple.DEFAULTS.get(stain, ())]}
+    return {"stains": out}
+
+
+@router.get("/labels/simple", dependencies=admin)
+def get_simple() -> dict:
+    """Every stain's simple classes and the mapping by which simple labels train (the Models page and the settings)."""
+    return all_simple()
+
+
+@router.put("/labels/simple/{stain}", dependencies=admin)
+def set_simple(stain: str, body: SimpleChange) -> dict:
+    """Save a stain's simple classes and/or their training mapping (checked first), or go back to the built-in ones."""
+    _stain(stain)
+    project = get_state().project
+    settings = copy.deepcopy(project.config.get("labels") or {})
+    stored = dict(settings.get("simple") or {})
+    if body.reset:
+        stored.pop(stain, None)
+    else:
+        now = simple.to_settings(simple.of(project, stain))
+        entry = {"classes": body.classes if body.classes is not None else now["classes"],
+                 "training": body.training if body.training is not None else now["training"]}
+        words = vocab.of(project, stain)
+        chosen = simple.from_config(stain, entry, words)
+        wrong = simple.problems(chosen, words)
+        if wrong:
+            raise HTTPException(400, " ".join(wrong))
+        stored[stain] = simple.to_settings(chosen)
+    settings["simple"] = stored
+    reload_project(save_project(Project(project.root, {**project.config, "labels": settings}), {}).root)
+    return all_simple()

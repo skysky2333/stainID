@@ -32,6 +32,7 @@ export function NewRoundSession({ stains, onClose, onCreated, onOlder }: {
   const words = WORDS[info?.kind ?? 'tma'] ?? WORDS.tma
   const [stain, setStain] = useState(stains[0] ?? 'NeuN')
   const [round, setRound] = useState<2 | 'areas'>(2)  // the field tool is the default: every object of a field, corrected in place
+  const [mode, setMode] = useState<'detailed' | 'simple'>('detailed')  // Fix the field: every class and type, or the simple classes in passes
   const [order, setOrder] = useState<'problems' | 'random'>('problems')  // "Mark bad areas": likely problems first
   const [where, setWhere] = useState<Where>('all')
   const [tmas, setTmas] = useState<string[]>([])
@@ -53,14 +54,14 @@ export function NewRoundSession({ stains, onClose, onCreated, onOlder }: {
   const areasNow = useFetch<AreasOverview>(round === 'areas' ? '/api/labels/areas' : null)
   const areas = round === 'areas'
   const day = new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
-  const placeholder = areas ? `${AREAS_TITLE} – ${day}` : `${stain} · ${ROUND_TITLE[round]} – ${day}`
+  const placeholder = areas ? `${AREAS_TITLE} – ${day}` : `${stain} · ${ROUND_TITLE[round]}${mode === 'simple' ? ' (simple)' : ''} – ${day}`
   const nothing = (where === 'pick' && !chosen.length && !areas) || (where === 'tmas' && !tmas.length)
   const create = async () => {
     setBusy(true)
     const body = areas
       ? { stain: 'all', kind: 'areas', title: title.trim() || placeholder, name, open, instructions, n_fields: fieldCount, order,
         seed: seed.trim() === '' ? null : Number(seed), tmas: where === 'tmas' ? tmas : null }
-      : { stain, round, title: title.trim() || placeholder, name, open, instructions, subtypes, labels_needed: needed,
+      : { stain, round, mode, title: title.trim() || placeholder, name, open, instructions, subtypes, labels_needed: needed,
         level: level === 'all' ? null : Number(level), n_fields: fieldCount, spread, seed: seed.trim() === '' ? null : Number(seed),
         tmas: where === 'tmas' ? tmas : null, tile_ids: where === 'pick' ? chosen : null }
     const made = await withError(() => api.post<SessionInfo>('/api/labels/sessions', body), setError)
@@ -80,9 +81,14 @@ export function NewRoundSession({ stains, onClose, onCreated, onOlder }: {
         </fieldset>}
         <fieldset className="field"><legend>What should people do?</legend>
           <div className="choice-grid">
-            <label className={`choice-card${round === 2 ? ' chosen' : ''}`}>
-              <input type="radio" name="round" checked={round === 2} onChange={() => setRound(2)} />
+            <label className={`choice-card${round === 2 && mode === 'detailed' ? ' chosen' : ''}`}>
+              <input type="radio" name="round" checked={round === 2 && mode === 'detailed'} onChange={() => { setRound(2); setMode('detailed') }} />
               <span><b>{ROUND_TITLE[2]} (start here)</b><span className="small secondary">{ROUND_TEXT[2]}</span></span>
+            </label>
+            <label className={`choice-card${round === 2 && mode === 'simple' ? ' chosen' : ''}`}>
+              <input type="radio" name="round" checked={round === 2 && mode === 'simple'} onChange={() => { setRound(2); setMode('simple') }} />
+              <span><b>{ROUND_TITLE[2]} (simple)</b><span className="small secondary">A few plain classes, one at a time: click what belongs to each class
+                (detection’s are lit already), add what it missed. No outlines to fix. For people new to the stains.</span></span>
             </label>
             <label className={`choice-card${areas ? ' chosen' : ''}`}>
               <input type="radio" name="round" checked={areas} onChange={() => { setRound('areas'); if (where === 'pick') setWhere('all') }} />

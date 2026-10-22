@@ -30,8 +30,8 @@ interface TutorialInfo {
   /** the AT8 threads practice, when the tutorial has one */
   threads?: { tile_id: string; credit?: string } | null
 }
-export type TutorialKind = 'objects' | 'areas' | 'threads'
-interface Done { objects: boolean; areas: boolean; threads?: boolean; kept: boolean }
+export type TutorialKind = 'objects' | 'areas' | 'threads' | 'simple'
+interface Done { objects: boolean; areas: boolean; threads?: boolean; simple?: boolean; kept: boolean }
 /** One step: done once the page reports one of `done` (`times` of them: "reject a few"). */
 interface Step { title: string; text: string; done: RoundEvent[]; times?: number }
 
@@ -66,6 +66,19 @@ function stepsFor(typed: boolean, counted: string, hint = ''): Step[] {
   return typed ? steps : steps.filter((s) => s.title !== 'Change the type')
 }
 
+/** The steps of "Fix the field (simple)": one class at a time, click in and out, add, the menu, the next class, save. */
+const SIMPLE_STEPS: Step[] = [
+  { title: 'One class at a time', text: 'On the right are a few classes. Click one (or press its number): the objects detection put in it light up in its colour. You only fix them.', done: ['pass'] },
+  { title: 'Point at an object', text: 'Move the mouse over an outlined object: it lights up and its class shows beside it. Objects of the other classes are faint in their own colour; objects in no class are dotted grey.', done: ['hover'] },
+  { title: 'Take one out', text: 'Click a bright object that does not belong to this class: it goes out of the class (dotted grey).', done: ['unpick'] },
+  { title: 'Put one in', text: 'Click an object that belongs to this class but is faint or dotted grey: it moves into this class. An object has one class: the last click wins.', done: ['pick'] },
+  { title: 'Add a missed object', text: 'Click on tissue where detection missed an object of this class: it is outlined and added to the class.', done: ['added'] },
+  { title: 'Choose from a list', text: 'Right-click an object: a short list of every class (and “not an object”) opens. Pick one.', done: ['menu'] },
+  { title: 'Undo', text: 'Clicked the wrong one? Press Z to undo your last change.', done: ['undo'] },
+  { title: 'The next class', text: 'Done with this class? Press “Next class” (or the next number) and do the same for it.', done: ['next-pass', 'pass'] },
+  { title: 'Save and continue', text: 'When every class looks right, press “Save and continue”. Objects left in no class are saved as “not an object”, and your next field opens. (In this practice nothing is saved.)', done: ['finish'] },
+]
+
 const guestKey = (kind: TutorialKind) => `stainid.tutorial.${kind}`
 function guestDone(kind: TutorialKind) {
   try { return localStorage.getItem(guestKey(kind)) === '1' } catch { return false }
@@ -76,7 +89,7 @@ export function useTutorialsDone() {
   const server = useFetch<Done>('/api/session/tutorials')
   const kept = !!server.data?.kept
   return { objects: kept ? server.data!.objects : guestDone('objects'), areas: kept ? server.data!.areas : guestDone('areas'),
-    threads: kept ? !!server.data!.threads : guestDone('threads'), loaded: !!server.data || !!server.error }
+    threads: kept ? !!server.data!.threads : guestDone('threads'), simple: kept ? !!server.data!.simple : guestDone('simple'), loaded: !!server.data || !!server.error }
 }
 
 /** Remember that this person finished or skipped a tutorial (`done` false: offer it again). */
@@ -87,6 +100,7 @@ export async function rememberTutorial(kind: TutorialKind, done = true) {
 
 const TUTORIALS: { kind: TutorialKind; title: string; text: string; minutes: string }[] = [
   { kind: 'objects', title: 'Fix the field', minutes: '3–5 minutes', text: 'The main task: correct what detection found on a field — reject, change types, fix outlines, split, merge, add what it missed.' },
+  { kind: 'simple', title: 'Fix the field (simple)', minutes: '2 minutes', text: 'The simple version: a few plain classes, one at a time — click what belongs to each, add what detection missed.' },
   { kind: 'threads', title: 'AT8 threads', minutes: '1 minute', text: 'AT8 only: in Fix the field, H shows the detected thread network; one slider sets where it matches the threads you see, Enter keeps it.' },
   { kind: 'areas', title: 'Mark bad areas', minutes: '2 minutes', text: 'The brush: paint folds, artifacts, missing tissue and blur that should not be counted, core by core with every stain.' },
 ]
@@ -137,12 +151,13 @@ export function Tutorial() {
   const next = nextOf(params)
   const areas = params.get('kind') === 'areas'
   const threads = params.get('kind') === 'threads'
+  const simple = params.get('kind') === 'simple'
   const info = useFetch<TutorialInfo>(!areas && !threads ? '/api/tutorial' : null)  // public: no account needed, nothing is kept
   if (areas) return <AreasCoached preview={preview} next={next} />
   if (threads) return <ThreadsCoached preview={preview} next={next} />
   return (
     <Loaded state={info} label="Opening the tutorial…">
-      {(data) => data.practice ? <Coached practice={data.practice} preview={preview} next={next} />
+      {(data) => data.practice ? <Coached practice={data.practice} preview={preview} next={next} simple={simple} />
         : <><PageHead title="Tutorial" subtitle="Nothing to practise on yet." />
           <Empty><p style={{ marginTop: 0 }}>The tutorial is not set up on this server yet: an admin makes it once with <code>stainid tutorial build</code>
             (a public dataset’s field and core, the same for every project).</p>
@@ -151,14 +166,15 @@ export function Tutorial() {
   )
 }
 
-function Coached({ practice, preview, next }: { practice: NonNullable<TutorialInfo['practice']>; preview: boolean; next: string }) {
+function Coached({ practice, preview, next, simple = false }: { practice: NonNullable<TutorialInfo['practice']>; preview: boolean; next: string; simple?: boolean }) {
   const navigate = useNavigate()
-  const field = useFetch<SessionDetail>(`/api/annotate/${practice.round2}`)
+  const field = useFetch<SessionDetail>(`/api/annotate/${simple ? `practice-simple-${practice.stain}` : practice.round2}`)
   const keys = field.data?.meta.keys
   const counted = keys?.groups?.find((g) => g.group === 'counted')
   const typed = (counted?.items.length ?? 0) > 1
   const hint = practice.hint?.text ?? ''
-  const steps = useMemo(() => stepsFor(typed, counted ? (counted.items.length > 1 ? `a number (${counted.keys})` : counted.keys) : '1', hint), [typed, counted, hint])
+  const steps = useMemo(() => (simple ? SIMPLE_STEPS : stepsFor(typed, counted ? (counted.items.length > 1 ? `a number (${counted.keys})` : counted.keys) : '1', hint)),
+    [simple, typed, counted, hint])
   const count = useRef(0)  // events of the step so far (for steps done after several)
   const [index, setIndex] = useState(0)
   const [cheer, setCheer] = useState(false)
@@ -169,8 +185,8 @@ function Coached({ practice, preview, next }: { practice: NonNullable<TutorialIn
 
   const remember = useCallback(async () => {
     if (preview) return  // the admin looking: nothing is remembered
-    try { await rememberTutorial('objects') } catch (e) { setError((e as Error).message) }
-  }, [preview])
+    try { await rememberTutorial(simple ? 'simple' : 'objects') } catch (e) { setError((e as Error).message) }
+  }, [preview, simple])
   useEffect(() => { if (finished) void remember() }, [finished, remember])
   const at = useRef(0)
   at.current = index

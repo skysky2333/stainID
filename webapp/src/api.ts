@@ -116,6 +116,8 @@ export interface TrainedModel {
   stain: string; created: number; validation: string; threshold: number; sets?: string[]; sources?: Record<string, number>; new_model: Metrics; current_model: Metrics | null
   current_model_path: string; path: string; active: boolean; sessions?: { name: string; title: string; objects: number }[]
   person_added?: { objects: number; positive: number; could_not_be_measured: number; detection: Detection }
+  /** how simple labels trained (simple class -> detailed class), when the training used any */
+  simple_mapping?: { classes: Record<string, string>; training: Record<string, string>; labels: Record<string, number> } | null
 }
 export interface CoreRow {
   core_id: string; tma: string; core_label: string; donor_id: string | null; sample_region_id: string | null
@@ -211,6 +213,7 @@ export interface SessionInfo {
   round?: 1 | 2; round_progress?: RoundProgress; labels_needed?: number; level?: number | null; objects?: number  // annotation rounds
   cores?: number | string[]; order?: string; cores_asked?: number; cores_remaining?: number; fields_from_checked_areas?: number  // "Mark bad areas"; round 2
   kind_title?: string; label_set?: boolean; ai_summary?: AiReviewSummary  // a read-only label set (an AI review round)
+  mode?: 'detailed' | 'simple'; simple_classes?: Record<string, number>  // Fix the field (simple): its labels by simple class
 }
 export interface Labeller { person: string; fields_done: number; labels: number; changed: number; confirmed: number; outlines: number; tags: number; last_active: number }
 export interface LabelsOverview { stains: StainOverview[]; sessions: SessionInfo[]; reference: ReferenceLabels | null }
@@ -234,10 +237,11 @@ export interface SessionDetail {
   cores?: Record<string, { x: number; y: number; width: number; height: number; others: [number, number, number, number, string][] }>; needed?: number
 }
 export interface Label {
-  id: string; source: string; stain: string; task: 'class' | 'outline' | 'tag' | 'note' | 'done' | 'exclude' | 'threshold' | 'replaced'; tile_id: string  // exclude: an area marked as bad (points: its rings)
+  id: string; source: string; stain: string; task: 'class' | 'outline' | 'tag' | 'note' | 'done' | 'exclude' | 'threshold' | 'replaced' | 'simple' | 'simple_area'; tile_id: string  // exclude: an area marked as bad (points: its rings)
   x: number | null; y: number | null; value: string; subtype?: string | null; points: number[][] | null; session: string; confirmed: boolean; time: number; deleted?: boolean
   /** where the label comes from: a piece of a split or a merged object ({edit, group}), an object replaced by one ({group, into}) */
-  meta?: { edit?: 'split' | 'merge'; group?: string; into?: number[][]; split_outline?: number[][]; whole_field?: boolean; reason?: string | null } | null
+  meta?: { edit?: 'split' | 'merge'; group?: string; into?: number[][]; split_outline?: number[][]; whole_field?: boolean; reason?: string | null
+    segments?: number[]; reach_um?: number | null; from?: string } | null
 }
 export interface FieldObjectLite { x: number; y: number; radius_px: number; ai_value?: string; ai_probability?: number }
 export interface FieldWork {
@@ -261,7 +265,9 @@ export interface PickerCore {
 export interface PickerPage { cores: PickerCore[]; total_cores: number; total_fields: number; ready_fields: number; facets: { tmas: string[]; regions: string[]; groups: string[] } }
 export type FieldState = 'preparing' | 'not_started' | 'in_progress' | 'done'
 export interface SessionFieldState extends FieldPlace { tile_id: string; state: FieldState; done_by: string[]; working: string[]; open_by: string[] }
-export interface LabelSet { name: string; title: string; reference: boolean; labels: number; objects: number; fields: number; classes: Record<string, number>; people: string[] }
+export interface LabelSet { name: string; title: string; reference: boolean; labels: number; objects: number; fields: number; classes: Record<string, number>; people: string[]
+  /** a simple session's labels, counted in its simple classes (they train through the mapping on the Models page) */
+  simple?: boolean }
 export interface ReferenceLabels { name: string; title: string; labels: number; stains: Record<string, number>; sets: string[]; fields: number }
 /* the labelled objects of a session, each as the crop the model sees (labels view) */
 export type LabelFrame = 'field' | 'pilot' | 'core'
@@ -526,7 +532,19 @@ export interface ImportedLabels {
 export interface RoundProgress { total: number; decided: number; people: { person: string; decided: number }[]; open_now?: number; left?: number
   images_checked?: number; second_checks?: number }  // "Mark bad areas": by core
 /** What a round session's pages get besides the session's settings. */
-export interface RoundDetail { round: 1 | 2 | 'areas'; labels_needed: number; level: number | null; remove_class: string; segment_anything: boolean; progress: RoundProgress }
+export interface RoundDetail { round: 1 | 2 | 'areas'; labels_needed: number; level: number | null; remove_class: string; segment_anything: boolean; progress: RoundProgress
+  /** Fix the field: the detailed classes, or the simple classes in passes (labels/simplefield.tsx) */
+  mode?: 'detailed' | 'simple'; simple?: SimpleVocab }
+/** A simple class ("Fix the field (simple)", labels/simple.py): `objects` a class of candidates, `wand` one of thread
+ *  segments chosen with the magic wand; `starts_from` the detailed calls a candidate starts in it from. */
+export interface SimpleClassDef { id: string; name: string; description: string; key: string; colour: string; kind: 'objects' | 'wand'; starts_from: string[]; hidden: boolean; builtin?: boolean }
+/** A stain's simple classes, "not an object", how each trains (simple id -> detailed "identity[/subtype]", "" unused)
+ *  and the wand's reach slider (µm). */
+export interface SimpleVocab { stain: string; classes: SimpleClassDef[]; none: { id: string; name: string }; training: Record<string, string>; wand: { from: number; to: number; start: number } }
+/** Who put a candidate in which simple class (this session's people) and the class most gave. */
+export interface SimpleCheck { by: string[]; value: string; time: number }
+/** GET /api/labels/simple: per stain the simple classes, what they may train as and the proposed mapping. */
+export interface SimpleSettings { stains: Record<string, SimpleVocab & { targets: { value: string; name: string; role: string }[]; proposed: Record<string, string>; builtin: SimpleClassDef[] }> }
 /** This person's saved answer on a round-1 candidate: its class (`keep`: detection's call confirmed), the mask chosen
  *  with it, or an outline they edited (crop pixels). */
 export interface RoundAnswer { identity: string; subtype: string; keep: boolean; mask: number | null; outline: number[][] | null }
@@ -542,7 +560,7 @@ export interface RoundItem {
 export interface RoundTile {
   tile_id: string | null; objects: RoundItem[]; tiles_left: number; taken: number; open_by: string[]; pictures: QueuePictures; progress: RoundProgress
 }
-export interface RoundLive { checked?: Record<string, RoundCheck>; open_by?: string[]; done_by?: string[]; progress: RoundProgress; time: number }
+export interface RoundLive { checked?: Record<string, RoundCheck>; simple_checked?: Record<string, SimpleCheck>; open_by?: string[]; done_by?: string[]; progress: RoundProgress; time: number }
 /** What saving a field's changes returns: the labels as saved, whether the field is now finished, and the progress. */
 export interface RoundSaved { saved: (Label & { candidate?: string | null })[]; submitted: boolean; progress: RoundProgress }
 /** Who decided a candidate already, and the class most of them gave. */
@@ -579,6 +597,8 @@ export interface RoundField<Shape = number[][]> {
   detection_threshold?: number | null; threshold?: number | null
   /** AT8 threads mode (H): the thread threshold this person set on the field (a factor on detection's), null before; none on other stains */
   threads?: { factor: number | null } | null
+  /** a simple session: where each candidate starts (detection's call in the simple classes) and who put which where */
+  simple?: { start: Record<string, string>; checked: Record<string, SimpleCheck> }
 }
 /** Each brush type's current area over a field (GET …/fields/{tile}/areas): detection's with people's saved edits
  *  merged in, a PNG per type (one pixel per `scale` field px) placed at x, y in the field picture. */

@@ -3,6 +3,7 @@ import type { Group, ProjectConfig, ProjectInfo } from '../api'
 import { api } from '../api'
 import { CacheSpace } from '../cacheSpace'
 import { ClassSettings } from '../labels/ClassSettings'
+import { SimpleClassSettings } from '../labels/SimpleSettings'
 import { ErrorNote, FilePicker, HelpBox, Loading, PageHead, PathLine, withError } from '../components'
 import type { Theme } from '../hooks'
 import { useTheme } from '../hooks'
@@ -51,6 +52,7 @@ export default function Settings() {
       </HelpBox>
       {info ? <StudySettings info={info} /> : <Loading label="Loading the settings…" />}
       <ClassSettings />
+      <SimpleClassSettings />
       <UsersLink />
       <div className="grid grid-2 settings-more">
         <div id="password"><ChoosePassword title="Your password" current /></div>

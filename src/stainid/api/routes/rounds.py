@@ -69,6 +69,7 @@ from stainid.labels import (
     readiness,
     rounds,
     sessions,
+    simple,
     starting,
     status,
     store,
@@ -200,10 +201,13 @@ def create_round_session(body: NewSession) -> dict:
     name = body.name or free_name(body.title or f"{body.stain} round {body.round}", body.stain, rounds.KIND[body.round])
     if not re.fullmatch(r"[A-Za-z0-9_\-]+", name) or name in sessions.names(root()) or name == sessions.REFERENCE:
         raise HTTPException(409, "a session with this name exists, or the name has other characters than letters, digits, - and _")
+    if body.mode not in ("detailed", simple.MODE):
+        raise HTTPException(400, "mode must be detailed or simple")
     needs = max(1, body.labels_needed)
     scope = _scope(body)
     common = {"title": body.title or name, "stain": body.stain, "instructions": body.instructions, "subtypes": body.subtypes, "ai_view": "full",
-              "source": rounds.SOURCE, "round": body.round, "level": body.level, "labels_needed": needs, "per_field": needs}
+              "source": rounds.SOURCE, "round": body.round, "level": body.level, "labels_needed": needs, "per_field": needs,
+              **({"mode": simple.MODE} if body.mode == simple.MODE else {})}
     asked = rounds.ALL_FIELDS if body.n_fields is None else body.n_fields
     seed = body.seed if body.seed is not None else secrets.randbelow(2**31)
     if body.tile_ids:
@@ -212,7 +216,8 @@ def create_round_session(body: NewSession) -> dict:
         fields, left = _pick_fields(body.stain, scope, asked, seed, body.spread)
     draw = {} if body.tile_ids else {"field_seed": seed, "fields_asked": asked, "fields_remaining": left, "fields_spread": body.spread}
     draw["fields_from_checked_areas"] = len(checked_areas_fields(body.stain, fields))
-    meta = sessions.create(root(), name, kind="fields", tools=["class", "point", "outline", "tag"], rule="random", fields=fields, scope=fields,
+    tools = ["class", "point", "tag"] if body.mode == simple.MODE else ["class", "point", "outline", "tag"]
+    meta = sessions.create(root(), name, kind="fields", tools=tools, rule="random", fields=fields, scope=fields,
                            **common, **draw)
     if body.open:
         meta = sessions.update(root(), name, open=True)
@@ -360,7 +365,10 @@ def detail(meta: dict, person: str | None) -> dict:
     """The extra facts of a round session for its pages."""
     words = vocabulary(meta["stain"])
     out = {"round": rounds.round_of(meta), "labels_needed": rounds.needed(meta), "level": rounds.level(meta),
-           "remove_class": candidate_store.negative_class(words), "segment_anything": get_state().project.model("sam").exists()}
+           "remove_class": candidate_store.negative_class(words), "segment_anything": get_state().project.model("sam").exists(),
+           "mode": simple.MODE if rounds.is_simple(meta) else "detailed"}
+    if rounds.is_simple(meta):
+        out["simple"] = simple.of(get_state().project, meta["stain"]).to_api()
     return out | {"progress": progress(meta)}
 
 
@@ -665,7 +673,36 @@ def open_field(meta: dict, tile_id: str, person: str, edit: bool = False, own: b
             "segment_anything": sam["state"] != "unavailable", "segment_ready": bool(sam.get("ready")),
             "open_by": sorted(tiles_held(meta).get(tile_id, set()) - {person}), "done_by": sorted(finished.get(tile_id, set()) - {person}),
             "finished": finishers(meta, labels, tile_id), "complete": complete, "read_only": looking, "own": own,
-            "pixel_size_um": state.project.pixel_size_um}
+            "pixel_size_um": state.project.pixel_size_um,
+            **({"simple": simple_field(meta, objects, labels, tile_id, own)} if rounds.is_simple(meta) else {})}
+
+
+def simple_start(meta: dict, objects: list[dict]) -> dict[str, str]:
+    """Where each candidate of a simple session's field starts: detection's call in the simple classes (`labels.simple`)."""
+    words = simple.of(get_state().project, meta["stain"])
+    return {o["candidate_id"]: words.start(o["ai_value"], o["ai_subtype"] or "") for o in objects}
+
+
+def simple_checks(meta: dict, labels: pd.DataFrame, tile_id: str) -> dict[str, dict]:
+    """Who put each candidate of the field in which simple class (this session's people), and the class most gave."""
+    if meta.get("practice") or labels.empty:
+        return {}
+    rows = people_only(labels[(labels.task == simple.TASK) & (labels.tile_id == tile_id) & (labels.stain == meta["stain"])])
+    if "candidate" not in rows:
+        return {}
+    rows = rows[rows.candidate.fillna("").astype(str) != ""]
+    out = {}
+    for candidate, group in rows.groupby("candidate"):
+        value, _ = store.majority(group.value.astype(str))
+        out[str(candidate)] = {"by": sorted(set(group.source)), "value": value or str(group.value.iloc[-1]),
+                               "time": float(pd.to_numeric(group.time, errors="coerce").max())}
+    return out
+
+
+def simple_field(meta: dict, objects: list[dict], labels: pd.DataFrame, tile_id: str, own: bool) -> dict:
+    """A simple session's field: where each candidate starts and what this session's people said (an extra annotation:
+    nobody's)."""
+    return {"start": simple_start(meta, objects), "checked": {} if own else simple_checks(meta, labels, tile_id)}
 
 
 def _number(value) -> float | None:
@@ -724,7 +761,9 @@ def live(meta: dict, body: Live, person: str) -> dict:
         finished = finished_tiles(meta)
         out |= {"open_by": sorted(tiles_held(meta).get(body.tile_id, set()) - {person}),
                 "done_by": sorted(finished.get(body.tile_id, set()) - {person})}
-        if rounds.round_of(meta) == 2 and not body.own:
+        if rounds.is_simple(meta) and not body.own:
+            out["simple_checked"] = simple_checks(meta, session_labels(meta), body.tile_id)
+        elif rounds.round_of(meta) == 2 and not body.own:
             out["checked"] = checks(_field_candidates(meta, tile), decided_by_people(meta, stale_ok=True))
     return out | {"progress": progress(meta)}
 
@@ -793,8 +832,12 @@ def clean(meta: dict, mark, person: str) -> dict | None:
     allowed = {"class", "outline"} | ({"tag", "note", "done", exclusions.TASK, starting.TASK, objectedit.TASK} if second else set())
     if second and stain == "AT8":
         allowed.add(thread_threshold.TASK)
+    if rounds.is_simple(meta):  # the simple classes (and an added object's outline): no detailed classes, no outline fixes
+        allowed = {simple.TASK, simple.AREA_TASK, "outline", "tag", "note", "done", exclusions.TASK}
     if mark.task not in allowed:
         raise HTTPException(400, f"{mark.task} labels are not part of this session")
+    if mark.task in (simple.TASK, simple.AREA_TASK):
+        return clean_simple(meta, mark, person)
     record = {"source": person, "stain": stain, "task": mark.task, "session": meta["name"], "deleted": mark.deleted, "value": mark.value,
               "subtype": None, "points": mark.points, "tile_id": mark.tile_id, "x": mark.x, "y": mark.y, "candidate": mark.candidate or None,
               "meta": dict(mark.meta) if mark.meta else None}
@@ -869,6 +912,90 @@ def clean(meta: dict, mark, person: str) -> dict | None:
            "tag": lambda: f"tag:{mark.tile_id}:{mark.value}", "note": lambda: f"note:{mark.tile_id}", "done": lambda: f"done:{mark.tile_id}",
            objectedit.TASK: lambda: store.object_id(objectedit.TASK, record["tile_id"], record["x"], record["y"])}
     return record | {"id": ids[mark.task]()}
+
+
+def clean_simple(meta: dict, mark, person: str) -> dict:
+    """A label of a simple session (`labels.simple`): a candidate's simple class (or an added object's, at x, y), or
+    the wand's thread segments of a field (`meta.segments`: their indices in detection's thread lines, which the server
+    reads again: `points` are those lines)."""
+    stain = meta["stain"]
+    words = simple.of(get_state().project, stain)
+    record = {"source": person, "stain": stain, "task": mark.task, "session": meta["name"], "deleted": bool(mark.deleted), "value": mark.value,
+              "subtype": None, "points": None, "tile_id": mark.tile_id, "x": mark.x, "y": mark.y, "candidate": mark.candidate or None, "meta": None}
+    chosen = words.get(mark.value)
+    if mark.task == simple.AREA_TASK:
+        if chosen is None or chosen.kind != simple.WAND:
+            raise HTTPException(400, f"{mark.value!r} is not a class chosen with the wand")
+        tile = field_tile(meta, mark.tile_id)
+        segments = sorted({int(i) for i in (mark.meta or {}).get("segments") or []})
+        lines: list = []
+        if segments and not mark.deleted:
+            ladder = thread_threshold.field_ladder(get_state().project, tile) if stain == "AT8" else {"status": "unavailable"}
+            steps = ladder.get("steps") or []
+            if ladder.get("status") != "done" or not steps:
+                raise HTTPException(409, "The threads of this field are not ready yet: try again in a moment.")
+            found = steps[ladder.get("detection", thread_threshold.DETECTION)]["lines"]
+            if segments[-1] >= len(found) or segments[0] < 0:
+                raise HTTPException(400, "a chosen thread segment is not one of this field's")
+            lines = [found[i] for i in segments]
+        reach = _number((mark.meta or {}).get("reach_um"))
+        return record | {"id": f"{simple.AREA_TASK}:{mark.tile_id}:{chosen.id}", "value": chosen.id, "x": None, "y": None, "candidate": None,
+                         "points": lines or None, "deleted": bool(mark.deleted) or not lines,
+                         "meta": {"segments": segments, "reach_um": reach} if lines else None}
+    if not mark.deleted and mark.value != simple.NONE and (chosen is None or chosen.kind != simple.OBJECTS):
+        raise HTTPException(400, f"{mark.value!r} is not a simple class of {stain}")
+    if mark.candidate:
+        row = candidate_row(stain, mark.candidate)
+        record |= {"tile_id": str(row.tile_id), "x": round(float(row.x), 1), "y": round(float(row.y), 1)}
+        field_tile(meta, record["tile_id"])
+    else:
+        if mark.x is None or mark.y is None:
+            raise HTTPException(400, "object labels need x and y")
+        field_tile(meta, mark.tile_id)
+    value = mark.value if mark.value == simple.NONE else chosen.id if chosen else mark.value
+    return record | {"id": store.object_id(simple.TASK, record["tile_id"], record["x"], record["y"]), "value": value}
+
+
+def _near_lines(x: float, y: float, lines: list, reach_px: float) -> bool:
+    """Whether (x, y) lies within `reach_px` of a point of these flat polylines."""
+    for flat in lines or []:
+        points = np.asarray(flat, float).reshape(-1, 2)
+        if len(points) and float(np.hypot(points[:, 0] - x, points[:, 1] - y).min()) <= reach_px:
+            return True
+    return False
+
+
+def _simple_confirmations(meta: dict, tile: dict, person: str, mine: pd.DataFrame, own: bool = False) -> list[dict]:
+    """A simple session, finishing a field: every candidate of it this person left as it started is saved in the class
+    it started in (detection's call in the simple classes, confirmed), "not an object" when none; one left in no class
+    that lies on the wand's chosen thread segments in the wand's class. No outline is recorded (they stay detection's)."""
+    tile_id = str(tile["tile_id"])
+    found = _field_candidates(meta, tile)
+    alone = person if own else None
+    own_rows = found[found.own]
+    own_rows = own_rows[~own_rows.candidate_id.isin(excluded_ids(meta, list(own_rows.candidate_id), alone))]
+    said = set(mine.id[mine.task == simple.TASK])
+    words = vocabulary(meta["stain"])
+    plain = simple.of(get_state().project, meta["stain"])
+    wands = mine[(mine.task == simple.AREA_TASK)]
+    reach = simple.NEAR_SEGMENT_UM / get_state().project.pixel_size_um
+    stamp = {"source": person, "stain": meta["stain"], "tile_id": tile_id, "session": meta["name"]}
+    records = []
+    for r in own_rows.rename(columns={"class": "klass"}).itertuples():
+        x, y = round(float(r.x), 1), round(float(r.y), 1)
+        key = store.object_id(simple.TASK, tile_id, x, y)
+        if key in said:
+            continue
+        identity, subtype = candidate_store.ai_call(words, r.decision, r.klass, r.subtype, r.reason)
+        start, extra = plain.start(identity, subtype), None
+        if start == simple.NONE:
+            for w in wands.itertuples():
+                if _near_lines(x, y, w.points, reach):
+                    start, extra = str(w.value), {"from": "wand"}
+                    break
+        records.append({**stamp, "id": key, "task": simple.TASK, "x": x, "y": y, "value": start, "subtype": None, "candidate": r.candidate_id,
+                        "confirmed": extra is None, "meta": extra})
+    return records
 
 
 def _chosen_outline(row, mark) -> dict:
@@ -993,7 +1120,8 @@ def save_tile(meta: dict, tile_id: str, marks: list, submit: bool, person: str, 
     marked_bad = any(r["task"] == exclusions.TASK and exclusions.is_whole(r) and not r["deleted"] for r in cleaned)
     if submit:
         if not practice and not marked_bad:  # a field marked bad as a whole: nothing in it was checked
-            cleaned += _confirmations(meta, tile, person, _mine_after(meta, tile_id, person, cleaned), own)
+            confirm = _simple_confirmations if rounds.is_simple(meta) else _confirmations
+            cleaned += confirm(meta, tile, person, _mine_after(meta, tile_id, person, cleaned), own)
         cleaned.append({"id": rounds.done_id(meta, tile_id), "source": person, "stain": meta["stain"], "task": "done", "tile_id": tile_id,
                         "session": meta["name"], "value": rounds.done_kind(meta) or None})
     if practice:  # nothing of the tutorial is kept
@@ -1258,14 +1386,16 @@ def practice_tile(stain: str) -> str | None:
 def practice_meta(name: str) -> dict:
     """The made-up session of a practice name (404 when there is nothing to practise on)."""
     parts = name.split("-", 2)
-    if len(parts) != 3 or parts[1] != "2":
+    if len(parts) != 3 or parts[1] not in ("2", simple.MODE):
         raise HTTPException(404, f"no labelling session {name}")
-    round_, stain = int(parts[1]), parts[2]
+    plain = parts[1] == simple.MODE  # the tutorial of "Fix the field (simple)"
+    round_, stain = 2, parts[2]
     tile = practice_tile(stain)
     if tile is None:
         raise HTTPException(404, "The tutorial is not set up on this server yet (stainid tutorial build).")
     from stainid import tutorial  # noqa: PLC0415
-    return {"name": name, "title": "Practice: " + rounds.TITLE[round_], "stain": stain, "kind": rounds.KIND[round_], "tools": ["class", "point", "outline", "tag"],
+    return {"name": name, "title": "Practice: " + rounds.TITLE[round_] + (" (simple)" if plain else ""), "stain": stain, "kind": rounds.KIND[round_],
+            "tools": ["class", "point", "tag"] if plain else ["class", "point", "outline", "tag"], **({"mode": simple.MODE} if plain else {}),
             "ai_view": "full", "per_field": 1, "rule": rounds.RULE, "fields": [tile] if round_ == 2 else [], "scope": [tile], "source": rounds.SOURCE,
             "round": round_, "level": None, "labels_needed": 1, "subtypes": True, "instructions": "", "open": True, "created": 0.0, "practice": True,
             "credit": (tutorial.info() or {}).get("credit", "")}

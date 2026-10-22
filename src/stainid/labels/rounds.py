@@ -40,6 +40,11 @@ def is_round(meta: dict) -> bool:
     return meta.get("source") == SOURCE
 
 
+def is_simple(meta: dict) -> bool:
+    """A "Fix the field (simple)" session: the simple classes, in passes (`labels.simple`)."""
+    return meta.get("mode") == "simple"
+
+
 def round_of(meta: dict) -> int:
     return int(meta.get("round") or (1 if meta["kind"] == "queue" else 2))
 

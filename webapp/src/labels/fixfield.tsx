@@ -36,6 +36,7 @@ import type { ClassPick, KeyGroup, Vocabulary } from './classKeys'
 import { keyGroups, resolveClass, roleOf } from './classKeys'
 import type { RoundEvent } from './rounds'
 import { BRUSH_KEY, BRUSH_PX, BRUSH_SCALE, CLEARED, EXCLUDE_TYPES, INCLUDE, brushStep, useBrush } from './brush'
+import { SimpleFixer } from './simplefield'
 import type { Slider } from './fieldStart'
 import { SLIDER_STEP, acceptedAt, lock, moveTo, slider, sliderText, startPick, unlock } from './fieldStart'
 import { LockIcon, ThresholdSlider } from './threshold'
@@ -169,7 +170,7 @@ export function FixField({ detail, reload, tile, onEvent, onFinished, coach }: {
     return (
       <div className="annotate-page round-page fit-page">
         <div className="annotate-top"><div className="annotate-heading"><h1>{detail.meta.title}</h1>
-          <div className="muted small">{detail.meta.stain} · {ROUND_TITLE[2]}</div></div></div>
+          <div className="muted small">{detail.meta.stain} · {ROUND_TITLE[2]}{(detail.meta as { mode?: string }).mode === 'simple' ? ' (simple)' : ''}</div></div></div>
         <ErrorNote error={work.error} />
         <div className="annotate-workspace">
           <div className="annotate-image field-loading">
@@ -183,6 +184,10 @@ export function FixField({ detail, reload, tile, onEvent, onFinished, coach }: {
         </div>
       </div>
     )
+  }
+  if ((detail.meta as { mode?: string }).mode === 'simple' && (detail.meta as { simple?: unknown }).simple) {  // the simple classes, in passes
+    return <SimpleFixer key={`${tile}:${how ?? ''}:${field.read_only ? 'look' : 'work'}`} detail={detail} reload={reload} tile={tile} field={field} onEvent={onEvent}
+      onFinished={onFinished} coach={coach} onOpen={(h) => setOpening({ tile, how: h })} />
   }
   return <Fixer key={`${tile}:${how ?? ''}:${field.read_only ? 'look' : 'work'}`} detail={detail} reload={reload} tile={tile} field={field} onEvent={onEvent}
     onFinished={onFinished} coach={coach} onOpen={(h) => setOpening({ tile, how: h })} />

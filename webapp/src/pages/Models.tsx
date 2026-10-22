@@ -10,6 +10,7 @@ import { ScoreOnLabels } from '../scoring'
 import { Advanced } from '../setup/parts'
 import { OutlineFixes } from '../segcheck/OutlineFixes'
 import { SegmentationCheck } from '../segcheck/SegmentationCheck'
+import { SimpleTraining, mappingText } from '../labels/SimpleSettings'
 
 const TITLES: Record<string, string> = {
   neun: 'NeuN model', amyloid: '6E10 model', tau: 'AT8 model', cellpose: 'Cellpose-SAM', sam: 'Segment Anything',
@@ -74,6 +75,7 @@ export default function Models() {
           </div>
           <ErrorNote error={trained.error} />
           <ScoreOnLabels />
+          <SimpleTraining />
           <h2 className="stage-title">Outlines</h2>
           <OutlineFixes />
           <SegmentationCheck />
@@ -235,7 +237,8 @@ function TrainDialog({ stain, onClose, onStart }: { stain: string; onClose: () =
               <label key={s.name} className={`choice-card${left.includes(s.name) ? '' : ' chosen'}`}>
                 <input type="checkbox" checked={!left.includes(s.name)}
                   onChange={() => setLeft(left.includes(s.name) ? left.filter((n) => n !== s.name) : [...left, s.name])} />
-                <span><span className="row" style={{ gap: 6 }}><b>{s.title}</b>{s.reference && <span className="badge">read only</span>}</span>
+                <span><span className="row" style={{ gap: 6 }}><b>{s.title}</b>{s.reference && <span className="badge">read only</span>}
+                  {s.simple && <span className="badge" title="Simple classes: they train through the mapping under “Simple labels in training”">simple</span>}</span>
                   <span className="small secondary">{s.objects.toLocaleString()} objects on {s.fields.toLocaleString()} fields · labelled by {s.people.map((p) => p.replace(/^import: /, '')).join(', ')}</span>
                   <span className="small muted">{Object.entries(s.classes).map(([c, n]) => `${c} ${n.toLocaleString()}`).join(' · ')}</span></span>
               </label>
@@ -266,7 +269,8 @@ function VersionTable({ versions }: { versions: TrainedModel[] }) {
           <tbody>{versions.map((t) => (
             <tr key={t.path}>
               <td className="small">{day(t.created)}<div className="muted ellipsis" title={Object.keys(t.sources ?? {}).join(', ')}>
-                {t.sessions ? t.sessions.map((s) => s.title).join(', ') : t.sources ? `${Object.keys(t.sources).length} label sources` : (t.sets ?? []).join(', ')}</div></td>
+                {t.sessions ? t.sessions.map((s) => s.title).join(', ') : t.sources ? `${Object.keys(t.sources).length} label sources` : (t.sets ?? []).join(', ')}</div>
+                {mappingText(t) && <div className="muted small simple-used">{mappingText(t)}</div>}</td>
               <td className="num">{t.new_model.n.toLocaleString()}<div className="muted small">{t.new_model.positives.toLocaleString()} positive</div>
                 {t.person_added && t.person_added.objects > 0 && <div className="muted small">{t.person_added.objects.toLocaleString()} added by people</div>}</td>
               <td className="small">{t.validation}</td>

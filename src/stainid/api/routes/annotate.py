@@ -23,7 +23,7 @@ from stainid.api.routes.images import OVERLAYS
 from stainid.api.session import GUEST, annotator, annotator_name, is_admin, require_admin
 from stainid.api.state import get_state
 from stainid.api.util import fast_json
-from stainid.labels import added, frames, outline, overview, pool, readiness, rounds, sessions, store
+from stainid.labels import added, frames, outline, overview, pool, readiness, rounds, sessions, simple, store
 from stainid.labels import objects as label_objects
 from stainid.labels import vocabulary as vocab
 from stainid.labels.overview import SPLIT
@@ -191,7 +191,7 @@ def labellers(meta: dict, labels: pd.DataFrame) -> list[dict]:
     reviewed = finished_fields(meta, labels)
     out = []
     for person, group in mine.groupby("source"):
-        classes = group.task.isin(("class", "object"))
+        classes = group.task.isin(("class", "object", "simple"))  # simple: a simple session's class labels (`labels.simple`)
         confirmed = group.confirmed.astype(bool)
         last = pd.to_numeric(group.time, errors="coerce").max()
         out.append({"person": person, "fields_done": sum(person in reviewed.get(t, set()) for t in meta.get("fields", [])),
@@ -205,7 +205,7 @@ def session_progress(meta: dict, labels: pd.DataFrame) -> dict:
     mine = labels[labels.session == meta["name"]]
     people = labellers(meta, labels)
     now = {p for open_by in busy(meta["name"]).values() for p in open_by}
-    progress = {"people": len(people), "labels": int(mine.task.isin(("class", "object")).sum()), "labellers": people,
+    progress = {"people": len(people), "labels": int(mine.task.isin(("class", "object", "simple")).sum()), "labellers": people,
                 "labelling_now": sum(time.time() - p["last_active"] < BUSY_SECONDS or p["person"] in now for p in people)}
     if meta["kind"] == "areas":
         return progress | {"round_progress": _areas().progress(meta, labels), "cores": len(meta.get("cores") or [])}
@@ -302,6 +302,7 @@ class NewSession(BaseModel):
     n_objects: int = 500  # round 1: how many candidates (0: every one)
     level: float | None = None  # rounds: how generous (lowest proposal level shown; None: every candidate)
     labels_needed: int = 1  # rounds: people who must decide a candidate (or finish a field) before it is done for everyone
+    mode: str = "detailed"  # Fix the field: "detailed" (every class and type, outlines) or "simple" (the simple classes in passes, `labels.simple`)
     order: str = "problems"  # "Mark bad areas" (kind "areas"): "problems" (likely problems first, then at random) or "random"
 
 
@@ -345,8 +346,10 @@ def _labels_overview() -> dict:
     listed = []
     for name in sessions.names(root()):
         meta = sessions.meta(root(), name)
-        listed.append({**{k: v for k, v in meta.items() if k != "fields"}, **session_progress(meta, session_labels(meta)), "link": annotate_path(name),
-                       "kind_title": sessions.kind_title(meta), "label_set": sessions.label_set_only(meta)})
+        here = session_labels(meta)
+        extra = {"simple_classes": simple.counts(here, meta["stain"], simple.of(state.project, meta["stain"]))} if rounds.is_simple(meta) else {}
+        listed.append({**{k: v for k, v in meta.items() if k != "fields"}, **session_progress(meta, here), "link": annotate_path(name),
+                       "kind_title": sessions.kind_title(meta), "label_set": sessions.label_set_only(meta), **extra})
     reference = labels[sessions.session_of(labels) == sessions.REFERENCE]
     objects = reference[reference.task == "class"]
     summary = {"name": sessions.REFERENCE, "title": sessions.REFERENCE_TITLE, "labels": int(len(objects)),
@@ -362,7 +365,7 @@ def _titles() -> dict[str, str]:
 @router.get("/labels/sets", dependencies=admin)
 def label_sets(stain: str) -> list[dict]:
     """The sessions (and the reference labels) with object labels of this stain, to choose what a model learns from."""
-    return sessions.label_sets(store.current(root()), stain, _titles(), vocabulary(stain))
+    return sessions.label_sets(store.current(root()), stain, _titles(), vocabulary(stain), simple.of(get_state().project, stain))
 
 
 OBJECTS_PAGE = 60
@@ -1124,8 +1127,8 @@ def open_field(name: str, tile_id: str, request: Request, edit: bool = False, ow
             points = np.asarray(outline["points"], float)
             i = pool.nearest(objects, *points.mean(axis=0), tolerance=max(12.0, float(np.ptp(points, axis=0).max()) / 2))
             if i is not None:
-                simple = cv2.approxPolyDP(points.astype(np.int32).reshape(-1, 1, 2), 2.5, True)[:, 0, :]
-                outlines.append({"x": float(objects.x.iloc[i]), "y": float(objects.y.iloc[i]), "points": simple.tolist()})
+                corners = cv2.approxPolyDP(points.astype(np.int32).reshape(-1, 1, 2), 2.5, True)[:, 0, :]
+                outlines.append({"x": float(objects.x.iloc[i]), "y": float(objects.y.iloc[i]), "points": corners.tolist()})
     labels = session_labels(meta)
     mine = labels[(labels.source == person) & (labels.tile_id == tile_id) & (labels.stain == meta["stain"])]
     box = {"x": int(tile["x_px"]) - x0, "y": int(tile["y_px"]) - y0, "width": int(tile["width_px"]), "height": int(tile["height_px"])}
