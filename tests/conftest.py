@@ -8,9 +8,88 @@ import pandas as pd
 import pytest
 import yaml
 
+_OUTSIDE: list[str] = []  # projects something opened outside the temporary folders (a test, or work it left running)
+_SAFE_ENV: dict[str, str] = {}
+
+
+def _allowed(path: Path) -> bool:
+    import tempfile
+
+    roots = [Path(tempfile.gettempdir()).resolve()]
+    factory = getattr(_CONFIG.get("config"), "_tmp_path_factory", None)
+    if factory is not None:
+        roots.append(factory.getbasetemp().resolve())
+    return any(path == r or r in path.parents for r in roots)
+
+
+_CONFIG: dict = {}
+
+
+def pytest_configure(config):
+    """For the whole run, before any test and for the work tests leave running in the background: no test may touch a
+    real project. The run starts in an empty temporary folder (not the folder pytest was started from, which may be a
+    study), without $STAINID_PROJECT and with a temporary home; a project opened anywhere but in a temporary folder
+    raises at once and fails the run."""
+    import os
+    import shutil
+    import tempfile
+
+    from stainid import project as project_module
+
+    _CONFIG["config"] = config
+    base = Path(tempfile.mkdtemp(prefix="stainid-tests-"))
+    node = Path.home() / ".local/node/bin"  # the tests that run TypeScript find Node.js here too
+    if not shutil.which("node") and (node / "node").exists():
+        os.environ["PATH"] = f"{node}{os.pathsep}{os.environ.get('PATH', '')}"
+    for name in ("STAINID_PROJECT", "STAINID_PROJECTS_DIR", "STAINID_TUTORIAL", "STAINID_QUEUE_DIR", "STAINID_PLAQUE_CNN_DIR",
+                 "STAINID_PROGRESS_FILE", "STAINID_JOB_ID"):
+        os.environ.pop(name, None)
+    (base / "home").mkdir()
+    (base / "cwd").mkdir()
+    os.environ["HOME"] = str(base / "home")
+    os.chdir(base / "cwd")
+    _SAFE_ENV.update(os.environ)
+    original = project_module.Project.__init__
+
+    def checked_init(self, root, config):
+        resolved = Path(root).expanduser().resolve()
+        if not _allowed(resolved):
+            _OUTSIDE.append(str(resolved))
+            raise RuntimeError(f"a test opened a project outside the temporary folders: {resolved}")
+        original(self, root, config)
+
+    project_module.Project.__init__ = checked_init
+
+
+def pytest_sessionfinish(session, exitstatus):
+    if _OUTSIDE:
+        print(f"\nPROJECTS OPENED OUTSIDE THE TEMPORARY FOLDERS: {sorted(set(_OUTSIDE))}")
+        session.exitstatus = 1
+
 
 @pytest.fixture(autouse=True)
-def own_app_settings(tmp_path_factory, monkeypatch):
+def no_real_project(tmp_path_factory, monkeypatch):
+    """Each test starts in an empty folder of its own with its own home, and the environment (as `pytest_configure`
+    made it) is put back afterwards; a project opened outside the temporary folders during the test fails it."""
+    import os
+
+    seen = len(_OUTSIDE)
+    monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home-dir")))
+    monkeypatch.chdir(tmp_path_factory.mktemp("cwd"))
+    yield
+    for name in [n for n in os.environ if n not in _SAFE_ENV and not n.startswith("PYTEST_")]:
+        del os.environ[name]  # what the code under test set (a project's model caches, `stainid serve`'s project)
+    os.environ.update({n: v for n, v in _SAFE_ENV.items() if not n.startswith("PYTEST_")})
+    from stainid import disk_cache
+
+    disk_cache._KNOWN.clear()  # the projects this process knew of: the free-space cleanup must never reach another test's one
+    disk_cache._WATCHED.clear()
+    if len(_OUTSIDE) > seen:
+        pytest.fail(f"a project was opened outside the temporary folders: {sorted(set(_OUTSIDE[seen:]))}")
+
+
+@pytest.fixture(autouse=True)
+def own_app_settings(no_real_project, tmp_path_factory, monkeypatch):
     """Every test gets its own app settings (projects list, password, secret) and its own job queue,
     so no test reads this computer's ~/.stainid or sees another test's jobs; open projects are closed afterwards."""
     from stainid.api import registry

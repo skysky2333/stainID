@@ -23,7 +23,7 @@ import { PALETTE } from '../palette'
 import { BRUSH_KEY, BRUSH_PX, CLEARED, brushStep } from './brush'
 import { AreaProgressLine } from './markareas'
 import { MATTER_COLOUR, MATTER_SCALE, MatterMask } from './mattermask'
-import { BackToSets, useFitScreen, useLeaveGuard } from './rounds'
+import { BackToSets, LabellingBar, useFitScreen, useLeaveGuard } from './rounds'
 
 export const MATTER_TITLE = 'Grey / white matter'
 export const MATTER_TEXT = 'One core at a time: paint the white matter on the NeuN image, then check it on the other stains, where it is carried over for you.'
@@ -44,15 +44,10 @@ type Meta = SessionDetail['meta'] & { progress?: RoundProgress; core_rows?: Matt
 
 function Heading({ meta, core, progress, me }: { meta: Meta; core?: string; progress: RoundProgress | null; me?: string | null }) {
   return (
-    <div className="annotate-top">
-      <div className="annotate-heading">
-        <span className="row small"><BackToSets />{core && meta.name !== PRACTICE_MATTER && <Link to={`/annotate/${meta.name}`}>All cores of this session</Link>}
-          {meta.name !== PRACTICE_MATTER && <Link to={`/tutorial?kind=matter&next=${enc(`/annotate/${meta.name}`)}`} title="The short tutorial of this page again">Tutorial</Link>}</span>
-        <h1>{meta.title}</h1>
-        <div className="muted small">{MATTER_TITLE}{core ? ` · core ${core}` : ''}</div>
-      </div>
-      <div className="annotate-progress"><AreaProgressLine progress={progress} me={me} verb="done" /></div>
-    </div>
+    <LabellingBar title={meta.title} about={`${MATTER_TITLE}${core ? ` · core ${core}` : ''}`}
+      links={<><BackToSets />{core && meta.name !== PRACTICE_MATTER && <Link to={`/annotate/${meta.name}`}>All cores of this session</Link>}
+        {meta.name !== PRACTICE_MATTER && <Link to={`/tutorial?kind=matter&next=${enc(`/annotate/${meta.name}`)}`} title="The short tutorial of this page again">Tutorial</Link>}</>}
+      progress={<AreaProgressLine progress={progress} me={me} verb="done" />} />
   )
 }
 

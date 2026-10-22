@@ -212,6 +212,15 @@ def submit(kind: str, key: Any, run: Callable[[Task], Any], priority: int = NOW,
         return task
 
 
+def forget(kind: str) -> None:
+    """What this kind of work made no longer holds (what it was made from changed): the next request makes it anew at
+    once. Work already running still finishes for whoever follows it, but is not handed to later requests."""
+    with _COND:
+        for key, task in list(_BY_KEY.items()):
+            if task.kind == kind:
+                _BY_KEY.pop(key, None)
+
+
 def _asker() -> str | None:
     """Who asks for the work (set by the app for every request, `session.asker`): the account's id, or a guest's own
     anonymous id ("guest:…"), so that guests never share work; else (no request) the label attribution."""

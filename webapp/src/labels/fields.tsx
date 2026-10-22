@@ -4,8 +4,8 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { Blocker, FieldState, PickerCore, PickerField, PickerPage, SessionFieldState, SessionInfo } from '../api'
 import { api, apiUrl, coreThumb, enc } from '../api'
-import { Empty, ErrorNote, GroupBadge, Loaded, Modal, withError } from '../components'
-import { useFetch } from '../hooks'
+import { Empty, ErrorNote, Flash, GroupBadge, Loaded, Modal, withError } from '../components'
+import { useFetch, useFlash } from '../hooks'
 import { ConfirmDialog } from '../labelling'
 import { useProject } from '../project'
 
@@ -165,12 +165,22 @@ export function SessionFields({ s, onChanged }: { s: SessionInfo; onChanged: () 
   const [adding, setAdding] = useState(false)
   const [removing, setRemoving] = useState<SessionFieldState | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [gone, setGone] = useState<Set<string>>(new Set())  // taken out: hidden at once, before the list comes again
+  const [said, say] = useFlash()
   const { tmaName } = useProject()
   const changed = () => { fields.reload(); onChanged() }
+  const remove = async (tile: string) => {
+    setGone((g) => new Set(g).add(tile))
+    const ok = await withError(async () => { await api.post(`/api/labels/sessions/${s.name}/fields/remove`, { tile_ids: [tile] }); return true }, setError)
+    if (ok) say('Field taken out of the session (its labels are kept)')
+    else setGone((g) => { const next = new Set(g); next.delete(tile); return next })
+    changed()
+  }
   return (
     <section className="session-fields">
       <Loaded state={fields} label="Loading the fields…">
-        {(list) => {
+        {(all) => {
+          const list = gone.size ? all.filter((f) => !gone.has(f.tile_id)) : all
           const count = (state: FieldState) => list.filter((f) => f.state === state).length
           const shown = show ? list.filter((f) => f.state === show) : list
           return <>
@@ -183,6 +193,7 @@ export function SessionFields({ s, onChanged }: { s: SessionInfo; onChanged: () 
                 ))}
               </div>
               <span className="spacer" />
+              <Flash text={said} />
               <button className="btn small" onClick={() => setAdding(true)}>+ Add fields</button>
             </div>
             {list.length ? (
@@ -203,10 +214,10 @@ export function SessionFields({ s, onChanged }: { s: SessionInfo; onChanged: () 
         }}
       </Loaded>
       <ErrorNote error={error} />
-      {adding && <AddFields s={s} onClose={() => setAdding(false)} onAdded={changed} />}
+      {adding && <AddFields s={s} have={(fields.data ?? []).map((f) => f.tile_id)} onClose={() => setAdding(false)} onAdded={(text) => { say(text); changed() }} />}
       {removing && (
         <ConfirmDialog title="Take this field out of the session?" confirm="Remove field" onClose={() => setRemoving(null)}
-          onConfirm={() => withError(async () => { await api.post(`/api/labels/sessions/${s.name}/fields/remove`, { tile_ids: [removing.tile_id] }); changed() }, setError)}>
+          onConfirm={() => remove(removing.tile_id)}>
           <p>People will no longer be shown this field in “{s.title}”. <b>Labels already made on it are kept</b> and still count for training.</p>
         </ConfirmDialog>
       )}
@@ -214,7 +225,7 @@ export function SessionFields({ s, onChanged }: { s: SessionInfo; onChanged: () 
   )
 }
 
-function AddFields({ s, onClose, onAdded }: { s: SessionInfo; onClose: () => void; onAdded: () => void }) {
+function AddFields({ s, have, onClose, onAdded }: { s: SessionInfo; have: string[]; onClose: () => void; onAdded: (text: string) => void }) {
   const [mode, setMode] = useState<'auto' | 'pick'>('auto')
   const [n, setN] = useState(10)
   const [chosen, setChosen] = useState<string[]>([])
@@ -222,9 +233,14 @@ function AddFields({ s, onClose, onAdded }: { s: SessionInfo; onClose: () => voi
   const [busy, setBusy] = useState(false)
   const add = async () => {
     setBusy(true)
-    const done = await withError(() => api.post(`/api/labels/sessions/${s.name}/fields`, mode === 'auto' ? { n } : { tile_ids: chosen }), setError)
+    const before = new Set(have)
+    const done = await withError(() => api.post<{ fields?: string[] | number }>(`/api/labels/sessions/${s.name}/fields`, mode === 'auto' ? { n } : { tile_ids: chosen }), setError)
     setBusy(false)
-    if (done) { onAdded(); onClose() }
+    if (done) {
+      const added = Array.isArray(done.fields) && before.size ? done.fields.filter((t) => !before.has(t)).length : null
+      onAdded(added != null ? `${added.toLocaleString()} field${added === 1 ? '' : 's'} added` : 'Fields added')
+      onClose()
+    }
   }
   return (
     <Modal title={`Add ${s.stain} fields to “${s.title}”`} onClose={onClose} wide>

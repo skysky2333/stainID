@@ -19,7 +19,7 @@ import { DeepZoom } from '../deepzoom'
 import type { Mark, PaintPoint, Pyramid } from '../deepzoom'
 import { useFetch, useStored } from '../hooks'
 import { AREA_SCALE, BRUSH_KEY, BRUSH_PX, BrushMasks, CLEARED, EXCLUDE_TYPES, brushStep, colourOfType } from './brush'
-import { BackToSets, useFitScreen, useLeaveGuard } from './rounds'
+import { BackToSets, LabellingBar, useFitScreen, useLeaveGuard } from './rounds'
 
 export const AREAS_TITLE = 'Mark bad areas'
 export const AREAS_TEXT = 'One core at a time with all its stains: paint where the tissue is folded, torn, dirty, missing or out of focus, or press Enter when a stain looks fine.'
@@ -68,15 +68,10 @@ export function MarkAreas({ detail, onEvent, coach, onFinished }: {
   useEffect(() => { void ask() }, [ask])
 
   const top = (
-    <div className="annotate-top">
-      <div className="annotate-heading">
-        <span className="row small"><BackToSets />
-          {!practice && <Link to={`/tutorial?kind=areas&next=${enc(`/annotate/${name}`)}`} title="The short tutorial of this page again">Tutorial</Link>}</span>
-        <h1>{meta.title}</h1>
-        <div className="muted small">{AREAS_TITLE}{next?.core_id ? ` · core ${next.core_id}` : ''}</div>
-      </div>
-      <div className="annotate-progress">{!practice && <AreaProgressLine progress={progress} me={detail.annotator} />}</div>
-    </div>
+    <LabellingBar title={meta.title} about={`${AREAS_TITLE}${next?.core_id ? ` · core ${next.core_id}` : ''}`}
+      links={<><BackToSets />
+        {!practice && <Link to={`/tutorial?kind=areas&next=${enc(`/annotate/${name}`)}`} title="The short tutorial of this page again">Tutorial</Link>}</>}
+      progress={!practice && <AreaProgressLine progress={progress} me={detail.annotator} />} />
   )
   if (!next) return <div className="annotate-page round-page fit-page">{top}<ErrorNote error={error} />{!error && <Loading label="Finding a core for you…" />}</div>
   if (!next.core_id) {

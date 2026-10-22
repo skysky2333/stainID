@@ -1536,3 +1536,21 @@ p.area-size { display: block; line-height: 1.7; }
 .matter-core-name { font-weight: 600; font-size: 13px; }
 .matter-core.is-taken { opacity: 0.6; }
 .area-tab:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* the slim bar of the labelling pages (labels/rounds.tsx LabellingBar): title, ways back, progress, actions and who is
+   signed in on one line, the app's header line hidden */
+html.labelling-bar-on .layout > .main > .app-header, html.labelling-bar-on .annotator-shell > .app-header { display: none; }
+.annotate-top.labelling-bar { flex-wrap: nowrap; gap: 4px 14px; margin: 0 0 6px; min-height: 30px; }
+.labelling-bar .labelling-title { margin: 0; font-size: 0.95rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  flex: 0 1 auto; min-width: 60px; max-width: 34ch; cursor: default; }
+.labelling-bar .labelling-links { flex: none; gap: 10px; white-space: nowrap; }
+.labelling-bar .annotate-progress { flex: 1 1 180px; min-width: 120px; gap: 2px; }
+.labelling-bar .round-progress > .small { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.labelling-bar .annotate-actions, .labelling-bar .app-account { flex: none; white-space: nowrap; }
+@media (max-width: 900px) { .annotate-top.labelling-bar { flex-wrap: wrap; } }
+
+/* full screen (the viewer's Full screen button): only the picture, its zoom levels and the field's controls */
+html.viewer-full.fit-screen .layout, html.viewer-full.fit-screen .layout.nav-collapsed { grid-template-columns: 1fr; }
+html.viewer-full.fit-screen .layout > .sidebar, html.viewer-full.fit-screen .app-header,
+html.viewer-full.fit-screen .fit-page > .annotate-top, html.viewer-full.fit-screen .fit-page > .instructions { display: none; }
+html.viewer-full.fit-screen .layout > .main, html.viewer-full.fit-screen .annotator-shell > main { padding: 6px 8px; }

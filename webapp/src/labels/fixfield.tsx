@@ -45,7 +45,7 @@ import { reasonText, whyStart } from './reasons'
 import { peopleChecks } from './aiLabels'
 import type { NotCounted, ThreadLadder } from './threads'
 import { THREAD_KEY, ThreadLines, ThreadsCard, stepOf } from './threads'
-import { BackToSets, CHOICE_IDS, CHOICE_NAMES, PIECE_IDS, PIECE_NAMES, tabNext, ClassLegend, LookLegend, MaskSwitch, ROUND_TITLE, RoundProgressLine, SaveButtons, SaveState, callText, changesText, draftKey, lookOf, maskName,
+import { BackToSets, CHOICE_IDS, LabellingBar, CHOICE_NAMES, PIECE_IDS, PIECE_NAMES, tabNext, ClassLegend, LookLegend, MaskSwitch, ROUND_TITLE, RoundProgressLine, SaveButtons, SaveState, callText, changesText, draftKey, lookOf, maskName,
   polygonArea, polygonPoints, readDraft, simplifyPolygon, stepMask, unsureClass, useCandidateKeys, useFitScreen, useLeaveGuard, useLive, useSaveKeys,
   writeDraft } from './rounds'
 
@@ -170,8 +170,8 @@ export function FixField({ detail, reload, tile, onEvent, onFinished, coach }: {
   if (!field) {  // the picture at once, the objects when they have arrived
     return (
       <div className="annotate-page round-page fit-page">
-        <div className="annotate-top"><div className="annotate-heading"><h1>{detail.meta.title}</h1>
-          <div className="muted small">{detail.meta.stain} · {ROUND_TITLE[2]}{(detail.meta as { mode?: string }).mode === 'simple' ? ' (simple)' : ''}</div></div></div>
+        <LabellingBar title={detail.meta.title} about={`${detail.meta.stain} · ${ROUND_TITLE[2]}${(detail.meta as { mode?: string }).mode === 'simple' ? ' (simple)' : ''}`}
+          links={<BackToSets />} />
         <ErrorNote error={work.error} />
         <div className="annotate-workspace">
           <div className="annotate-image field-loading">
@@ -1183,20 +1183,11 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
 
   return (
     <div className="annotate-page round-page fit-page">
-      <div className="annotate-top">
-        <div className="annotate-heading">
-          <span className="row small"><BackToSets />{!(meta as { practice?: boolean }).practice && <Link to={`/annotate/${name}`}>All fields of this session</Link>}</span>
-          <h1>{meta.title}</h1>
-          <div className="muted small">{meta.stain} · {ROUND_TITLE[2]} · field {position + 1} of {fields.length}</div>
-        </div>
-        <div className="annotate-progress">
-          <RoundProgressLine progress={progress} me={detail.annotator} />
-        </div>
-        <div className="annotate-actions">
-          <button className="btn" onClick={() => void skip()} disabled={!!precise || busy}
-            title={locked ?? 'Come back to this field later: the next field waiting for you opens'}>Skip for now</button>
-        </div>
-      </div>
+      <LabellingBar title={meta.title} about={`${meta.stain} · ${ROUND_TITLE[2]} · field ${position + 1} of ${fields.length}`}
+        links={<><BackToSets />{!(meta as { practice?: boolean }).practice && <Link to={`/annotate/${name}`}>All fields of this session</Link>}</>}
+        progress={<RoundProgressLine progress={progress} me={detail.annotator} />}
+        actions={<button className="btn small" onClick={() => void skip()} disabled={!!precise || busy}
+          title={locked ?? 'Come back to this field later: the next field waiting for you opens'}>Skip for now</button>} />
       {meta.instructions && <div className="instructions">{meta.instructions}</div>}
       <ErrorNote error={error} />
       {wholeBad && <div className="found found-warn small whole-bad" role="status">You marked this whole field as bad:

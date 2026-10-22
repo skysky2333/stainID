@@ -37,6 +37,30 @@ type View = { zoom: number; x: number; y: number }
  * takes all the room its card is given (the annotation pages size that to the window), the picture fitted inside it
  * and centred, so a zoomed-in picture uses the whole room; else the picture is as wide as the card.
  */
+// full screen (FullScreenButton): the whole page goes full screen and html.viewer-full hides all but the picture,
+// its zoom levels and the field's controls (index.css); kept in step however full screen ends (Esc, the button)
+if (typeof document !== 'undefined') {
+  document.addEventListener('fullscreenchange', () => document.documentElement.classList.toggle('viewer-full', !!document.fullscreenElement))
+}
+
+/** Full screen on a labelling page (the browser's Fullscreen API): only the picture with its zoom levels and the
+ *  field's controls stay; Esc or the button again leaves it. */
+export function FullScreenButton() {
+  const [on, setOn] = useState(() => !!document.fullscreenElement)
+  useEffect(() => {
+    const sync = () => setOn(!!document.fullscreenElement)
+    document.addEventListener('fullscreenchange', sync)
+    return () => document.removeEventListener('fullscreenchange', sync)
+  }, [])
+  if (!document.fullscreenEnabled) return null
+  const toggle = () => {
+    if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined)
+    else void document.documentElement.requestFullscreen().catch(() => undefined)
+  }
+  return <button className={`btn small${on ? ' active' : ''}`} onClick={toggle} aria-pressed={on}
+    title={on ? 'Leave full screen (Esc)' : 'Full screen: only the picture, its zoom levels and the controls (Esc leaves it)'}>{on ? 'Exit full screen' : 'Full screen'}</button>
+}
+
 export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, onMove, children, fit = false, onPress, onRelease, onWheelOver, onSize, panLock = false, under, paint, onContext,
   onView, control, aside }: {
   src: string
@@ -239,6 +263,7 @@ export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, on
         <span className="small muted viewer-zoom">{zoom.toFixed(1)}×</span>
         <button className="btn small" onClick={() => zoomBy(1.5)} title={`Zoom in (+), up to ${MAX_ZOOM}×`} aria-label="Zoom in">+</button>
         <button className="btn small" onClick={() => setView({ zoom: 1, x: 0, y: 0 })} title="The whole picture">Reset</button>
+        {fit && <FullScreenButton />}
       </div>
       {fit ? <div className={`viewer-row${aside ? ' with-aside' : ''}`}>{aside}<div ref={room} className="viewer-room">{viewer}</div></div> : viewer}
     </div>

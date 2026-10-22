@@ -64,3 +64,16 @@ function applyTheme(theme: Theme) {
   if (theme === 'system') document.documentElement.removeAttribute('data-theme')
   else document.documentElement.setAttribute('data-theme', theme)
 }
+
+/** A short confirmation after an action ("Closed"), gone again after a few seconds (`Flash` shows it). */
+export function useFlash(ms = 4000): [string | null, (text: string) => void] {
+  const [text, setText] = useState<string | null>(null)
+  const timer = useRef(0)
+  const show = useCallback((t: string) => {
+    setText(t)
+    window.clearTimeout(timer.current)
+    timer.current = window.setTimeout(() => setText(null), ms)
+  }, [ms])
+  useEffect(() => () => window.clearTimeout(timer.current), [])
+  return [text, show]
+}

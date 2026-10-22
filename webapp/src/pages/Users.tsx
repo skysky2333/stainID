@@ -7,8 +7,8 @@ import { useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import type { Account, ApiToken } from '../api'
 import { api } from '../api'
-import { ErrorNote, Loaded, Modal, PageHead, timeAgo, withError } from '../components'
-import { useFetch } from '../hooks'
+import { ErrorNote, Flash, Loaded, Modal, PageHead, timeAgo, withError } from '../components'
+import { useFetch, useFlash } from '../hooks'
 import { CopyButton } from '../labelling'
 
 interface UserSet { project: string; project_name: string; session: string; title: string; joined?: number; exists?: boolean; stain?: string }
@@ -41,7 +41,12 @@ export default function Users() {
   const [open, setOpen] = useState<string | null>(null)
   const [removing, setRemoving] = useState<UserRow | null>(null)
   const filter = params.get('project') && params.get('set') ? `${params.get('project')}/${params.get('set')}` : ''
-  const act = async (call: () => Promise<unknown>) => { const ok = await withError(call, setError); if (ok !== undefined) data.reload(); return ok }
+  const act = async (call: () => Promise<unknown>) => {  // the list again right after the answer (also when the answer is empty)
+    let ok = false
+    const made = await withError(async () => { const r = await call(); ok = true; return r }, setError)
+    if (ok) data.reload()
+    return ok ? made ?? true : undefined
+  }
 
   return (
     <>
@@ -155,6 +160,13 @@ function Manage({ user, me, guard, sets, many, free, act, onSecret, onRemove }: 
   const [adding, setAdding] = useState('')
   const [label, setLabel] = useState('')
   const joined = useMemo(() => new Set(user.sets.map(setKey)), [user.sets])
+  const [busy, setBusy] = useState<string | null>(null)  // the membership being added or taken out
+  const [said, say] = useFlash()
+  const member = async (key: string, call: () => Promise<unknown>, done: string) => {
+    setBusy(key)
+    if (await act(call) !== undefined) say(done)
+    setBusy(null)
+  }
   const reset = async () => {
     const made = await act(() => api.post<{ password: string }>(`/api/admin/users/${user.id}/reset`, {})) as { password: string } | undefined
     if (made) onSecret('One-time password', made.password)
@@ -179,17 +191,20 @@ function Manage({ user, me, guard, sets, many, free, act, onSecret, onRemove }: 
       <h4>Labelling sets</h4>
       {user.sets.length ? <ul className="users-sets small">{user.sets.map((s) => (
         <li key={setKey(s)}>{setName(s, many)} <span className="muted">· joined {s.joined ? timeAgo(s.joined) : ''}</span>{' '}
-          <button className="link-btn small" onClick={() => act(() => api.del(`/api/admin/users/${user.id}/sets/${encodeURIComponent(s.project)}/${encodeURIComponent(s.session)}`))}>remove</button></li>
+          <button className="link-btn small" disabled={busy === setKey(s)} onClick={() => void member(setKey(s),
+            () => api.del(`/api/admin/users/${user.id}/sets/${encodeURIComponent(s.project)}/${encodeURIComponent(s.session)}`), `Taken out of ${s.title}`)}>
+            {busy === setKey(s) ? 'removing…' : 'remove'}</button></li>
       ))}</ul> : <p className="muted small">In no labelling set.</p>}
       <div className="row small">
         <select value={adding} onChange={(e) => setAdding(e.target.value)} aria-label={`Add ${user.name} to a set`}>
           <option value="">Add to a set…</option>
           {sets.filter((s) => !joined.has(setKey(s))).map((s) => <option key={setKey(s)} value={setKey(s)}>{setName(s, many)}</option>)}
         </select>
-        <button className="btn small" disabled={!adding} onClick={async () => {
+        <button className="btn small" disabled={!adding || busy === 'add'} onClick={async () => {
           const s = sets.find((x) => setKey(x) === adding)
-          if (s) { await act(() => api.post(`/api/admin/users/${user.id}/sets`, { project: s.project, session: s.session })); setAdding('') }
-        }}>Add</button>
+          if (s) { await member('add', () => api.post(`/api/admin/users/${user.id}/sets`, { project: s.project, session: s.session }), `Added to ${s.title}`); setAdding('') }
+        }}>{busy === 'add' ? 'Adding…' : 'Add'}</button>
+        <Flash text={said} />
       </div>
       <h4>API tokens</h4>
       <Loaded state={tokens} label="Loading tokens…">

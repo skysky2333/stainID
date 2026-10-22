@@ -264,3 +264,18 @@ def test_two_sessions_of_a_stain_hold_the_same_fields_and_finishing_in_one_leave
     third = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "n_fields": -1, "open": True, "title": "third"})
     assert third.status_code == 200, third.text
     assert TILE in third.json()["fields"]
+
+
+def test_the_labels_page_sees_a_change_at_once(rounds_project):  # noqa: F811
+    """Closing, opening, adding fields to or deleting a session shows on the Labels page's very next look (its counts
+    are kept for a few seconds otherwise)."""
+    admin, _, _ = rounds_project
+    name = _session(admin, "quick")
+    listed = lambda: {s["name"]: s for s in admin.get("/api/labels/overview").json()["sessions"]}  # noqa: E731
+    assert listed()[name]["open"] is True
+    assert admin.post(f"/api/labels/sessions/{name}/open", json={"open": False}).status_code == 200
+    assert listed()[name]["open"] is False
+    assert admin.post(f"/api/labels/sessions/{name}/fields/remove", json={"tile_ids": [OTHER]}).status_code == 200
+    assert listed()[name]["fields"] == 1 or listed()[name].get("round_progress", {}).get("total") == 1
+    assert admin.delete(f"/api/labels/sessions/{name}").status_code == 200
+    assert name not in listed()

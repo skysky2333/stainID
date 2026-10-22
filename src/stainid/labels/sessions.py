@@ -107,6 +107,15 @@ def folder(root: Path, name: str) -> Path:
 
 
 ON_CREATE: list = []  # called with (root, name) when a session is made: the app gives it its join key (`api.routes.accounts`)
+ON_CHANGE: list = []  # called with (root, name) when a session is made, changed or deleted: the app counts its sessions anew (`api.routes.annotate`)
+
+
+def _changed(root: Path, name: str) -> None:
+    for hook in ON_CHANGE:
+        try:
+            hook(root, name)
+        except Exception:  # noqa: BLE001 - only what the pages counted: they count again on their next look
+            pass
 
 
 def create(root: Path, name: str, **meta) -> dict:
@@ -126,6 +135,7 @@ def create(root: Path, name: str, **meta) -> dict:
             hook(root, name)
         except Exception:  # noqa: BLE001 - a session outside the app (an import on the command line) gets its key when first shown
             pass
+    _changed(root, name)
     return full
 
 
@@ -137,6 +147,7 @@ def update(root: Path, name: str, **changes) -> dict:
     practice.guard("the sessions")
     updated = {**meta(root, name), **changes}
     write_text_atomic(folder(root, name) / "meta.json", json.dumps(updated, indent=1))
+    _changed(root, name)
     return updated
 
 
@@ -148,7 +159,9 @@ def remove(root: Path, name: str) -> tuple[Path, int]:
     target = root / FOLDER / ".deleted" / f"{name}-{time.strftime('%Y%m%d-%H%M%S')}"
     target.parent.mkdir(parents=True, exist_ok=True)
     moved = Path(shutil.move(folder(root, name), target))
-    return moved, store.remove_session(root, name, moved)
+    removed = store.remove_session(root, name, moved)
+    _changed(root, name)
+    return moved, removed
 
 
 def labels_in(root: Path, name: str) -> int:

@@ -22,7 +22,7 @@ import type { ImagePoint } from '../viewer'
 import { RASTER_LAYERS, ZoomViewer } from '../viewer'
 import { HALO_PX, LIT_PX, OUTLINE_PX, lineScale } from '../viewkeys'
 import type { RoundEvent } from './rounds'
-import { BackToSets, RoundProgressLine, SaveButtons, SaveState, changesText, draftKey, polygonPoints, readDraft, useLeaveGuard, useLive, useSaveKeys,
+import { BackToSets, LabellingBar, RoundProgressLine, SaveButtons, SaveState, changesText, draftKey, polygonPoints, readDraft, useLeaveGuard, useLive, useSaveKeys,
   writeDraft } from './rounds'
 import type { ThreadLadder } from './threads'
 import { nearestSegment, segmentsOf, wandGroup } from './wand'
@@ -367,17 +367,10 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
 
   return (
     <div className="annotate-page round-page fit-page simple-page">
-      <div className="annotate-top">
-        <div className="annotate-heading">
-          <span className="row small"><BackToSets />{!practice && <Link to={`/annotate/${name}`}>All fields of this session</Link>}</span>
-          <h1>{meta.title}</h1>
-          <div className="muted small">{meta.stain} · Fix the field (simple) · field {position + 1} of {fields.length}</div>
-        </div>
-        <div className="annotate-progress"><RoundProgressLine progress={progress} me={detail.annotator} /></div>
-        <div className="annotate-actions">
-          <button className="btn" onClick={() => void skip()} disabled={saving} title="Come back to this field later: the next field waiting for you opens">Skip for now</button>
-        </div>
-      </div>
+      <LabellingBar title={meta.title} about={`${meta.stain} · Fix the field (simple) · field ${position + 1} of ${fields.length}`}
+        links={<><BackToSets />{!practice && <Link to={`/annotate/${name}`}>All fields of this session</Link>}</>}
+        progress={<RoundProgressLine progress={progress} me={detail.annotator} />}
+        actions={<button className="btn small" onClick={() => void skip()} disabled={saving} title="Come back to this field later: the next field waiting for you opens">Skip for now</button>} />
       {meta.instructions && <div className="instructions">{meta.instructions}</div>}
       <ErrorNote error={error} />
       {restored > 0 && <div className="found found-warn small round-restored" role="status">{changesText(restored)} you had not saved came back from this browser.

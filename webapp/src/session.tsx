@@ -131,6 +131,18 @@ export function AppHeader({ brand = true }: { brand?: boolean }) {
   )
 }
 
+/** Who is signed in, small (the slim bar of the labelling pages): the name (to the account) and Sign out. */
+export function AccountCompact() {
+  const { session, reload } = useSession()
+  if (!session.account) return <a className="small" href="/">Sign in</a>
+  return (
+    <span className="row small app-account" title={`Signed in as ${session.account.name}`}>
+      <a href={appPath('/account')} title={`Signed in as ${session.account.name}: your account`}>{session.account.name}</a>
+      <button className="link-btn" onClick={() => signOut(reload)}>Sign out</button>
+    </span>
+  )
+}
+
 export async function signOut(reload: () => void) {
   await api.post('/api/session/logout', {})
   reload()

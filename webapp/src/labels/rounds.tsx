@@ -4,10 +4,11 @@
    every change on the page until the person presses Save (a draft in this browser survives a reload, never sent before),
    ask before leaving with unsaved changes, and save a field's changes all at once. */
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import type { RoundLive, RoundProgress } from '../api'
 import { api } from '../api'
 import { Link } from 'react-router-dom'
-import { useSession } from '../session'
+import { AccountCompact, useSession } from '../session'
 import { Progress } from '../components'
 import type { ClassPick, KeyMap, Vocabulary } from './classKeys'
 import { classText, keyGroups, keyName } from './classKeys'
@@ -30,6 +31,27 @@ export type RoundEvent = 'hover' | 'class' | 'subtype' | 'unsure' | 'remove' | '
 export function BackToSets() {
   const { session } = useSession()
   return session.account ? <Link to="/">← My labelling sets</Link> : <Link to="/">Sign in</Link>
+}
+
+/** The one slim bar of a labelling page (room for the picture on a small laptop): the session's title, small (what
+ *  it is only on hover), the ways back, the progress, the page's actions and, on the right, who is signed in. The
+ *  app's own header line is hidden while it shows. */
+export function LabellingBar({ title, about, links, progress, actions }: {
+  title: string; about: string; links?: ReactNode; progress?: ReactNode; actions?: ReactNode
+}) {
+  useEffect(() => {
+    document.documentElement.classList.add('labelling-bar-on')
+    return () => document.documentElement.classList.remove('labelling-bar-on')
+  }, [])
+  return (
+    <div className="annotate-top labelling-bar">
+      <h1 className="labelling-title" title={about}>{title}</h1>
+      {links && <span className="row small labelling-links">{links}</span>}
+      <div className="annotate-progress">{progress}</div>
+      {actions && <div className="annotate-actions">{actions}</div>}
+      <AccountCompact />
+    </div>
+  )
 }
 
 export const LIVE_MS = 3000  // how often a round page renews its hold on the field and asks for the progress

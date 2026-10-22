@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { AiView, AreasOverview, ClassCount, LabelsOverview, Labeller, ReferenceLabels, RoundProgress, SessionInfo, StainOverview, Vocabulary } from '../api'
 import { api, apiUrl, appPath, enc } from '../api'
-import { Empty, ErrorNote, HelpBox, Loaded, Modal, PageHead, Progress, fmt, timeAgo, withError } from '../components'
-import { useFetch } from '../hooks'
+import { Empty, ErrorNote, Flash, HelpBox, Loaded, Modal, PageHead, Progress, fmt, timeAgo, withError } from '../components'
+import { useFetch, useFlash } from '../hooks'
 import { AI_VIEW_TEXT, ConfirmDialog, CopyButton, DetectionLine, TOOL_TEXT, kindText, objectsOf, percent } from '../labelling'
 import { SessionAccessCard } from '../labels/access'
 import { SessionLabelsView } from '../labels/examine'
@@ -19,6 +19,15 @@ interface Defaults {
   classes: Record<string, string[]>; vocabularies: Record<string, Vocabulary>; tags: string[]; tools: string[]; ai_views: AiView[]; rules: Record<string, string>
 }
 interface Share { links: string[]; network: boolean }
+/** What this page shows of a session before the server's list does (opened or closed, deleted): at once on a click,
+ *  until the list agrees (or half a minute has passed). */
+interface Patch { open?: boolean; gone?: boolean; at: number }
+type OnPatch = (name: string, change: Omit<Patch, 'at'> | null) => void
+const PATCH_MS = 30000
+
+function patched(sessions: SessionInfo[], patch: Record<string, Patch>): SessionInfo[] {
+  return sessions.filter((s) => !patch[s.name]?.gone).map((s) => patch[s.name]?.open != null ? { ...s, open: patch[s.name].open! } : s)
+}
 
 export default function Labels() {
   const overview = useFetch<LabelsOverview>('/api/labels/overview', 10000)
@@ -26,6 +35,24 @@ export default function Labels() {
   const [creating, setCreating] = useState(false)
   const [older, setOlder] = useState(false)  // one of the kinds of session made before the annotation rounds
   const [notice, setNotice] = useState<string | null>(null)
+  const [patch, setPatch] = useState<Record<string, Patch>>({})
+  const onPatch: OnPatch = (name, change) => setPatch((old) => {
+    const next = { ...old }
+    if (change) next[name] = { ...next[name], ...change, at: Date.now() }
+    else delete next[name]
+    return next
+  })
+  useEffect(() => {  // the server's list shows the change now (or it is old): no patch needed any more
+    const listed = overview.data?.sessions
+    if (!listed) return
+    setPatch((old) => {
+      const keep = Object.fromEntries(Object.entries(old).filter(([name, p]) => {
+        const s = listed.find((x) => x.name === name)
+        return Date.now() - p.at < PATCH_MS && (p.gone ? !!s : !!s && p.open != null && s.open !== p.open)
+      }))
+      return Object.keys(keep).length === Object.keys(old).length ? old : keep
+    })
+  }, [overview.data])
   const linkFor = (name = '') => {
     const base = share.data?.network && share.data.links[0] ? share.data.links[0] : `${location.origin}${appPath('/annotate')}`
     return name ? `${base}/${name}` : `${new URL(base).origin}/`  // the main page: everyone signs in there
@@ -56,7 +83,8 @@ export default function Labels() {
       {notice && <div className="found found-good labels-notice">{notice}<button className="link-btn" onClick={() => setNotice(null)}>Dismiss</button></div>}
       <Loaded state={overview} label="Loading labelling sessions…">
         {(data) => <>
-          <Sessions sessions={data.sessions} reference={data.reference} linkFor={linkFor} onChanged={overview.reload} onNew={() => setCreating(true)} />
+          <Sessions sessions={patched(data.sessions, patch)} reference={data.reference} linkFor={linkFor} onChanged={overview.reload} onPatch={onPatch}
+            onNotice={setNotice} onNew={() => setCreating(true)} />
           {data.sessions.some((s) => s.kind === 'areas') && <AreasSoFar />}
           <ShareCard share={share.data} error={share.error} link={linkFor()} anyOpen={data.sessions.some((s) => s.open)} />
           <LabelledSoFar stains={data.stains} onChanged={overview.reload} />
@@ -93,22 +121,24 @@ export default function Labels() {
 const wholeCores = (s: { kind: string }) => s.kind === 'areas' || s.kind === 'matter'
 const isRound = (s: SessionInfo) => !!s.round || wholeCores(s) || !!s.label_set  // AI review rounds (read-only label sets) with them
 
-function Sessions({ sessions, reference, linkFor, onChanged, onNew }: {
-  sessions: SessionInfo[]; reference: ReferenceLabels | null; linkFor: (name: string) => string; onChanged: () => void; onNew: () => void
+function Sessions({ sessions, reference, linkFor, onChanged, onPatch, onNotice, onNew }: {
+  sessions: SessionInfo[]; reference: ReferenceLabels | null; linkFor: (name: string) => string; onChanged: () => void; onPatch: OnPatch
+  onNotice: (text: string) => void; onNew: () => void
 }) {
+  const row = (s: SessionInfo) => <SessionRow key={s.name} s={s} link={linkFor(s.name)} onChanged={onChanged} onPatch={onPatch} onNotice={onNotice} />
   const ordered = [...sessions].sort((a, b) => b.created - a.created)  // newest first; stays put when one is opened or closed
   return (
     <section className="card labels-section">
       <h2>Labelling sessions</h2>
       {ordered.length || reference ? <div className="session-list">
-        {ordered.filter((s) => isRound(s)).map((s) => s.label_set ? <AiReviewRow key={s.name} s={s} /> : <SessionRow key={s.name} s={s} link={linkFor(s.name)} onChanged={onChanged} />)}
+        {ordered.filter((s) => isRound(s)).map((s) => s.label_set ? <AiReviewRow key={s.name} s={s} /> : row(s))}
         {ordered.some((s) => !isRound(s)) && (ordered.some((s) => isRound(s))
           ? <details className="advanced older-sessions">
             <summary><span>Older kinds of session</span><span className="muted small"> · {ordered.filter((s) => !isRound(s)).length} (older segmentation checks, whole-field reviews, quick checks)
               {ordered.some((s) => !isRound(s) && s.open) ? ` · ${ordered.filter((s) => !isRound(s) && s.open).length} open` : ''}</span></summary>
-            <div className="advanced-body session-list">{ordered.filter((s) => !isRound(s)).map((s) => <SessionRow key={s.name} s={s} link={linkFor(s.name)} onChanged={onChanged} />)}</div>
+            <div className="advanced-body session-list">{ordered.filter((s) => !isRound(s)).map(row)}</div>
           </details>
-          : ordered.map((s) => <SessionRow key={s.name} s={s} link={linkFor(s.name)} onChanged={onChanged} />))}
+          : ordered.map(row))}
         {reference && <ReferenceRow r={reference} />}
       </div>
         : <Empty>
@@ -205,15 +235,22 @@ function sessionState(s: SessionInfo): { text: string; className: string } {
   return s.open ? { text: 'Open', className: 'status-running' } : { text: 'Closed', className: '' }
 }
 
-function SessionRow({ s, link, onChanged }: { s: SessionInfo; link: string; onChanged: () => void }) {
+function SessionRow({ s, link, onChanged, onPatch, onNotice }: {
+  s: SessionInfo; link: string; onChanged: () => void; onPatch: OnPatch; onNotice: (text: string) => void
+}) {
   const [open, setOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [said, say] = useFlash()
   const state = sessionState(s)
-  const toggle = async () => {
+  const toggle = async () => {  // shown at once, put back if the server says no
+    const to = !s.open
     setBusy(true)
-    await withError(() => api.post(`/api/labels/sessions/${s.name}/open`, { open: !s.open }), setError)
+    onPatch(s.name, { open: to })
+    const ok = await withError(async () => { await api.post(`/api/labels/sessions/${s.name}/open`, { open: to }); return true }, setError)
     setBusy(false)
+    if (ok) say(to ? 'Open: people with the link and key can label' : 'Closed: nobody can open it now, nothing is lost')
+    else onPatch(s.name, null)
     onChanged()
   }
   return (
@@ -235,11 +272,12 @@ function SessionRow({ s, link, onChanged }: { s: SessionInfo; link: string; onCh
       <div className="session-actions">
         {s.open && !s.read_only && <CopyButton text={link} />}
         {!s.read_only && <button className="btn small" disabled={busy} onClick={toggle} title={s.open ? 'People can no longer open it; nothing is lost' : 'People with the link can start labelling'}>
-          {busy ? '…' : s.open ? 'Close' : 'Open to labellers'}</button>}
+          {busy ? (s.open ? 'Opening…' : 'Closing…') : s.open ? 'Close' : 'Open to labellers'}</button>}
         <button className="btn small" onClick={() => setOpen(!open)} aria-expanded={open}>{open ? 'Less' : 'More'}</button>
+        <Flash text={said} />
       </div>
       <ErrorNote error={error} />
-      {open && <SessionMore s={s} onChanged={onChanged} onError={setError} />}
+      {open && <SessionMore s={s} onChanged={onChanged} onError={setError} onPatch={onPatch} onNotice={onNotice} />}
     </div>
   )
 }
@@ -312,12 +350,18 @@ function People({ people, fields }: { people: Labeller[]; fields: number | null 
   )
 }
 
-function DeleteSession({ s, onClose, onChanged, onError }: { s: SessionInfo; onClose: () => void; onChanged: () => void; onError: (e: string | null) => void }) {
+function DeleteSession({ s, onClose, onChanged, onError, onPatch, onNotice }: {
+  s: SessionInfo; onClose: () => void; onChanged: () => void; onError: (e: string | null) => void; onPatch: OnPatch; onNotice: (text: string) => void
+}) {
   const count = useFetch<{ labels: number }>(`/api/labels/sessions/${s.name}/labels-count`)
   const n = count.data?.labels
   return (
     <ConfirmDialog title={`Delete “${s.title}”?`} confirm={n ? `Delete session and ${n.toLocaleString()} labels` : 'Delete session'} danger onClose={onClose}
-      onConfirm={() => withError(async () => { await api.del(`/api/labels/sessions/${s.name}`); onChanged() }, onError)}>
+      onConfirm={async () => {
+        const ok = await withError(async () => { await api.del(`/api/labels/sessions/${s.name}`); return true }, onError)
+        if (ok) { onPatch(s.name, { gone: true }); onNotice(`“${s.title}” is deleted: it and its labels are in the archive.`) }
+        onChanged()
+      }}>
       <p>The session closes for everyone and disappears from this list.{' '}
         {n == null ? <>Counting its labels…</> : n === 0 ? <>Nobody has saved a label in it.</>
           : <><b>Its {n.toLocaleString()} label{n === 1 ? '' : 's'} will be removed</b>: they no longer count for training, models or any page.</>}</p>
@@ -326,15 +370,19 @@ function DeleteSession({ s, onClose, onChanged, onError }: { s: SessionInfo; onC
   )
 }
 
-function SessionMore({ s, onChanged, onError }: { s: SessionInfo; onChanged: () => void; onError: (e: string | null) => void }) {
+function SessionMore({ s, onChanged, onError, onPatch, onNotice }: {
+  s: SessionInfo; onChanged: () => void; onError: (e: string | null) => void; onPatch: OnPatch; onNotice: (text: string) => void
+}) {
   const defaults = useFetch<Defaults>(s.kind === 'queue' ? '/api/labels/defaults' : null)
   const [confirm, setConfirm] = useState<'delete' | null>(null)
   const [adding, setAdding] = useState(false)
   const [examining, setExamining] = useState(false)
+  const [said, say] = useFlash()
   const prepareMore = async () => {  // a queue draws objects from prepared fields: prepare 10 more
     setAdding(true)
-    await withError(() => api.post(`/api/labels/sessions/${s.name}/fields`, { n: 10 }), onError)
+    const ok = await withError(async () => { await api.post(`/api/labels/sessions/${s.name}/fields`, { n: 10 }); return true }, onError)
     setAdding(false)
+    if (ok) say('10 more fields are being prepared')
     onChanged()
   }
   return (
@@ -346,6 +394,7 @@ function SessionMore({ s, onChanged, onError }: { s: SessionInfo; onChanged: () 
         <a className="btn small" href={apiUrl(`/api/labels/export.csv?session=${s.name}`)}>Download this session’s labels</a>
         {s.kind === 'queue' && !s.round && <button className="btn small" disabled={adding} onClick={prepareMore} title="Prepares 10 more fields the queue can draw objects from">
           {adding ? 'Preparing…' : 'Prepare 10 more fields'}</button>}
+        <Flash text={said} />
         <span className="spacer" />
         <button className="btn small danger-outline" onClick={() => setConfirm('delete')}>Delete session</button>
       </div>
@@ -381,7 +430,7 @@ function SessionMore({ s, onChanged, onError }: { s: SessionInfo; onChanged: () 
           </div>
         )}
       </Advanced>
-      {confirm === 'delete' && <DeleteSession s={s} onClose={() => setConfirm(null)} onChanged={onChanged} onError={onError} />}
+      {confirm === 'delete' && <DeleteSession s={s} onClose={() => setConfirm(null)} onChanged={onChanged} onError={onError} onPatch={onPatch} onNotice={onNotice} />}
     </div>
   )
 }

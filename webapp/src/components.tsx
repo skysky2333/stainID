@@ -246,3 +246,7 @@ export async function withError<T>(action: () => Promise<T>, setError: (e: strin
   }
 }
 
+/** The short confirmation of an action (`useFlash`), beside its button. */
+export function Flash({ text }: { text: string | null }) {
+  return text ? <span className="small status-finished flash" role="status">✓ {text}</span> : null
+}

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import os
 import re
 import socket
@@ -350,6 +351,16 @@ def labels_overview():
                        "Counting the labels", admin=True, fresh=work.within(15))
 
 
+def _sessions_changed(root: Path, name: str) -> None:
+    """A session made, opened, closed, changed or deleted: the Labels page's next look counts again at once, not up to
+    15 s later (`labels_overview`)."""
+    work.forget("labels overview")
+
+
+if _sessions_changed not in sessions.ON_CHANGE:
+    sessions.ON_CHANGE.append(_sessions_changed)
+
+
 def _labels_overview() -> dict:
     state = get_state()
     labels = store.current(root())
@@ -652,10 +663,17 @@ def set_open(name: str, body: Opening, request: Request) -> dict:
     session_meta(name, request)
     meta = sessions.update(root(), name, open=body.open)
     if meta["kind"] == outline.KIND:
-        sam_embeddings.prepare_session(get_state(), meta, force=True)
+        _after_answer(lambda: sam_embeddings.prepare_session(get_state(), meta, force=True))
     if rounds.is_round(meta) and meta["open"]:
-        _rounds().warm(meta, force=True)
+        _after_answer(lambda: _rounds().warm(meta, force=True))
     return meta
+
+
+def _after_answer(run) -> None:
+    """Work a click starts but need not wait for (making an opened session's fields ahead): on a thread of its own, in
+    the request's project, so the page shows the change at once."""
+    context = contextvars.copy_context()
+    threading.Thread(target=context.run, args=(run,), name="stainid-after-answer", daemon=True).start()
 
 
 @router.post("/labels/sessions/{name}/fields", dependencies=admin)
@@ -673,7 +691,7 @@ def add_fields(name: str, body: MoreFields, request: Request) -> dict:
         return meta
     more = _known_fields(meta["stain"], body.tile_ids) if body.tile_ids else _pick(meta["stain"], body.n, len(meta["fields"]))
     if not more:
-        raise HTTPException(400, f"no {meta['stain']} fields left that nobody has checked")
+        raise HTTPException(400, f"No {meta['stain']} field is ready to add.")
     updated = sessions.add_fields(root(), name, more)
     prepare_job(meta["stain"], 0, name)
     return updated

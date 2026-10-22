@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { HALO_PX, LIT_PX, MAX_ZOOM, OUTLINE_PX, lineScale, useViewKeys } from './viewkeys'
+import { FullScreenButton } from './viewer'
 
 export interface PyramidLevel { width: number; height: number; cols: number; rows: number }
 /** A core image the server has cut into tiles: level 0 is full resolution, each next level half the size. */
@@ -589,6 +590,7 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
           <span className="small muted dz-zoom" title="100% shows every pixel of the scan">{committed ? `${committed.s >= 0.1 ? Math.round(committed.s * 100) : (committed.s * 100).toFixed(1)}%` : ''}</span>
           <button className="btn small" onClick={() => zoomCentre(1.6)} aria-label="Zoom in" title={`Zoom in (+), up to ${MAX_ZOOM}× the whole core`}>+</button>
           <button className="btn small" onClick={() => setView(fit(), true)} title="Show the whole core">Whole core</button>
+          {height === 'fill' && <FullScreenButton />}
         </span>
       </div>
       <div ref={box} className={`dz${dragging ? ' dragging' : ''}`} style={{ ...(height === 'fill' ? {} : { height }), ...(cursor ? { cursor } : {}) }} tabIndex={0}
