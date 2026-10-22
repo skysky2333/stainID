@@ -147,12 +147,6 @@ def progress(tiles: list[str], finished: dict[str, set[str]], held: dict[str, se
 ALL_FIELDS = -1  # "how many fields": every remaining one
 
 
-def remaining_fields(fields: list[str], finished: set[str], assigned: set[str]) -> list[str]:
-    """The fields a new "Fix the field" session can draw from: those not annotated yet (nobody finished them) and not
-    assigned to an open session, in the given order."""
-    return [t for t in dict.fromkeys(fields) if t not in finished and t not in assigned]
-
-
 def draw_fields(remaining: list[str], n: int, seed: int, first: set[str] | None = None) -> list[str]:
     """n of the remaining fields drawn at random, without repeats (n < 0, or more than there are: all of them), in the
     drawn order; the same seed gives the same draw. `first`: fields drawn before any other (those whose core image's

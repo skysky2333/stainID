@@ -44,9 +44,7 @@ def test_candidates_at_a_level():
 
 
 def test_fields_are_drawn_at_random_from_the_remaining_ones():
-    fields = [f"T{i}" for i in range(50)]
-    left = rounds.remaining_fields(fields, finished={"T0", "T1"}, assigned={"T2"})
-    assert left == fields[3:]  # not annotated yet and not in another open session
+    left = [f"T{i}" for i in range(50)]
     assert sorted(rounds.draw_fields(left, rounds.ALL_FIELDS, seed=7)) == sorted(left)  # -1: every remaining field
     some = rounds.draw_fields(left, 10, seed=7)
     assert len(some) == 10 == len(set(some)) and set(some) <= set(left)  # n distinct remaining fields
@@ -412,10 +410,7 @@ def test_a_fix_the_field_session_takes_every_remaining_field_by_default(rounds_p
     assert scope["fields_remaining"] == 2
     first = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "open": True, "seed": 3}).json()  # no n_fields: -1
     assert sorted(first["fields"]) == sorted([TILE, OTHER]) and first["fields_asked"] == -1 and first["field_seed"] == 3
-    assert admin.get("/api/labels/rounds/scope", params={"stain": "6E10"}).json()["fields_remaining"] == 0  # both are in an open session
-    taken = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "n_fields": -1})
-    assert taken.status_code == 400 and "open session" in taken.text
-    admin.post(f"/api/labels/sessions/{first['name']}/open", json={"open": False})  # a closed session's fields are free again
+    assert admin.get("/api/labels/rounds/scope", params={"stain": "6E10"}).json()["fields_remaining"] == 2  # sessions are independent
     again = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "n_fields": 5, "seed": 3}).json()
     assert sorted(again["fields"]) == sorted([TILE, OTHER]) and again["fields_remaining"] == 2  # asked for more than remain: all
     one = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "n_fields": 1, "seed": 3}).json()

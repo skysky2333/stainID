@@ -47,10 +47,10 @@ const PAGE = 12
  *  cannot be labelled yet are greyed out with the reason and a link to the step that comes first; all others stay choosable. */
 export function FieldPicker({ stain, chosen, onChange, source = '' }: { stain: string; chosen: string[]; onChange: (ids: string[]) => void; source?: string }) {
   const { tmaName } = useProject()
-  const [filters, setFilters] = useState({ tma: '', region: '', group: '', core: '', free: true })
+  const [filters, setFilters] = useState({ tma: '', region: '', group: '', core: '' })
   const [page, setPage] = useState(0)
   const query = new URLSearchParams({ stain, tma: filters.tma, region: filters.region, group: filters.group, core: filters.core,
-    free: String(filters.free), offset: String(page * PAGE), limit: String(PAGE), source })
+    offset: String(page * PAGE), limit: String(PAGE), source })
   const picker = useFetch<PickerPage>(`/api/labels/picker?${query}`)
   const set = (change: Partial<typeof filters>) => { setFilters({ ...filters, ...change }); setPage(0) }
   const selected = new Set(chosen)
@@ -66,11 +66,10 @@ export function FieldPicker({ stain, chosen, onChange, source = '' }: { stain: s
         <label className="field">Group<select value={filters.group} onChange={(e) => set({ group: e.target.value })}>
           <option value="">all</option>{(facets?.groups ?? []).map((g) => <option key={g} value={g}>{g}</option>)}</select></label>
         <label className="field">Core<input type="search" value={filters.core} placeholder="e.g. B-2" style={{ width: 110 }} onChange={(e) => set({ core: e.target.value })} /></label>
-        <label className="layer-toggle"><input type="checkbox" checked={filters.free} onChange={(e) => set({ free: e.target.checked })} />only fields nobody has labelled</label>
       </div>
       <div className="row small picker-legend">
         <span><span className="swatch outline picker-free" />choosable</span><span><span className="swatch picker-chosen" />chosen</span>
-        <span><span className="swatch outline picker-labelled" />has labels or is in a session</span><span><span className="swatch picker-blocked" />not ready yet</span>
+        <span><span className="swatch picker-blocked" />not ready yet</span>
         <span className="spacer" />
         {picker.data && <span className="secondary">{picker.data.ready_fields.toLocaleString()} of {picker.data.total_fields.toLocaleString()} fields ready
           · <b>{chosen.length.toLocaleString()} chosen</b></span>}
@@ -86,7 +85,7 @@ export function FieldPicker({ stain, chosen, onChange, source = '' }: { stain: s
               <button className="btn small" disabled={(page + 1) * PAGE >= data.total_cores} onClick={() => setPage(page + 1)}>Next ›</button>
             </div>
           )}
-        </> : <Empty>{filters.free || filters.tma || filters.region || filters.group || filters.core
+        </> : <Empty>{filters.tma || filters.region || filters.group || filters.core
           ? 'No fields match these filters.' : <>There are no {stain} fields yet. Fields are the tiles of each core: run <Link to="/workflow#tiles">Cut cores into tiles</Link> first.</>}</Empty>}
       </Loaded>
     </div>
@@ -99,9 +98,8 @@ function PickerCard({ core, stain, selected, onToggle }: { core: PickerCore; sta
   const chosenHere = core.fields.filter((f) => selected.has(f.tile_id)).length
   const width = core.width ?? Math.max(...core.fields.map((f) => f.x_px + f.width_px))
   const height = core.height ?? Math.max(...core.fields.map((f) => f.y_px + f.height_px))
-  const tone = (f: PickerField) => (f.blocked ? 'blocked' : selected.has(f.tile_id) ? 'chosen' : f.labelled_by.length || f.sessions.length ? 'labelled' : 'free')
-  const title = (f: PickerField) => f.blocked ? f.blocked.reason : [f.labelled_by.length ? `labelled by ${f.labelled_by.join(', ')}` : '',
-    f.sessions.length ? `in session ${f.sessions.join(', ')}` : '', selected.has(f.tile_id) ? 'chosen: click to leave out' : 'click to choose'].filter(Boolean).join(' · ')
+  const tone = (f: PickerField) => (f.blocked ? 'blocked' : selected.has(f.tile_id) ? 'chosen' : 'free')
+  const title = (f: PickerField) => (f.blocked ? f.blocked.reason : selected.has(f.tile_id) ? 'chosen: click to leave out' : 'click to choose')
   return (
     <div className={`card picker-card${core.blocked ? ' is-blocked' : ''}`}>
       <div className="row picker-card-head"><b>{tmaName(core.tma)} · {core.core_label}</b><GroupBadge group={core.disease_group} />
@@ -143,8 +141,7 @@ export function FieldChoice({ stain, mode, n, chosen, onMode, onN, onChosen, aut
       <div className="choice-grid">
         <label className={`choice-card${mode === 'auto' ? ' chosen' : ''}`}>
           <input type="radio" name="field-mode" checked={mode === 'auto'} onChange={() => onMode('auto')} />
-          <span><b>Let stainID choose (recommended)</b><span className="small secondary">{autoText ?? `Fields nobody has labelled yet, spread over TMAs and groups,
-            from cores that are ready for labelling.`}</span>
+          <span><b>Let stainID choose (recommended)</b><span className="small secondary">{autoText ?? `Ready fields, spread over TMAs and groups. Sessions are independent: fields of other sessions are drawn too.`}</span>
             {mode === 'auto' && <label className="field inline-number">How many fields
               <input type="number" min={1} max={500} value={n} style={{ width: 90 }} onChange={(e) => onN(Math.max(1, Number(e.target.value)))} /></label>}</span>
         </label>

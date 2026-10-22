@@ -1228,7 +1228,7 @@ details.side-details.compact > summary { font-weight: 500; }
 .side-save-buttons .btn.big { padding-top: 7px; padding-bottom: 7px; }
 .side-discard { margin-top: -2px; }
 /* the session's fields for the person labelling (labels/sessionfields.tsx): by TMA, then core, each core as its tiles */
-:root { --tile-todo: #8f8d86; --tile-progress: #2a78d6; --tile-done: #1f8a4c; --tile-mine: #8a4fd8; --tile-preparing: #b9b7af; --tile-ai: #d9730d; --tile-bad: #c2410c; }
+:root { --tile-elsewhere: #0e7490; --tile-todo: #8f8d86; --tile-progress: #2a78d6; --tile-done: #1f8a4c; --tile-mine: #8a4fd8; --tile-preparing: #b9b7af; --tile-ai: #d9730d; --tile-bad: #c2410c; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --tile-todo: #a5a39b; --tile-progress: #5aa0f0; --tile-done: #3fb871; --tile-mine: #b08cf0; --tile-preparing: #6c6b66; } }
 :root[data-theme="dark"] { --tile-todo: #a5a39b; --tile-progress: #5aa0f0; --tile-done: #3fb871; --tile-mine: #b08cf0; --tile-preparing: #6c6b66; }
 .session-fields { display: grid; gap: 12px; margin-top: 16px; container: fieldmap / inline-size; }
@@ -1266,6 +1266,10 @@ a.core-tile:hover, a.core-tile:focus-visible { outline: 2px solid var(--text-pri
 .core-tile.in-row { position: relative; display: inline-block; width: 120px; height: 120px; margin: 0 6px 6px 0; }
 .ai-dot { position: absolute; top: 5px; right: 5px; width: 9px; height: 9px; border-radius: 50%; background: var(--tile-ai); box-shadow: 0 0 0 1.5px var(--surface-1); }
 .ai-dot.in-legend { position: static; display: inline-block; }
+/* labelled in another session (informational: each session is independent) */
+.elsewhere-dot { position: absolute; top: 5px; right: 5px; width: 9px; height: 9px; border-radius: 50%; background: var(--tile-elsewhere); box-shadow: 0 0 0 1.5px var(--surface-1); }
+.elsewhere-dot.second { right: 17px; }
+.elsewhere-dot.in-legend { position: static; display: inline-block; }
 .look-not_started { border-color: var(--tile-todo); }
 .look-in_progress { border-color: var(--tile-progress); }
 .look-done { border-color: var(--tile-done); }

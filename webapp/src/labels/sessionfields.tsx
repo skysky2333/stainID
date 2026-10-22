@@ -42,6 +42,7 @@ function hoverText(f: Field, i: number, needed: number, me: string | null, sure?
     done.length ? `Finished by ${done.map((p) => `${p === me ? 'you' : p}${f.done_at?.[p] ? ` (${day(f.done_at[p])})` : ''}`).join(', ')}` : '',
     `${Math.min(done.length, needed)} of ${needed} ${needed === 1 ? 'person' : 'people'} done`,
     f.ai_reviewed ? 'AI review labels exist (not shown while labelling)' : '',
+    ...(f.elsewhere ?? []).map((e) => `Labelled in another session: ${e.title}${e.finished ? ` (finished by ${e.finished} ${e.finished === 1 ? 'person' : 'people'} there)` : ''} — not shown here`),
     ...Object.entries(f.marked_bad ?? {}).map(([p, k]) => `Marked bad by ${p === me ? 'you' : p}: ${BAD_REASON[k] ?? 'bad'}`),
     takenBy(f, me).length ? `Open now by ${who(takenBy(f, me), me)}: it opens for you once they close it`
       : f.prepared ? 'Click to open' : 'Being prepared: it opens once ready',
@@ -133,6 +134,7 @@ export function SessionFieldMap({ detail }: { detail: SessionDetail }) {
         <ul className="row small tile-legend" aria-label="Tile outlines">
           {LOOK_ORDER.map((look) => <li key={look}><span className={`tile-swatch look-${look}`} />{LOOK_TEXT[look]}</li>)}
           {fields.some((f) => f.ai_reviewed) && <li title="AI review labels exist on the field (not shown while labelling)"><span className="ai-dot in-legend" />AI reviewed</li>}
+          {fields.some((f) => f.elsewhere?.length) && <li title="People labelled the field in another session. This session is independent: its state here and what you see while labelling come from this session only"><span className="elsewhere-dot in-legend" />Labelled in another session</li>}
         </ul>
         <span className="spacer" />
         <div className="segmented small" role="group" aria-label="How the fields are shown">
@@ -174,7 +176,7 @@ function Tile({ name, n: { f, i }, needed, me, style, className = '', sure }: {
 }) {
   const look = lookOf(f)
   const body = <><img src={apiUrl(`/api/annotate/${name}/fields/${enc(f.tile_id)}/thumb.jpg`)} alt="" loading="lazy" decoding="async"
-    onError={(e) => { e.currentTarget.style.visibility = 'hidden' }} />{f.ai_reviewed && <span className="ai-dot" aria-hidden="true" />}</>
+    onError={(e) => { e.currentTarget.style.visibility = 'hidden' }} />{f.ai_reviewed && <span className="ai-dot" aria-hidden="true" />}{f.elsewhere?.length ? <span className={`elsewhere-dot${f.ai_reviewed ? ' second' : ''}`} aria-hidden="true" /> : null}</>
   const taken = takenBy(f, me).length > 0
   const common = { className: `core-tile look-${look}${className}${taken ? ' taken' : ''}`, style, title: hoverText(f, i, needed, me, sure), 'aria-label': `Field ${i + 1}: ${LOOK_TEXT[look]}` }
   return f.prepared && !taken ? <Link to={`/annotate/${name}/${enc(f.tile_id)}`} {...common}>{body}</Link> : <span {...common}>{body}</span>

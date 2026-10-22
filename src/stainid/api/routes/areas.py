@@ -59,8 +59,9 @@ def session_checked(meta: dict, labels: pd.DataFrame | None = None) -> dict[tupl
 # ---------------------------------------------------------------- making a session (admin)
 
 def create(body: NewSession) -> dict:
-    """A "Mark bad areas" session: the cores (each with all its stain images) not checked yet and not in another open
-    areas session, of the chosen TMAs, `n_fields` of them (-1 or empty: all), in the chosen order."""
+    """A "Mark bad areas" session: the cores (each with all its stain images) of the chosen TMAs, `n_fields` of them
+    (-1 or empty: all), in the chosen order. Sessions are independent: cores checked or held in another session are
+    drawn as any other."""
     state = get_state()
     tiles = state.tiles
     if body.tmas and not tiles.empty:
@@ -69,15 +70,7 @@ def create(body: NewSession) -> dict:
     if not stains_of:
         raise HTTPException(400, "No core has analysed tiles" + (" on these TMAs" if body.tmas else ""))
     order = body.order if body.order in areas.ORDERS else "problems"
-    done = checked()
-    taken: set[str] = set()
-    for name in sessions.names(root()):
-        meta = sessions.meta(root(), name)
-        if areas.is_areas(meta) and meta.get("open"):
-            taken |= set(meta.get("cores") or [])
-    left = [c for c, stains in stains_of.items() if c not in taken and not all(done.get((c, s)) for s in stains)]
-    if not left:
-        raise HTTPException(400, "Every core there has been checked for bad areas already (or is in an open session).")
+    left = list(stains_of)
     seed = body.seed if body.seed is not None else secrets.randbelow(2**31)
     scores = areas.priority({c: _signals(c, stains_of[c]) for c in left}) if order == "problems" else {}
     ordered = areas.order(left, scores, order, seed)

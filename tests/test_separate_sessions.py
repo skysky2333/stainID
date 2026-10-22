@@ -235,3 +235,32 @@ def test_mark_bad_areas_sessions_are_separate_too(rounds_project):  # noqa: F811
     assert "2" not in ben.get(f"/api/annotate/{two}/cores/{CORE}/6E10/areas").json()["kinds"]
     assert "2" in ann.get(f"/api/annotate/{one}/cores/{CORE}/6E10/areas").json()["kinds"]
     assert admin.get("/api/labels/areas").json()["cores_checked"] == 1  # the overview reads every session
+
+
+def test_two_sessions_of_a_stain_hold_the_same_fields_and_finishing_in_one_leaves_the_other(rounds_project):  # noqa: F811
+    """Sessions are independent, choosing fields too: a second session of the same stain draws the fields the first
+    one holds, and a field finished in one stays to do in the other (only marked as labelled in another session)."""
+    admin, (ann, ben), _ = rounds_project
+    made = []
+    for title in ("first", "second"):
+        r = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "n_fields": -1, "open": True, "title": title})
+        assert r.status_code == 200, r.text
+        made.append(r.json())
+    a, b = made
+    assert TILE in a["fields"] and sorted(a["fields"]) == sorted(b["fields"])  # the first session holding them leaves them in
+
+    assert _save(ann, a["name"], TILE, [], submit=True).status_code == 200
+    states_a = {f["tile_id"]: f for f in admin.get(f"/api/labels/sessions/{a['name']}/fields").json()}
+    states_b = {f["tile_id"]: f for f in admin.get(f"/api/labels/sessions/{b['name']}/fields").json()}
+    assert states_a[TILE]["done_by"] == ["Ann"]
+    assert states_b[TILE]["done_by"] == [] and states_b[TILE]["state"] != "done"
+    page_b = {f["tile_id"]: f for f in ben.get(f"/api/annotate/{b['name']}").json()["fields"]}
+    assert page_b[TILE]["done_by"] == [] and not page_b[TILE]["done_by_me"]
+    assert page_b[TILE]["elsewhere"] == [{"session": a["name"], "title": "first", "finished": 1}]  # a mark, nothing more
+    page_a = {f["tile_id"]: f for f in ann.get(f"/api/annotate/{a['name']}").json()["fields"]}
+    assert page_a[TILE]["elsewhere"] == []
+
+    # a field finished in another session and held by two open sessions is still drawn
+    third = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "n_fields": -1, "open": True, "title": "third"})
+    assert third.status_code == 200, third.text
+    assert TILE in third.json()["fields"]

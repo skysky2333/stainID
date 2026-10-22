@@ -590,18 +590,17 @@ def _known_fields(stain: str, tile_ids: list[str]) -> list[str]:
 
 
 def _pick(stain: str, n: int, seed: int) -> list[str]:
-    """n fields that are ready, that nobody has checked and no session has, spread over TMAs and groups."""
+    """n fields that are ready, spread over TMAs and groups. Sessions are independent: what other sessions hold or
+    finished does not matter here."""
     tiles = get_state().labelling_tiles
     tiles = tiles[tiles.stain == stain] if not tiles.empty else tiles
-    reviewed = set(store.reviewed_fields(store.current(root()), stain))
-    free = tiles[~tiles.tile_id.isin(reviewed | set(sessions.taken(root())))] if not tiles.empty else tiles
-    if free.empty:
-        raise HTTPException(400, f"Every {stain} field has been checked or belongs to a session already.")
-    blocked = readiness.blockers(get_state().project, free)
+    if tiles.empty:
+        raise HTTPException(400, f"There are no {stain} fields yet.")
+    blocked = readiness.blockers(get_state().project, tiles)
     if all(blocked):
         first = pd.Series([b["reason"] for b in blocked]).value_counts().index[0]
         raise HTTPException(400, f"No {stain} field can be labelled yet. {first}")
-    return sessions.pick_fields(free[[b is None for b in blocked]], set(), n, seed)
+    return sessions.pick_fields(tiles[[b is None for b in blocked]], set(), n, seed)
 
 
 @router.post("/labels/sessions", dependencies=admin)
@@ -703,6 +702,7 @@ def _with_place(meta: dict, fields: list[dict], states: dict[str, dict], labels:
     everyone = store.current(root())
     everyone = everyone[(everyone.stain == meta["stain"]) & everyone.tile_id.isin(wanted)]
     ai_reviewed = set(everyone.tile_id[everyone.source.map(store.is_ai_label)])  # the AI's labels (its own sessions): never shown while labelling, only flagged
+    elsewhere = _elsewhere(meta, everyone)
     bad: dict[str, dict[str, str]] = {}  # people's marks of a whole field as bad: who, and the type
     for r in here[(here.task == "exclude") & ~here.source.map(store.is_ai_label)].itertuples():
         if isinstance(r.meta, dict) and r.meta.get("whole_field"):
@@ -718,7 +718,33 @@ def _with_place(meta: dict, fields: list[dict], states: dict[str, dict], labels:
                     "box": [place[k] for k in BOX] if all(place.get(k) is not None for k in BOX) else None, "state": s.get("state"),
                     "working": s.get("working", []), "open_by": s.get("open_by", f.get("open_by", [])), "done_by": done_by,
                     "done_at": {p: float(when[(f["tile_id"], p)]) for p in done_by if (f["tile_id"], p) in when},
-                    "ai_reviewed": f["tile_id"] in ai_reviewed, "marked_bad": bad.get(f["tile_id"], {})})
+                    "ai_reviewed": f["tile_id"] in ai_reviewed, "marked_bad": bad.get(f["tile_id"], {}),
+                    "elsewhere": elsewhere.get(f["tile_id"], [])})
+    return out
+
+
+def _elsewhere(meta: dict, everyone: pd.DataFrame) -> dict[str, list[dict]]:
+    """Per field, the other sessions with people's labels on it: {session, title, finished: how many people finished
+    it there}. Only shown as a mark on the fields page: the field's state here and everything shown while labelling
+    come from this session alone."""
+    if everyone.empty or "session" not in everyone:
+        return {}
+    rows = everyone[(everyone.session.fillna("").astype(str) != meta["name"]) & (everyone.session.fillna("").astype(str) != "")
+                    & ~everyone.source.map(store.is_ai_label)]
+    if rows.empty:
+        return {}
+    titles: dict[str, str] = {}
+    out: dict[str, list[dict]] = {}
+    for (tile, name), group in rows.groupby(["tile_id", "session"]):
+        if name not in titles:
+            try:
+                titles[name] = str(sessions.meta(root(), name).get("title") or name)
+            except (FileNotFoundError, KeyError, ValueError):
+                titles[name] = ""
+        if not titles[name]:
+            continue  # a deleted session's labels
+        finished = int(group[group.task == "done"].source.nunique())
+        out.setdefault(str(tile), []).append({"session": str(name), "title": titles[name], "finished": finished})
     return out
 
 
@@ -875,23 +901,19 @@ def _field_states(meta: dict) -> list[dict]:
 def picker(stain: str, tma: str = "", region: str = "", group: str = "", core: str = "", free: bool = False, offset: int = 0,
            limit: int = 12, source: str = "") -> dict:
     """The fields people can be asked to label, core by core (for choosing them by hand): each field's square in its
-    core image, whether it already has labels or belongs to a session, and, when it cannot be labelled yet, why and
-    which step comes first (`blocked`, see `labels.readiness`; a core whose fields all wait for the same thing carries
-    it too). `free` keeps only fields nobody has labelled that no session has."""
+    core image and, when it cannot be labelled yet, why and which step comes first (`blocked`, see `labels.readiness`;
+    a core whose fields all wait for the same thing carries it too). Sessions are independent: other sessions' fields
+    and labels play no part (`free` is ignored: kept for older pages)."""
     state = get_state()
     tiles = state.labelling_tiles
     tiles = tiles[tiles.stain == stain] if not tiles.empty else tiles
     facets = {key: sorted({str(v) for v in tiles[column].dropna()}, key=lambda v: (len(v), v)) if column in tiles else []
               for key, column in (("tmas", "tma"), ("regions", "region"), ("groups", "disease_group"))}
-    labelled = sessions.labelled_by(store.current(root()), stain)
-    taken = sessions.taken(root())
     for column, value in (("tma", tma), ("region", region), ("disease_group", group)):
         if value and column in tiles:
             tiles = tiles[tiles[column].astype(str) == value]
     if core:
         tiles = tiles[tiles.core_id.str.contains(core, case=False, regex=False)]
-    if free:
-        tiles = tiles[~tiles.tile_id.isin(set(labelled) | set(taken))]
     check = readiness.store_blockers if source == rounds.SOURCE else readiness.blockers  # rounds read the v2 candidate store
     blocked = dict(zip(tiles.tile_id, check(state.project, tiles))) if not tiles.empty else {}
     first_rows = tiles.drop_duplicates("core_id") if not tiles.empty else tiles
@@ -902,8 +924,7 @@ def picker(stain: str, tma: str = "", region: str = "", group: str = "", core: s
     for core_id, group_tiles in tiles[tiles.core_id.isin(set(page))].groupby("core_id"):
         first = group_tiles.iloc[0]
         image = images[(images.core_id == core_id) & (images.stain == stain)] if not images.empty else images
-        fields = [{"tile_id": t["tile_id"], **{k: int(t[k]) for k in BOX}, "labelled_by": sorted(labelled.get(t["tile_id"], set())),
-                   "sessions": taken.get(t["tile_id"], []), "blocked": blocked.get(t["tile_id"])}
+        fields = [{"tile_id": t["tile_id"], **{k: int(t[k]) for k in BOX}, "blocked": blocked.get(t["tile_id"])}
                   for t in group_tiles.sort_values("selection_order").to_dict("records")]
         reasons = {f["blocked"]["reason"] if f["blocked"] else None for f in fields}
         cores.append({"core_id": core_id, **{k: _text(first.get(k)) for k in ("tma", "core_label", "region", "disease_group", "donor_id")},

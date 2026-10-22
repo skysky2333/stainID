@@ -138,14 +138,14 @@ export function NewRoundSession({ stains, onClose, onCreated, onOlder }: {
               return (
                 <fieldset className="field"><legend>How many fields</legend>
                   <div className="segmented">
-                    <button type="button" className={`btn${fieldCount < 0 ? ' chosen' : ''}`} onClick={() => setFieldCount(-1)}>All remaining fields ({left.toLocaleString()})</button>
+                    <button type="button" className={`btn${fieldCount < 0 ? ' chosen' : ''}`} onClick={() => setFieldCount(-1)}>Every ready field ({left.toLocaleString()})</button>
                     <button type="button" className={`btn${fieldCount > 0 ? ' chosen' : ''}`} onClick={() => setFieldCount(fieldCount > 0 ? fieldCount : Math.min(10, Math.max(1, left)))}>A random sample</button>
                   </div>
                   {fieldCount > 0 && <label className="inline-number small" style={{ marginTop: 6 }}>
                     <input type="number" min={1} value={fieldCount} style={{ width: 90 }} onChange={(e) => setFieldCount(Math.max(1, Number(e.target.value) || 1))} />
-                    {' '}fields drawn at random from the {left.toLocaleString()} remaining</label>}
-                  <p className="small muted" style={{ margin: '6px 0 0' }}>Remaining: ready fields nobody has finished that are not in another open session.
-                    {fieldCount > left && left > 0 ? <b className="warning-text"> Only {left.toLocaleString()} remain, so all of them are taken.</b> : null}</p>
+                    {' '}fields drawn at random from the {left.toLocaleString()} ready</label>}
+                  <p className="small muted" style={{ margin: '6px 0 0' }}>Sessions are independent: fields other sessions have, or finished, are drawn like any other.
+                    {fieldCount > left && left > 0 ? <b className="warning-text"> Only {left.toLocaleString()} are ready, so all of them are taken.</b> : null}</p>
                 </fieldset>
               )
             })() : null}
@@ -207,7 +207,7 @@ function AreasScope({ matter = false, scope, overview, where, setWhere, tmas, se
   words: (typeof WORDS)[keyof typeof WORDS]; tmaName: (tma: string) => string
 }) {
   const o = overview.data
-  const left = o ? o.cores - o.cores_checked : null
+  const left = o ? o.cores : null
   return <>
     <fieldset className="field"><legend>Which {words.pictures}?</legend>
       {o && <p className="small secondary" style={{ margin: '0 0 8px' }}>{o.cores_checked.toLocaleString()} of {o.cores.toLocaleString()} {words.pictures} {matter ? 'have their grey and white matter marked' : 'have been checked for bad areas'} so far.</p>}
@@ -224,14 +224,14 @@ function AreasScope({ matter = false, scope, overview, where, setWhere, tmas, se
     </fieldset>
     <fieldset className="field"><legend>How many {words.pictures}</legend>
       <div className="segmented">
-        <button type="button" className={`btn${count < 0 ? ' chosen' : ''}`} onClick={() => setCount(-1)}>All not checked yet{left != null && where !== 'tmas' ? ` (${left.toLocaleString()})` : ''}</button>
+        <button type="button" className={`btn${count < 0 ? ' chosen' : ''}`} onClick={() => setCount(-1)}>Every {words.pictures.slice(0, -1)}{left != null && where !== 'tmas' ? ` (${left.toLocaleString()})` : ''}</button>
         <button type="button" className={`btn${count > 0 ? ' chosen' : ''}`} onClick={() => setCount(count > 0 ? count : 30)}>A sample</button>
       </div>
       {count > 0 && <label className="inline-number small" style={{ marginTop: 6 }}>
         <input type="number" min={1} value={count} style={{ width: 90 }} onChange={(e) => setCount(Math.max(1, Number(e.target.value) || 1))} />
         {' '}{words.pictures}, taken in the order below</label>}
       <p className="small muted" style={{ margin: '6px 0 0' }}>People stop whenever they like: the session is a sample, it does not need every {words.pictures.slice(0, -1)} checked.
-        {' '}{words.pictures[0].toUpperCase() + words.pictures.slice(1)} someone checked already, or in another open session, are left out.</p>
+        {' '}Sessions are independent: {words.pictures} of other sessions are drawn like any other.</p>
     </fieldset>
     {!matter && <fieldset className="field"><legend>Order</legend>
       <div className="segmented">

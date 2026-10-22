@@ -173,15 +173,6 @@ def pick_fields(tiles: pd.DataFrame, reviewed: set[str], n: int, seed: int) -> l
     return list(np.random.default_rng(seed).permutation(picked))
 
 
-def taken(root: Path) -> dict[str, list[str]]:
-    """The sessions each field belongs to."""
-    out: dict[str, list[str]] = {}
-    for name in names(root):
-        for tile in meta(root, name).get("fields", []):
-            out.setdefault(tile, []).append(name)
-    return out
-
-
 def add_fields(root: Path, name: str, tile_ids: list[str]) -> dict:
     """Add these fields to a session (ones it has already are left as they are)."""
     current = meta(root, name)

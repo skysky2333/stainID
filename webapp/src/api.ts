@@ -226,6 +226,8 @@ export interface SessionField { tile_id: string; done_by_me: boolean; annotators
   box?: [number, number, number, number] | null; done_at?: Record<string, number>
   /** the AI's review labels exist on it (never shown while labelling) */
   ai_reviewed?: boolean
+  /** other sessions with people's labels on the field (informational: nothing of them shows while labelling here) */
+  elsewhere?: { session: string; title: string; finished: number }[]
   /** people who marked the whole field as bad, with the type (labels.exclusions: "1"–"4") */
   marked_bad?: Record<string, string>
   /** where it stands for everyone (`sessions.field_states`), with who finished it and who is working on it or has it open */
@@ -257,7 +259,7 @@ export interface QueueNext { object: QueueItem | null; objects: QueueItem[]; rem
 /* labelling fields (whole-core area): choosing fields, their state in a session, the labels of a session */
 export interface Blocker { reason: string; step: string; step_title: string; link: string }
 export interface FieldPlace { core_id?: string; core_label?: string; tma?: string; region?: string | null; disease_group?: string | null; x_px?: number; y_px?: number; width_px?: number; height_px?: number }
-export interface PickerField { tile_id: string; x_px: number; y_px: number; width_px: number; height_px: number; labelled_by: string[]; sessions: string[]; blocked: Blocker | null }
+export interface PickerField { tile_id: string; x_px: number; y_px: number; width_px: number; height_px: number; blocked: Blocker | null }
 export interface PickerCore {
   core_id: string; tma: string; core_label: string; region: string | null; disease_group: string | null; donor_id: string | null
   width: number | null; height: number | null; fields: PickerField[]; blocked: Blocker | null

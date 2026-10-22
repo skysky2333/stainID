@@ -225,19 +225,10 @@ def create_round_session(body: NewSession) -> dict:
     return meta
 
 
-def assigned_fields(but: str = "") -> set[str]:
-    """The fields of the open labelling sessions (but this one)."""
-    out: set[str] = set()
-    for name in sessions.names(root()):
-        meta = sessions.meta(root(), name)
-        if meta.get("open") and name != but and not sessions.label_set_only(meta):
-            out |= set(meta.get("fields", []))
-    return out
-
-
 def remaining(stain: str, scope: list[str], but: str = "") -> list[str]:
-    """The fields of the scope that are not annotated yet and not assigned to another open session (`rounds.remaining_fields`)."""
-    return rounds.remaining_fields(scope, set(store.reviewed_fields(store.current(root()), stain)), assigned_fields(but))
+    """The fields a session can draw from: every field of the scope (each ready one: `_scope`). Sessions are
+    independent: fields other sessions hold or finished are drawn as any other."""
+    return list(dict.fromkeys(scope))
 
 
 def checked_areas_fields(stain: str, fields: list[str]) -> set[str]:
@@ -251,7 +242,7 @@ def _pick_fields(stain: str, scope: list[str], n: int, seed: int, spread: bool =
     person checked, then the rest; with `spread` spread over TMAs and groups (within each of the two pools)."""
     left = remaining(stain, scope, but)
     if not left:
-        raise HTTPException(400, f"Every {stain} field there has been checked or belongs to an open session already.")
+        raise HTTPException(400, f"No {stain} field there is ready to label.")
     first = checked_areas_fields(stain, left)
     if spread:
         tiles = get_state().labelling_tiles

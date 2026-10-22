@@ -62,24 +62,16 @@ def working_text(people: set[str]) -> str:
 # ---------------------------------------------------------------- making a session (admin)
 
 def create(body: NewSession) -> dict:
-    """A "Grey / white matter" session: the cores (each with all its stain images, NeuN first) of the chosen TMAs whose
-    white matter nobody saved yet and that are in no other open session of this kind, `n_fields` of them (-1 or
-    empty: all), in random order."""
+    """A "Grey / white matter" session: the cores (each with all its stain images, NeuN first) of the chosen TMAs,
+    `n_fields` of them (-1 or empty: all), in random order. Sessions are independent: cores done or held in another
+    session are drawn as any other."""
     tiles = get_state().tiles
     if body.tmas and not tiles.empty:
         tiles = tiles[tiles.tma.astype(str).isin({str(t) for t in body.tmas})]
     stains_of = {c: matter.ordered(s) for c, s in areas.core_stains(tiles).items()}
     if not stains_of:
         raise HTTPException(400, "No core has analysed tiles" + (" on these TMAs" if body.tmas else ""))
-    done = matter.checked(store.current(root()))
-    taken: set[str] = set()
-    for name in sessions.names(root()):
-        meta = sessions.meta(root(), name)
-        if matter.is_matter(meta) and meta.get("open"):
-            taken |= set(meta.get("cores") or [])
-    left = [c for c, stains in stains_of.items() if c not in taken and not all(done.get((c, s)) for s in stains)]
-    if not left:
-        raise HTTPException(400, "Every core there has its grey and white matter marked already (or is in an open session).")
+    left = list(stains_of)
     seed = body.seed if body.seed is not None else secrets.randbelow(2**31)
     ordered = areas.order(left, {}, "random", seed)
     n = -1 if body.n_fields is None else body.n_fields
