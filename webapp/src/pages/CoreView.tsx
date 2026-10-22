@@ -183,12 +183,12 @@ export default function CoreView() {
   const openRef = useRef(open)
   openRef.current = open
   const neighbours = info?.neighbours
-  useEffect(() => {  // ← and →: the previous and the next core (the core list's order), the same stain and layers
+  useEffect(() => {  // [ and ]: the previous and the next core (the core list's order), the same stain and layers (the arrow keys move the picture)
     const onKey = (e: KeyboardEvent) => {
-      if ((e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || typing(e.target)) return
-      const id = e.key === 'ArrowLeft' ? neighbours?.previous : neighbours?.next
+      if ((e.key !== '[' && e.key !== ']') || e.ctrlKey || e.metaKey || e.altKey || typing(e.target)) return
+      const id = e.key === '[' ? neighbours?.previous : neighbours?.next
       e.preventDefault()
-      e.stopPropagation()  // before the picture's own arrow keys (they move it): ↑ and ↓ still do
+      e.stopPropagation()
       if (id) openRef.current(id)
     }
     window.addEventListener('keydown', onKey, { capture: true })
@@ -203,8 +203,8 @@ export default function CoreView() {
           {info.donor_id ? <span>donor {info.donor_id}</span> : <span>control tissue</span>}
           {info.region && <span>{info.region}</span>}{info.technical_replicate && <span>replicate {info.technical_replicate}</span>}</span> : 'Loading the core…'}>
         {info && <span className="row">
-          <button className="btn" disabled={!info.neighbours.previous} onClick={() => open(info.neighbours.previous)} title="The core before this one on the TMA (key ←)">← Previous core</button>
-          <button className="btn" disabled={!info.neighbours.next} onClick={() => open(info.neighbours.next)} title="The core after this one on the TMA (key →)">Next core →</button>
+          <button className="btn" disabled={!info.neighbours.previous} onClick={() => open(info.neighbours.previous)} title="The core before this one on the TMA (key [)">← Previous core</button>
+          <button className="btn" disabled={!info.neighbours.next} onClick={() => open(info.neighbours.next)} title="The core after this one on the TMA (key ])">Next core →</button>
         </span>}
       </PageHead>
       <Loaded state={core} label="Loading the core…">
@@ -458,7 +458,7 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
       <div ref={pictureBox} className="card core-picture" onPointerDown={() => setFixed(null)} onPointerLeave={() => setFixed(null)}>
         {ready && tileUrl ? (
           <DeepZoom pyramid={ready} tileUrl={tileUrl} layers={!hidden && layers.dab ? ['dab'] : []} marks={shown} lines={lines} lineColor={THREAD_COLOR}
-            boxes={boxes} overlays={overlays} pixelUm={image?.pixel_width_um} height="auto"
+            boxes={boxes} overlays={overlays} pixelUm={image?.pixel_width_um} height="var(--core-square)"
             selected={!hidden && pick ? drawn.indexOf(pick) : null} describe={describe} target={target} onView={setViewRect}
             onPick={(i) => {
               if (i !== null && i >= drawn.length) {  // a badge: its object
@@ -469,7 +469,7 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
               setSelected(i === null ? null : drawn[i].index)
             }} onTileError={() => setPoll(true)}
             toolbar={<span className="row dz-toolbar-info"><span className="small muted">Scroll to zoom · drag to move · click an object for details ·
-              {' '}<span className="kbd">Space</span> hides what is drawn · <span className="kbd">←</span> <span className="kbd">→</span> other cores</span>
+              {' '}<span className="kbd">Space</span> hides what is drawn · arrow keys move · <span className="kbd">[</span> <span className="kbd">]</span> other cores</span>
               {hidden && <span className="badge">Overlays hidden · <span className="kbd">Space</span></span>}</span>} />
         ) : (
           <Preparing core={core} stain={stain} state={picture.data} error={picture.error} />

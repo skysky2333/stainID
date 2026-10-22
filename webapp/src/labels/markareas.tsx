@@ -3,7 +3,7 @@
    chosen type strong; detection's own areas, what the analysis uses, never change here) and detection's objects
    faintly, for context. The brush is always on and is the field tool's (`BrushMasks`, labels/brush.ts): 1–4 choose
    the type, whose current area (detection's with everyone's saved edits) is drawn as one merged region; a drag adds to
-   it, Shift-drag takes out of it (detection's part too); Tab / Shift+Tab (or − / +) a smaller / bigger brush (its size on screen: zoom in for a finer one), the wheel zooms, the
+   it, Shift-drag takes out of it (detection's part too); Tab / Shift+Tab a smaller / bigger brush (its size on screen: zoom in for a finer one), the wheel zooms, the
    middle button pans, Z takes back a stroke, Space hides everything drawn over the tissue, [ / ] the other stain.
    Enter says "this stain is done" and goes to the next stain; after the last one the core is
    saved (every stain looked at, an edit for each stain painted on) and the next core opens. People's areas teach and
@@ -197,16 +197,15 @@ function CoreTask({ name, core, after, afterStains, practice, onEvent, coach, on
       if (e.ctrlKey || e.metaKey) return
       const type = EXCLUDE_TYPES.find((t) => t.key === e.key)
       if (type) { setKind(type.key); tell('type'); return }
-      if (e.key === 'Tab') { e.preventDefault(); l.size(e.shiftKey) }  // the brush size, as in the field tool
-      else if (e.key === '+' || e.key === '=' || e.key === '-' || e.key === '−') { e.preventDefault(); e.stopPropagation(); l.size(e.key !== '-' && e.key !== '−') }
+      if (e.key === 'Tab') { e.preventDefault(); l.size(e.shiftKey) }  // the brush size, as in the field tool (+ / − zoom, as in every viewer)
       else if (e.key === '[') { e.preventDefault(); l.go(l.at - 1) }
       else if (e.key === ']') { e.preventDefault(); l.go(l.at + 1) }
       else if (e.key.toLowerCase() === 'z') l.undo()
       else if (e.key === 'Enter') { e.preventDefault(); l.fine() }
       else if (e.key === ' ') { e.preventDefault(); setHidden(!l.hidden); tell('overlays') }
     }
-    window.addEventListener('keydown', onKey, true)  // first, so + / − size the brush rather than zoom the picture
-    return () => window.removeEventListener('keydown', onKey, true)
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
   }, [tell])
 
   if (!task.data) return <><ErrorNote error={task.error} />{!task.error && <Loading label="Opening the core…" />}</>
@@ -268,7 +267,7 @@ function CoreTask({ name, core, after, afterStains, practice, onEvent, coach, on
           <div className="card side-block key-help small">
             <h3>Keys</h3>
             <div><span className="kbd">1</span>–<span className="kbd">4</span> type · drag adds to it · <span className="kbd">Shift</span>-drag takes out of it</div>
-            <div><span className="kbd">Tab</span> / <span className="kbd">Shift</span>+<span className="kbd">Tab</span> (or <span className="kbd">−</span> / <span className="kbd">+</span>) a smaller / bigger brush · wheel: zoom · middle button: move</div>
+            <div><span className="kbd">Tab</span> / <span className="kbd">Shift</span>+<span className="kbd">Tab</span> a smaller / bigger brush · <span className="kbd">+</span> <span className="kbd">−</span> zoom · arrow keys move · wheel: zoom · middle button: move</div>
             <div><span className="kbd">Z</span> undo a stroke · <span className="kbd">Space</span> hide the overlays</div>
             <div><span className="kbd">Enter</span> this stain is done · <span className="kbd">[</span> <span className="kbd">]</span> other stain</div>
             <label className="layer-toggle" style={{ marginTop: 6 }}><input type="checkbox" checked={objectsOn} onChange={(e) => setObjectsOn(e.target.checked)} />Show detection’s objects (faint)</label>
@@ -360,7 +359,7 @@ function StainView({ base, image, masks, kind, brushRadius, hidden, objectsOn, t
     const failed = state && !state.ready && state.state === 'failed' ? state.error ?? 'unknown error' : null
     const ahead = state && !state.ready ? state.ahead ?? 0 : 0
     return (
-      <div className="dz-preparing" style={{ height: 'calc(100vh - 260px)' }}>
+      <div className="dz-preparing dz-preparing-fill">
         {state && !state.ready && state.thumb_size && <img src={apiUrl(`${base}/thumb.jpg?size=${state.thumb_size}`)} alt="" />}
         <div className="dz-preparing-note">{failed ? <><b>This picture could not be prepared.</b><ErrorNote error={failed} /></>
           : <Loading label={<span><b>Preparing this picture…</b><br /><span className="small">{ahead ? `${ahead} other picture${ahead === 1 ? '' : 's'} first. ` : ''}It takes about 10 s once.</span></span>} />}</div>
@@ -369,7 +368,7 @@ function StainView({ base, image, masks, kind, brushRadius, hidden, objectsOn, t
   }
   const types = (ex.kinds ?? []).filter((k) => (k.fraction ?? 0) > 0)
   return (
-    <DeepZoom pyramid={pyramid} height="calc(100vh - 260px)" panLock cursor="none"
+    <DeepZoom pyramid={pyramid} height="fill" panLock cursor="none"
       tileUrl={(level, col, row) => apiUrl(`${base}/tiles/${level}/${col}_${row}.jpg?v=${pyramid.version}`)}
       marks={marks}
       onTileError={() => { setPoll(true); picture.reload() }}

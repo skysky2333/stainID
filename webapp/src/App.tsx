@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import type { Job, ProjectsInfo, Session } from './api'
 import { appBase, projectId, projectPath, remote } from './api'
@@ -152,11 +152,24 @@ function NewPassword() {
   )
 }
 
+const SIDEBAR_KEY = 'stainid.sidebar.collapsed'
+
+/** The left menu hidden (a thin strip with its button) or shown, remembered in this browser. */
+function useCollapsedSidebar(): [boolean, (on: boolean) => void] {
+  const [collapsed, setCollapsed] = useState(() => { try { return window.localStorage.getItem(SIDEBAR_KEY) === '1' } catch { return false } })
+  const set = (on: boolean) => {
+    setCollapsed(on)
+    try { window.localStorage.setItem(SIDEBAR_KEY, on ? '1' : '0') } catch { /* not remembered: still works */ }
+  }
+  return [collapsed, set]
+}
+
 /** The one app, for everyone signed in: the labelling pages (home with my sets, the tutorials, the labelling itself,
  *  help, the account) and, for admins, the study's pages. An annotator's pages need no project in the address (their
  *  sets are of every project); a session's link names its project. */
 function Shell({ admin }: { admin: boolean }) {
   const { info, error } = useProject()
+  const [collapsed, setCollapsed] = useCollapsedSidebar()
   const { pathname } = useLocation()
   useEffect(() => { document.title = [pageLabel(pathname), info?.name, 'stainID'].filter(Boolean).join(' · ') }, [pathname, info?.name])
   if (admin && error && !info) {
@@ -170,8 +183,13 @@ function Shell({ admin }: { admin: boolean }) {
   }
 
   return (
-    <div className="layout">
-      <aside className="sidebar">
+    <div className={`layout${collapsed ? ' nav-collapsed' : ''}`}>
+      <aside className="sidebar" aria-label="Navigation">
+        <button className="btn small sidebar-toggle" onClick={() => setCollapsed(!collapsed)} aria-expanded={!collapsed}
+          title={collapsed ? 'Show the menu' : 'Hide the menu: more room for the picture'} aria-label={collapsed ? 'Show the menu' : 'Hide the menu'}>
+          {collapsed ? '»' : '«'}
+        </button>
+        <div className="sidebar-body">
         <BrandLink />
         {admin && <ProjectSwitcher />}
         {admin && <JobsIndicator />}
@@ -186,6 +204,7 @@ function Shell({ admin }: { admin: boolean }) {
         </nav>
         <div className="sidebar-foot">
           <nav className="nav-group" aria-label="Settings and help">{[...(admin ? ADMIN_FOOT : []), ...FOOT_NAV].map((item) => <SideLink key={item[0]} item={item} />)}</nav>
+        </div>
         </div>
       </aside>
       <main className="main">

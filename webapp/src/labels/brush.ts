@@ -7,7 +7,7 @@
    adds the brushed pixels to the chosen type's area (a union: one region, however many strokes; pixels of another type
    are given to the chosen one); Shift-drag takes them out of the chosen type's area, detection's included ("marked
    fine" is no more than that: taken out of a type). The chosen type's current area is drawn as one merged region (the
-   others faintly). Tab makes the brush smaller, Shift+Tab bigger (+ / − too; its size in µm shows in the panel and as
+   others faintly). Tab makes the brush smaller, Shift+Tab bigger (+ / − zoom the picture; its size in µm shows in the panel and as
    the ring under the mouse); the wheel always zooms. Each stroke is one step Z takes back.
 
    `BrushMasks` holds, at 1/`scale` of the picture, per type what was added and what was taken out since the last Save,

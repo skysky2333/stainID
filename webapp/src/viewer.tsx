@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { PALETTE } from './palette'
+import { MAX_ZOOM, useViewKeys } from './viewkeys'
 
 /** The names of detection's own classes where no label class names them (the current outputs); their colours are the
  *  label classes' (classPalette.ts `MODEL_CLASSES`), these only for what has no class. */
@@ -23,14 +24,18 @@ export const RASTER_LAYERS: Record<string, { label: string; color: string }> = {
 
 export interface ImagePoint { x: number; y: number; unit: number }
 
+type View = { zoom: number; x: number; y: number }
+
 /**
- * A field image with raster layers and an SVG overlay in image pixel coordinates. Scroll zooms towards the pointer,
- * dragging (the left button where nothing else takes it, the middle one always) pans, the right button does nothing; a left or right press without dragging is reported as a click in image
- * pixels (`unit` = image pixels per screen pixel). The page never scrolls from it: the wheel is taken, and the middle
- * button's autoscroll never starts. With `fit`, the picture is as large as fits the space its card is given (the
- * annotation pages size that to the window), instead of the card's width.
+ * A field image with raster layers and an SVG overlay in image pixel coordinates. Scroll, + / − (keys and buttons)
+ * zoom from the picture as it fits up to `MAX_ZOOM`; dragging (the left button where nothing else takes it, the middle
+ * one always) and the arrow keys (held: smoothly, `useViewKeys`) pan. A left press without dragging is reported as a
+ * click in image pixels (`unit` = image pixels per screen pixel); the right button calls `onContext` (a menu). The page
+ * never scrolls from it: the wheel is taken, and the middle button's autoscroll never starts. With `fit`, the viewer
+ * takes all the room its card is given (the annotation pages size that to the window), the picture fitted inside it
+ * and centred, so a zoomed-in picture uses the whole room; else the picture is as wide as the card.
  */
-export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, onMove, children, fit = false, onPress, onRelease, onWheelOver, onSize, panLock = false, under, paint }: {
+export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, onMove, children, fit = false, onPress, onRelease, onWheelOver, onSize, panLock = false, under, paint, onContext }: {
   src: string
   layers?: string[]
   title: ReactNode
@@ -53,11 +58,14 @@ export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, on
   under?: (zoom: number, size: { w: number; h: number }, unit: number) => ReactNode
   /** HTML (the brush's canvases) between `under` and `children`, in a layer of its own: a change to it repaints only it */
   paint?: ReactNode
+  /** the right button on the picture (a menu at the pointer) */
+  onContext?: (point: ImagePoint, event: React.MouseEvent) => void
 }) {
-  const [view, setView] = useState({ zoom: 1, x: 0, y: 0 })
+  // the view: `x`, `y` move the picture from where it sits centred at 1× (screen px), `zoom` scales it
+  const [view, setView] = useState<View>({ zoom: 1, x: 0, y: 0 })
   const [size, setSize] = useState({ w: 2304, h: 2304 })
   const [loaded, setLoaded] = useState(false)
-  const [width, setWidth] = useState(800)
+  const [boxSize, setBoxSize] = useState({ w: 800, h: 800 })
   const drag = useRef<{ x: number; y: number; ox: number; oy: number; moved: boolean; pan: boolean } | null>(null)
   const box = useRef<HTMLDivElement>(null)
   const room = useRef<HTMLDivElement>(null)
@@ -65,7 +73,7 @@ export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, on
   const { zoom } = view
   const viewNow = useRef(view)
   viewNow.current = view
-  const before = useRef<{ zoom: number; x: number; y: number } | null>(null)  // the view before a `focus` zoomed in
+  const before = useRef<View | null>(null)  // the view before a `focus` zoomed in
   const wheelOver = useRef(onWheelOver)
   wheelOver.current = onWheelOver
   const sizeHeard = useRef(onSize)
@@ -89,6 +97,24 @@ export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, on
     img.src = src
   }, [src])
 
+  const ratio = size.w / Math.max(1, size.h)
+  const filled = fit && space && space.w > 0 && space.h > 0 ? space : null
+  const shown = filled  // the picture at 1×, in screen px
+    ? (filled.w / filled.h > ratio ? { width: Math.floor(filled.h * ratio), height: filled.h } : { width: filled.w, height: Math.floor(filled.w / ratio) })
+    : { width: boxSize.w, height: boxSize.w / ratio }
+  const origin = { x: Math.max(0, (boxSize.w - shown.width) / 2), y: Math.max(0, (boxSize.h - shown.height) / 2) }  // where it sits at 1×
+  const layout = useRef({ origin, shown, boxSize })
+  layout.current = { origin, shown, boxSize }
+
+  /** The view zoomed by `factor` about a point of the viewer (screen px from its corner); 1× is the picture as it fits. */
+  const zoomedAt = (v: View, factor: number, px: number, py: number): View => {
+    const next = Math.min(MAX_ZOOM, Math.max(1, v.zoom * factor))
+    if (next === 1) return { zoom: 1, x: 0, y: 0 }
+    const o = layout.current.origin
+    const ax = px - o.x, ay = py - o.y
+    return { zoom: next, x: ax - ((ax - v.x) * next) / v.zoom, y: ay - ((ay - v.y) * next) / v.zoom }
+  }
+
   useEffect(() => {
     const element = box.current
     if (!element) return
@@ -98,17 +124,13 @@ export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, on
       const rect = element.getBoundingClientRect()
       const px = e.clientX - rect.left
       const py = e.clientY - rect.top
-      setView((v) => {
-        const next = Math.min(16, Math.max(1, v.zoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15)))
-        if (next === 1) return { zoom: 1, x: 0, y: 0 }
-        return { zoom: next, x: px - ((px - v.x) * next) / v.zoom, y: py - ((py - v.y) * next) / v.zoom }
-      })
+      setView((v) => zoomedAt(v, e.deltaY < 0 ? 1.15 : 1 / 1.15, px, py))
     }
     element.addEventListener('wheel', onWheel, { passive: false })
-    const resize = new ResizeObserver(() => setWidth(element.clientWidth))
+    const resize = new ResizeObserver(() => setBoxSize({ w: element.clientWidth, h: element.clientHeight }))
     resize.observe(element)
     return () => { element.removeEventListener('wheel', onWheel); resize.disconnect() }
-  }, [])
+  }, [])  // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!focus) return
@@ -118,36 +140,32 @@ export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, on
       return
     }
     before.current = before.current ?? viewNow.current
-    const width = box.current?.clientWidth ?? 600
-    const scale = width / size.w
-    setView({ zoom: 4, x: width / 2 - focus.x * scale * 4, y: width / 2 - focus.y * scale * 4 })
+    const { origin: o, shown: s, boxSize: b } = layout.current
+    const scale = s.width / size.w
+    setView({ zoom: 4, x: b.w / 2 - o.x - focus.x * scale * 4, y: b.h / 2 - o.y - focus.y * scale * 4 })
   }, [focus, size.w])
 
-  const zoomBy = (factor: number) => setView((v) => {
-    const width = box.current?.clientWidth ?? 600
-    const next = Math.min(16, Math.max(1, v.zoom * factor))
-    if (next === 1) return { zoom: 1, x: 0, y: 0 }
-    return { zoom: next, x: width / 2 - ((width / 2 - v.x) * next) / v.zoom, y: width / 2 - ((width / 2 - v.y) * next) / v.zoom }
-  })
+  const zoomBy = (factor: number) => setView((v) => zoomedAt(v, factor, layout.current.boxSize.w / 2, layout.current.boxSize.h / 2))
+  const keys = useViewKeys({ zoomBy, panBy: (dx, dy) => setView((v) => (v.zoom > 1 ? { ...v, x: v.x + dx, y: v.y + dy } : v)) })
 
+  const unit = size.w / Math.max(1, shown.width) / zoom  // image px per screen px
   const toImage = (e: React.MouseEvent): ImagePoint => {
     const rect = box.current!.getBoundingClientRect()
-    const unit = size.w / rect.width / zoom
-    return { x: (e.clientX - rect.left - view.x) * unit, y: (e.clientY - rect.top - view.y) * unit, unit }
+    return { x: (e.clientX - rect.left - origin.x - view.x) * unit, y: (e.clientY - rect.top - origin.y - view.y) * unit, unit }
   }
+  const onPicture = (p: ImagePoint) => p.x >= 0 && p.y >= 0 && p.x <= size.w && p.y <= size.h  // not the room around it
 
-  const ratio = size.w / Math.max(1, size.h)
-  const fitted = fit && space && space.w > 0 && space.h > 0
-    ? (space.w / space.h > ratio ? { width: Math.floor(space.h * ratio), height: space.h } : { width: space.w, height: Math.floor(space.w / ratio) })
-    : null
   const viewer = (
-    <div ref={box} className="viewer" style={{ ...(fitted ?? { aspectRatio: `${size.w} / ${size.h}` }), cursor: cursor ?? (zoom > 1 ? 'grab' : 'default') }}
-      onContextMenu={(e) => e.preventDefault()}
+    <div ref={box} className={`viewer${filled ? ' viewer-filled' : ''}`}
+      style={{ ...(filled ? { width: filled.w, height: filled.h } : { aspectRatio: `${size.w} / ${size.h}` }), cursor: cursor ?? (zoom > 1 ? 'grab' : 'default') }}
+      onContextMenu={(e) => { e.preventDefault(); if (onContext) { const p = toImage(e); if (onPicture(p)) onContext(p, e) } }}
+      onMouseEnter={keys.activate}
       onMouseDown={(e) => {
-        if (e.button === 2) return  // the right button does nothing on the picture; the middle one pans
+        keys.activate()
+        if (e.button === 2) return  // the right button: the menu (onContext); the middle one pans
         if (e.button === 1) e.preventDefault()  // no autoscroll: the middle button pans the picture
         drag.current = { x: e.clientX, y: e.clientY, ox: view.x, oy: view.y, moved: false, pan: !panLock || e.button === 1 }
-        if (e.button !== 1) onPress?.(toImage(e), e)
+        if (e.button !== 1 && onPress) { const p = toImage(e); if (onPicture(p)) onPress(p, e) }
       }}
       onAuxClick={(e) => e.preventDefault()}
       onMouseMove={(e) => {
@@ -159,29 +177,29 @@ export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, on
       onMouseUp={(e) => {
         if (e.button === 2) return
         if (e.button !== 1) onRelease?.(toImage(e), e)
-        if (drag.current && !drag.current.moved && e.button !== 1) onClick?.(toImage(e), e)
+        if (drag.current && !drag.current.moved && e.button !== 1) { const p = toImage(e); if (onPicture(p)) onClick?.(p, e) }
         drag.current = null
       }}
       onMouseLeave={(e) => { if (drag.current && onRelease) onRelease(toImage(e), e); drag.current = null }}>
       {!loaded && <div className="viewer-loading">Loading the field image… the first field of a core takes a few seconds; the others then open instantly.</div>}
-      <div style={{ position: 'absolute', inset: 0, transform: `translate(${view.x}px, ${view.y}px) scale(${zoom})`, transformOrigin: '0 0' }}>
+      <div className="viewer-plane" style={{ width: shown.width, height: shown.height, transform: `translate(${origin.x + view.x}px, ${origin.y + view.y}px) scale(${zoom})` }}>
         <img src={src} alt="field" draggable={false} />
         {layers.map((layer) => <img key={layer} src={layer} alt="" draggable={false} style={{ imageRendering: 'pixelated' }} />)}
-        {under && <svg className="viewer-under" viewBox={`0 0 ${size.w} ${size.h}`}>{under(zoom, size, size.w / width / zoom)}</svg>}
+        {under && <svg className="viewer-under" viewBox={`0 0 ${size.w} ${size.h}`}>{under(zoom, size, unit)}</svg>}
         {paint && <div className="viewer-paint">{paint}</div>}
-        <svg viewBox={`0 0 ${size.w} ${size.h}`}>{children(zoom, size, size.w / width / zoom)}</svg>
+        <svg viewBox={`0 0 ${size.w} ${size.h}`}>{children(zoom, size, unit)}</svg>
       </div>
     </div>
   )
 
   return (
     <div className={`card${fit ? ' viewer-card-fit' : ''}`}>
-      <div className="row viewer-head" style={{ marginBottom: 10 }}>  {/* one line always: what it says never moves or resizes the picture */}
+      <div className="row viewer-head">  {/* one line always: what it says never moves or resizes the picture */}
         <div className="viewer-title">{title}</div>
-        <button className="btn small" onClick={() => zoomBy(1 / 1.5)}>−</button>
-        <span className="small muted">{zoom.toFixed(1)}×</span>
-        <button className="btn small" onClick={() => zoomBy(1.5)}>+</button>
-        <button className="btn small" onClick={() => setView({ zoom: 1, x: 0, y: 0 })}>Reset</button>
+        <button className="btn small" onClick={() => zoomBy(1 / 1.5)} title="Zoom out (−)" aria-label="Zoom out">−</button>
+        <span className="small muted viewer-zoom">{zoom.toFixed(1)}×</span>
+        <button className="btn small" onClick={() => zoomBy(1.5)} title={`Zoom in (+), up to ${MAX_ZOOM}×`} aria-label="Zoom in">+</button>
+        <button className="btn small" onClick={() => setView({ zoom: 1, x: 0, y: 0 })} title="The whole picture">Reset</button>
       </div>
       {fit ? <div ref={room} className="viewer-room">{viewer}</div> : viewer}
     </div>

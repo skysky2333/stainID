@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
+import { HALO_PX, LIT_PX, MAX_ZOOM, OUTLINE_PX, lineScale, useViewKeys } from './viewkeys'
 
 export interface PyramidLevel { width: number; height: number; cols: number; rows: number }
 /** A core image the server has cut into tiles: level 0 is full resolution, each next level half the size. */
@@ -19,10 +20,10 @@ const MAX_SCALE = 4
 const FAR_SCALE = 0.25  // below this zoom lines are drawn as faint hairlines
 /* Object strokes, in screen px whatever the zoom: every line has a thin dark halo under it so it reads on brown (DAB)
    and on blue (haematoxylin) tissue; dashed marks (rejected candidates) use long dashes so they stay visible. */
-const STROKE = 2.2
-const STROKE_HOVER = 3.2
-const STROKE_SELECTED = 3.8
-const HALO = 1.6  // extra width of the dark line under each stroke
+const STROKE = OUTLINE_PX  // an outline's width on screen at 1× (the whole core); `lineScale` thickens it a little zoomed in
+const STROKE_HOVER = LIT_PX
+const STROKE_SELECTED = LIT_PX + 0.5
+const HALO = HALO_PX  // extra width of the dark line under each stroke
 const HALO_COLOR = 'rgb(0 0 0 / 55%)'
 const DASH = [5, 4]
 
@@ -216,7 +217,8 @@ export interface Overlay { src: string; width: number; height: number; opacity?:
 export interface PaintPoint { x: number; y: number; s: number; shift: boolean }
 
 /**
- * A whole core image to zoom (wheel, double-click, + / −, keyboard) and drag around. Only the tiles in view are
+ * A whole core image to zoom (wheel, double-click, + / − keys and buttons, up to `MAX_ZOOM` times the whole core) and drag
+ * around (or hold the arrow keys: `useViewKeys`). Only the tiles in view are
  * fetched, at the screen's resolution; the coarse picture underneath stays visible while sharper tiles arrive.
  * `marks` (detected objects, with their outlines), `lines` (in `lineColor`, thin at any zoom, faint when far out) and
  * `boxes` (tiles, fields) are drawn on a canvas on top; `overlays` are pictures laid over the whole image. A click near
@@ -238,6 +240,7 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
   target?: ViewTarget | null
   pixelUm?: number | null
   toolbar?: ReactNode
+  /** the picture's height (CSS); 'fill': as tall as its (flex column) parent lets it be */
   height?: string
   /** A tile could not be loaded (the server cleaned up the picture to save space): ask for the picture again. */
   onTileError?: () => void
@@ -296,7 +299,8 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
     g.clearRect(0, 0, w, h)
     const ox = v.x + mx, oy = v.y + my  // where the image corner lies in the cached picture
     const [ix0, iy0, ix1, iy1] = [-ox / v.s, -oy / v.s, (w - ox) / v.s, (h - oy) / v.s]
-    g.lineWidth = 1.5
+    const z = lineScale(v.s / fitScale())  // outlines a little thicker zoomed in
+    g.lineWidth = 1.2
     for (const b of bs) {
       g.strokeStyle = b.color
       g.setLineDash(b.dashed ? [5, 4] : [])
@@ -348,10 +352,10 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
       if (!paths.length) continue
       g.setLineDash(style.dashed ? DASH.map((d) => d * unit) : [])
       g.strokeStyle = HALO_COLOR
-      g.lineWidth = (STROKE + HALO) * unit
+      g.lineWidth = (STROKE * z + HALO) * unit
       for (const path of paths) g.stroke(path)
       g.strokeStyle = style.color
-      g.lineWidth = STROKE * unit
+      g.lineWidth = STROKE * z * unit
       for (const path of paths) g.stroke(path)
     }
     g.restore()
@@ -372,7 +376,7 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
         g.stroke()
         continue
       }
-      strokeWithHalo(g, () => { g.beginPath(); g.arc(x, y, Math.max(r, 5), 0, 2 * Math.PI); g.stroke() }, m.color, STROKE, 1, m.dashed)
+      strokeWithHalo(g, () => { g.beginPath(); g.arc(x, y, Math.max(r, 5), 0, 2 * Math.PI); g.stroke() }, m.color, STROKE * z, 1, m.dashed)
     }
     return { canvas: c, view: v, w, h }
   }
@@ -404,7 +408,8 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
     }
     g.imageSmoothingEnabled = true
     g.drawImage(cached.canvas, (-mx - cached.view.x) * k + v.x, (-my - cached.view.y) * k + v.y, cached.w * k, cached.h * k)
-    const lit: [number | null, number][] = [[hov, STROKE_HOVER], [sel, STROKE_SELECTED]]
+    const z = lineScale(v.s / fitScale())
+    const lit: [number | null, number][] = [[hov, STROKE_HOVER * z], [sel, STROKE_SELECTED * z]]
     for (const [i, width] of lit) {
       const m = i === null ? null : ms[i]
       if (!m) continue
@@ -435,20 +440,28 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
   useEffect(() => () => { cancelAnimationFrame(frame.current); window.clearTimeout(settle.current); window.clearTimeout(commitTimer.current) }, [])
 
   const fit = (): View => {
-    const s = Math.min(size.w / pyramid.width, size.h / pyramid.height) * 0.96
+    const s = fitScale()
     return { s, x: (size.w - pyramid.width * s) / 2, y: (size.h - pyramid.height * s) / 2 }
   }
+  /** The whole core in view: the zoom lines and `MAX_ZOOM` count from (1×). */
+  function fitScale(): number {
+    const { size: sz } = latest.current
+    return sz.w && sz.h ? Math.min(sz.w / pyramid.width, sz.h / pyramid.height) * 0.96 : 1
+  }
+  /** At most `MAX_ZOOM` times the whole core, and never less than every pixel of the scan at MAX_SCALE. */
+  const maxScale = () => Math.max(MAX_SCALE, fitScale() * MAX_ZOOM)
   const centred = (t: ViewTarget): View => {
-    const s = Math.min(MAX_SCALE, Math.max(fit().s, t.scale ?? Math.max(viewRef.current?.s ?? 0, 0.5)))
+    const s = Math.min(maxScale(), Math.max(fit().s, t.scale ?? Math.max(viewRef.current?.s ?? 0, 0.5)))
     return { s, x: size.w / 2 - t.x * s, y: size.h / 2 - t.y * s }
   }
   const zoomAt = (factor: number, px: number, py: number, now = false) => {
     const v = viewRef.current
     if (!v) return
-    const s = Math.min(MAX_SCALE, Math.max(fit().s * 0.5, v.s * factor))
+    const s = Math.min(maxScale(), Math.max(fit().s * 0.5, v.s * factor))
     setView({ s, x: px - ((px - v.x) * s) / v.s, y: py - ((py - v.y) * s) / v.s }, now)
   }
   const zoomCentre = (factor: number) => zoomAt(factor, size.w / 2, size.h / 2, true)
+  const keys = useViewKeys({ zoomBy: zoomCentre, panBy: (dx, dy) => { const v = viewRef.current; if (v) setView({ ...v, x: v.x + dx, y: v.y + dy }) } })
 
   useEffect(() => {
     const element = box.current
@@ -567,20 +580,23 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
   }
 
   return (
-    <div className="dz-wrap">
+    <div className={`dz-wrap${height === 'fill' ? ' dz-fill' : ''}`}>
       <div className="dz-toolbar">
         {toolbar}
         <span className="spacer" />
         <span className="row dz-zoom-buttons">
           <button className="btn small" onClick={() => zoomCentre(1 / 1.6)} aria-label="Zoom out" title="Zoom out (−)">−</button>
           <span className="small muted dz-zoom" title="100% shows every pixel of the scan">{committed ? `${committed.s >= 0.1 ? Math.round(committed.s * 100) : (committed.s * 100).toFixed(1)}%` : ''}</span>
-          <button className="btn small" onClick={() => zoomCentre(1.6)} aria-label="Zoom in" title="Zoom in (+)">+</button>
+          <button className="btn small" onClick={() => zoomCentre(1.6)} aria-label="Zoom in" title={`Zoom in (+), up to ${MAX_ZOOM}× the whole core`}>+</button>
           <button className="btn small" onClick={() => setView(fit(), true)} title="Show the whole core">Whole core</button>
         </span>
       </div>
-      <div ref={box} className={`dz${dragging ? ' dragging' : ''}`} style={{ height, ...(cursor ? { cursor } : {}) }} tabIndex={0} aria-label="Core image: scroll or use + and − to zoom, drag or use the arrow keys to move"
+      <div ref={box} className={`dz${dragging ? ' dragging' : ''}`} style={{ ...(height === 'fill' ? {} : { height }), ...(cursor ? { cursor } : {}) }} tabIndex={0}
+        aria-label="Core image: scroll or use + and − to zoom, drag or hold the arrow keys to move"
         onMouseDown={(e) => { if (e.button === 1) e.preventDefault() }}  // no autoscroll on the middle button
+        onPointerEnter={keys.activate}
         onPointerDown={(e) => {
+          keys.activate()
           const v = viewRef.current
           if (!v || (e.button !== 0 && !(panLock && e.button === 1))) return
           e.currentTarget.setPointerCapture(e.pointerId)
@@ -614,15 +630,7 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
           if (d && !d.moved && onPick && e.button === 0) { const { px, py } = local(e); onPick(nearest(px, py)) }
         }}
         onPointerLeave={() => { pointer.current = null; setTip(null); setHovered(null); onMove?.(null) }}
-        onDoubleClick={(e) => { if (panLock) return; const { px, py } = local(e); zoomAt(2, px, py, true) }}
-        onKeyDown={(e) => {
-          const moves: Record<string, [number, number]> = { ArrowLeft: [80, 0], ArrowRight: [-80, 0], ArrowUp: [0, 80], ArrowDown: [0, -80] }
-          const move = moves[e.key]
-          const v = viewRef.current
-          if (move && v) { e.preventDefault(); setView({ ...v, x: v.x + move[0], y: v.y + move[1] }) }
-          if (e.key === '+' || e.key === '=') zoomCentre(1.6)
-          if (e.key === '-') zoomCentre(1 / 1.6)
-        }}>
+        onDoubleClick={(e) => { if (panLock) return; const { px, py } = local(e); zoomAt(2, px, py, true) }}>
         {view && (
           <div ref={plane} className="dz-plane" style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.s})` }}>
             {shown.map((t) => {

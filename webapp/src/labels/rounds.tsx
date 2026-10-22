@@ -302,9 +302,9 @@ export interface CandidateActions {
   onClass: (pick: ClassPick) => void  // 1–9 and Q W E R …: this type
   onUnsure: () => void  // ` (or 0)
   onRemove: () => void  // Delete / Backspace: not an object (undoable)
-  onMask: (bigger: boolean) => void  // Shift+Tab / + bigger, Tab / − smaller (as the brush)
-  /** Tab / Shift+Tab, + / −, while something else has a size (the brush: Tab smaller, Shift+Tab bigger): true when
-   *  it took the key, so the outline does not change */
+  onMask: (bigger: boolean) => void  // Shift+Tab bigger, Tab smaller (as the brush; + / − zoom the picture, as in every viewer)
+  /** Tab / Shift+Tab while something else has a size (the brush: Tab smaller, Shift+Tab bigger): true when it took the
+   *  key, so the outline does not change */
   onSize?: (bigger: boolean) => boolean
   onPrecise: () => void  // Space: precise editing in and out
   onUndo: () => void  // Z
@@ -324,8 +324,6 @@ export function useCandidateKeys(keys: KeyMap, actions: CandidateActions) {
       const a = latest.current
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement).tagName) || e.metaKey || e.ctrlKey || e.altKey) return
       if (e.key === 'Tab') { e.preventDefault(); if (a.onSize?.(e.shiftKey)) return; a.onMask(e.shiftKey); return }  // Tab smaller, Shift+Tab bigger
-      if (e.key === '+' || e.key === '=') { if (a.onSize?.(true)) return; a.onMask(true); return }
-      if (e.key === '-' || e.key === '_') { if (a.onSize?.(false)) return; a.onMask(false); return }
       if (e.repeat) return
       if (e.key === 'Enter' && a.onEnter && !a.answering) { e.preventDefault(); a.onEnter(); return }  // with nothing under the mouse too
       if (e.key === ' ') { e.preventDefault(); a.onPrecise(); return }

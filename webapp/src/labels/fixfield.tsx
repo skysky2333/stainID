@@ -31,8 +31,9 @@ import { PALETTE } from '../palette'
 import { useFetch, useStored } from '../hooks'
 import type { ImagePoint } from '../viewer'
 import { RASTER_LAYERS, ZoomViewer } from '../viewer'
-import type { ClassPick } from './classKeys'
-import { resolveClass, roleOf } from './classKeys'
+import { HALO_PX, LIT_PX, OUTLINE_PX, lineScale } from '../viewkeys'
+import type { ClassPick, KeyGroup, Vocabulary } from './classKeys'
+import { keyGroups, resolveClass, roleOf } from './classKeys'
 import type { RoundEvent } from './rounds'
 import { BRUSH_KEY, BRUSH_PX, BRUSH_SCALE, CLEARED, EXCLUDE_TYPES, INCLUDE, brushStep, useBrush } from './brush'
 import type { Slider } from './fieldStart'
@@ -239,23 +240,24 @@ function PeopleAreaLines({ areas, unit }: { areas: PeopleAreas; unit: number }) 
   return (
     <g pointerEvents="none" className="people-areas">
       {areas.regions.map((r, k) => r.kind === INCLUDE
-        ? <path key={k} d={ringsPath(r.rings)} fill="none" fillRule="evenodd" stroke={CLEARED.colour} strokeWidth={2 * unit} strokeDasharray={`${7 * unit} ${5 * unit}`} />
-        : <path key={k} d={ringsPath(r.rings)} fill="none" fillRule="evenodd" stroke={EXCLUDE_TYPES.find((t) => t.key === r.kind)?.colour ?? '#fff'} strokeWidth={2.2 * unit} />)}
+        ? <path key={k} d={ringsPath(r.rings)} fill="none" fillRule="evenodd" stroke={CLEARED.colour} strokeWidth={1.4 * unit} strokeDasharray={`${7 * unit} ${5 * unit}`} />
+        : <path key={k} d={ringsPath(r.rings)} fill="none" fillRule="evenodd" stroke={EXCLUDE_TYPES.find((t) => t.key === r.kind)?.colour ?? '#fff'} strokeWidth={1.5 * unit} />)}
     </g>
   )
 }
 
-const ObjectLayer = memo(function ObjectLayer({ items, unit, dim }: { items: Drawn[]; unit: number; dim: number }) {
+const ObjectLayer = memo(function ObjectLayer({ items, unit, dim, zoom }: { items: Drawn[]; unit: number; dim: number; zoom: number }) {
+  const line = lineScale(zoom)
   return (
     <g opacity={dim} pointerEvents="none">
       {items.map((d) => {
-        const width = (d.dash ? 2.2 : 2.4) * unit
+        const width = (d.dash ? OUTLINE_PX - 0.1 : OUTLINE_PX) * line * unit
         const dash = d.dash ? `${5 * unit} ${4 * unit}` : undefined
         const shape = (extra: Record<string, unknown>) => d.points
           ? <polygon points={d.points} {...extra} />
           : <circle cx={d.x} cy={d.y} r={Math.max(6, d.r)} {...extra} />
         return <g key={d.key} className={`round-object look-${d.look}${d.unsaved ? ' unsaved' : ''}`} data-key={d.key} opacity={d.faded ? 0.35 : undefined}>
-          {shape({ fill: 'none', stroke: '#000000', strokeOpacity: 0.6, strokeWidth: width + 1.8 * unit, strokeDasharray: dash, strokeLinecap: 'round' })}
+          {shape({ fill: 'none', stroke: '#000000', strokeOpacity: 0.6, strokeWidth: width + HALO_PX * unit, strokeDasharray: dash, strokeLinecap: 'round' })}
           {shape({ style: { stroke: d.colour, fill: d.colour }, fillOpacity: d.dash ? 0 : 0.08, strokeWidth: width, strokeDasharray: dash, strokeLinecap: 'round' })}
           {d.diamond && <polygon points={`${d.x},${d.y - 5 * unit} ${d.x + 5 * unit},${d.y} ${d.x},${d.y + 5 * unit} ${d.x - 5 * unit},${d.y}`}
             fill={d.look === 'class' || d.look === 'unsure' ? d.colour : '#ffffff'} stroke="#000" strokeWidth={0.8 * unit} />}
@@ -272,6 +274,9 @@ const ObjectLayer = memo(function ObjectLayer({ items, unit, dim }: { items: Dra
   )
 })
 
+/** The keys that only look (hide the drawings, move and zoom the picture): they work on a field opened to look at. */
+const VIEW_KEYS = new Set([' ', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', '+', '=', '-', '_', '−'])
+
 /** When people finished a field: "Ann on 21 Oct 2026, Ben on 22 Oct 2026". */
 function finishedText(finished: { person: string; time: number }[]): string {
   return finished.map((f) => `${f.person} on ${new Date(f.time * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}`).join(', ')
@@ -285,7 +290,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   useEffect(() => {  // looking only: no key edits anything (Space still hides the overlays)
     if (!readOnly) return
     const stop = (e: KeyboardEvent) => {
-      if (e.key === ' ' || ['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement).tagName)) return
+      if (VIEW_KEYS.has(e.key) || ['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement).tagName)) return
       e.stopImmediatePropagation()
     }
     window.addEventListener('keydown', stop, true)
@@ -527,9 +532,8 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   }, [save, typesAsked, mine, masks, precise])  // eslint-disable-line react-hooks/exhaustive-deps
 
   /** Delete: the object turns dotted grey and stays ("not an object"); a class key brings it back, Z undoes. */
-  const removeTarget = useCallback(() => {
-    const s = target
-    if (!s) return
+  const removeTarget = () => { if (target) removeObject(target) }
+  const removeObject = useCallback((s: Shown) => {
     if (s.fresh) {
       const f = s.fresh
       if (f.removed) return
@@ -538,7 +542,26 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
       return
     }
     if (meta.remove_class && callOf(s).pick.identity !== meta.remove_class) giveClass(s, { identity: meta.remove_class, subtype: null })
-  }, [target, giveClass, save, meta.remove_class])  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [giveClass, save, meta.remove_class])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Right-click on an object: a menu of every class and type, with its key, for that object (in precise editing the
+   *  object being edited, whose outline edit goes on). */
+  const [menu, setMenu] = useState<{ key: string; x: number; y: number } | null>(null)
+  const openMenu = (_p: ImagePoint, e: React.MouseEvent) => {
+    if (readOnly || excluding || threading || mode || draft.length || byHand) return
+    const s = precise ? byKey.get(precise.key) : target
+    if (!s) { setMenu(null); return }
+    setMenu({ key: s.key, x: e.clientX, y: e.clientY })
+  }
+  const pickFromMenu = (pick: ClassPick, reject: boolean) => {
+    const s = menu ? byKey.get(menu.key) : undefined
+    setMenu(null)
+    if (!s) return
+    if (reject) { tell('remove'); removeObject(s); return }
+    const before = callOf(s).pick
+    tell(s.fresh ? 'added' : before.identity === pick.identity && before.identity !== meta.remove_class ? 'subtype' : 'class')
+    giveClass(s, pick)
+  }
 
   /** Show this one of the object's outlines (Tab, or a button of the side panel). A candidate's choice is kept with
    *  the field (its option by name, `CHOICE_IDS`); Segment Anything where the store has none is asked live. */
@@ -1201,7 +1224,9 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
           navigate(next.tile_id ? `/annotate/${name}/${enc(next.tile_id)}` : `/annotate/${name}`)
         })()}>go to a field nobody is on</button>.</div>}
       <div className="annotate-workspace">
-        <div className={`annotate-image${precise ? ' is-precise' : ''}`} onContextMenu={(e) => e.preventDefault()} onMouseLeave={() => { if (!precise) setHovered(null) }}>
+        <div className={`annotate-image${precise ? ' is-precise' : ''}`} onContextMenu={(e) => e.preventDefault()} onMouseLeave={() => { if (!precise && !menu) setHovered(null) }}>
+          {menu && byKey.get(menu.key) && <ClassMenu at={menu} groups={keyGroups(vocabulary, keys)} vocabulary={vocabulary} removeClass={meta.remove_class}
+            current={callOf(byKey.get(menu.key)!).pick} onPick={pickFromMenu} onClose={() => setMenu(null)} />}
           <ZoomViewer fit src={apiUrl(`/api/annotate/${name}/fields/${enc(tile)}/image.jpg`)}
             layers={hidden ? [] : field.layers.filter((l) => layers[l]).map((l) => apiUrl(`/api/annotate/${name}/fields/${enc(tile)}/layer/${l}.png`))}
             title={<span className="row"><span className="muted small">{tile}</span>{done && <span className="badge status-done">finished</span>}
@@ -1214,21 +1239,22 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
               {target && (target.candidate || pieceOf(target)) && !precise && !excluding && <span className="badge outline-badge" title="Tab switches the outline of the object under the mouse">
                 Outline: {(choicesOf(target).names ?? CHOICE_NAMES)[choicesOf(target).index]} · Tab</span>}</span>}
             focus={focus} cursor={readOnly || threading ? 'default' : excluding ? 'none' : mode ? 'crosshair' : precise ? 'crosshair' : target ? 'pointer' : 'copy'}
-            onClick={threading || readOnly ? undefined : click} onMove={move}
+            onClick={threading || readOnly ? undefined : click} onMove={move} onContext={openMenu}
             onPress={readOnly ? undefined : press} onRelease={readOnly ? undefined : release} panLock={excluding || !!mode} onSize={setFieldSize}
             paint={!hidden && fieldSize && (excluding || brush.dirty) ? (  // each type's area now: one merged region per type (brush.ts), from the first stroke
               <div ref={brush.host} className="exclude-painted" style={{ position: 'absolute', left: 0, top: 0,
                 width: `${(100 * Math.ceil(fieldSize.w / BRUSH_SCALE) * BRUSH_SCALE) / fieldSize.w}%`, height: `${(100 * Math.ceil(fieldSize.h / BRUSH_SCALE) * BRUSH_SCALE) / fieldSize.h}%` }} />
             ) : null}
-            under={(_z, _s, rawUnit) => hidden ? null : <>
+            under={(underZoom, _s, rawUnit) => hidden ? null : <>
               {layers.excluded !== false && !excluding && excluded.data?.status === 'done' && excluded.data.width && excluded.data.height ? (  // excluded from analysis
                 <image href={apiUrl(`/api/annotate/${name}/fields/${enc(tile)}/excluded.png?v=${excluded.data.version ?? 0}`)} x={excluded.data.x} y={excluded.data.y}
                   width={excluded.data.width} height={excluded.data.height} preserveAspectRatio="none" style={{ imageRendering: 'pixelated' }} />
               ) : null}
               {layers.excluded !== false && !excluding && people.data && <PeopleAreaLines areas={people.data} unit={Number.isFinite(rawUnit) && rawUnit > 0 ? rawUnit : 1} />}
-              <ObjectLayer items={drawnItems} unit={Number.isFinite(rawUnit) && rawUnit > 0 ? rawUnit : 1} dim={precise ? 0.25 : threading ? 0.3 : excluding ? 0.55 : split ? 0.6 : 1} />
+              <ObjectLayer items={drawnItems} unit={Number.isFinite(rawUnit) && rawUnit > 0 ? rawUnit : 1} zoom={underZoom}
+                dim={precise ? 0.25 : threading ? 0.3 : excluding ? 0.55 : split ? 0.6 : 1} />
             </>}>
-            {(_zoom, size, rawUnit) => {
+            {(zoomNow, size, rawUnit) => {
               const unit = Number.isFinite(rawUnit) && rawUnit > 0 ? rawUnit : 1
               if (hidden) return null  // a clean look at the tissue
               const box = field.box
@@ -1239,7 +1265,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
                 {threading && ladderDone && <ThreadLines lines={ladderDone.steps[threadIndex].lines} unit={unit} areas={notCounted.data} />}
                 {layers.box && <>
                   <path d={`M0 0H${size.w}V${size.h}H0Z M${box.x} ${box.y}v${box.height}h${box.width}v${-box.height}Z`} fill="#000" fillOpacity={0.22} fillRule="evenodd" />
-                  <rect x={box.x} y={box.y} width={box.width} height={box.height} fill="none" stroke={BOX_COLOR} strokeWidth={2 * unit} strokeDasharray={`${12 * unit} ${8 * unit}`} />
+                  <rect x={box.x} y={box.y} width={box.width} height={box.height} fill="none" stroke={BOX_COLOR} strokeWidth={1.5 * unit} strokeDasharray={`${12 * unit} ${8 * unit}`} />
                 </>}
                 {layers.margin && field.objects.filter((o) => !o.own).map((o) => {
                   const poly = o.masks[o.mask]
@@ -1248,14 +1274,14 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
                 })}
                 {lit && !precise && (() => {  // the object under the mouse, on top: thicker, with a glow
                   const look = lookOf(vocabulary, meta.remove_class, litCall!.pick.identity, litCall!.pick.subtype)
-                  const width = 3.4 * unit
+                  const width = LIT_PX * lineScale(zoomNow) * unit
                   const dash = look.dash ? `${5 * unit} ${4 * unit}` : undefined
                   const shape = (extra: Record<string, unknown>) => litPoly
                     ? <polygon points={polygonPoints(litPoly)} {...extra} />
                     : <circle cx={lit.x} cy={lit.y} r={Math.max(6, lit.r)} {...extra} />
                   return <g className={`round-object look-${look.look} lit`} data-key={lit.key} pointerEvents="none">
-                    {shape({ fill: 'none', stroke: '#ffffff', strokeOpacity: 0.55, strokeWidth: width + 6 * unit })}
-                    {shape({ fill: 'none', stroke: '#000000', strokeOpacity: 0.6, strokeWidth: width + 1.8 * unit, strokeDasharray: dash, strokeLinecap: 'round' })}
+                    {shape({ fill: 'none', stroke: '#ffffff', strokeOpacity: 0.55, strokeWidth: width + 4.5 * unit })}
+                    {shape({ fill: 'none', stroke: '#000000', strokeOpacity: 0.6, strokeWidth: width + HALO_PX * unit, strokeDasharray: dash, strokeLinecap: 'round' })}
                     {shape({ style: { stroke: look.colour, fill: look.colour }, fillOpacity: 0.22, strokeWidth: width, strokeDasharray: dash, strokeLinecap: 'round' })}
                   </g>
                 })()}
@@ -1499,6 +1525,50 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   )
 }
 
+/** The class menu of an object (right-click): every class and type of the stain, grouped as the keys are, each with
+ *  its key; the object's class now is marked. Esc, a click elsewhere or the wheel closes it. */
+function ClassMenu({ at, groups, vocabulary, removeClass, current, onPick, onClose }: {
+  at: { x: number; y: number }; groups: KeyGroup[]; vocabulary: Vocabulary; removeClass: string; current: ClassPick
+  onPick: (pick: ClassPick, reject: boolean) => void; onClose: () => void
+}) {
+  const box = useRef<HTMLDivElement>(null)
+  const [place, setPlace] = useState({ left: at.x, top: at.y })
+  useEffect(() => {  // inside the window
+    const b = box.current?.getBoundingClientRect()
+    if (!b) return
+    setPlace({ left: Math.max(8, Math.min(at.x, window.innerWidth - b.width - 8)), top: Math.max(8, Math.min(at.y, window.innerHeight - b.height - 8)) })
+  }, [at.x, at.y])
+  useEffect(() => {
+    const away = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) onClose() }
+    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); onClose() } }
+    window.addEventListener('mousedown', away, true)
+    window.addEventListener('wheel', onClose, true)
+    window.addEventListener('keydown', key, true)
+    return () => { window.removeEventListener('mousedown', away, true); window.removeEventListener('wheel', onClose, true); window.removeEventListener('keydown', key, true) }
+  }, [onClose])
+  return (
+    <div ref={box} className="class-menu" role="menu" aria-label="Class of this object" style={place} onContextMenu={(e) => e.preventDefault()}>
+      {groups.map((g) => (
+        <div key={g.group} className="class-menu-group">
+          <div className="small muted class-group-title">{g.title}</div>
+          {g.items.map((item) => {
+            const look = lookOf(vocabulary, removeClass, item.identity, item.subtype)
+            const on = current.identity === item.identity && (current.subtype ?? null) === (item.subtype ?? null)
+            return (
+              <button key={item.key} role="menuitem" className={`class-menu-item${on ? ' chosen' : ''}`} title={item.description}
+                onClick={() => onPick({ identity: item.identity, subtype: item.subtype }, g.group === 'reject')}>
+                <span className="kbd key-slot">{item.label}</span>
+                <span className={`look-swatch look-${look.look}`} style={{ borderColor: look.colour, background: look.dash ? 'transparent' : look.colour }} />
+                <span className="ellipsis">{item.name}</span>
+              </button>
+            )
+          })}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 /** The keys of the field, one per line, with what they do; while precise editing, only its own. */
 function Controls({ sam, precise, excluding, mode }: { sam: boolean; precise: boolean; excluding: boolean; mode: 'split' | 'merge' | null }) {
   if (excluding) {
@@ -1508,7 +1578,7 @@ function Controls({ sam, precise, excluding, mode }: { sam: boolean; precise: bo
         <li><span className="kbd">1</span>–<span className="kbd">4</span> the type: fold, artifact, no tissue, out of focus</li>
         <li><span className="kbd">drag</span> add to that type’s area</li>
         <li><span className="kbd">⇧ drag</span> take out of it (detection’s part too)</li>
-        <li><span className="kbd">Tab</span> smaller · <span className="kbd">⇧ Tab</span> bigger brush · <span className="kbd">scroll</span> zoom · <span className="kbd">middle</span> move</li>
+        <li><span className="kbd">Tab</span> smaller · <span className="kbd">⇧ Tab</span> bigger brush · <span className="kbd">scroll</span> or <span className="kbd">+</span> <span className="kbd">−</span> zoom · <span className="kbd">middle</span> or arrows move</li>
         <li><span className="kbd">Z</span> one stroke back · <span className="kbd">B</span> or <span className="kbd">Esc</span> done</li>
       </ul>
     )
@@ -1532,7 +1602,7 @@ function Controls({ sam, precise, excluding, mode }: { sam: boolean; precise: bo
         {sam && <li><span className="kbd">click</span> add a spot to it</li>}
         {sam && <li><span className="kbd">⇧ click</span> leave a spot out</li>}
         <li><span className="kbd">drag</span> a dot to move the outline</li>
-        <li><span className="kbd">Z</span> one step back</li>
+        <li><span className="kbd">Z</span> one step back · <span className="kbd">right-click</span> its class</li>
         <li><span className="kbd">click beyond the frame</span> or <span className="kbd">Enter</span> keep the edit · <span className="kbd">Esc</span> cancel</li>
       </ul>
     )
@@ -1541,6 +1611,8 @@ function Controls({ sam, precise, excluding, mode }: { sam: boolean; precise: bo
     <ul className="key-list small">
       <li><span className="kbd">Tab</span> switch its outline: Segment Anything / stain</li>
       <li><span className="kbd">Del</span> reject — dotted grey · <span className="kbd">`</span> unsure — dotted amber ?</li>
+      <li><span className="kbd">right-click</span> an object: choose its class from a list</li>
+      <li><span className="kbd">+</span> <span className="kbd">−</span> or the wheel zoom (up to 10×) · arrow keys move</li>
       <li><span className="kbd">click</span> empty tissue: {sam ? 'a new candidate' : 'draw a new one by hand'}</li>
       <li><span className="kbd">click</span> an object: precise edit{sam ? ' (click add, ⇧ click remove, drag dots, click beyond the frame done)' : ' (drag dots, click beyond the frame done)'}</li>
       <li><span className="kbd">Space</span> hide / show the drawings</li>

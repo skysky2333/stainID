@@ -1420,3 +1420,67 @@ a.core-tile:hover, a.core-tile:focus-visible { outline: 2px solid var(--text-pri
 .tutorial-card .btn { margin-top: 2px; }
 .tutorial-cards.compact .tutorial-card { padding: 12px 14px; }
 .tutorial-cards.compact .tutorial-card .btn { margin-top: 8px; }
+
+/* ---------- the image viewers fill their room (viewer.tsx, deepzoom.tsx) ---------- */
+.viewer-plane { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
+.viewer-plane > img, .viewer-plane > svg, .viewer-plane > .viewer-paint { position: absolute; inset: 0; width: 100%; height: 100%; }
+.viewer-head { margin-bottom: 8px; gap: 6px; }
+.viewer-zoom { min-width: 38px; text-align: center; font-variant-numeric: tabular-nums; }
+.viewer.viewer-filled { background: #111; border-radius: 8px; }
+.viewer-card-fit { padding: 8px; }
+.viewer-card-fit > .row { margin-bottom: 6px !important; }
+.dz-fill { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; gap: 6px; }
+.dz-fill > .dz { flex: 1 1 auto; min-height: 240px; }
+.dz-fill > .dz-toolbar { flex: none; flex-wrap: nowrap; min-width: 0; }
+.dz-fill > .dz-toolbar > :first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dz-preparing-fill { flex: 1 1 auto; min-height: 240px; }
+.fit-page .annotate-image > .dz-fill, .fit-page .annotate-image > .dz-preparing-fill { flex: 1 1 auto; }
+
+/* the Cores view: the picture as wide as its column (zoomed in, a wide view shows more), the side panel narrower */
+.core-layout { grid-template-columns: minmax(0, 1fr) minmax(260px, 340px); gap: 12px; }
+.core-picture { padding: 8px; }
+.core-picture .dz, .core-picture .dz-preparing { width: 100%; height: var(--core-square); aspect-ratio: auto; }
+
+/* the left menu folds to a strip (App.tsx useCollapsedSidebar) */
+.sidebar-toggle { align-self: flex-end; padding: 2px 8px; min-height: 0; line-height: 1.2; font-size: 15px; margin: -8px -4px 2px 0; flex: none; }
+.sidebar-body { display: flex; flex-direction: column; gap: 0; flex: 1 1 auto; min-height: 0; }
+.layout.nav-collapsed { grid-template-columns: 40px 1fr; }
+.layout.nav-collapsed > .sidebar { padding: 12px 4px; align-items: center; overflow: hidden; }
+.layout.nav-collapsed > .sidebar > .sidebar-toggle { align-self: center; margin: 0; }
+.layout.nav-collapsed .sidebar-body { display: none; }
+@media (max-width: 800px) {
+  .sidebar-toggle { display: none; }
+  .layout.nav-collapsed { grid-template-columns: 1fr; }
+  .layout.nav-collapsed .sidebar-body { display: contents; }
+  .sidebar-body { display: contents; }
+}
+
+/* small screens (1366×768 laptops): the panels compact, the picture the most room */
+@media (max-width: 1500px) {
+  .layout { grid-template-columns: 196px 1fr; }
+  .layout.nav-collapsed { grid-template-columns: 40px 1fr; }
+  .fit-page .annotate-workspace { grid-template-columns: minmax(0, 1fr) minmax(250px, 300px); gap: 10px; }
+  .annotate-side .card.side-block { padding: 8px 10px; }
+  .core-layout { grid-template-columns: minmax(0, 1fr) minmax(240px, 300px); }
+}
+@media (max-height: 820px) and (min-width: 901px) {
+  html.fit-screen .layout > .main { padding: 6px 12px 8px; }
+  .fit-page .annotate-top { margin-bottom: 4px; }
+  .area-tab img { width: 40px; height: 40px; }
+  .area-tabs { margin-bottom: 4px; }
+  .fit-page .annotate-image > .key-help { margin-top: 4px; }
+}
+
+/* the class menu of an object (right-click in Fix the field) */
+.class-menu { position: fixed; z-index: 60; min-width: 200px; max-width: 280px; max-height: calc(100vh - 16px); overflow-y: auto; padding: 4px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow), 0 8px 24px rgb(0 0 0 / 22%); }
+.class-menu-group + .class-menu-group { border-top: 1px solid var(--border); margin-top: 3px; padding-top: 3px; }
+.class-menu .class-group-title { padding: 3px 8px 1px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+.class-menu-item { display: flex; align-items: center; gap: 8px; width: 100%; padding: 4px 8px; border: none; border-radius: 6px; background: none; color: inherit;
+  font: inherit; font-size: 13px; text-align: left; cursor: pointer; min-width: 0; }
+.class-menu-item:hover, .class-menu-item:focus-visible { background: var(--accent-soft); outline: none; }
+.class-menu-item.chosen { font-weight: 650; box-shadow: inset 3px 0 0 var(--accent); }
+.class-menu-item .kbd { flex: none; }
+p.area-size { display: block; line-height: 1.7; }
+.dz-fill > .dz-toolbar > :first-child { flex: 1 1 0; }
+.dz-fill .dz-zoom-buttons { flex: none; flex-wrap: nowrap; }
