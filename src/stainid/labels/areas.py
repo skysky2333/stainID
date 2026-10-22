@@ -4,7 +4,7 @@ bubbles cross tile borders) and its labels are areas, not objects.
 
 - A task is one core (`core_id`) with each of its stain images (6E10, AT8, NeuN, whichever exist); status, edits and
   digests stay per core image (core x stain) underneath.
-- A person looks at each stain image and saves the core ("Save and continue"): every stain image gets a `done` label
+- A person looks at each stain image and saves the core ("Finish core"): every stain image gets a `done` label
   (`value` `AREAS`, `tile_id` the core id, `stain` the stain, id `done:areas:<core>:<stain>`), also when nothing was
   changed (that confirms detection's areas), and each stain image whose areas were painted or cleared one edit
   (`exclude`, rings in core pixels, `tile_id` the core id; `labels.exclusions`).

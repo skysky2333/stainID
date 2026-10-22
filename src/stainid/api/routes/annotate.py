@@ -142,11 +142,22 @@ def ai_review_summary(meta: dict, labels: pd.DataFrame) -> dict:
                            "round": round_}}
 
 
+CLOSED_TEXT = "This session is closed; reopen it to edit (Labels page). Nothing in it can be saved while it is closed."
+
+
+def is_closed(meta: dict) -> bool:
+    """A closed session (not the tutorial's practice): it opens to look at, for admins too, and nothing in it is saved."""
+    return not meta.get("open", True) and not meta.get("practice") and not str(meta.get("name", "")).startswith("practice-")
+
+
 def writable(meta: dict) -> dict:
-    """A session people may add labels to: not one of the read-only sessions imported from a dataset package."""
+    """A session people may add labels to: open (closed means closed for everyone, admins too), and not one of the
+    read-only sessions imported from a dataset package."""
     if meta.get("read_only"):
         raise HTTPException(403, "These labels were imported from a dataset and stay as they were; to label these fields yourself, start a new "
                                  "labelling session on the Labels page")
+    if is_closed(meta):
+        raise HTTPException(409, CLOSED_TEXT)
     return meta
 
 

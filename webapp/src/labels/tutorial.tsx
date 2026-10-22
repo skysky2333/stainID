@@ -65,8 +65,8 @@ function stepsFor(typed: boolean, counted: string, hint = ''): Step[] {
     { title: 'Leave precise editing', text: 'Click outside the faint frame around the object (or press Enter) to keep the outline: the view goes back to where you were (Esc would cancel the edit).', done: ['precise-out'] },
     { title: 'Drag the dots', text: 'Click an object again for precise editing and drag one of the white dots on its outline to where the edge is (on a server without one-click outlines, dragging the dots is the way). Click outside the faint frame (or Enter) to keep it.', done: ['precise-drag'] },
     { title: 'Mark a bad area', text: 'Hatched areas are what the analysis leaves out: folds, artifacts, empty glass, found by detection. Press B for the brush: 1–4 choose the type (fold, artifact, no tissue, out of focus), and that type’s area shows as one region — detection’s with everyone’s edits. Drag to add to it (a stroke touching a detected fold extends that fold); Shift-drag takes a part out, detection’s too. Tab makes the brush smaller, Shift+Tab bigger; the wheel still zooms. Your areas teach and test the bad-area detection; the analysis keeps detection’s own. Press B again when done.', done: ['exclude'] },
-    { title: 'Save your work', text: 'Nothing you do is saved yet: the panel says how many unsaved changes you have, and a small orange dot marks each object you changed. Press Save (or Ctrl+S) to keep them — you stay on this field. (In this practice, Save only pretends.)', done: ['save'] },
-    { title: 'Save and continue', text: 'When the field looks right, press “Save and continue”. Everything you left as it is counts as checked by you, the field is done, nobody else is asked to do it again, and your next field opens.', done: ['finish'] },
+    { title: 'Save your work', text: 'Nothing you do is saved yet: the panel says how many unsaved changes you have, and a small orange dot marks each object you changed. Press Save progress (or Ctrl+S) to keep them — the field stays unfinished and you stay on it. (In this practice, Save progress only pretends.)', done: ['save'] },
+    { title: 'Finish field', text: 'When the field looks right, press “Finish field” (Ctrl+Enter). It records everything on this field as checked by you: the field is done, nobody else is asked to do it again, and your next field opens.', done: ['finish'] },
   ]
   return typed ? steps : steps.filter((s) => s.title !== 'Change the type')
 }
@@ -81,7 +81,7 @@ const SIMPLE_STEPS: Step[] = [
   { title: 'Choose from a list', text: 'Right-click an object: a short list of every class (and “not an object”) opens. Pick one.', done: ['menu'] },
   { title: 'Undo', text: 'Clicked the wrong one? Press Z to undo your last change.', done: ['undo'] },
   { title: 'The next class', text: 'Done with this class? Press “Next class” (or the next number) and do the same for it.', done: ['next-pass', 'pass'] },
-  { title: 'Save and continue', text: 'When every class looks right, press “Save and continue”. Objects left in no class are saved as “not an object”, and your next field opens. (In this practice nothing is saved.)', done: ['finish'] },
+  { title: 'Finish field', text: 'When every class looks right, press “Finish field” (Ctrl+Enter): it records everything on this field as checked by you. Objects left in no class are saved as “not an object”, and your next field opens. (In this practice nothing is saved.)', done: ['finish'] },
 ]
 
 const guestKey = (kind: TutorialKind) => `stainid.tutorial.${kind}`
@@ -252,7 +252,7 @@ function areaSteps(single: boolean): AreaStep[] {
   if (!single) return AREA_STEPS
   const steps = AREA_STEPS.filter((s) => !s.done.includes('stain') && !s.done.includes('saved'))
   return steps.map((s) => s.done.includes('type') ? { ...s, text: `You see one core at a time with each of its stains as a tab above the picture (one stain in this example). ${s.text}` }
-    : s.done.includes('fine') ? { ...s, title: 'Save the core', text: 'When the core looks right — painted, or fine as it is — press Enter (or “Save and continue”): it is saved and the next core opens. With several stains, each stain gets its tick first. (In this practice nothing is kept.)', done: ['fine', 'saved'] }
+    : s.done.includes('fine') ? { ...s, title: 'Finish the core', text: 'When the core looks right — painted, or fine as it is — press Enter (or “Finish core”): it is recorded as checked by you and the next core opens. With several stains, each stain gets its tick first. (In this practice nothing is kept.)', done: ['fine', 'saved'] }
       : s)
 }
 const AREA_STEPS: AreaStep[] = [
@@ -264,7 +264,7 @@ const AREA_STEPS: AreaStep[] = [
   { title: 'Undo', text: 'Press Z to take back your last stroke.', done: ['undo'] },
   { title: 'A clean look', text: 'Press Space to hide everything drawn over the tissue, and Space again to bring it back.', done: ['overlays'] },
   { title: 'This stain is done', text: 'When a stain looks right — painted, or fine as it is — press Enter. It gets a tick and the next stain opens.', done: ['fine'] },
-  { title: 'Save the core', text: 'Press Enter on the last stain (or “Save and continue”) once every stain has a tick: the core is saved and the next one opens. (In this practice nothing is kept.)', done: ['saved'] },
+  { title: 'Finish the core', text: 'Press Enter on the last stain (or “Finish core”) once every stain has a tick: the core is recorded as checked by you and the next one opens. (In this practice nothing is kept.)', done: ['saved'] },
 ]
 
 function AreasCoached({ preview, next }: { preview: boolean; next: string }) {

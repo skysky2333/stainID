@@ -595,6 +595,8 @@ export interface RoundField<Shape = number[][]> {
    *  it needs); `read_only`: opened to look at (Redo this field / Add an extra annotation open it to work on);
    *  `own`: an extra annotation, starting from detection's output and this person's own labels only */
   finished?: { person: string; time: number }[]; complete?: boolean; read_only?: boolean; own?: boolean
+  /** the session is closed: every field opens to look at, for admins too, and nothing is saved */
+  closed?: boolean
   /** detection's acceptance threshold on this field, and the one this person locked (saved), if any */
   detection_threshold?: number | null; threshold?: number | null
   /** AT8 threads mode (H): the thread threshold this person set on the field (a factor on detection's), null before; none on other stains */
@@ -642,7 +644,7 @@ export interface MatterCoreRow { core_id: string; tma: string; core: string; sta
 export interface MatterSaved { person: string; time: number; session: string; carried_from: string | null; accepted: boolean; registration: string | null }
 export interface MatterImage { stain: string; picture: PictureState | null; saved_by: string[]; saved_by_me: boolean; mine: MatterSaved | null }
 /** One core: its stain images (NeuN first: `source`, which the others start from) and whether it opens to look at. */
-export interface MatterCore { core_id: string; tma: string; core: string; images: MatterImage[]; source: string; read_only: boolean; done_by: string[]
+export interface MatterCore { core_id: string; tma: string; core: string; images: MatterImage[]; source: string; read_only: boolean; closed?: boolean; done_by: string[]
   progress: RoundProgress; pixel_size_um?: number; practice?: boolean }
 /** How a core's two stain images line up (registration/cores.py): status pass / review / fail / same, from the table or computed. */
 export interface Registration { status: string; how: string; dice: number | null; matrix: number[][] }

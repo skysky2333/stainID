@@ -9,7 +9,7 @@ import type { ReactNode } from 'react'
 
 export interface Rect { x0: number; y0: number; x1: number; y1: number }
 /** A square of the overview: a field of the session at its place in the core, coloured by its state. */
-export interface Square { key: string; x: number; y: number; w: number; h: number; colour: string; current?: boolean; title?: string; onOpen?: () => void }
+export interface Square { key: string; x: number; y: number; w: number; h: number; colour: string; fill?: boolean; current?: boolean; title?: string; onOpen?: () => void }
 
 /** The middle level's window: `times` the detailed view's extent (at least `least` across), square, centred on it, kept
  *  inside the picture (`width` × `height`). */
@@ -66,12 +66,17 @@ export function LevelMap({ src, width, height, window: win, next, squares = [], 
       onPointerCancel={() => { press.current = null }}>
       <rect x={0} y={0} width={width} height={height} fill="var(--surface-0)" />
       <image href={src} x={0} y={0} width={width} height={height} preserveAspectRatio="none" />
-      {squares.map((s) => (
-        <rect key={s.key} x={s.x} y={s.y} width={s.w} height={s.h} fill={s.colour} fillOpacity={s.current ? 0 : 0.22} stroke={s.current ? 'var(--accent)' : s.colour}
-          strokeWidth={stroke * (s.current ? 2.2 : 1)} className={`level-square${s.current ? ' current' : ''}${s.onOpen ? ' opens' : ''}`}>
+      {squares.filter((s) => !s.current).map((s) => (  // the others first, inset a little so neighbours never paint over each other
+        <rect key={s.key} x={s.x + stroke} y={s.y + stroke} width={Math.max(0, s.w - 2 * stroke)} height={Math.max(0, s.h - 2 * stroke)}
+          fill={s.colour} fillOpacity={s.fill ? 0.3 : 0} stroke={s.colour} strokeOpacity={s.fill ? 0.9 : 0.35} strokeWidth={stroke}
+          className={`level-square${s.onOpen ? ' opens' : ''}`}>
           {s.title && <title>{s.title}</title>}
         </rect>
       ))}
+      {squares.filter((s) => s.current).map((s) => <g key={s.key} className="level-square current">  {/* this field: last, on top of its neighbours */}
+        <rect x={s.x} y={s.y} width={s.w} height={s.h} fill="none" stroke="#000000" strokeOpacity={0.6} strokeWidth={stroke * 4.4} />
+        <rect x={s.x} y={s.y} width={s.w} height={s.h} fill="none" stroke="var(--accent)" strokeWidth={stroke * 2.4}>{s.title && <title>{s.title}</title>}</rect>
+      </g>)}
       {children}
       {next && <>
         <rect x={next.x0} y={next.y0} width={next.x1 - next.x0} height={next.y1 - next.y0} fill="none" stroke="#000" strokeOpacity={0.55} strokeWidth={stroke * 3} />

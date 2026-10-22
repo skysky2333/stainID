@@ -49,6 +49,9 @@ def pytest_configure(config):
     os.environ["HOME"] = str(base / "home")
     os.chdir(base / "cwd")
     _SAFE_ENV.update(os.environ)
+    from stainid.api import registry  # noqa: PLC0415 - the projects list too: never the real ~/.stainid/app.json, also between tests
+
+    registry.SETTINGS = base / "home" / ".stainid" / "app.json"
     original = project_module.Project.__init__
 
     def checked_init(self, root, config):

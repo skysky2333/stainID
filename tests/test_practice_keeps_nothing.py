@@ -124,7 +124,7 @@ def test_a_guest_opens_the_practice_session_its_field_and_its_picture(rounds_pro
     assert scoped["practice"] == info["practice"]
 
 
-def test_tutorials_are_kept_with_the_account_and_admins_sets_are_the_ones_they_opened(rounds_project):
+def test_tutorials_are_kept_with_the_account_and_admins_sets_are_the_ones_they_added(rounds_project):
     admin, (ann, ben), _ = rounds_project
     assert ann.get("/api/session/tutorials").json() == {"objects": False, "areas": False, "threads": False, "simple": False, "matter": False, "kept": True}
     assert ann.post("/api/session/tutorials", json={"kind": "areas", "done": True}).json()["areas"] is True
@@ -135,5 +135,11 @@ def test_tutorials_are_kept_with_the_account_and_admins_sets_are_the_ones_they_o
     assert guest.post("/api/session/tutorials", json={"kind": "objects"}).json()["kept"] is False  # a guest's stays in the browser
     made = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "open": True, "tile_ids": [TILE]}).json()["name"]
     assert made not in {s["name"] for s in admin.get("/api/session/sets").json()}
-    assert admin.get(f"/api/annotate/{made}").status_code == 200  # an admin opens it: it joins their sets
+    assert admin.get(f"/api/annotate/{made}").status_code == 200  # an admin opens it: nothing is added by itself
+    assert made not in {s["name"] for s in admin.get("/api/session/sets").json()}
+    assert admin.put(f"/api/labels/sessions/{made}/home", json={"on": True}).json() == {"sessions": [made]}  # "Add to my home page"
     assert made in {s["name"] for s in admin.get("/api/session/sets").json()}
+    assert admin.get("/api/labels/home").json() == {"sessions": [made]}
+    assert admin.put(f"/api/labels/sessions/{made}/home", json={"on": False}).json() == {"sessions": []}
+    assert made not in {s["name"] for s in admin.get("/api/session/sets").json()}
+    assert ann.put(f"/api/labels/sessions/{made}/home", json={"on": True}).status_code in (401, 403)  # admins only

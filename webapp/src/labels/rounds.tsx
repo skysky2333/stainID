@@ -9,7 +9,7 @@ import type { RoundLive, RoundProgress } from '../api'
 import { api } from '../api'
 import { Link } from 'react-router-dom'
 import { AccountCompact, useSession } from '../session'
-import { Progress } from '../components'
+import { Modal, Progress } from '../components'
 import type { ClassPick, KeyMap, Vocabulary } from './classKeys'
 import { classText, keyGroups, keyName } from './classKeys'
 import { ClassKeyHint, useClassKeys } from './classes'
@@ -160,27 +160,73 @@ export function writeDraft(key: string, value: unknown) {
 }
 
 export const changesText = (n: number) => `${n.toLocaleString()} unsaved change${n === 1 ? '' : 's'}`
-const leaveText = (n: number) => `You have ${changesText(n)} on this field.\n\nLeave without saving? They stay in this browser and come back when you open this field again, but nobody else sees them until you press Save.`
+/** What the leave dialog offers (`useLeaveGuard`): Save progress (true when saved), Finish (the field or the core,
+ *  then `go`), Discard (forget the unsaved changes and their copy in this browser). Stay is always there. */
+export interface LeaveWays { save?: () => Promise<boolean>; finish?: (go: () => void) => void; finishLabel?: string; discard?: () => void; unit?: string }
 
-/** Asks before leaving while there are unsaved changes: closing or reloading the tab, or following a link of the app.
- *  Returns `mayLeave()` for leaving by a button (true when there is nothing to lose or the person agrees). */
-export function useLeaveGuard(unsaved: number) {
+/** Leaving a field (or a core) with unsaved changes asks in the app, the same for every way of leaving: another field
+ *  in the whole-core panel, Skip, a link such as the way back. Save progress / Finish / Discard / Stay. Closing or
+ *  reloading the tab is the browser's own question (the changes stay in this browser then). `leave(go)` runs `go` at
+ *  once when there is nothing to lose; `dialog` is rendered by the page. */
+export function useLeaveGuard(unsaved: number, ways: LeaveWays = {}): { leave: (go: () => void) => void; dialog: ReactNode } {
+  const [asking, setAsking] = useState<{ go: () => void } | null>(null)
+  const [busy, setBusy] = useState(false)
+  const passing = useRef(false)
   useEffect(() => {
     if (!unsaved) return
     const unload = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = '' }
     const click = (e: MouseEvent) => {
+      if (passing.current) return
       const link = (e.target as HTMLElement | null)?.closest?.('a[href]') as HTMLAnchorElement | null
-      if (!link || link.target === '_blank' || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
-      if (!window.confirm(leaveText(unsaved))) { e.preventDefault(); e.stopPropagation() }
+      if (!link || link.target === '_blank' || link.hasAttribute('download') || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+      e.preventDefault()
+      e.stopPropagation()
+      setAsking({ go: () => { passing.current = true; try { link.click() } finally { passing.current = false } } })
     }
     window.addEventListener('beforeunload', unload)
     document.addEventListener('click', click, true)
     return () => { window.removeEventListener('beforeunload', unload); document.removeEventListener('click', click, true) }
   }, [unsaved])
-  return useCallback(() => !unsaved || window.confirm(leaveText(unsaved)), [unsaved])
+  const leave = useCallback((go: () => void) => { if (!unsaved) go(); else setAsking({ go }) }, [unsaved])
+  const unit = ways.unit ?? 'field'
+  const close = () => setAsking(null)
+  const dialog = asking ? (
+    <Modal title="Leave with unsaved changes?" onClose={close}>
+      <p className="secondary" style={{ marginTop: 0 }}>You have {changesText(unsaved)} on this {unit}.</p>
+      <div className="leave-ways">
+        {ways.save && <button className="btn" disabled={busy} onClick={async () => {
+          setBusy(true)
+          const ok = await ways.save!()
+          setBusy(false)
+          if (ok) { close(); asking.go() }
+        }}><b>{busy ? 'Saving…' : 'Save progress'}</b><span className="small muted">keeps your changes; the {unit} stays unfinished</span></button>}
+        {ways.finish && <button className="btn primary" disabled={busy} onClick={() => { close(); ways.finish!(asking.go) }}>
+          <b>{ways.finishLabel ?? `Finish ${unit}`}</b><span className="small">records everything on this {unit} as checked by you</span></button>}
+        {ways.discard && <button className="btn danger-outline" disabled={busy} onClick={() => { ways.discard!(); close(); asking.go() }}>
+          <b>Discard</b><span className="small muted">drops the unsaved changes</span></button>}
+        <button className="btn" disabled={busy} onClick={close} autoFocus><b>Stay</b><span className="small muted">back to this {unit}</span></button>
+      </div>
+    </Modal>
+  ) : null
+  return { leave, dialog }
 }
 
-/** Ctrl+S (⌘S) saves, Ctrl+Enter (⌘Enter) saves and goes on to the next field. */
+/** A closed session: it opens to look at, for admins too, and nothing in it can be saved (the server refuses). */
+export function ClosedNote({ unit = 'field' }: { unit?: string }) {
+  const { session } = useSession()
+  return (
+    <div className="found found-warn small closed-note" role="status">
+      <b>This session is closed; reopen it to edit.</b> You are looking at this {unit}: nothing here can be saved.
+      {session.admin && <> <Link to="/labels">Labels page</Link></>}
+    </div>
+  )
+}
+
+/** The line under "Finish field": what finishing records. */
+export const FINISH_NOTE = 'Records everything on this field as checked by you'
+
+
+/** Ctrl+S (⌘S) saves progress, Ctrl+Enter (⌘Enter) finishes the field and goes on to the next one. */
 export function useSaveKeys(onSave: () => void, onContinue: () => void) {
   const latest = useRef({ onSave, onContinue })
   latest.current = { onSave, onContinue }
@@ -204,14 +250,16 @@ export function SaveState({ unsaved, saving }: { unsaved: number; saving: boolea
   )
 }
 
-/** The two save buttons of a field: Save (stays) and Save and continue (finishes the field; the filled button unless
- *  another action is the page's main one). */
+/** The two buttons of a field: Save progress (keeps the changes so far; the field stays unfinished, in progress, and
+ *  untouched candidates are not recorded yet) and Finish field (records every candidate as checked, the field is done,
+ *  the next one opens: the main button, `FINISH_NOTE` under it). */
 export function SaveButtons({ unsaved, saving, onSave, onContinue, canContinue, continueTitle, primary = true }: {
   unsaved: number; saving: boolean; onSave: () => void; onContinue: () => void; canContinue: boolean; continueTitle: string; primary?: boolean
 }) {
   return <>
-    <button className="btn" onClick={onSave} disabled={saving || !unsaved} title="Save your changes and stay on this field (Ctrl+S)">Save</button>
-    <button className={`btn${primary ? ' primary big' : ''}`} onClick={onContinue} disabled={saving || !canContinue} title={continueTitle}>Save and continue →</button>
+    <button className="btn" onClick={onSave} disabled={saving || !unsaved}
+      title="Keep the changes made so far: the field stays unfinished (in progress), untouched candidates are not recorded yet (Ctrl+S)">Save progress</button>
+    <button className={`btn${primary ? ' primary big' : ''}`} onClick={onContinue} disabled={saving || !canContinue} title={continueTitle}>Finish field →</button>
   </>
 }
 
@@ -441,8 +489,8 @@ export function KeyLegend({ round, vocabulary, keys, sam }: { round: 1 | 2; voca
       <span><span className="kbd">Z</span> undo (unsaved changes)</span>
       {round === 2 && sam && <span>Click empty tissue: add a missed object</span>}
       <span><span className="kbd">Esc</span> cancel</span>
-      <span><span className="kbd">Ctrl S</span> save</span>
-      <span><span className="kbd">Ctrl Enter</span> save and continue</span>
+      <span><span className="kbd">Ctrl S</span> Save progress</span>
+      <span><span className="kbd">Ctrl Enter</span> Finish field</span>
     </div>
   )
 }

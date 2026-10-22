@@ -3,7 +3,7 @@
 A simple session (a "Fix the field" session with `mode: "simple"`, `labels.rounds`) asks fewer, plainer questions than
 the detailed one: 6E10 "diffuse amyloid beta", "diffuse plaque", "plaque with cores"; AT8 "tangles", "neuritic plaque",
 "neurite". People pick a class (a pass), click the candidates that belong to it (the ones detection put there are lit
-already), click empty tissue to add a missed one, then go on to the next class. On Save and continue every candidate of
+already), click empty tissue to add a missed one, then go on to the next class. On Finish field every candidate of
 the field nobody put in a class is saved as `NONE` ("not an object"), as the detailed mode confirms what was left.
 
 The simple labels are their own vocabulary, kept as they are: task `TASK` ("simple"), `value` the simple class's id.

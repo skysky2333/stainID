@@ -4,7 +4,7 @@ of round 2 with every candidate, one-click Segment Anything outlines (`api.sam_e
 
 A tile is what people claim, in both rounds: the tile handed to someone (or opened by them) is held for them while their
 page is open (`_TILES_HELD`, renewed by the page's live calls), so the others are handed other tiles; a tile saved as
-finished ("Save and continue") is done for that round and, once `labels_needed` people finished it, handed to nobody
+finished ("Finish field") is done for that round and, once `labels_needed` people finished it, handed to nobody
 else. Pages keep every change on the page until the person saves: `save_tile` writes all of a tile's labels at once
 (and, when it finishes the tile, the calls left as the AI made them, confirmed, and its `done` label), or nothing.
 
@@ -583,7 +583,7 @@ def _prepare_key(meta: dict, tile_id: str) -> tuple:
 
 
 def prefetch(meta: dict, tile_id: str, person: str) -> None:
-    """Make the next fields this person may be handed ready in the background, so "Save and continue" opens at once."""
+    """Make the next fields this person may be handed ready in the background, so "Finish field" opens at once."""
     if meta.get("practice"):
         return
     fields = list(meta.get("fields") or [])
@@ -631,7 +631,8 @@ def open_field(meta: dict, tile_id: str, person: str, edit: bool = False, own: b
     labels = session_labels(meta)
     finished = finished_tiles(meta, labels)
     complete = is_complete(meta, finished, tile_id, person)
-    looking = complete and not (edit or own)  # a finished field opens to look at: no edits, nothing held
+    closed = not practice and not meta.get("open", True)  # a closed session: every field opens to look at, for admins too
+    looking = (complete and not (edit or own)) or closed  # a finished field opens to look at: no edits, nothing held
     own = own and person not in finished.get(tile_id, set())  # an extra annotation is someone else's: the finisher redoes their own
     if not practice and not looking:
         refuse_if_taken(meta, tile_id, person)
@@ -663,7 +664,7 @@ def open_field(meta: dict, tile_id: str, person: str, edit: bool = False, own: b
             "mine": mine.replace({np.nan: None}).to_dict(orient="records"), "added": added_states(meta, tile, mine, found),
             "segment_anything": sam["state"] != "unavailable", "segment_ready": bool(sam.get("ready")),
             "open_by": sorted(tiles_held(meta).get(tile_id, set()) - {person}), "done_by": sorted(finished.get(tile_id, set()) - {person}),
-            "finished": finishers(meta, labels, tile_id), "complete": complete, "read_only": looking, "own": own,
+            "finished": finishers(meta, labels, tile_id), "complete": complete, "read_only": looking, "closed": closed, "own": own,
             "pixel_size_um": state.project.pixel_size_um,
             **({"simple": simple_field(meta, objects, labels, tile_id, own)} if rounds.is_simple(meta) else {})}
 
@@ -1026,7 +1027,7 @@ def mask_outline(meta: dict, mark, record: dict) -> dict | None:
 
 class TileSave(BaseModel):
     records: list[Mark] = []  # every change on the page since the last save
-    submit: bool = False  # "Save and continue": the tile is finished for this round
+    submit: bool = False  # "Finish field": the tile is finished for this round
     own: bool = False  # an extra annotation of a finished field (its objects faded by this person's own areas only)
 
 
@@ -1088,7 +1089,7 @@ def _confirmations(meta: dict, tile: dict, person: str, mine: pd.DataFrame, own:
 
 def save_tile(meta: dict, tile_id: str, marks: list, submit: bool, person: str, own: bool = False) -> dict:
     """Save everything this person changed on a tile, all at once (or nothing, when one label is wrong). With `submit`
-    ("Save and continue") the field is finished: the calls and outlines left as the AI made them are confirmed. The field
+    ("Finish field") the field is finished: the calls and outlines left as the AI made them are confirmed. The field
     stays this person's until it is finished. An old round-1 session takes no more labels."""
     meta = writable(meta)
     if rounds.round_of(meta) != 2:

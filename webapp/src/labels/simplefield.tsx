@@ -6,7 +6,7 @@
    no class is dotted grey ("not an object"). Then the next class. AT8 "neurite" is a magic wand over the thread
    segments detection found: a click takes a segment and the ones near it (one slider: how far), Shift+click takes them
    out; the thread lines show only in that pass. There is no outline editing: outlines stay detection's.
-   Nothing is sent before Save; Save and continue finishes the field, and every candidate left as it started is saved
+   Nothing is sent before Save progress; Finish field finishes the field, and every candidate left as it started is saved
    in the class it started in, those in no class as "not an object". Locks, the read-only finished field with Redo /
    Add an extra annotation, the draft in this browser and the progress are those of the detailed mode (fixfield.tsx). */
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -22,7 +22,7 @@ import type { ImagePoint } from '../viewer'
 import { RASTER_LAYERS, ZoomViewer } from '../viewer'
 import { HALO_PX, LIT_PX, OUTLINE_PX, lineScale } from '../viewkeys'
 import type { RoundEvent } from './rounds'
-import { BackToSets, LabellingBar, RoundProgressLine, SaveButtons, SaveState, changesText, draftKey, polygonPoints, readDraft, useLeaveGuard, useLive, useSaveKeys,
+import { BackToSets, ClosedNote, FINISH_NOTE, LabellingBar, RoundProgressLine, SaveButtons, SaveState, changesText, draftKey, polygonPoints, readDraft, useLeaveGuard, useLive, useSaveKeys,
   writeDraft } from './rounds'
 import type { ThreadLadder } from './threads'
 import { nearestSegment, segmentsOf, wandGroup } from './wand'
@@ -76,6 +76,7 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
   const passes = wandClass ? [...objectClasses, wandClass] : objectClasses
   const byId = useMemo(() => new Map(classes.map((c) => [c.id, c])), [classes])
   const readOnly = !!field.read_only
+  const closed = !!field.closed  // a closed session: every field is looked at, for admins too
   const tell = (event: RoundEvent) => onEvent?.(event)
   const navigate = useNavigate()
   useEffect(() => {  // looking only: no key edits anything
@@ -304,35 +305,35 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
       setSaving(false)
     }
   }
-  const saveAll = async (finish: boolean) => {
-    if (saving || readOnly || (!finish && !unsaved)) return
+  /** Save progress, or with `finish` Finish field (then the next field, or `then`). True when everything is saved. */
+  const saveAll = async (finish: boolean, then?: () => void): Promise<boolean> => {
+    if (readOnly) return false
+    if (saving || (!finish && !unsaved)) return !saving
     const marks = Object.values(changes).flatMap((c) => (c.mark ? [c.mark] : []))
       .map((m) => (m.candidate ? { task: m.task, candidate: m.candidate, value: m.value, deleted: m.deleted } : m))
     if (segmentsDirty && wandClass) marks.push({ task: 'simple_area', value: wandClass.id, meta: { segments: segmentsOn, reach_um: reach }, deleted: !segmentsOn.length })
-    if (!(await send(marks, finish))) return
+    if (!(await send(marks, finish))) return false
     setChanges({}); setUndos([]); setRestored(0); setSegmentsSaved(segmentsOn)
     writeDraft(draftAt, null)
     tell(finish ? 'finish' : 'save')
-    if (!finish) return
-    if (onFinished) { onFinished(); return }
+    if (!finish) return true
+    if (onFinished) { onFinished(); return true }
     reload()
+    if (then) { then(); return true }  // finished from the leave dialog: on to where the person was going
     const next = await api.get<{ tile_id: string | null }>(`/api/annotate/${name}/next`).catch(() => ({ tile_id: null }))
     navigate(next.tile_id && next.tile_id !== tile ? `/annotate/${name}/${enc(next.tile_id)}` : `/annotate/${name}`)
+    return true
   }
-  const mayLeave = useLeaveGuard(unsaved)
+  const { leave, dialog: leaveDialog } = useLeaveGuard(unsaved, {
+    save: () => saveAll(false), finish: (go) => { void saveAll(true, go) },
+    discard: () => { writeDraft(draftAt, null); discarding.current = true } })
   useSaveKeys(() => { void saveAll(false) }, () => { void saveAll(true) })
-  const skip = async () => {
-    if (!mayLeave()) return
+  const skip = () => leave(() => void (async () => {
     const next = await api.get<{ tile_id: string | null }>(`/api/annotate/${name}/next?skip=${enc(tile)}`).catch(() => ({ tile_id: null }))
     if (next.tile_id && next.tile_id !== tile) navigate(`/annotate/${name}/${enc(next.tile_id)}`)
     else setError('No other field is waiting for you right now.')
-  }
-  const discardAndClose = () => {
-    if (unsaved && !window.confirm(`Discard ${changesText(unsaved)} on this field and close it? They are not saved and cannot be brought back.`)) return
-    writeDraft(draftAt, null)
-    discarding.current = true
-    navigate(`/annotate/${name}`)
-  }
+  })())
+  const discardAndClose = () => leave(() => navigate(`/annotate/${name}`))  // Close field: the leave dialog asks first
   const finishedBy = field.finished ?? []
   const iFinished = finishedBy.some((f) => f.person === detail.annotator)
   const workOnIt = () => {
@@ -371,11 +372,13 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
         links={<><BackToSets />{!practice && <Link to={`/annotate/${name}`}>All fields of this session</Link>}</>}
         progress={<RoundProgressLine progress={progress} me={detail.annotator} />}
         actions={<button className="btn small" onClick={() => void skip()} disabled={saving} title="Come back to this field later: the next field waiting for you opens">Skip for now</button>} />
+      {leaveDialog}
       {meta.instructions && <div className="instructions">{meta.instructions}</div>}
       <ErrorNote error={error} />
       {restored > 0 && <div className="found found-warn small round-restored" role="status">{changesText(restored)} you had not saved came back from this browser.
         They are not saved yet. <button className="link-btn small" onClick={() => { setChanges({}); setUndos([]); setRestored(0); setSegmentsOn(segmentsSaved) }}>Discard them</button></div>}
-      {readOnly && <div className="found found-good field-finished" role="status">
+      {closed && <ClosedNote />}
+      {readOnly && !closed && <div className="found found-good field-finished" role="status">
         <span><b>Done by {finishedText(finishedBy)}.</b> You are looking at it: nothing here can be changed.</span>
         <span className="spacer" />
         {openBy.length > 0 ? <span className="small">{openBy.join(', ')} {openBy.length === 1 ? 'is' : 'are'} working on it now.</span>
@@ -403,7 +406,7 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
             onClick={readOnly ? undefined : click} onMove={move} onContext={openMenu}
             onView={levels.onView} control={levels.control}
             aside={stripOn && !practice ? <FieldStrip name={name} tile={tile} fields={detail.fields} levels={levels}
-              onOpen={(t) => { if (mayLeave()) navigate(`/annotate/${name}/${enc(t)}`) }} /> : null}
+              onOpen={(t) => leave(() => navigate(`/annotate/${name}/${enc(t)}`))} /> : null}
             under={(zoom, _s, rawUnit) => hidden ? null : <SimpleLayer items={drawn} unit={Number.isFinite(rawUnit) && rawUnit > 0 ? rawUnit : 1} zoom={zoom}
               active={wandOn ? null : active} dim={wandOn ? 0.55 : 1} />}>
             {(zoom, size, rawUnit) => {
@@ -459,7 +462,7 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
             <p className="small muted" style={{ margin: '6px 0 0' }}>{activeClass?.description}</p>
             {!readOnly && <div className="row" style={{ marginTop: 6 }}>
               {passIndex < passes.length - 1 ? <button className="btn" onClick={nextPass}>Next class: {passes[passIndex + 1]?.name} →</button>
-                : <span className="small secondary">Last class: when the field looks right, Save and continue.</span>}
+                : <span className="small secondary">Last class: when the field looks right, Finish field.</span>}
             </div>}
           </div>
           {wandOn && <div className="card side-block wand-card" role="group" aria-label="The magic wand">
@@ -492,7 +495,7 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
             <h3>This field</h3>
             <p className="small field-counts">{objectClasses.map((c) => <span key={c.id}><b>{counts[c.id] ?? 0}</b> {c.name} · </span>)}
               <b>{counts[NONE] ?? 0}</b> in no class{added.length ? <> · <b>{added.length}</b> added by you</> : null}</p>
-            <p className="small muted" style={{ margin: 0 }}>Save and continue keeps every object as you leave it: those in a class in that class, the
+            <p className="small muted" style={{ margin: 0 }}>Finish field keeps every object as you leave it: those in a class in that class, the
               others as “not an object”.</p>
             <details className="side-details compact">
               <summary className="small">Display options</summary>
@@ -501,7 +504,8 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
               <label className="layer-toggle"><input type="checkbox" checked={!!layers.box} onChange={() => setLayers({ ...layers, box: !layers.box })} />field boundary (yellow)</label>
             </details>
           </div>
-          {readOnly ? <div className="card side-block side-save">
+          {closed ? <div className="card side-block side-save"><p className="small" style={{ margin: 0 }}><b>This session is closed; reopen it to edit.</b></p></div>
+            : readOnly ? <div className="card side-block side-save">
             <p className="small" style={{ margin: '0 0 6px' }}>Done by {finishedText(finishedBy)}.</p>
             <div className="row">{openBy.length > 0 ? <span className="small muted">{openBy.join(', ')} {openBy.length === 1 ? 'is' : 'are'} working on it now.</span>
               : <button className="btn primary" onClick={workOnIt}>{iFinished ? 'Redo this field' : 'Add an extra annotation'}</button>}
@@ -510,10 +514,11 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
             <SaveState unsaved={unsaved} saving={saving} />
             <div className="row side-save-buttons">
               <SaveButtons unsaved={unsaved} saving={saving || !!pending} onSave={() => void saveAll(false)} onContinue={() => void saveAll(true)} canContinue={!saving && !pending}
-                continueTitle="Save and finish this field: every object counts as you leave it (Ctrl+Enter)" />
+                continueTitle="Finish field: every object counts as you leave it, and the next field opens (Ctrl+Enter)" />
             </div>
+            <p className="small muted finish-note">{FINISH_NOTE}</p>
             {!onFinished && <div className="row side-discard"><span className="spacer" />
-              <button className="link-btn small" onClick={discardAndClose} title="Drop your unsaved changes on this field and go back to the session’s page">Discard and close</button></div>}
+              <button className="link-btn small" onClick={discardAndClose} title="Back to the session’s page (with unsaved changes it asks first: save, finish or discard them)">Close field</button></div>}
           </div>}
           <div className="side-foot small">{!onFinished && <Link to="/tutorial?kind=simple">Tutorial</Link>}<span className="spacer" /><span className="muted">{tile}</span></div>
         </aside>

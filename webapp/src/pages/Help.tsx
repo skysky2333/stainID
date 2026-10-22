@@ -57,7 +57,7 @@ const FAQ: [string, ReactNode][] = [
     Enter when the lines match the threads you see), <b>B</b> the brush for bad areas (a drag adds to the chosen type’s area, Shift-drag
     takes out of it, <b>Tab</b> / <b>Shift+Tab</b> a smaller or bigger brush: it keeps its size on screen, so zoom in for a finer one), <b>Z</b> undo. Splits and merges are your labels: detection’s objects stay what the
     analysis counts. In <b>Fix the field</b>, clicking empty
-    tissue outlines a missed object. Nothing is saved until <b>Save</b> or <b>Save and continue</b>; unsaved changes come back after a reload. The keys
+    tissue outlines a missed object. Nothing is saved until <b>Save progress</b> (the field stays unfinished) or <b>Finish field</b> (everything on it recorded as checked by you); unsaved changes come back after a reload. The keys
     are always shown in the side panel.</>],
   ['Which key is which type?', <>The same on every labelling page, shown in the side panel:
     <ul className="help-keys">

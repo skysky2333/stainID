@@ -23,7 +23,8 @@ import { PALETTE } from '../palette'
 import { BRUSH_KEY, BRUSH_PX, CLEARED, brushStep } from './brush'
 import { AreaProgressLine } from './markareas'
 import { MATTER_COLOUR, MATTER_SCALE, MatterMask } from './mattermask'
-import { BackToSets, LabellingBar, useFitScreen, useLeaveGuard } from './rounds'
+import { BackToSets, ClosedNote, LabellingBar, useFitScreen, useLeaveGuard } from './rounds'
+import { HomePin } from './access'
 
 export const MATTER_TITLE = 'Grey / white matter'
 export const MATTER_TEXT = 'One core at a time: paint the white matter on the NeuN image, then check it on the other stains, where it is carried over for you.'
@@ -47,7 +48,8 @@ function Heading({ meta, core, progress, me }: { meta: Meta; core?: string; prog
     <LabellingBar title={meta.title} about={`${MATTER_TITLE}${core ? ` · core ${core}` : ''}`}
       links={<><BackToSets />{core && meta.name !== PRACTICE_MATTER && <Link to={`/annotate/${meta.name}`}>All cores of this session</Link>}
         {meta.name !== PRACTICE_MATTER && <Link to={`/tutorial?kind=matter&next=${enc(`/annotate/${meta.name}`)}`} title="The short tutorial of this page again">Tutorial</Link>}</>}
-      progress={<AreaProgressLine progress={progress} me={me} verb="done" />} />
+      progress={<AreaProgressLine progress={progress} me={me} verb="done" />}
+      actions={!core && meta.name !== PRACTICE_MATTER ? <HomePin name={meta.name} /> : undefined} />
   )
 }
 
@@ -143,7 +145,7 @@ export function MatterCorePage({ detail, core, onEvent, coach, onFinished }: {
   const sourceSaved = !!images.find((i) => i.stain === source)?.saved_by_me
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const painted = useMemo(() => images.filter((i) => masks.current.get(i.stain)?.dirty).map((i) => i.stain), [images, tick])
-  const mayLeave = useLeaveGuard(saving || readOnly ? 0 : painted.length)
+  const { leave, dialog: leaveDialog } = useLeaveGuard(saving || readOnly ? 0 : painted.length, { unit: 'core', discard: () => undefined })
   useEffect(() => { if (data) setProgress(data.progress) }, [data])
   useEffect(() => {  // keep the core this person's while the page is open; closing it frees it for the others at once
     if (!data || readOnly || practice) return
@@ -166,6 +168,7 @@ export function MatterCorePage({ detail, core, onEvent, coach, onFinished }: {
   const mask = image ? masks.current.get(image.stain) : undefined
   const carried = area?.from === 'carried'
   const dirty = !!mask?.dirty
+  const lastOne = !!image && images.every((i) => i.saved_by_me || i.stain === image.stain)  // saving this stain finishes the core
 
   const save = async (accepted: boolean) => {
     if (!image || saving || readOnly) return
@@ -254,7 +257,9 @@ export function MatterCorePage({ detail, core, onEvent, coach, onFinished }: {
     <div className="annotate-page round-page fit-page areas-page matter-page">
       <Heading meta={meta} core={data.core} progress={practice ? null : progress} me={detail.annotator} />
       {meta.instructions && <div className="instructions">{meta.instructions}</div>}
-      {readOnly && <div className="found found-good small field-others" role="status">
+      {leaveDialog}
+      {data.closed && <ClosedNote unit="core" />}
+      {readOnly && !data.closed && <div className="found found-good small field-others" role="status">
         {data.done_by.includes(detail.annotator ?? '') ? 'You finished this core' : `Done by ${data.done_by.join(', ')}`}: it opens to look at.{' '}
         {data.done_by.includes(detail.annotator ?? '') && <button className="link-btn small" onClick={() => { masks.current.clear(); setAreaOf({}); setParams({ edit: '1' }) }}>Redo this core</button>}
       </div>}
@@ -303,20 +308,20 @@ export function MatterCorePage({ detail, core, onEvent, coach, onFinished }: {
             <p className="small secondary" style={{ marginTop: 0 }}>{status}</p>
             {!readOnly && image && !locked(image.stain) && area && area.from !== 'waiting' && <div className="row">
               {carried && <button className={`btn${dirty ? '' : ' primary'}`} disabled={saving} onClick={() => void save(true)}
-                title="Save the white matter carried from NeuN as it is (Enter when nothing is changed)">Accept as carried</button>}
+                title="Save the white matter carried from NeuN as it is (Enter when nothing is changed)">{lastOne ? 'Accept as carried and finish core' : 'Accept as carried'}</button>}
               {(!carried || dirty) && <button className="btn primary" disabled={saving} onClick={() => void save(false)}
-                title="Save this stain's white matter as painted (Enter)">{saving ? 'Saving…' : savedHere && !dirty ? `Save ${image.stain} again` : `Save ${image.stain}`}</button>}
+                title="Save this stain's white matter as painted (Enter)">{saving ? 'Saving…' : lastOne ? 'Finish core' : savedHere && !dirty ? `Save ${image.stain} again` : `Save ${image.stain}`}</button>}
             </div>}
             {painted.length > 0 && !readOnly && <p className="small muted" style={{ marginBottom: 0 }}>Painted, not saved yet: {painted.join(', ')}.</p>}
             {!readOnly && <p className="small muted" style={{ marginBottom: 0 }}>{images.filter((i) => i.saved_by_me).length} of {images.length} stains saved.{' '}
-              {!practice && <button className="link-btn small" onClick={() => { if (mayLeave()) void nextCore() }}>Take another core</button>}</p>}
+              {!practice && <button className="link-btn small" onClick={() => leave(() => void nextCore())}>Take another core</button>}</p>}
           </div>
           <div className="card side-block key-help small">
             <h3>Keys</h3>
             <div>drag paints · <span className="kbd">E</span> eraser · <span className="kbd">B</span> brush · <span className="kbd">Shift</span>-drag erases</div>
             <div><span className="kbd">Tab</span> / <span className="kbd">Shift</span>+<span className="kbd">Tab</span> a smaller / bigger brush · <span className="kbd">+</span> <span className="kbd">−</span> zoom · arrow keys move · middle button: move</div>
             <div><span className="kbd">Z</span> undo a stroke · <span className="kbd">Space</span> hide the drawing</div>
-            <div><span className="kbd">Enter</span> save this stain (accept as carried when nothing changed) · <span className="kbd">[</span> <span className="kbd">]</span> other stain</div>
+            <div><span className="kbd">Enter</span> save this stain (accept as carried when nothing changed; on the last stain: Finish core) · <span className="kbd">[</span> <span className="kbd">]</span> other stain</div>
             <p className="muted" style={{ margin: '6px 0 0' }}>What you mark teaches and tests a grey / white matter model; the analysis does not use it.</p>
           </div>
         </aside>

@@ -196,7 +196,8 @@ def open_core(name: str, core_id: str, request: Request, edit: bool = False, per
     labels = store.current(root()).iloc[:0] if practice else session_labels(meta)
     found = {} if practice else session_checked(meta, labels)
     by = areas.finished(meta, found).get(core_id, set())
-    looking = (person in by or len(by) >= areas.needed(meta, core_id)) and not edit
+    closed = not practice and not meta.get("open", True)  # a closed session: its cores open to look at, for admins too
+    looking = ((person in by or len(by) >= areas.needed(meta, core_id)) and not edit) or closed
     if not looking and not practice:
         refuse_if_taken(meta, core_id, person)
         _HELD.hold(hold_key(meta), person, [core_id])
@@ -211,7 +212,7 @@ def open_core(name: str, core_id: str, request: Request, edit: bool = False, per
         images.append({"stain": stain, "picture": picture, "saved_by": sorted(found.get((core_id, stain), set())),
                        "saved_by_me": person in found.get((core_id, stain), set()), "mine": mine.to_api() if mine else None})
     place = _places().get(core_id, {"tma": "", "core": core_id})
-    return {"core_id": core_id, **place, "images": images, "source": matter.source_of(stains), "read_only": looking, "done_by": sorted(by),
+    return {"core_id": core_id, **place, "images": images, "source": matter.source_of(stains), "read_only": looking, "closed": closed, "done_by": sorted(by),
             "progress": progress(meta, labels), "pixel_size_um": state.project.pixel_size_um, "practice": practice}
 
 

@@ -279,3 +279,20 @@ def test_the_labels_page_sees_a_change_at_once(rounds_project):  # noqa: F811
     assert listed()[name]["fields"] == 1 or listed()[name].get("round_progress", {}).get("total") == 1
     assert admin.delete(f"/api/labels/sessions/{name}").status_code == 200
     assert name not in listed()
+
+
+def test_a_closed_session_is_closed_for_everyone(rounds_project):  # noqa: F811
+    """Closed means closed for admins too: its fields open to look at (read-only) and nothing in it is saved; reopened,
+    it is as before."""
+    admin, (ann, _), _ = rounds_project
+    name = _session(admin, "closing")
+    assert admin.post(f"/api/labels/sessions/{name}/open", json={"open": False}).status_code == 200
+    field = admin.get(f"/api/annotate/{name}/fields/{TILE}").json()
+    assert field["read_only"] is True and field["closed"] is True
+    refused = _save(admin, name, TILE, [], submit=True)
+    assert refused.status_code == 409 and "closed" in refused.text
+    assert ann.get(f"/api/annotate/{name}").status_code == 403  # people who joined: not open at the moment
+    assert admin.post(f"/api/labels/sessions/{name}/open", json={"open": True}).status_code == 200
+    field = admin.get(f"/api/annotate/{name}/fields/{TILE}").json()
+    assert field["read_only"] is False and field["closed"] is False
+    assert _save(admin, name, TILE, [], submit=True).status_code == 200

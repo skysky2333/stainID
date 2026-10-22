@@ -15,10 +15,11 @@ import type { ViewControl } from '../viewer'
 interface FieldCore { core_id: string; width: number; height: number; origin: [number, number]; field: [number, number]; thumb: string; mid: string }
 type Field = SessionDetail['fields'][number]
 
-const STATE_COLOUR: Record<string, string> = { done: PALETTE.states.unknown, in_progress: PALETTE.markers.others, not_started: '#ffffff', preparing: PALETTE.states.inactive }
+const STATE_COLOUR: Record<string, string> = { done: PALETTE.states.unknown, in_progress: PALETTE.markers.others, not_started: '#000000', preparing: PALETTE.states.inactive }
+const FILLED = new Set(['done', 'in_progress'])  // to do: only a thin outline, so the core stays visible where every tile is a field
 
 /** Whether the strip shows (remembered in this browser); a button in the field page's head turns it on and off. */
-export function useStripShown() { return useStored<boolean>('stainid.field.levels', true) }
+export function useStripShown() { return useStored<boolean>('stainid.field.levels.v2', true) }  // v2: on again for everyone
 
 /** The link between the detailed view and the strip: the viewer reports what is in view (`onView`) and is moved
  *  through `control`; only the strip draws again as the view moves, not the whole field page. */
@@ -29,6 +30,8 @@ export function useLevels(): Levels {
   const onView = useCallback((r: Rect) => sink.current?.(r), [])
   return useMemo(() => ({ control, onView, sink }), [onView])
 }
+
+const STATE_WORD: Record<string, string> = { done: 'done', in_progress: 'in progress (saved, not finished, or open now)', not_started: 'to do', preparing: 'being prepared' }
 
 export function FieldStrip({ name, tile, fields, levels, onOpen }: {
   name: string; tile: string; fields: Field[]; levels: Levels; onOpen: (tile: string) => void
@@ -42,8 +45,8 @@ export function FieldStrip({ name, tile, fields, levels, onOpen }: {
   const squares = useMemo<Square[]>(() => (c ? fields.filter((f) => f.core_id === c.core_id && f.box).map((f, i) => {
     const [x, y, w, h] = f.box!
     const state = f.done_by_me ? 'done' : f.state ?? 'not_started'
-    return { key: f.tile_id, x, y, w, h, colour: STATE_COLOUR[state] ?? '#ffffff', current: f.tile_id === tile,
-      title: `Field ${i + 1}${f.tile_id === tile ? ' (this one)' : f.prepared ? ' · click to open' : ' · being prepared'}`,
+    return { key: f.tile_id, x, y, w, h, colour: STATE_COLOUR[state] ?? '#000000', fill: FILLED.has(state), current: f.tile_id === tile,
+      title: `Field ${i + 1} · ${STATE_WORD[state] ?? 'to do'}${f.tile_id === tile ? ' (this one)' : f.prepared ? ' · click to open' : ' · being prepared'}`,
       onOpen: f.tile_id !== tile && f.prepared ? () => onOpen(f.tile_id) : undefined }
   }) : []), [c, fields, tile, onOpen])
   if (!c) return <div className="level-strip" aria-hidden={!core.error}>{core.error ? null : <div className="card level-card level-wait small muted">Loading the core…</div>}</div>
@@ -61,8 +64,10 @@ export function FieldStrip({ name, tile, fields, levels, onOpen }: {
         <div className="level-title small"><b>Whole core</b><span className="muted"> · fields by state</span></div>
         <LevelMap src={apiUrl(c.thumb)} width={c.width} height={c.height} window={whole} next={mid} squares={squares} onMove={move}
           label="The whole core: this session's fields by state, the part shown next to it" />
-        <div className="level-legend small muted"><span><i style={{ borderColor: STATE_COLOUR.done }} />done</span>
-          <span><i style={{ borderColor: STATE_COLOUR.in_progress }} />in progress</span><span><i style={{ borderColor: STATE_COLOUR.not_started }} />to do</span></div>
+        <div className="level-legend small muted"><span><i className="filled" style={{ borderColor: STATE_COLOUR.done, background: STATE_COLOUR.done }} />done</span>
+          <span title="Saved but not finished, or open now"><i className="filled" style={{ borderColor: STATE_COLOUR.in_progress, background: STATE_COLOUR.in_progress }} />in progress</span>
+          <span><i style={{ borderColor: STATE_COLOUR.not_started }} />to do</span><span><i className="current" />this field</span></div>
+        <div className="level-hint small muted">click a field to open it · drag to move the view</div>
       </div>
       <div className="card level-card">
         <div className="level-title small"><b>Around this field</b></div>

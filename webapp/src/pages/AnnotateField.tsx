@@ -15,7 +15,8 @@ import { FixField } from '../labels/fixfield'
 import { MarkAreas } from '../labels/markareas'
 import { MatterCorePage, MatterSession } from '../labels/matter'
 import { SessionFieldMap } from '../labels/sessionfields'
-import { ROUND_TITLE, RoundProgressLine, useFitScreen } from '../labels/rounds'
+import { ClosedNote, ROUND_TITLE, RoundProgressLine, useFitScreen } from '../labels/rounds'
+import { HomePin } from '../labels/access'
 import type { RoundDetail } from '../api'
 import { Register, useSession } from '../session'
 import type { ImagePoint } from '../viewer'
@@ -103,8 +104,10 @@ function SessionOverview({ detail, reload }: { detail: SessionDetail; reload: ()
   return (
     <div className="annotate-overview">
       <PageHead title={meta.title} subtitle={<Link to="/">← My labelling sets</Link>}>
-        {left > 0 && <button className="btn primary big" disabled={finding || left === preparing} onClick={next}>{done ? 'Continue with the next field →' : 'Start with the first field →'}</button>}
+        <HomePin name={name} />
+        {left > 0 && meta.open !== false && <button className="btn primary big" disabled={finding || left === preparing} onClick={next}>{done ? 'Continue with the next field →' : 'Start with the first field →'}</button>}
       </PageHead>
+      {meta.open === false && <ClosedNote unit="session" />}
       {meta.instructions && <div className="instructions">{meta.instructions}</div>}
       {(meta as Partial<RoundDetail>).round === 2 && <div className="card annotate-progress-card">
         <div className="row"><b>Round 2 · {ROUND_TITLE[2]}</b><span className="spacer" /><span className="small muted">everyone’s work, live</span></div>

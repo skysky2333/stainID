@@ -204,7 +204,7 @@ export function SessionFields({ s, onChanged }: { s: SessionInfo; onChanged: () 
                     <button className="link-btn small" onClick={() => setRemoving(f)} title="Take this field out of the session (its labels are kept)">Remove</button></div>
                   <div className="small secondary ellipsis" title={f.tile_id}>{f.tma ? `${tmaName(f.tma)} · ${f.core_label}` : f.tile_id}{f.region ? ` · ${f.region}` : ''}</div>
                   {(f.done_by.length > 0 || f.working.length > 0 || f.open_by.length > 0) && (
-                    <div className="small muted">{[f.done_by.length ? `done: ${f.done_by.join(', ')}` : '', f.working.length ? `working: ${f.working.join(', ')}` : '',
+                    <div className="small muted">{[f.done_by.length ? `done: ${f.done_by.join(', ')}` : '', f.working.length ? `in progress (saved, not finished): ${f.working.join(', ')}` : '',
                       f.open_by.length ? `open now: ${f.open_by.join(', ')}` : ''].filter(Boolean).join(' · ')}</div>
                   )}
                 </div>

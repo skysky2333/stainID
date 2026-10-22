@@ -104,6 +104,8 @@ create table if not exists members (account text not null, project text not null
 create table if not exists join_keys (project text not null, session text not null, key text not null unique, enabled integer not null,
     created real not null, primary key (project, session));
 create table if not exists tutorials (account text not null, kind text not null, done real not null, primary key (account, kind));
+create table if not exists pins (account text not null, project text not null, session text not null, pinned real not null,
+    primary key (account, project, session));
 create table if not exists audit (id integer primary key autoincrement, time real not null, actor text not null, actor_name text not null,
     action text not null, target text not null default '', target_name text not null default '', detail text not null default '');
 """
@@ -616,6 +618,21 @@ def sets_of(account_id: str) -> list[tuple[str, str, float]]:
     """(project id, session, when joined) of every set in the account's collection, latest first."""
     with _db() as db:
         return [(r["project"], r["session"], r["joined"]) for r in db.execute("select * from members where account = ? order by joined desc", (account_id,))]
+
+
+def pin(account_id: str, project: str, session: str, on: bool) -> None:
+    """Put a session on an admin's home page (or take it off): their home lists only the sessions they added."""
+    with _db() as db:
+        if on:
+            db.execute("insert or ignore into pins (account, project, session, pinned) values (?, ?, ?, ?)", (account_id, project, session, time.time()))
+        else:
+            db.execute("delete from pins where account = ? and project = ? and session = ?", (account_id, project, session))
+
+
+def pins_of(account_id: str) -> list[tuple[str, str, float]]:
+    """(project id, session, when added) of the sessions on an admin's home page, latest first."""
+    with _db() as db:
+        return [(r["project"], r["session"], r["pinned"]) for r in db.execute("select * from pins where account = ? order by pinned desc", (account_id,))]
 
 
 TUTORIALS = ("objects", "areas", "threads", "simple", "matter")  # "Fix the field", "Mark bad areas" and AT8 threads (its thread-threshold slider)

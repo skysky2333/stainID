@@ -5,7 +5,7 @@ import { api, apiUrl, appPath, enc } from '../api'
 import { Empty, ErrorNote, Flash, HelpBox, Loaded, Modal, PageHead, Progress, fmt, timeAgo, withError } from '../components'
 import { useFetch, useFlash } from '../hooks'
 import { AI_VIEW_TEXT, ConfirmDialog, CopyButton, DetectionLine, TOOL_TEXT, kindText, objectsOf, percent } from '../labelling'
-import { SessionAccessCard } from '../labels/access'
+import { HomePin, SessionAccessCard } from '../labels/access'
 import { SessionLabelsView } from '../labels/examine'
 import { FIELD_TEXT, FieldChoice, SessionFields } from '../labels/fields'
 import { AREAS_TITLE } from '../labels/markareas'
@@ -32,6 +32,7 @@ function patched(sessions: SessionInfo[], patch: Record<string, Patch>): Session
 export default function Labels() {
   const overview = useFetch<LabelsOverview>('/api/labels/overview', 10000)
   const share = useFetch<Share>('/api/labels/share')
+  const home = useFetch<{ sessions: string[] }>('/api/labels/home')  // the sessions on this admin's home page
   const [creating, setCreating] = useState(false)
   const [older, setOlder] = useState(false)  // one of the kinds of session made before the annotation rounds
   const [notice, setNotice] = useState<string | null>(null)
@@ -76,7 +77,7 @@ export default function Labels() {
             areas</b>: core by core with a brush, for folds, artifacts, glass and blur (a sample of cores is enough).</li>
           <li><b>Try the tutorial</b> to see what annotators see first (nothing is saved).</li>
           <li><b>Send the link and the set’s key</b> (a session → More → Who can label). People sign in or make an account, add the set with the key and label
-            in their browser. Each person gets their own field, and their work is kept when they press Save.</li>
+            in their browser. Each person gets their own field, and their work is kept when they press Save progress or Finish field.</li>
           <li><b>Watch progress</b> here, field by field, then <Link to="/models">train a new model</Link> from the sessions you choose and compare it with the one in use.</li>
         </ol>
       </HelpBox>
@@ -84,7 +85,7 @@ export default function Labels() {
       <Loaded state={overview} label="Loading labelling sessions…">
         {(data) => <>
           <Sessions sessions={patched(data.sessions, patch)} reference={data.reference} linkFor={linkFor} onChanged={overview.reload} onPatch={onPatch}
-            onNotice={setNotice} onNew={() => setCreating(true)} />
+            onNotice={setNotice} onNew={() => setCreating(true)} home={home.data?.sessions ?? null} onHome={home.reload} />
           {data.sessions.some((s) => s.kind === 'areas') && <AreasSoFar />}
           <ShareCard share={share.data} error={share.error} link={linkFor()} anyOpen={data.sessions.some((s) => s.open)} />
           <LabelledSoFar stains={data.stains} onChanged={overview.reload} />
@@ -121,11 +122,12 @@ export default function Labels() {
 const wholeCores = (s: { kind: string }) => s.kind === 'areas' || s.kind === 'matter'
 const isRound = (s: SessionInfo) => !!s.round || wholeCores(s) || !!s.label_set  // AI review rounds (read-only label sets) with them
 
-function Sessions({ sessions, reference, linkFor, onChanged, onPatch, onNotice, onNew }: {
+function Sessions({ sessions, reference, linkFor, onChanged, onPatch, onNotice, onNew, home, onHome }: {
   sessions: SessionInfo[]; reference: ReferenceLabels | null; linkFor: (name: string) => string; onChanged: () => void; onPatch: OnPatch
-  onNotice: (text: string) => void; onNew: () => void
+  onNotice: (text: string) => void; onNew: () => void; home: string[] | null; onHome: () => void
 }) {
-  const row = (s: SessionInfo) => <SessionRow key={s.name} s={s} link={linkFor(s.name)} onChanged={onChanged} onPatch={onPatch} onNotice={onNotice} />
+  const row = (s: SessionInfo) => <SessionRow key={s.name} s={s} link={linkFor(s.name)} onChanged={onChanged} onPatch={onPatch} onNotice={onNotice}
+    pinned={home ? home.includes(s.name) : undefined} onHome={onHome} />
   const ordered = [...sessions].sort((a, b) => b.created - a.created)  // newest first; stays put when one is opened or closed
   return (
     <section className="card labels-section">
@@ -235,8 +237,8 @@ function sessionState(s: SessionInfo): { text: string; className: string } {
   return s.open ? { text: 'Open', className: 'status-running' } : { text: 'Closed', className: '' }
 }
 
-function SessionRow({ s, link, onChanged, onPatch, onNotice }: {
-  s: SessionInfo; link: string; onChanged: () => void; onPatch: OnPatch; onNotice: (text: string) => void
+function SessionRow({ s, link, onChanged, onPatch, onNotice, pinned, onHome }: {
+  s: SessionInfo; link: string; onChanged: () => void; onPatch: OnPatch; onNotice: (text: string) => void; pinned?: boolean; onHome: () => void
 }) {
   const [open, setOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -273,6 +275,7 @@ function SessionRow({ s, link, onChanged, onPatch, onNotice }: {
         {s.open && !s.read_only && <CopyButton text={link} />}
         {!s.read_only && <button className="btn small" disabled={busy} onClick={toggle} title={s.open ? 'People can no longer open it; nothing is lost' : 'People with the link can start labelling'}>
           {busy ? (s.open ? 'Opening…' : 'Closing…') : s.open ? 'Close' : 'Open to labellers'}</button>}
+        {!s.read_only && pinned !== undefined && <HomePin name={s.name} pinned={pinned} onChanged={onHome} />}
         <button className="btn small" onClick={() => setOpen(!open)} aria-expanded={open}>{open ? 'Less' : 'More'}</button>
         <Flash text={said} />
       </div>

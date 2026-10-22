@@ -18,6 +18,7 @@ type Layout = NonNullable<SessionDetail['cores']>[string]
 type Look = FieldState | 'mine' | 'bad'
 export const LOOK_TEXT: Record<Look, string> = { not_started: 'To do', in_progress: 'In progress', done: 'Done', preparing: 'Being prepared', mine: 'Finished by you', bad: 'Marked bad' }
 const LOOK_ORDER: Look[] = ['not_started', 'in_progress', 'mine', 'done', 'bad', 'preparing']
+const LOOK_HINT: Partial<Record<Look, string>> = { in_progress: 'Saved but not finished (Save progress), or open now', done: 'Finished (Finish field)' }
 const BADGE: Record<Look, string> = { not_started: 'status-todo', in_progress: 'status-running', done: 'status-done', preparing: 'status-queued', mine: 'status-done', bad: 'status-outdated' }
 
 const stateOf = (f: Field): FieldState => f.state ?? (!f.prepared ? 'preparing' : f.done_by_me ? 'done' : f.open_by_others ? 'in_progress' : 'not_started')
@@ -38,7 +39,7 @@ function hoverText(f: Field, i: number, needed: number, me: string | null, sure?
     `Field ${i + 1} · ${LOOK_TEXT[lookOf(f)]}`,
     `${f.tma_name || f.tma || 'TMA ?'} · core ${f.core || '?'}`,
     sure ? (sure.objects && sure.mean != null ? `average ${sure.mean.toFixed(2)} closeness · ${sure.objects} object${sure.objects === 1 ? '' : 's'}` : 'no objects') : '',
-    on.length ? `Working on it now: ${who(on, me)}` : '',
+    on.length ? `In progress · ${who(on, me)} (saved but not finished, or open now)` : '',
     done.length ? `Finished by ${done.map((p) => `${p === me ? 'you' : p}${f.done_at?.[p] ? ` (${day(f.done_at[p])})` : ''}`).join(', ')}` : '',
     `${Math.min(done.length, needed)} of ${needed} ${needed === 1 ? 'person' : 'people'} done`,
     f.ai_reviewed ? 'AI review labels exist (not shown while labelling)' : '',
@@ -132,7 +133,7 @@ export function SessionFieldMap({ detail }: { detail: SessionDetail }) {
       </p>
       <div className="row session-fields-bar">
         <ul className="row small tile-legend" aria-label="Tile outlines">
-          {LOOK_ORDER.map((look) => <li key={look}><span className={`tile-swatch look-${look}`} />{LOOK_TEXT[look]}</li>)}
+          {LOOK_ORDER.map((look) => <li key={look} title={LOOK_HINT[look]}><span className={`tile-swatch look-${look}`} />{LOOK_TEXT[look]}</li>)}
           {fields.some((f) => f.ai_reviewed) && <li title="AI review labels exist on the field (not shown while labelling)"><span className="ai-dot in-legend" />AI reviewed</li>}
           {fields.some((f) => f.elsewhere?.length) && <li title="People labelled the field in another session. This session is independent: its state here and what you see while labelling come from this session only"><span className="elsewhere-dot in-legend" />Labelled in another session</li>}
         </ul>

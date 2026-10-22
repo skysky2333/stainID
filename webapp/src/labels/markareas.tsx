@@ -19,7 +19,8 @@ import { DeepZoom } from '../deepzoom'
 import type { Mark, PaintPoint, Pyramid } from '../deepzoom'
 import { useFetch, useStored } from '../hooks'
 import { AREA_SCALE, BRUSH_KEY, BRUSH_PX, BrushMasks, CLEARED, EXCLUDE_TYPES, brushStep, colourOfType } from './brush'
-import { BackToSets, LabellingBar, useFitScreen, useLeaveGuard } from './rounds'
+import { BackToSets, ClosedNote, LabellingBar, useFitScreen, useLeaveGuard } from './rounds'
+import { HomePin } from './access'
 
 export const AREAS_TITLE = 'Mark bad areas'
 export const AREAS_TEXT = 'One core at a time with all its stains: paint where the tissue is folded, torn, dirty, missing or out of focus, or press Enter when a stain looks fine.'
@@ -57,6 +58,7 @@ export function MarkAreas({ detail, onEvent, coach, onFinished }: {
   const meta = detail.meta as SessionDetail['meta'] & { stains_of?: Record<string, string[]>; progress?: RoundProgress }
   const name = meta.name
   const practice = name === PRACTICE_AREAS
+  const closed = meta.open === false && !practice  // closed for everyone, admins too: nothing is handed out or saved
   const [next, setNext] = useState<AreaNext | null>(null)
   const [progress, setProgress] = useState<RoundProgress | null>(meta.progress ?? null)
   const [error, setError] = useState<string | null>(null)
@@ -65,14 +67,16 @@ export function MarkAreas({ detail, onEvent, coach, onFinished }: {
     const found = await withError(() => api.get<AreaNext>(`/api/annotate/${name}/areas/next${skip ? `?skip=${enc(skip)}` : ''}`), setError)
     if (found) { setNext(found); setProgress(found.progress) }
   }, [name])
-  useEffect(() => { void ask() }, [ask])
+  useEffect(() => { if (!closed) void ask() }, [ask, closed])
 
   const top = (
     <LabellingBar title={meta.title} about={`${AREAS_TITLE}${next?.core_id ? ` · core ${next.core_id}` : ''}`}
       links={<><BackToSets />
         {!practice && <Link to={`/tutorial?kind=areas&next=${enc(`/annotate/${name}`)}`} title="The short tutorial of this page again">Tutorial</Link>}</>}
-      progress={!practice && <AreaProgressLine progress={progress} me={detail.annotator} />} />
+      progress={!practice && <AreaProgressLine progress={progress} me={detail.annotator} />}
+      actions={!practice ? <HomePin name={name} /> : undefined} />
   )
+  if (closed) return <div className="annotate-page round-page fit-page">{top}<ClosedNote unit="session" /></div>
   if (!next) return <div className="annotate-page round-page fit-page">{top}<ErrorNote error={error} />{!error && <Loading label="Finding a core for you…" />}</div>
   if (!next.core_id) {
     return (
@@ -126,7 +130,8 @@ function CoreTask({ name, core, after, afterStains, practice, onEvent, coach, on
   const tell = useCallback((e: AreaEvent) => onEvent?.(e), [onEvent])
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const painted = useMemo(() => images.filter((i) => masks.current.get(i.stain)?.dirty).map((i) => i.stain), [images, tick])
-  const mayLeave = useLeaveGuard(saving ? 0 : painted.length)
+  const { leave, dialog: leaveDialog } = useLeaveGuard(saving ? 0 : painted.length, { unit: 'core', discard: () => undefined, finishLabel: 'Finish core',
+    finish: images.length && images.every((i) => looked.has(i.stain)) ? () => { void save() } : undefined })
 
   useEffect(() => { if (task.data) setOpenBy(task.data.open_by) }, [task.data])
   useEffect(() => {  // keep the core this person's while the page is open, and hear who else is on it
@@ -209,10 +214,11 @@ function CoreTask({ name, core, after, afterStains, practice, onEvent, coach, on
   const second = task.data.second_check
   return (
     <>
+      {leaveDialog}
       {(second || openBy.length > 0) && <div className="found found-warn small field-others" role="status">
         {second && <>This core is a <b>second check</b>: someone else checks it too, so we learn how well people agree. Mark what you see yourself. </>}
         {openBy.length > 0 && <>{openBy.join(', ')} {openBy.length === 1 ? 'has' : 'have'} this core open too. {!practice && <button className="link-btn small"
-          onClick={() => { if (mayLeave()) onSkip() }}>Take another core</button>}</>}
+          onClick={() => leave(onSkip)}>Take another core</button>}</>}
       </div>}
       <ErrorNote error={error} />
       <div className="annotate-workspace">
@@ -255,8 +261,8 @@ function CoreTask({ name, core, after, afterStains, practice, onEvent, coach, on
             <p className="small secondary" style={{ marginTop: 0 }}>Look at each stain. Paint what should not be counted; press <span className="kbd">Enter</span> when a stain is done.
               {' '}{allLooked ? 'Every stain is looked at.' : `Still to look at: ${notYet.join(', ')}.`}</p>
             <button className="btn primary" disabled={saving || !allLooked} onClick={() => void save()}
-              title={allLooked ? 'Save this core and go on to the next one' : `Look at every stain first (Enter on each): ${notYet.join(', ')}`}>
-              {saving ? 'Saving…' : 'Save and continue'}</button>
+              title={allLooked ? 'Finish core: records it as checked by you, and the next core opens' : `Look at every stain first (Enter on each): ${notYet.join(', ')}`}>
+              {saving ? 'Saving…' : 'Finish core'}</button>
             {painted.length > 0 && <p className="small muted" style={{ marginBottom: 0 }}>Painted, not saved yet: {painted.join(', ')}.</p>}
           </div>
           <div className="card side-block key-help small">

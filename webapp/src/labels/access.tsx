@@ -5,6 +5,39 @@ import { api } from '../api'
 import { ErrorNote, Flash, Loaded, timeAgo, withError } from '../components'
 import { useFetch, useFlash } from '../hooks'
 import { ConfirmDialog, CopyButton } from '../labelling'
+import { useSession } from '../session'
+
+/** "Add to my home page" / "Remove from my home page" (admins): an admin's home page lists only the sessions they
+ *  added. `pinned`: known already (the Labels page asks once for all its sessions), else asked here. */
+export function HomePin({ name, pinned, onChanged }: { name: string; pinned?: boolean; onChanged?: () => void }) {
+  const { session } = useSession()
+  const own = useFetch<{ sessions: string[] }>(session.admin && pinned === undefined ? '/api/labels/home' : null)
+  const [now, setNow] = useState<boolean | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [said, say] = useFlash()
+  const known = pinned ?? own.data?.sessions.includes(name)
+  if (!session.admin || known === undefined) return null
+  const on = now ?? known
+  const toggle = async () => {
+    setBusy(true)
+    setNow(!on)
+    const ok = await withError(async () => { await api.put(`/api/labels/sessions/${name}/home`, { on: !on }); return true }, setError)
+    setBusy(false)
+    if (ok) say(on ? 'Taken off your home page' : 'Added to your home page')
+    else setNow(null)
+    own.reload()
+    onChanged?.()
+  }
+  return (
+    <span className="row small home-pin">
+      <button className="btn small" disabled={busy} onClick={() => void toggle()} aria-pressed={on}
+        title="Your home page lists only the sessions you add to it">{on ? 'Remove from my home page' : 'Add to my home page'}</button>
+      <Flash text={said} />
+      <ErrorNote error={error} />
+    </span>
+  )
+}
 
 /** Who can label a session (Labels → a session → More): its join key, and the people who joined. Annotators add a set
  *  with its key; a new key stops the old one, and the people who joined keep their access. Admins open every set. */

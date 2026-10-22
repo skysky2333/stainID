@@ -17,7 +17,7 @@
    outlines a missed object with one click: a new candidate, dotted, until
    a class key makes it solid. A change of call is recorded exactly like an answer in round 1. Every change stays on this
    page ("3 unsaved changes", with a draft in this browser in case of a reload; Z undoes) until Save (stays on the field)
-   or Save and continue: the field is then finished, every call nobody has decided and every outline left as it is counts
+   or Finish field: the field is then finished, every call nobody has decided and every outline left as it is counts
    as checked by this person, and the next field comes. Opening a field holds it for this person, so the others are
    handed other fields; what others decide meanwhile shows within seconds ("checked by Ben"). The page takes the window
    exactly: the picture as large as fits, the side panel scrolling by itself. */
@@ -45,7 +45,7 @@ import { reasonText, whyStart } from './reasons'
 import { peopleChecks } from './aiLabels'
 import type { NotCounted, ThreadLadder } from './threads'
 import { THREAD_KEY, ThreadLines, ThreadsCard, stepOf } from './threads'
-import { BackToSets, CHOICE_IDS, LabellingBar, CHOICE_NAMES, PIECE_IDS, PIECE_NAMES, tabNext, ClassLegend, LookLegend, MaskSwitch, ROUND_TITLE, RoundProgressLine, SaveButtons, SaveState, callText, changesText, draftKey, lookOf, maskName,
+import { BackToSets, CHOICE_IDS, ClosedNote, FINISH_NOTE, LabellingBar, CHOICE_NAMES, PIECE_IDS, PIECE_NAMES, tabNext, ClassLegend, LookLegend, MaskSwitch, ROUND_TITLE, RoundProgressLine, SaveButtons, SaveState, callText, changesText, draftKey, lookOf, maskName,
   polygonArea, polygonPoints, readDraft, simplifyPolygon, stepMask, unsureClass, useCandidateKeys, useFitScreen, useLeaveGuard, useLive, useSaveKeys,
   writeDraft } from './rounds'
 
@@ -292,6 +292,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   onOpen: (how: 'edit' | 'own') => void } & Hooks) {
   const field = useMemo(() => lighter(arrived), [arrived])
   const readOnly = !!field.read_only  // a finished field, looked at: nothing changes until Redo / Add an extra annotation
+  const closed = !!field.closed  // a closed session: every field is looked at, for admins too
   const ownOnly = field.own ? '?own=true' : ''  // an extra annotation: the bad areas it starts from are this person's own
   useEffect(() => {  // looking only: no key edits anything (Space still hides the overlays)
     if (!readOnly) return
@@ -1078,16 +1079,18 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
       setSaving(false)
     }
   }
-  /** Save (stays on the field) or, with `finish`, Save and continue: the field is finished and the next one opens. */
-  const saveAll = async (finish: boolean, extra: Rec[] = []) => {
-    if (saving || (!finish && !unsaved)) return
+  /** Save progress (stays on the field) or, with `finish`, Finish field: the field is finished and the next one opens
+   *  (or `then`: where the person was going). True when everything is saved. */
+  const saveAll = async (finish: boolean, extra: Rec[] = [], then?: () => void): Promise<boolean> => {
+    if (readOnly) return false
+    if (saving || (!finish && !unsaved)) return !saving
     const marks = [...Object.values(changes).flatMap((c) => (c.mark ? [c.mark] : [])), ...extra]
       .sort((a, b) => (SEND_ORDER[String(a.task)] ?? 2) - (SEND_ORDER[String(b.task)] ?? 2))
     const painted = brush.dirty
     if (painted) marks.push({ task: 'exclude', pngs: brush.pngs(), scale: BRUSH_SCALE })  // added to and taken out of each type's area
     if (start) marks.push({ task: 'threshold', value: start.value.toFixed(3) })  // the acceptance threshold of step 1, locked now
     setStart((s) => (s ? lock(s) : s))
-    if (!(await send(marks, finish))) return
+    if (!(await send(marks, finish))) return false
     if (painted && !(meta as { practice?: boolean }).practice) {  // the edit is saved: the current areas have it now
       resetAfter.current = areas.data ?? null
       areas.reload()
@@ -1096,23 +1099,19 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     setChanges({}); setUndos([]); setRestored(0)
     writeDraft(draftAt, null)
     tell(finish ? 'finish' : 'save')
-    if (!finish) return
-    if (onFinished) { onFinished(); return }
+    if (!finish) return true
+    if (onFinished) { onFinished(); return true }
     reload()
+    if (then) { then(); return true }  // finished from the leave dialog: on to where the person was going
     const next = await api.get<{ tile_id: string | null }>(`/api/annotate/${name}/next`).catch(() => ({ tile_id: null }))
     navigate(next.tile_id && next.tile_id !== tile ? `/annotate/${name}/${enc(next.tile_id)}` : `/annotate/${name}`)
+    return true
   }
-  /** Discard and close: this field's unsaved changes (and their copy in this browser) dropped, back to the session's
-   *  page. One confirmation when there is anything to lose. */
-  const discardAndClose = () => {
-    const lost = unsavedNow()
-    if (lost && !window.confirm(`Discard ${changesText(lost)} on this field and close it? They are not saved and cannot be brought back.`)) return
-    writeDraft(draftAt, null)
-    discarding.current = true
-    navigate(`/annotate/${name}`)
-  }
+  /** Close field: back to the session's page; with unsaved changes the leave dialog asks first (Save progress, Finish,
+   *  Discard, Stay). */
+  const discardAndClose = () => leave(() => navigate(`/annotate/${name}`))
   /** "Mark whole field as bad…": the field's whole square as a bad area of one type, in the same store as painted
-   *  areas (so it shows and counts wherever they do), then the field is finished as by Save and continue. */
+   *  areas (so it shows and counts wherever they do), then the field is finished as by Finish field. */
   const [markingBad, setMarkingBad] = useState(false)
   const [badReason, setBadReason] = useState(EXCLUDE_TYPES[0].key)
   const wholeBad = Object.values(saved).find((m) => m.task === 'exclude' && m.meta?.whole_field)
@@ -1137,13 +1136,12 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
       : `Add an extra annotation of this field? You start from detection’s output and your own labels only; ${finishedBy.map((f) => f.person).join(', ')}’s labels stay as they are.`
     if (window.confirm(ask)) onOpen(iFinished ? 'edit' : 'own')
   }
-  /** Skip for now: the server hands the next field (as Save and continue does), this one put aside. */
-  const skip = async () => {
-    if (!mayLeave()) return
+  /** Skip for now: the server hands the next field (as Finish field does), this one put aside. */
+  const skip = () => leave(() => void (async () => {
     const next = await api.get<{ tile_id: string | null }>(`/api/annotate/${name}/next?skip=${enc(tile)}`).catch(() => ({ tile_id: null }))
     if (next.tile_id && next.tile_id !== tile) navigate(`/annotate/${name}/${enc(next.tile_id)}`)
     else setError('No other field is waiting for you right now.')
-  }
+  })())
 
   const addedState = (s: Shown) => addedStates.find((a) => rkey(a.x, a.y) === rkey(s.x, s.y))?.state ?? 'measuring'
   const measuring = !(meta as { practice?: boolean }).practice && added.some((m) => saved[m.id] && addedStates.find((a) => rkey(a.x, a.y) === rkey(m.x!, m.y!))?.state !== 'measured')
@@ -1172,13 +1170,14 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   const toggle = (k: string) => setLayers({ ...layers, [k]: !layers[k] })
   const busy = saving || !!pending
   const px = field.pixel_size_um
-  const mayLeave = useLeaveGuard(unsaved + unclassed)
-  const unsavedNow = () => unsaved + unclassed + (precise || draft.length ? 1 : 0)
+  const { leave, dialog: leaveDialog } = useLeaveGuard(unsaved + unclassed, {
+    save: () => saveAll(false), finish: (go) => { if (!busy && !precise && !draft.length) void saveAll(true, [], go) },
+    discard: () => { writeDraft(draftAt, null); discarding.current = true } })
   const canFinish = !busy && !precise && !draft.length  // detection's calls stand unless changed: no object needs a class first
   useSaveKeys(() => { if (!precise) void saveAll(false) }, () => { if (canFinish) void saveAll(true) })
   const finishTitle = precise ? 'Leave precise editing first (a click beyond the frame or Enter keeps the edit, Esc cancels it)'
-    : unclassed ? `Save your changes and finish this field. ${unclassed} new candidate${unclassed === 1 ? '' : 's'} without a class ${unclassed === 1 ? 'is' : 'are'} left out (Ctrl+Enter)`
-      : 'Save your changes and finish this field: every call and outline you left as it is counts as checked by you (Ctrl+Enter)'
+    : unclassed ? `Finish field: your changes are saved and the field is done. ${unclassed} new candidate${unclassed === 1 ? '' : 's'} without a class ${unclassed === 1 ? 'is' : 'are'} left out (Ctrl+Enter)`
+      : 'Finish field: every call and outline you left as it is counts as checked by you, and the next field opens (Ctrl+Enter)'
   const locked = precise ? 'Precise editing: only this object can change now. A click beyond the frame or Enter keeps the edit, Esc cancels it.' : undefined
 
   return (
@@ -1188,6 +1187,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
         progress={<RoundProgressLine progress={progress} me={detail.annotator} />}
         actions={<button className="btn small" onClick={() => void skip()} disabled={!!precise || busy}
           title={locked ?? 'Come back to this field later: the next field waiting for you opens'}>Skip for now</button>} />
+      {leaveDialog}
       {meta.instructions && <div className="instructions">{meta.instructions}</div>}
       <ErrorNote error={error} />
       {wholeBad && <div className="found found-warn small whole-bad" role="status">You marked this whole field as bad:
@@ -1207,7 +1207,8 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
       </Modal>}
       {restored > 0 && <div className="found found-warn small round-restored" role="status">{changesText(restored)} you had not saved came back from this browser.
         They are not saved yet. <button className="link-btn small" onClick={() => { setChanges({}); setUndos([]); setRestored(0) }}>Discard them</button></div>}
-      {readOnly && <div className="found found-good field-finished" role="status">
+      {closed && <ClosedNote />}
+      {readOnly && !closed && <div className="found found-good field-finished" role="status">
         <span><b>Done by {finishedText(finishedBy)}.</b> You are looking at it: nothing here can be changed.</span>
         <span className="spacer" />
         {openBy.length > 0 ? <span className="small">{openBy.join(', ')} {openBy.length === 1 ? 'is' : 'are'} working on it now.</span>
@@ -1217,11 +1218,10 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
         {' '}{finishedBy.length ? `${finishedBy.map((f) => f.person).join(', ')}’s labels stay as they are; yours are added alongside.` : ''}</div>}
       {!readOnly && !field.own && (openBy.length > 0 || doneBy.length > 0) && <div className="found found-warn small field-others" role="status">
         {doneBy.length > 0 ? `${checkedByText(doneBy)} already finished this field.` : `${openBy.join(', ')} ${openBy.length === 1 ? 'is' : 'are'} working on this field right now.`}
-        {' '}You can still look and change things here, or <button className="link-btn small" onClick={() => void (async () => {
-          if (!mayLeave()) return
+        {' '}You can still look and change things here, or <button className="link-btn small" onClick={() => leave(() => void (async () => {
           const next = await api.get<{ tile_id: string | null }>(`/api/annotate/${name}/next?skip=${enc(tile)}`).catch(() => ({ tile_id: null }))
           navigate(next.tile_id ? `/annotate/${name}/${enc(next.tile_id)}` : `/annotate/${name}`)
-        })()}>go to a field nobody is on</button>.</div>}
+        })())}>go to a field nobody is on</button>.</div>}
       <div className="annotate-workspace">
         <div className={`annotate-image${precise ? ' is-precise' : ''}`} onContextMenu={(e) => e.preventDefault()} onMouseLeave={() => { if (!precise && !menu) setHovered(null) }}>
           {menu && byKey.get(menu.key) && <ClassMenu at={menu} groups={keyGroups(vocabulary, keys)} vocabulary={vocabulary} removeClass={meta.remove_class}
@@ -1244,7 +1244,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
             onPress={readOnly ? undefined : press} onRelease={readOnly ? undefined : release} panLock={excluding || !!mode} onSize={setFieldSize}
             onView={levels.onView} control={levels.control}
             aside={stripOn && !(meta as { practice?: boolean }).practice ? <FieldStrip name={name} tile={tile} fields={detail.fields} levels={levels}
-              onOpen={(t) => { if (mayLeave()) navigate(`/annotate/${name}/${enc(t)}`) }} /> : null}
+              onOpen={(t) => leave(() => navigate(`/annotate/${name}/${enc(t)}`))} /> : null}
             paint={!hidden && fieldSize && (excluding || brush.dirty) ? (  // each type's area now: one merged region per type (brush.ts), from the first stroke
               <div ref={brush.host} className="exclude-painted" style={{ position: 'absolute', left: 0, top: 0,
                 width: `${(100 * Math.ceil(fieldSize.w / BRUSH_SCALE) * BRUSH_SCALE) / fieldSize.w}%`, height: `${(100 * Math.ceil(fieldSize.h / BRUSH_SCALE) * BRUSH_SCALE) / fieldSize.h}%` }} />
@@ -1413,7 +1413,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
               <b>{added.length}</b> added</p>
             {unclassed > 0 && <p className="small warning-text" style={{ margin: '0 0 4px' }}>{unclassed} new candidate{unclassed === 1 ? '' : 's'} without a class:
               {' '}left out when you save, unless you give {unclassed === 1 ? 'it' : 'them'} a class.</p>}
-            <p className="small muted" style={{ margin: 0 }}>Detection’s calls stand unless you change them: nothing needs a class first. Save and continue
+            <p className="small muted" style={{ margin: 0 }}>Detection’s calls stand unless you change them: nothing needs a class first. Finish field
               counts the whole field as checked by you, every object you left as it is with detection’s call.</p>
             <details className="side-details compact">
               <summary className="small">Tags and a note</summary>
@@ -1454,7 +1454,8 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
               </div>
             )
           })()}
-          {readOnly ? <div className="card side-block side-save">
+          {closed ? <div className="card side-block side-save"><p className="small" style={{ margin: 0 }}><b>This session is closed; reopen it to edit.</b></p></div>
+            : readOnly ? <div className="card side-block side-save">
             <p className="small" style={{ margin: '0 0 6px' }}>Done by {finishedText(finishedBy)}.</p>
             <div className="row">{openBy.length > 0 ? <span className="small muted">{openBy.join(', ')} {openBy.length === 1 ? 'is' : 'are'} working on it now.</span>
               : <button className="btn primary" onClick={workOnIt}>{iFinished ? 'Redo this field' : 'Add an extra annotation'}</button>}
@@ -1465,12 +1466,13 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
               <SaveButtons unsaved={unsaved} saving={busy || !!precise} onSave={() => void saveAll(false)} onContinue={() => void saveAll(true)} canContinue={canFinish}
                 continueTitle={finishTitle} />
             </div>
+            <p className="small muted finish-note">{FINISH_NOTE}</p>
             {!onFinished && <div className="row side-discard">
               {!wholeBad && <button className="link-btn small" onClick={() => setMarkingBad(true)} disabled={busy || !!precise}
                 title="The whole field is unusable (a fold, out of focus, an artifact, no tissue): mark it bad and go on">Mark whole field as bad…</button>}
               <span className="spacer" />
               <button className="link-btn small" onClick={discardAndClose}
-                title="Drop your unsaved changes on this field and go back to the session’s page">Discard and close</button></div>}
+                title="Back to the session’s page (with unsaved changes it asks first: save, finish or discard them)">Close field</button></div>}
           </div>}
           <div className="side-foot small">
             <button className={`btn small help-toggle${help ? ' chosen' : ''}`} aria-expanded={help} onClick={() => setHelp(!help)} title="How this page works">?</button>
@@ -1490,7 +1492,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
                 <li><b>Two objects outlined as one?</b> <span className="kbd">S</span>, then click it: a split shows (click elsewhere on it to move it), <span className="kbd">Enter</span> keeps it.
                   Or draw a line across it. <b>One object in pieces?</b> <span className="kbd">M</span>, click or drag over the pieces, <span className="kbd">Enter</span>.</li>
                 <li><b>Missed object?</b> {sam ? 'Click it: its outline appears as a new candidate (dotted); then press its type’s key.' : 'Click its corners one by one, then the first corner (or Enter).'}</li>
-                <li><b>Nothing is saved until you press Save</b> (a small gold dot marks each object you changed). <b>Save and continue</b> when the field
+                <li><b>Nothing is saved until you press Save progress</b> (a small gold dot marks each object you changed). <b>Finish field</b> when the field
                   looks right: what you left as it is counts as checked by you, and the next field opens.</li>
                 <li><span className="look-swatch" style={{ borderColor: PALETTE.markers.others, background: PALETTE.markers.others, borderRadius: '50%' }} /> a small
                   blue dot: someone else checked it.</li>
@@ -1623,7 +1625,7 @@ function Controls({ sam, precise, excluding, mode }: { sam: boolean; precise: bo
       <li><span className="kbd">S</span> split an object · <span className="kbd">M</span> merge objects</li>
       <li><span className="kbd">B</span> brush for bad areas (1–4 the type; ⇧ drag takes out): their objects are left out of training</li>
       <li><span className="kbd">Z</span> undo · <span className="kbd">Esc</span> cancel</li>
-      <li><span className="kbd">Ctrl S</span> save · <span className="kbd">Ctrl ⏎</span> save and continue</li>
+      <li><span className="kbd">Ctrl S</span> Save progress · <span className="kbd">Ctrl ⏎</span> Finish field</li>
     </ul>
   )
 }

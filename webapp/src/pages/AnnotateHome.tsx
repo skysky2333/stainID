@@ -42,7 +42,9 @@ function MySets({ list, admin }: { list: ReturnType<typeof useFetch<MySet[]>>; a
           const rank = (s: MySet) => (s.round === 'areas' ? 0.5 : s.round === 'matter' ? 0.4 : s.round ?? 0)  // the field tool first, then calls, then bad areas, grey / white matter
           const projects = [...new Set(sets.map((s) => s.project))]
           return projects.map((p) => {
-            const mine = sets.filter((s) => s.project === p)
+            const all = sets.filter((s) => s.project === p)
+            const mine = all.filter((s) => s.open !== false)
+            const closed = all.filter((s) => s.open === false)  // closed for everyone: they open read-only
             const rounds = mine.filter((s) => s.round).sort((a, b) => rank(b) - rank(a))
             const older = mine.filter((s) => !s.round)
             return (
@@ -53,11 +55,15 @@ function MySets({ list, admin }: { list: ReturnType<typeof useFetch<MySet[]>>; a
                   {rounds.length > 0 && <h2 className="annotate-older">Other kinds of session</h2>}
                   <div className="grid grid-2">{older.map((s) => <SessionCard key={s.name} s={s} />)}</div>
                 </>}
+                {closed.length > 0 && <>
+                  <h2 className="annotate-older">Closed</h2>
+                  <div className="grid grid-2">{closed.map((s) => <SessionCard key={s.name} s={s} />)}</div>
+                </>}
               </section>
             )
           })
         })() : admin ? (
-          <p className="small muted">No labelling set of yours yet: a session you open from <Link to="/labels">Labels</Link>, or add with a key, appears here.</p>
+          <p className="small muted">No session on your home page yet: add one with “Add to my home page” on the <Link to="/labels">Labels</Link> page or on the session’s page.</p>
         ) : (
           <Empty>
             <p style={{ marginTop: 0 }}>No labelling set yet. Enter the key you were given above: the set then appears here.</p>
@@ -120,7 +126,9 @@ function SessionCard({ s }: { s: MySet }) {
         <Progress done={s.done_by_me} total={s.fields} />
         <p className="small secondary">{finished ? 'You have finished every field — thank you!' : `${s.done_by_me} of ${s.fields} fields finished by you`}</p>
       </> : <p className="small secondary">{s.my_labels ? `${s.my_labels.toLocaleString()} objects labelled by you` : 'Pick what each object is with one key press.'}</p>}
-      {!finished && <a className="btn primary big" href={s.link}>{started ? 'Continue' : 'Start'}</a>}
+      {s.open === false ? <><p className="small muted" style={{ margin: '0 0 6px' }}>Closed: it opens to look at; nothing in it can be changed.</p>
+        <a className="btn" href={s.link}>Look (read-only)</a></>
+        : !finished && <a className="btn primary big" href={s.link}>{started ? 'Continue' : 'Start'}</a>}
     </div>
   )
 }

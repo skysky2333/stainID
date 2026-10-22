@@ -343,7 +343,7 @@ accepted at 0.43 (detection: 128 at 0.50)"). *Start editing* (or Enter) locks it
 kind (a class key, Del, `, an outline, a precise edit, a split, a merge, a brush stroke); locked, it shows a lock and
 its value and cannot move. The only way back is *Reset field*, which asks first, discards the field's unsaved edits and
 unlocks it (`labels/fieldStart.ts`). The locked value is saved with the field (a `threshold` label, value e.g.
-`0.430`, with every Save): on *Save and continue* the objects left as they started are saved as that person's labels at
+`0.430`, with every Save progress): on *Finish field* the objects left as they started are saved as that person's labels at
 that threshold, and the value itself is a training and evaluation signal (to tune each stain's cut-off later). Nothing
 in the analysis reads it. The Cores view has the same slider as a preview only ("Preview only — the analysis uses
 detection's threshold"): never saved, gone on reload.
@@ -363,7 +363,7 @@ scrolls while the picture is panned (drag, or hold the middle button; scroll to 
 top: the object under the mouse (its class, detection's call and score, why it was left out, its area and which of its
 three outlines shows, *n/3*); the keys in their groups with their colours ("Plaques 1–4 · Not plaques Q–W · Del not a
 plaque · ` unsure · B brush"); the keys; this field (checked, changed,
-added; tags and a note); *Save* and *Save and continue*; **?** for the longer help, display options and the other
+added; tags and a note); *Save progress* and *Finish field*; **?** for the longer help, display options and the other
 fields; and the *Tutorial* link. Pointing at an object also shows its name beside it on the picture. Every key acts on the object under the mouse:
 
 | Key | What it does |
@@ -382,8 +382,8 @@ fields; and the *Tutorial* link. Pointing at an object also shows its name besid
 | B | the brush, on and off (Esc also leaves). People change the existing areas rather than drawing separate new ones: for each type (1 fold or tissue damage, 2 artifact: scratch, bubble, debris, linear, 3 no tissue / empty, 4 out of focus or bad staining; the keys 1–4 choose it while the brush is on, and the class keys rest) the current area is detection's area of that type with everyone's saved edits merged in (GET `…/fields/{tile}/areas`, `exclusions.final_say`), and while the brush is on the chosen type's current area is drawn as one merged region (the others faintly). A drag adds the brushed pixels to it (a union: overlapping strokes are one region, a stroke touching a detected fold extends that fold, pixels of another type become this type); Shift-drag takes them out of the chosen type's area, detection's part included. Tab makes the brush smaller, Shift+Tab bigger (its size in the panel and as the ring under the mouse); the wheel always zooms; the middle button pans; outlines are locked meanwhile. Saved with Save as one edit (an `exclude` label, `labels/exclusions.py`: rings per type, "1"–"4" added, "-1"–"-4" taken out), an ordered log resolved per type into masks (`exclusions.annotated` / `final_say`, one region set per type): **people's areas**. Over every field the page draws detection's own areas hatched, *Excluded from analysis* (GET `…/fields/{tile}/excluded`, the automatic layer, the same as the Cores view's: folds, linear artifacts, no tissue, the AT8 edge guard), and people's areas outlined on top (GET `…/fields/{tile}/annotated`: painted ones in their type's colour, the parts marked fine dashed green). People's areas only train and evaluate models: objects in them (by people's final say over detection's areas, `exclusions.final_say`) are drawn faint, are not asked about, and are left out of training and scoring; the bad-area detector is compared with them on the Models page. The analysis never reads them, so marking an area changes no result and makes no step out of date. Space hides them with everything else; *Display options* turns them off |
 | Z | undo the last unsaved change (a brush stroke too) |
 | Enter | precise editing: keep the edit; drawing by hand: close the outline |
-| Ctrl+S (⌘S) | save, and stay on the field |
-| Ctrl+Enter (⌘Enter) | save and continue |
+| Ctrl+S (⌘S) | Save progress: keep the changes, the field stays unfinished |
+| Ctrl+Enter (⌘Enter) | Finish field: everything on it recorded as checked by you, the next field opens |
 
 In round 2, a click on empty tissue outlines a missed object with one click (Segment Anything). It is a new
 candidate, dotted grey, and Tab / Shift+Tab switch to a smaller or bigger one of Segment Anything's three sizes, until a class key makes it solid. *Draw an object by hand…* is the last resort. One click answers at once,
@@ -430,15 +430,15 @@ as a bad area of that type: one `exclude` label (id `exclude:<tile>:whole`, `met
 and history as painted areas, so it shows wherever they do (the Cores view's annotations, the Labels page) and
 counts the same: it teaches and tests bad-area detection, and object labels in it leave object training and
 scoring for everyone (`exclusions.drop_excluded`). The analysis keeps using the automatic layer only. The field is
-then finished for that person as by *Save and continue*, with none of its objects confirmed, and the next one
+then finished for that person as by *Finish field*, with none of its objects confirmed, and the next one
 opens; the session's page draws it with its own outline (*Marked bad*, the reason on hover). Reopened, the page
 says so with *Unmark*, which deletes the mark (the field stays finished until *Reopen*).
 
-**Saving.** Nothing is saved until the person presses *Save* or *Save and continue*. The count at the top says how many
+**Saving.** Nothing is saved until the person presses *Save progress* or *Finish field*. The count at the top says how many
 unsaved changes there are, and a small orange dot marks each changed object. A draft is kept in the browser in case of
 a reload, and leaving the page with unsaved changes asks first. *Discard and close* (under the save buttons) drops the
 field's unsaved changes and their draft, after one confirmation when there are any, and goes back to the session's page:
-the field stands as it did before. *Save and continue* finishes the field:
+the field stands as it did before. *Finish field* finishes the field:
 
 - detection's call counts as right unless the person changed it: nothing needs a class or an answer first;
 - every candidate of the tile is then recorded as checked by this person, the ones they left as they are with

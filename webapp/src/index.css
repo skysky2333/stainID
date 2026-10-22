@@ -1518,7 +1518,11 @@ p.area-size { display: block; line-height: 1.7; }
 .level-wait { padding: 10px; }
 .levels-toggle { padding: 1px 8px; }
 .core-mid .level-map { max-width: 256px; margin-inline: auto; }
-@media (max-width: 900px) { .level-strip { display: none; } }
+@media (max-width: 900px) {  /* narrow (a small laptop zoomed in): the two smaller levels above the field, side by side */
+  .viewer-row.with-aside { flex-direction: column; }
+  .viewer-row.with-aside > .level-strip { width: auto; flex-direction: row; overflow: visible; }
+  .viewer-row.with-aside > .level-strip > .level-card { flex: 1 1 0; min-width: 0; }
+}
 @media (max-height: 820px) and (min-width: 901px) {  /* the Cores view's two smaller levels both in sight on a laptop */
   .minimap-card .minimap, .core-mid .level-map { max-width: 168px; }
   .minimap-card > p.muted { display: none; }
@@ -1554,3 +1558,15 @@ html.viewer-full.fit-screen .layout, html.viewer-full.fit-screen .layout.nav-col
 html.viewer-full.fit-screen .layout > .sidebar, html.viewer-full.fit-screen .app-header,
 html.viewer-full.fit-screen .fit-page > .annotate-top, html.viewer-full.fit-screen .fit-page > .instructions { display: none; }
 html.viewer-full.fit-screen .layout > .main, html.viewer-full.fit-screen .annotator-shell > main { padding: 6px 8px; }
+
+/* the whole core's field squares (levelmap.tsx): what a click opens lights up; the legend's swatches */
+.level-square.opens { cursor: pointer; }
+.level-square.opens:hover { stroke: var(--accent); stroke-opacity: 1; }
+.level-legend i.filled { opacity: 0.75; }
+.level-legend i.current { border-color: var(--accent); border-width: 2px; }
+.level-hint { margin-top: 2px; }
+
+/* the leave dialog (labels/rounds.tsx useLeaveGuard): one button per way, each with what it does */
+.leave-ways { display: grid; gap: 8px; }
+.leave-ways .btn { display: grid; justify-items: start; text-align: left; gap: 2px; padding: 8px 12px; }
+.finish-note { margin: 2px 0 0; }

@@ -62,6 +62,28 @@ def new_key(name: str) -> dict:
     return accounts.regenerate_key(state.get_state().id, _session(name))
 
 
+class OnHome(BaseModel):
+    on: bool
+
+
+@router.get("/labels/home", dependencies=admin)
+def on_my_home(request: Request) -> dict:
+    """The sessions of this project on the signed-in admin's home page (they add each one: nothing is added by itself)."""
+    from stainid.api import session  # noqa: PLC0415
+
+    project = state.get_state().id
+    return {"sessions": [n for p, n, _ in accounts.pins_of(session.require_account(request).id) if p == project]}
+
+
+@router.put("/labels/sessions/{name}/home", dependencies=admin)
+def set_on_my_home(name: str, body: OnHome, request: Request) -> dict:
+    """Add the session to the signed-in admin's home page, or take it off."""
+    from stainid.api import session  # noqa: PLC0415
+
+    accounts.pin(session.require_account(request).id, state.get_state().id, _session(name), body.on)
+    return on_my_home(request)
+
+
 @router.put("/labels/sessions/{name}/access", dependencies=admin)
 def joining(name: str, body: Joining) -> dict:
     return accounts.set_joining(state.get_state().id, _session(name), body.enabled)
@@ -89,8 +111,8 @@ def remove_member(name: str, account_id: str, request: Request) -> dict:
 
 
 def may_label(request: Request, name: str) -> None:
-    """Annotators only reach the sessions they joined; admins every one, and a session an admin opens joins their own
-    labelling sets (they label like anyone, under their account). Checked on every annotation request."""
+    """Annotators only reach the sessions they joined; admins every one (they label like anyone, under their account;
+    a session shows on an admin's home page only when they add it there: `home`). Checked on every annotation request."""
     from stainid.api import session  # noqa: PLC0415
 
     account = session.current_account(request)
@@ -100,8 +122,6 @@ def may_label(request: Request, name: str) -> None:
         raise HTTPException(403, "choose a new password first")
     project = state.get_state().id
     if account.admin:
-        if not accounts.is_member(account.id, project, name) and not sessions.label_set_only(sessions.meta(_root(), name)):  # looking at an AI review round joins nothing
-            accounts.add_member(account.id, project, name)
         return
     if not accounts.is_member(account.id, project, name):
         raise HTTPException(403, "this labelling set is not in your sets: add it with the key you were given")
@@ -126,7 +146,7 @@ def sets_of(account: accounts.Account, request: Request, here: str | None = None
     from stainid.api.routes import annotate  # noqa: PLC0415
 
     joined: dict[str, dict[str, float]] = defaultdict(dict)
-    for project, name, when in accounts.sets_of(account.id):
+    for project, name, when in accounts.pins_of(account.id) if account.admin else accounts.sets_of(account.id):  # an admin: the ones they added
         joined[project][name] = when
     out = []
     for project, names in joined.items():
