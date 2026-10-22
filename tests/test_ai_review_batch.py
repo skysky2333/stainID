@@ -160,7 +160,7 @@ def test_reviewers_csvs_become_a_read_only_session_of_ai_accounts(batch, monkeyp
 
     labels = store.current(root)
     assert set(labels.source) == {"ai:alpha", "ai:beta"} and set(labels.session) == {name}
-    raw = [json.loads(line) for line in store.log_path(root).read_text().splitlines()]
+    raw = store.raw_records(root)
     assert all(r["account"] == r["source"] for r in raw)
     classes = labels[labels.task == "class"]
     named = classes[classes.candidate.notna()].set_index(["source", "candidate"])

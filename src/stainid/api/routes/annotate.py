@@ -151,6 +151,13 @@ def people_only(labels: pd.DataFrame) -> pd.DataFrame:
     return labels[~labels.source.map(store.is_ai_label)] if len(labels) else labels
 
 
+def session_labels(meta: dict) -> pd.DataFrame:
+    """The labels of this session only (its own logs, `store.current(root, session)`): inside a session nothing another
+    session or label set said counts, for who finished or is working on a field, the progress, the next field, what a
+    field starts from. (The tutorial's practice sessions have none: they save nothing.)"""
+    return store.current(root(), session=meta["name"])
+
+
 def finished_fields(meta: dict, labels: pd.DataFrame) -> dict[str, set[str]]:
     """Who finished each field of a session: marked it complete (outline sessions) or pressed Finished (reviews)."""
     return outline.finished(labels, meta["name"]) if meta["kind"] == outline.KIND else store.reviewed_fields(people_only(labels), meta["stain"])
@@ -338,7 +345,7 @@ def _labels_overview() -> dict:
     listed = []
     for name in sessions.names(root()):
         meta = sessions.meta(root(), name)
-        listed.append({**{k: v for k, v in meta.items() if k != "fields"}, **session_progress(meta, labels), "link": annotate_path(name),
+        listed.append({**{k: v for k, v in meta.items() if k != "fields"}, **session_progress(meta, session_labels(meta)), "link": annotate_path(name),
                        "kind_title": sessions.kind_title(meta), "label_set": sessions.label_set_only(meta)})
     reference = labels[sessions.session_of(labels) == sessions.REFERENCE]
     objects = reference[reference.task == "class"]
@@ -365,7 +372,7 @@ def _session_objects(name: str, labels: pd.DataFrame, stain: str) -> pd.DataFram
     """The labelled objects of one session and stain (`labels.objects.labelled`), kept until a label or pool changes."""
     state = get_state()
     mine = labels[sessions.session_of(labels) == name]
-    return cache.memo(("session objects", str(state.root), name, stain, vocabulary(stain)), [store.log_path(root()), pool.folder(state.project, stain)],
+    return cache.memo(("session objects", str(state.root), name, stain, vocabulary(stain), len(mine)), [store.log_path(root()), pool.folder(state.project, stain)],
                       lambda: label_objects.labelled(state.project, state.tiles, mine, stain), folders=True)
 
 
@@ -436,7 +443,7 @@ def session_objects(name: str, request: Request, stain: str = "", values: str = 
     reference = name == sessions.REFERENCE
     meta = {"title": sessions.REFERENCE_TITLE, "stain": ""} if reference else session_meta(name, request)
     state = get_state()
-    labels = store.current(root())
+    labels = store.current(root()) if reference else store.current(root(), session=name)
     classes_of = labels[(sessions.session_of(labels) == name) & (labels.task == "class")]
     stains = sorted(set(classes_of.stain))
     stain = stain or meta.get("stain") or (stains[0] if stains else "")
@@ -674,9 +681,12 @@ def _with_place(meta: dict, fields: list[dict], states: dict[str, dict], labels:
     tiles), its square in the core image (`box`), and where it stands for everyone (`state`, who is working on it or has
     it open, who finished it and when, as `sessions.field_states`)."""
     facts = _field_facts([f["tile_id"] for f in fields])
-    here = labels[(labels.stain == meta["stain"]) & labels.tile_id.isin({f["tile_id"] for f in fields})]
+    wanted = {f["tile_id"] for f in fields}
+    here = labels[(labels.stain == meta["stain"]) & labels.tile_id.isin(wanted)]  # this session's own
     done = here[(here.task == "done") & ~here.source.map(store.is_ai_label)]
-    ai_reviewed = set(here.tile_id[here.source.map(store.is_ai_label)])  # the AI's labels: never shown while labelling, only flagged
+    everyone = store.current(root())
+    everyone = everyone[(everyone.stain == meta["stain"]) & everyone.tile_id.isin(wanted)]
+    ai_reviewed = set(everyone.tile_id[everyone.source.map(store.is_ai_label)])  # the AI's labels (its own sessions): never shown while labelling, only flagged
     bad: dict[str, dict[str, str]] = {}  # people's marks of a whole field as bad: who, and the type
     for r in here[(here.task == "exclude") & ~here.source.map(store.is_ai_label)].itertuples():
         if isinstance(r.meta, dict) and r.meta.get("whole_field"):
@@ -840,7 +850,7 @@ def _field_states(meta: dict) -> list[dict]:
     """Where each field of a session stands, the same for the admin's page and the person labelling (`sessions.field_states`)."""
     if rounds.is_round(meta):
         return _rounds().admin_fields(meta) if meta["kind"] == "fields" else []
-    labels = store.current(root())
+    labels = session_labels(meta)
     working = outline.started(labels, meta["name"]) if meta["kind"] == outline.KIND else sessions.labelled_by(people_only(labels[labels.session == meta["name"]]), meta["stain"])
     return sessions.field_states(meta, finished_fields(meta, labels), working, ready_fields(meta), busy(meta["name"]))
 
@@ -910,10 +920,19 @@ def _thumb(tile_id: str) -> FileResponse:
 
 
 
+@router.get("/labels/sessions/{name}/labels-count", dependencies=admin)
+def session_label_count(name: str, request: Request) -> dict:
+    """How many labels deleting this session removes (the delete dialog says so)."""
+    session_meta(name, request)
+    return {"labels": sessions.labels_in(root(), name)}
+
+
 @router.delete("/labels/sessions/{name}", dependencies=admin)
 def delete_session(name: str, request: Request) -> dict:
+    """Deletes a session with every label made in it (`sessions.remove`: folder and logs into sessions/.deleted)."""
     session_meta(name, request)
-    return {"moved_to": str(sessions.remove(root(), name))}
+    moved, removed = sessions.remove(root(), name)
+    return {"moved_to": str(moved), "labels_removed": removed}
 
 
 @router.post("/labels/prepare", dependencies=admin)
@@ -924,7 +943,8 @@ def prepare(body: Prepare) -> dict:
 
 @router.get("/labels/sessions/{name}/people", dependencies=admin)
 def session_people(name: str, request: Request) -> list[dict]:
-    return labellers(session_meta(name, request), store.current(root()))
+    meta = session_meta(name, request)
+    return labellers(meta, session_labels(meta))
 
 
 def with_classes(labels: pd.DataFrame) -> pd.DataFrame:
@@ -944,7 +964,7 @@ def with_classes(labels: pd.DataFrame) -> pd.DataFrame:
 
 @router.get("/labels/export.csv", dependencies=admin)
 def export(session: str = "") -> Response:
-    labels = store.current(root())
+    labels = store.current(root(), session=session) if session else store.current(root())
     if session:
         labels = labels[labels.session == session]
     tiles = get_state().tiles[["tile_id", "core_id", "tma", "disease_group", "region"]].drop_duplicates("tile_id")
@@ -991,7 +1011,6 @@ def list_open(request: Request, person: str | None = Depends(viewer)) -> list[di
 
 def open_sessions(request: Request, person: str | None, only: set[str] | None = None) -> list[dict]:
     """The open sessions (an admin: every one) of the request's project, or of them the ones in `only`, with progress."""
-    labels = store.current(root())
     out = []
     for name in sessions.names(root()):
         if only is not None and name not in only:
@@ -999,6 +1018,7 @@ def open_sessions(request: Request, person: str | None, only: set[str] | None = 
         meta = sessions.meta(root(), name)
         if sessions.label_set_only(meta) or (not meta["open"] and not is_admin(request)):  # nobody labels in an AI review round
             continue
+        labels = session_labels(meta)
         reviewed = finished_fields(meta, labels)
         done = sum(person in reviewed.get(t, set()) for t in meta["fields"]) if person else 0
         extra = {"round": rounds.round_of(meta), "progress": _rounds().progress(meta)} if rounds.is_round(meta) else {"round": None}
@@ -1015,7 +1035,7 @@ def session_detail(name: str, request: Request, person: str | None = Depends(vie
     meta = labelled_here(session_meta(name, request))
     if meta["kind"] == "areas":
         return {"meta": {**meta, **_areas().detail(meta, person)}, "fields": [], "annotator": person}
-    labels = store.current(root())
+    labels = session_labels(meta)
     reviewed = finished_fields(meta, labels)
     prepared = ready_fields(meta)
     open_now = busy(name)
@@ -1054,7 +1074,7 @@ def next_item(name: str, request: Request, person: str = Depends(annotator), cou
         if meta["kind"] == "queue":
             raise HTTPException(410, _rounds().NO_ROUND_ONE)
         return _rounds().next_field(meta, person, skip)
-    labels = store.current(root())
+    labels = session_labels(meta)
     state = get_state()
     if meta["kind"] != "queue":
         prepared = ready_fields(meta)
@@ -1103,7 +1123,7 @@ def open_field(name: str, tile_id: str, request: Request, person: str = Depends(
             if i is not None:
                 simple = cv2.approxPolyDP(points.astype(np.int32).reshape(-1, 1, 2), 2.5, True)[:, 0, :]
                 outlines.append({"x": float(objects.x.iloc[i]), "y": float(objects.y.iloc[i]), "points": simple.tolist()})
-    labels = store.current(root())
+    labels = session_labels(meta)
     mine = labels[(labels.source == person) & (labels.tile_id == tile_id) & (labels.stain == meta["stain"])]
     box = {"x": int(tile["x_px"]) - x0, "y": int(tile["y_px"]) - y0, "width": int(tile["width_px"]), "height": int(tile["height_px"])}
     return {"tile_id": tile_id, "box": box, "objects": shown, "outlines": outlines, "layers": LAYERS[meta["stain"]] if meta["ai_view"] == "full" else [],
@@ -1148,7 +1168,7 @@ def field_added(name: str, tile_id: str, request: Request, person: str = Depends
     """Where this person's added objects stand (`added_states`), for the page to follow their measuring."""
     meta = session_meta(name, request)
     tile = field_tile(meta, tile_id)
-    labels = store.current(root())
+    labels = session_labels(meta)
     mine = labels[(labels.source == person) & (labels.tile_id == tile_id) & (labels.stain == meta["stain"])]
     if rounds.is_round(meta):
         return _rounds().added_states(meta, tile, mine)
@@ -1183,7 +1203,7 @@ def finish(name: str, tile_id: str, request: Request, person: str = Depends(anno
         return _rounds().save_tile(meta, tile_id, [], True, person)["saved"]
     field_tile(meta, tile_id)
     objects = field_objects(meta, tile_id)
-    labels = store.current(root())
+    labels = session_labels(meta)
     mine = labels[(labels.source == person) & (labels.tile_id == tile_id) & (labels.stain == meta["stain"])]
     records = []
     words = vocabulary(meta["stain"])

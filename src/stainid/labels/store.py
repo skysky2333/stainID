@@ -1,9 +1,23 @@
-"""Every label in one append-only log: who said what about which object (or field), for which task.
+"""Every label, in append-only logs: who said what about which object (or field), for which task.
+
+One log per labelling session and per label set, all under `<reviews>/labels/` (`file_of`):
+
+    labels/sessions/<session>.jsonl   people's labels in a labelling session
+    labels/imports/<set>.jsonl        an imported label set ("import: <set>"; an imported set with a session: that session)
+    labels/ai/<session or source>.jsonl  the AI's labels (an AI review session's, the earlier "AI reviewer")
+    labels/other/<source>.jsonl       anything else made outside a session
+    labels/changes.log                one line more per save: what caches watch (`log_path`, `signature`)
+
+Training, the Labels and Models pages and the Cores view read the union of them all (`current(root)`), as one log;
+inside a session only its own labels count (`current(root, session=name)`). Deleting a session moves its logs into its
+archive (`remove_session`): nothing reads them any more. A project of an earlier release has one `labels/labels.jsonl`:
+`split_legacy` (the `stainid labels split` command, with the app stopped) splits it once; the app does not open a
+project in the old layout, nor one with both (`check_layout`).
 
 A label is {id, source, stain, task, tile_id, x, y, value, points, session, confirmed, time, deleted, subtype, candidate}. `source` is a
 person's name or `import: <set>`; the pipeline's own call is not stored here, it is read from the results. A label's
-`id` is its field and position (rounded pixel); the latest version of (source, id) wins, edits and deletions keep the
-history. What a class label is *about* (`object_keys`) is the candidate it names (`candidate`), else the candidate found
+`id` is its field and position (rounded pixel); the latest version of (session, source, id) wins, edits and deletions
+keep the history (a session's labels are its own: nothing said in another session replaces or deletes them). What a class label is *about* (`object_keys`) is the candidate it names (`candidate`), else the candidate found
 at its position (labels made before candidate ids existed, `labels.decisions`), else its field and position: the one
 key `consensus` groups by, for training, the Labels page and the rounds alike.
 
@@ -15,6 +29,8 @@ from __future__ import annotations
 
 import fcntl
 import json
+import re
+import shutil
 import time
 from contextvars import ContextVar
 from pathlib import Path
@@ -40,11 +56,87 @@ def is_ai_label(source) -> bool:
 
 COLUMNS = ["id", "source", "stain", "task", "tile_id", "x", "y", "value", "points", "session", "confirmed", "time", "deleted", "subtype", "candidate",
            "meta"]  # meta: where a label comes from (a split or merge, `labels.objectedit`), else None
-_CACHE: dict[Path, tuple[tuple[int, int], pd.DataFrame]] = {}
+_CACHE: dict[Path, tuple] = {}  # one log -> (its signature, frame, bytes read, inode, records)
+GROUPS = ("sessions", "imports", "ai", "other")  # the folders of the logs (see the module's docstring)
+LEGACY, BEFORE_SPLIT, CHANGES = "labels.jsonl", "labels.jsonl.before_split", "changes.log"
+
+
+class LayoutError(RuntimeError):
+    """The label store is in an earlier release's layout (one labels.jsonl), or in both layouts at once."""
+
+
+def folder(root: Path) -> Path:
+    return root / "labels"
 
 
 def log_path(root: Path) -> Path:
-    return root / "labels" / "labels.jsonl"
+    """The file whose signature changes with every save to any log (`changes.log`): what caches of results made from
+    the labels name as their input."""
+    return folder(root) / CHANGES
+
+
+def legacy_path(root: Path) -> Path:
+    return folder(root) / LEGACY
+
+
+def _slug(text: str) -> str:
+    out = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(text).strip()).strip("._")
+    return out or "unnamed"
+
+
+def file_of(root: Path, record: dict) -> Path:
+    """The log a label belongs in: its session's (people's under sessions/, an imported set's under imports/, the AI's
+    under ai/), else its import or AI set's by `source`, else other/<source>."""
+    session = str(record.get("session") or "")
+    source = str(record.get("source") or "")
+    base = folder(root)
+    if session:
+        group = "imports" if source.startswith("import:") else "ai" if is_ai_label(source) else "sessions"
+        return base / group / f"{_slug(session)}.jsonl"
+    if source.startswith("import:"):
+        return base / "imports" / f"{_slug(source[len('import:'):])}.jsonl"
+    if is_ai_label(source):
+        return base / "ai" / f"{_slug(source)}.jsonl"
+    return base / "other" / f"{_slug(source)}.jsonl"
+
+
+def session_files(root: Path, name: str) -> list[Path]:
+    """The logs of one session (people's, and an imported or AI session's), those that exist."""
+    base = folder(root)
+    return [path for path in (base / group / f"{_slug(name)}.jsonl" for group in ("sessions", "imports", "ai")) if path.exists()]
+
+
+_FILES: dict[str, tuple] = {}
+
+
+def files(root: Path) -> list[Path]:
+    """Every log of the store (not the archives of deleted sessions); listed again when changes.log changes (a log is
+    only made or archived together with a line there)."""
+    stamp = signature(root)
+    kept = _FILES.get(str(root))
+    if stamp is not None and kept is not None and kept[0] == stamp:
+        return kept[1]
+    base = folder(root)
+    found = sorted(path for group in GROUPS for path in (base / group).glob("*.jsonl"))
+    _FILES[str(root)] = (stamp, found)
+    return found
+
+
+def layout(root: Path) -> str:
+    """"split" (this release's), "legacy" (one labels.jsonl), "empty"; LayoutError when both are there."""
+    legacy = legacy_path(root).exists()
+    split = log_path(root).exists() or bool(files(root))
+    if legacy and split:
+        raise LayoutError(f"{folder(root)} has both the old labels.jsonl and the split logs: the split was not finished or labels were "
+                          "written to the old log after it. Stop the app, look at both, and keep one layout.")
+    return "legacy" if legacy else "split" if split else "empty"
+
+
+def check_layout(root: Path) -> None:
+    """Refuses (LayoutError) a store the app cannot use: in the old layout (split it first) or in both."""
+    if layout(root) == "legacy":
+        raise LayoutError(f"{folder(root)} still has one labels.jsonl (an earlier release): with the app stopped, run "
+                          f"`stainid --project <project> labels split` once, then start the app again.")
 
 
 def object_id(task: str, tile_id: str, x: float, y: float) -> str:
@@ -54,29 +146,46 @@ def object_id(task: str, tile_id: str, x: float, y: float) -> str:
 ATTRIBUTION: ContextVar[str | None] = ContextVar("stainid_account", default=None)  # the signed-in account (set by the app)
 
 
+def _append_lines(path: Path, lines: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        handle.write(lines)
+        handle.flush()
+        fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def _changed(root: Path) -> None:
+    """One line more in changes.log: every cache made from the labels looks again (the log only grows, so its size
+    changes even within the file system's time resolution)."""
+    _append_lines(log_path(root), f"{time.time():.6f}\n")
+
+
 def append(root: Path, records: list[dict]) -> list[dict]:
-    """Add labels to the log; each carries the account id of the signed-in person (`account`) besides their name. Never
-    while practising (`stainid.practice`)."""
+    """Add labels, each to its log (`file_of`); each carries the account id of the signed-in person (`account`) besides
+    their name. Never while practising (`stainid.practice`), never into a store in the old layout."""
     from stainid import practice  # noqa: PLC0415
 
     practice.guard("the label log")
-    path = log_path(root)
+    if legacy_path(root).exists():
+        check_layout(root)
     account = ATTRIBUTION.get()
-    path.parent.mkdir(parents=True, exist_ok=True)
     now = time.time()
     stamped = [{**{k: None for k in COLUMNS}, "confirmed": False, "deleted": False, "session": "", **r, "time": r.get("time") or now} for r in records]
     if account:
         stamped = [r if r.get("account") else {**r, "account": account} for r in stamped]
-    with path.open("a", encoding="utf-8") as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX)
-        handle.write("".join(json.dumps(r) + "\n" for r in stamped))
-        handle.flush()
-        fcntl.flock(handle, fcntl.LOCK_UN)
+    by_file: dict[Path, list[dict]] = {}
+    for record in stamped:
+        by_file.setdefault(file_of(root, record), []).append(record)
+    for path, rows in by_file.items():
+        _append_lines(path, "".join(json.dumps(r) + "\n" for r in rows))
+    if stamped:
+        _changed(root)
     return stamped
 
 
 def signature(root: Path) -> tuple[int, int] | None:
-    """Changes whenever a label is saved."""
+    """Changes whenever a label is saved (to any log) or a session's logs are archived."""
     path = log_path(root)
     if not path.exists():
         return None
@@ -84,14 +193,12 @@ def signature(root: Path) -> tuple[int, int] | None:
     return stat.st_mtime_ns, stat.st_size
 
 
-def history(root: Path) -> pd.DataFrame:
-    path = log_path(root)
-    if not path.exists():
-        return pd.DataFrame(columns=COLUMNS)
+def _file_history(path: Path) -> pd.DataFrame:
+    """One log, read again only where it grew."""
     stat = path.stat()
     key = (stat.st_mtime_ns, stat.st_size)
     kept = _CACHE.get(path)
-    if kept is not None and kept[0] == key:
+    if kept is not None and kept[0] == key and len(kept) > 4 and kept[3] == stat.st_ino:
         return kept[1]
     with path.open("rb") as handle:
         fcntl.flock(handle, fcntl.LOCK_SH)
@@ -108,22 +215,136 @@ def history(root: Path) -> pd.DataFrame:
     return frame
 
 
-_CURRENT: dict[Path, tuple[tuple, pd.DataFrame]] = {}
+_UNION: dict[tuple, tuple[tuple, pd.DataFrame]] = {}
 
 
-def current(root: Path) -> pd.DataFrame:
-    """The latest version of every label that is not deleted (kept until a label is saved; a copy is returned)."""
-    frame = history(root)
-    path = log_path(root)
-    key = (_CACHE[path][0], id(frame)) if path in _CACHE else None
-    kept = _CURRENT.get(path)
-    if key is not None and kept is not None and kept[0] == key:
+def history(root: Path, session: str | None = None) -> pd.DataFrame:
+    """Every version of every label, oldest first: of the whole store (every log, as one), or of one session."""
+    if legacy_path(root).exists():
+        check_layout(root)
+    paths = session_files(root, session) if session is not None else files(root)
+    frames = [_file_history(path) for path in paths]
+    key = (str(root), session)
+    stamp = tuple((str(path), id(frame)) for path, frame in zip(paths, frames))
+    kept = _UNION.get(key)
+    if kept is not None and kept[0] == stamp:
+        return kept[1]
+    if not frames:
+        frame = pd.DataFrame(columns=COLUMNS)
+    elif len(frames) == 1:
+        frame = frames[0]
+    else:
+        joined = pd.concat([f for f in frames if len(f)] or frames[:1], ignore_index=True)
+        order = pd.to_numeric(joined.time, errors="coerce").fillna(0.0)
+        frame = joined.iloc[order.sort_values(kind="stable").index].reset_index(drop=True)  # one log, in the order labels were saved
+    if session is not None and len(frame):
+        own = frame.session.fillna("").astype(str) == session  # a set's log named like the session holds no label of it
+        if not own.all():
+            frame = frame[own].reset_index(drop=True)
+    _UNION[key] = (stamp, frame)
+    return frame
+
+
+def raw_records(root: Path) -> list[dict]:
+    """Every line of every log as saved (all fields, `account` too), oldest first: for checks and exports."""
+    out = []
+    for path in files(root):
+        out += [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return sorted(out, key=lambda r: float(r.get("time") or 0.0))
+
+
+def line_count(root: Path) -> int:
+    """How many lines all the logs hold (every save adds lines, none is rewritten)."""
+    return sum(1 for path in files(root) for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+
+
+_CURRENT: dict[tuple, tuple[int, pd.DataFrame]] = {}
+
+
+def current(root: Path, session: str | None = None) -> pd.DataFrame:
+    """The latest version of every label that is not deleted (a copy): of the whole store, or of one session only (what
+    counts inside it: its fields' states, its progress, who is on it, what its fields start from)."""
+    frame = history(root, session)
+    key = (str(root), session)
+    kept = _CURRENT.get(key)
+    if kept is not None and kept[0] == id(frame):
         return kept[1].copy()
-    latest = frame.drop_duplicates(["source", "id"], keep="last")
+    keys = ["session", "source", "id"] if "session" in frame else ["source", "id"]  # a session's labels are its own: one
+    latest = frame.drop_duplicates(keys, keep="last")  # in another session (or a delete there) never replaces them
     latest = latest[~latest.deleted.astype(bool)].reset_index(drop=True)
-    if key is not None:
-        _CURRENT[path] = (key, latest)
+    _CURRENT[key] = (id(frame), latest)
     return latest.copy()
+
+
+def remove_session(root: Path, name: str, archive: Path) -> int:
+    """A deleted session's logs go into its archive (`archive`, beside the session's own files): nothing reads them any
+    more, so its labels leave training, scoring and every page; an admin can bring them back by hand. How many labels
+    left (the current ones)."""
+    from stainid import practice  # noqa: PLC0415
+
+    practice.guard("the label log")
+    paths = session_files(root, name)
+    count = len(current(root, name)) if paths else 0
+    if not paths:
+        return 0
+    archive.mkdir(parents=True, exist_ok=True)
+    for path in paths:
+        target = archive / f"labels-{path.parent.name}.jsonl"
+        with path.open("r+", encoding="utf-8") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)  # no label is added meanwhile
+            lines = [line for line in handle.read().splitlines() if line.strip()]
+            own = [str(json.loads(line).get("session") or "") == name for line in lines]
+            if all(own):
+                shutil.move(str(path), str(target))
+            else:  # a label set's log of the same name: only the session's own lines go
+                target.write_text("".join(line + "\n" for line, mine in zip(lines, own) if mine), encoding="utf-8")
+                handle.seek(0)
+                handle.truncate()
+                handle.write("".join(line + "\n" for line, mine in zip(lines, own) if not mine))
+                handle.flush()
+            fcntl.flock(handle, fcntl.LOCK_UN)
+    _changed(root)
+    return count
+
+
+def split_legacy(root: Path) -> dict:
+    """The one-off move from the earlier release's single labels.jsonl to one log per session and set: every line goes,
+    in its order, to its log (`file_of`); the counts are checked; the old file is kept as labels.jsonl.before_split. Run
+    it with the app stopped. Refuses when there is nothing to split or the split logs exist already."""
+    source = legacy_path(root)
+    if not source.exists():
+        raise LayoutError(f"{source} does not exist: nothing to split")
+    if log_path(root).exists() or files(root):
+        raise LayoutError(f"{folder(root)} has split logs already: the split was done (or started); look before running it again")
+    by_file: dict[Path, list[str]] = {}
+    total = 0
+    with source.open("rb") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)  # no writer while it is read
+        data = handle.read()
+        fcntl.flock(handle, fcntl.LOCK_UN)
+    for line in data.decode("utf-8").splitlines():
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        by_file.setdefault(file_of(root, record), []).append(line.rstrip("\n"))
+        total += 1
+    written: dict[str, int] = {}
+    try:
+        for path, lines in by_file.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(path.name + ".part")
+            tmp.write_text("".join(line + "\n" for line in lines), encoding="utf-8")
+            tmp.replace(path)
+            written[str(path.relative_to(folder(root)))] = sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+        if sum(written.values()) != total or any(written[str(p.relative_to(folder(root)))] != len(lines) for p, lines in by_file.items()):
+            raise LayoutError(f"the split logs hold {sum(written.values())} labels, the old log {total}: nothing was changed")
+    except BaseException:
+        for path in by_file:
+            path.unlink(missing_ok=True)
+        raise
+    source.rename(folder(root) / BEFORE_SPLIT)
+    _changed(root)
+    return {"labels": total, "files": dict(sorted(written.items())), "kept": str(folder(root) / BEFORE_SPLIT)}
 
 
 def classes(labels: pd.DataFrame, stain: str, vocabulary: Vocabulary | None = None) -> pd.DataFrame:

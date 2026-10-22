@@ -139,9 +139,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("summarize", help="one results table with every stain (results_<level>.csv)")
     p.add_argument("--level", choices=("sample_region_id", "core_id"), default="sample_region_id")
 
-    p = sub.add_parser("labels", help="prepare candidate objects for labelling, or import earlier label sets")
-    p.add_argument("action", choices=("prepare", "import", "store-from-pool"),
-                   help="store-from-pool: write a v2 candidate store from the prepared pool (to try the annotation rounds before the v2 detection)")
+    p = sub.add_parser("labels", help="prepare candidate objects for labelling, import earlier label sets, or split an old label log")
+    p.add_argument("action", choices=("prepare", "import", "store-from-pool", "split"),
+                   help="store-from-pool: write a v2 candidate store from the prepared pool (to try the annotation rounds before the v2 "
+                        "detection); split: once, with the app stopped, move an earlier release's labels.jsonl into one log per session "
+                        "and label set (the old file is kept as labels.jsonl.before_split)")
+    p.add_argument("--all", action="store_true", help="split: every project the app knows (its Projects page), not only --project")
     p.add_argument("--stain", choices=("NeuN", "6E10", "AT8"))
     p.add_argument("--fields", type=int, default=0, help="prepare this many more fields that are not prepared yet (-1: every one)")
     p.add_argument("--session", default="", help="prepare every field of this labelling session")
@@ -239,6 +242,9 @@ def main(argv: list[str] | None = None) -> None:
 
         project = create_project(args.package, args.folder, args.name)
         print(f"{project.name}: a new {project.kind} project in {project.root}; next: stainid --project {project.root} images", flush=True)
+        return
+    if args.command == "labels" and args.action == "split":
+        split_labels(args)
         return
     project = load_project(args.project)
     os.chdir(project.root)
@@ -394,6 +400,64 @@ def run_v2(args: argparse.Namespace, project) -> None:
         run.run_measures(project)
 
 
+def split_labels(args: argparse.Namespace) -> None:
+    """`stainid labels split`: the one-off move of an earlier release's labels.jsonl into one log per session and set
+    (`labels.store.split_legacy`), for --project or, with --all, every project the app knows. Run with the app stopped."""
+    from stainid.labels import store
+
+    if args.all:
+        from stainid.api.registry import entries
+
+        roots = [Path(e.path) for e in entries() if e.exists]
+    else:
+        roots = [load_project(args.project).root]
+    failed = False
+    for root in roots:
+        try:
+            reviews = load_project(root).output("reviews")
+        except Exception as error:  # noqa: BLE001 - one project that does not load stops no other
+            print(f"{root}: not split, the project does not load ({error})", flush=True)
+            failed = True
+            continue
+        try:
+            found = store.layout(reviews)
+        except store.LayoutError as error:
+            print(f"{root}: not split: {error}", flush=True)
+            failed = True
+            continue
+        if found != "legacy":
+            print(f"{root}: nothing to split ({'split already' if found == 'split' else 'no labels yet'})", flush=True)
+            continue
+        done = store.split_legacy(reviews)
+        print(f"{root}: {done['labels']} labels split into {len(done['files'])} logs under {store.folder(reviews)}; "
+              f"the old log is kept as {done['kept']}", flush=True)
+        for name, count in done["files"].items():
+            print(f"  {name}: {count}", flush=True)
+    if failed:
+        raise SystemExit(1)
+
+
+def refuse_old_label_logs(extra: list[Path]) -> None:
+    """The app does not start while a project it knows keeps its labels in an earlier release's single labels.jsonl, or
+    in both layouts (`labels.store.check_layout`): split them first, with `stainid labels split`."""
+    from stainid.api.registry import entries
+    from stainid.labels import store
+
+    roots = list(dict.fromkeys([*(Path(r).resolve() for r in extra), *(Path(e.path).resolve() for e in entries() if e.exists)]))
+    problems = []
+    for root in roots:
+        try:
+            reviews = load_project(root).output("reviews")
+        except Exception:  # noqa: BLE001 - not a project (the Projects page says why)
+            continue
+        try:
+            store.check_layout(reviews)
+        except store.LayoutError as error:
+            problems.append(f"{root}: {error}")
+    if problems:
+        raise SystemExit("stainID does not start: " + "\n".join(problems) + "\nWith the app stopped: stainid labels split --all")
+
+
 def serve(args: argparse.Namespace) -> None:
     import socket
     import threading
@@ -415,6 +479,7 @@ def serve(args: argparse.Namespace) -> None:
             if not args.no_browser:
                 webbrowser.open(page)
             return
+    refuse_old_label_logs([start])
     os.environ["STAINID_PROJECT"] = str(start)
     os.environ["STAINID_HOST"] = args.host
     if args.cache_limit:

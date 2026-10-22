@@ -136,8 +136,7 @@ def test_people_add_missed_objects_and_they_are_measured(client, monkeypatch):
     plaques = next(s for s in client.get("/api/labels/overview").json()["stains"] if s["stain"] == "6E10")
     assert plaques["detection"]["never_proposed"] == 2 and plaques["detection"]["recall"] == 0
     assert plaques["added"] == {"objects": 2, "measured": 1, "could_not_be_measured": 1, "waiting": 0}
-    with open(store.log_path(project.output("reviews"))) as handle:  # the label log only grew; nothing in it was rewritten
-        assert [json.loads(line)["x"] for line in handle] == [100.0, 392.0, 600.0]
+    assert [r["x"] for r in store.raw_records(project.output("reviews"))] == [100.0, 392.0, 600.0]  # the logs only grew
 
 
 def test_person_added_objects_train_the_model_and_are_reported(tmp_path):

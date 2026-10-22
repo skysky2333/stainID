@@ -170,7 +170,7 @@ def test_threads_mode_shades_what_is_not_counted_from_people_s_final_say_without
     codes[38:, :] = exclusions.OUTSIDE  # beyond the tiles: not shaded
     asked = {}
 
-    def final_say(project, core_id, stain, ai=True):
+    def final_say(project, core_id, stain, ai=True, session=None):
         asked["ai"] = ai
         return SimpleNamespace(codes=codes, scale=16, digest="d")
 

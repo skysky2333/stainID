@@ -94,7 +94,7 @@ def test_practice_writes_nothing_in_the_study_or_the_tutorial(public):
                                                                        "submit": True})
     assert saved.status_code == 200
     assert store.history(project.output("reviews")).equals(log)
-    assert not store.log_path(tutorial.folder() / "data/annotations").exists()
+    assert not store.log_path(tutorial.folder() / "data/annotations").exists() and not store.files(tutorial.folder() / "data/annotations")
 
 
 def test_without_a_built_tutorial_the_practice_says_so(rounds_project, monkeypatch, tmp_path):

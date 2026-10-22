@@ -72,9 +72,10 @@ class Edit:
     rings: tuple
     holes: tuple
     kinds: tuple
+    session: str = ""  # the labelling session it was saved in ("" for none)
 
     def key(self) -> tuple:
-        return (round(self.time, 6), self.source, self.id, self.kinds, self.holes,
+        return (round(self.time, 6), self.source, self.id, self.session, self.kinds, self.holes,
                 tuple(tuple(np.round(r, 1).ravel().tolist()) for r in self.rings))
 
 
@@ -134,7 +135,8 @@ def all_edits(project) -> dict[tuple[str, str], list[Edit]]:
                 continue
             shift = np.array([x0, y0], np.float32)
             out.setdefault((stain, core_id), []).append(Edit(float(r.time or 0.0), str(r.source), str(r.id),
-                                                             tuple(np.asarray(g, np.float32) + shift for g in rings), tuple(holes), tuple(kinds)))
+                                                             tuple(np.asarray(g, np.float32) + shift for g in rings), tuple(holes), tuple(kinds),
+                                                             str(getattr(r, "session", "") or "")))
         for edits in out.values():
             edits.sort(key=lambda e: (e.time, e.source, e.id))
         return out
@@ -142,10 +144,13 @@ def all_edits(project) -> dict[tuple[str, str], list[Edit]]:
     return cache.memo(("exclusion edits", str(project.root)), [_log(project), *_tile_paths(project)], make)
 
 
-def edits(project, core_id: str, stain: str, ai: bool = True) -> list[Edit]:
+def edits(project, core_id: str, stain: str, ai: bool = True, session: str | None = None) -> list[Edit]:
     """The edits of one core image and stain, oldest first (the history: who, when, which type). `ai` False: people's
-    only, without the AI reviewer's (`labels.store.is_ai_label`), as the annotation pages start from them."""
+    only, without the AI reviewer's (`labels.store.is_ai_label`), as the annotation pages start from them. `session`: only
+    the edits saved in that labelling session (inside a session nothing another session said counts)."""
     found = all_edits(project).get((stain, str(core_id)), [])
+    if session is not None:
+        found = [e for e in found if e.session == session]
     if ai:
         return found
     from stainid.labels.store import is_ai_label  # noqa: PLC0415
@@ -335,9 +340,9 @@ def digests(project, stain: str, core_ids) -> dict[str, str | None]:
     return {str(c): digest(project, str(c), stain) for c in core_ids}
 
 
-def edits_digest(project, core_id: str, stain: str, ai: bool = True) -> str:
+def edits_digest(project, core_id: str, stain: str, ai: bool = True, session: str | None = None) -> str:
     """People's edits of a core image, as a short text: changes exactly when one is saved."""
-    keys = [e.key() for e in edits(project, core_id, stain, ai)]
+    keys = [e.key() for e in edits(project, core_id, stain, ai, session)]
     return hashlib.sha1(json.dumps(keys, default=str).encode()).hexdigest()[:16]
 
 
@@ -406,13 +411,13 @@ def _grid_shape(project, core_id: str, stain: str) -> tuple[int, int] | None:
     return None
 
 
-def annotated(project, core_id: str, stain: str, ai: bool = True) -> Annotated | None:
+def annotated(project, core_id: str, stain: str, ai: bool = True, session: str | None = None) -> Annotated | None:
     """People's areas of one core image and stain (every edit in time order, the latest winning); None when the image
     is unknown. Only training and evaluation read them. `ai` False: without the AI reviewer's (the annotation pages)."""
     shape = _grid_shape(project, core_id, stain)
     if shape is None:
         return None
-    found = edits(project, core_id, stain, ai)
+    found = edits(project, core_id, stain, ai, session)
     codes = np.zeros(shape, np.uint8)
     auto = automatic(project, core_id, stain) if found else None
     final = auto.codes.copy() if auto is not None and auto.codes.shape == shape else np.zeros(shape, np.uint8)  # people's say so far
@@ -426,7 +431,7 @@ def annotated(project, core_id: str, stain: str, ai: bool = True) -> Annotated |
                 codes[area], final[area] = CLEARED, COUNTED
             else:
                 codes[area] = final[area] = _painted_code(kind)
-    return Annotated(codes, found, edits_digest(project, core_id, stain, ai))
+    return Annotated(codes, found, edits_digest(project, core_id, stain, ai, session))
 
 
 def agreement(auto: "Layer", people: Annotated) -> dict:
@@ -456,15 +461,15 @@ _SHARES_LIMIT = 100_000  # every core image and stain of a cohort (a pass over a
 _LOCK = threading.Lock()
 
 
-def _layer(project, core_id: str, stain: str, people: bool, ai: bool = True) -> Layer | None:
+def _layer(project, core_id: str, stain: str, people: bool, ai: bool = True, session: str | None = None) -> Layer | None:
     path = mask_path(project, core_id, stain)
     made_from = digest(project, core_id, stain)
     if made_from is None:
         return None
-    found = edits(project, core_id, stain, ai) if people else []
+    found = edits(project, core_id, stain, ai, session) if people else []
     if people:
-        made_from = made_from + ":" + edits_digest(project, core_id, stain, ai)
-    key = (str(project.root), stain, str(core_id), people, ai or not people)
+        made_from = made_from + ":" + edits_digest(project, core_id, stain, ai, session)
+    key = (str(project.root), stain, str(core_id), people, ai or not people, session if people else None)
     with _LOCK:
         kept = _LAYERS.get(key)
         if kept is not None and kept.digest == made_from:
@@ -493,13 +498,14 @@ def automatic(project, core_id: str, stain: str) -> Layer | None:
     return _layer(project, core_id, stain, people=False)
 
 
-def final_say(project, core_id: str, stain: str, ai: bool = True) -> Layer | None:
+def final_say(project, core_id: str, stain: str, ai: bool = True, session: str | None = None) -> Layer | None:
     """People's final say over detection's areas: detection's areas with every edit on top in time order (a painted
     part excluded with its type, a cleared part counted). It is the label set for training and evaluating (objects there
     are left out of training and scoring, `drop_excluded`), never an analysis input; None before stage 2. `ai` False
     (the annotation pages: Mark bad areas, the brush, the faded objects of Fix the field): without the AI reviewer's
-    edits (`labels.store.is_ai_label`), detection's areas and people's edits only."""
-    return _layer(project, core_id, stain, people=True, ai=ai)
+    edits (`labels.store.is_ai_label`), detection's areas and people's edits only. `session`: people's edits of that
+    labelling session only (a session's pages)."""
+    return _layer(project, core_id, stain, people=True, ai=ai, session=session)
 
 
 _TISSUE: OrderedDict[tuple, np.ndarray] = OrderedDict()  # (image, its signature, shape) -> tissue cells
@@ -646,7 +652,8 @@ def _known(project, stain: str, core_id: str, quick: tuple | None = None) -> dic
     return kept[1]
 
 
-def shares(project, stain: str, core_id: str, ids, quick: tuple | None = None, ai: bool = True) -> dict[str, float]:
+def shares(project, stain: str, core_id: str, ids, quick: tuple | None = None, ai: bool = True,
+           session: str | None = None) -> dict[str, float]:
     """The excluded share of these candidates of one core in people's final say (`final_say`, `Layer.fractions` of their stain
     outlines; a candidate the store no longer has by the cell at the position in its id); empty before stage 2. Only
     the candidates asked about are worked out (and kept until the layer or the store changes). `ai` False: in the final
@@ -657,10 +664,10 @@ def shares(project, stain: str, core_id: str, ids, quick: tuple | None = None, a
     if known is None:
         return {}
     ids = [str(c) for c in dict.fromkeys(ids)]
-    tag = "share" if ai else "people share"
+    tag = ("share" if ai else "people share", session)
     missing = [c for c in ids if (tag, c) not in known]
     if missing:
-        layer = final_say(project, core_id, stain, ai=ai)
+        layer = final_say(project, core_id, stain, ai=ai, session=session)
         rows = candidates.read_core(project, stain, core_id, ["candidate_id", "x_core", "y_core", "outline"])
         rows = rows[rows.candidate_id.isin(missing)].drop_duplicates("candidate_id") if len(rows) else rows
         found = dict(zip(rows.candidate_id, layer.fractions(rows.outline.tolist(), rows.x_core, rows.y_core))) if len(rows) else {}

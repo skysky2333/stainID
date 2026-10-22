@@ -31,10 +31,10 @@ from stainid.project import Project
 COLUMNS = ["candidate", "source", "identity", "subtype", "role", "time", "session", "confirmed"]
 _LOCK = threading.Lock()
 _LEGACY: OrderedDict[tuple, pd.Series] = OrderedDict()  # (project, stain, what it was made from) -> candidate of each old label
-_LEGACY_LIMIT = 8  # the rounds' labels, training's and the Labels page's: each its own rows
-_STATE: dict[tuple[str, str], tuple[tuple, State]] = {}
+_LEGACY_LIMIT = 16  # the rounds' labels, training's, the Labels page's and each session's: each its own rows
+_STATE: dict[tuple, tuple[tuple, State]] = {}  # (project, stain) or (project, stain, session) -> (signature, state)
 _PEOPLE: dict[tuple[str, str], tuple[State, State]] = {}  # (project, stain) -> (the state it was made from, people's only)
-_MAKING: dict[tuple[str, str], threading.Lock] = {}
+_MAKING: dict[tuple, threading.Lock] = {}
 
 
 def _has_candidate(labels: pd.DataFrame) -> pd.Series:
@@ -158,19 +158,38 @@ def _signature(project: Project, stain: str) -> tuple:
     return store.signature(project.output("reviews")), _store_signature(project, stain), excluded_areas.signature(project, stain)
 
 
-def cached(project: Project, stain: str) -> bool:
-    """Whether `state` answers at once (made since the last label was saved)."""
+def cached(project: Project, stain: str, session: str | None = None) -> bool:
+    """Whether `state` (with `session`: `session_people`) answers at once (made since the last label was saved)."""
     with _LOCK:
-        kept = _STATE.get((str(project.root), stain))
+        kept = _STATE.get((str(project.root), stain) if session is None else (str(project.root), stain, session))
     return kept is not None and kept[0] == _signature(project, stain)
 
 
 def state(project: Project, stain: str, tiles: pd.DataFrame, stale_ok: bool = False) -> State:
-    """The decisions as the label log stands now, made again whenever a label is saved (once: parallel requests wait
-    for the one making it). `stale_ok` (the pages' heartbeat): while it is being made again, the previous one."""
+    """The decisions as the label log stands now (every session's and set's labels), made again whenever a label is
+    saved (once: parallel requests wait for the one making it). `stale_ok` (the pages' heartbeat): while it is being made
+    again, the previous one."""
     root = project.output("reviews")
+    return _kept(project, stain, (str(project.root), stain), stale_ok,
+                 lambda: _state_of(table(project, stain, excluded_areas.drop_excluded(project, store.current(root)), tiles)))  # not on excluded objects
+
+
+def session_people(project: Project, stain: str, tiles: pd.DataFrame, session: str, stale_ok: bool = False) -> State:
+    """The decisions of one labelling session, people's only (`people` of its own labels, `store.current(root,
+    session)`): what that session's pages show and start from. Inside a session nothing another session or label set
+    said counts."""
+    root = project.output("reviews")
+
+    def make() -> State:
+        rows = table(project, stain, excluded_areas.drop_excluded(project, store.current(root, session=session)), tiles)
+        ai = rows.source.map(store.is_ai_label).astype(bool) if len(rows) else pd.Series(False, index=rows.index)
+        return _state_of(rows[~ai] if ai.any() else rows)
+
+    return _kept(project, stain, (str(project.root), stain, session), stale_ok, make)
+
+
+def _kept(project: Project, stain: str, key: tuple, stale_ok: bool, make) -> State:
     signature = _signature(project, stain)
-    key = (str(project.root), stain)
     with _LOCK:
         kept = _STATE.get(key)
         making = _MAKING.setdefault(key, threading.Lock())
@@ -187,7 +206,7 @@ def state(project: Project, stain: str, tiles: pd.DataFrame, stale_ok: bool = Fa
         signature = _signature(project, stain)
         if kept is not None and kept[0] == signature:
             return kept[1]
-        made = _state_of(table(project, stain, excluded_areas.drop_excluded(project, store.current(root)), tiles))  # not on excluded objects
+        made = make()
         with _LOCK:
             _STATE[key] = (signature, made)
         return made

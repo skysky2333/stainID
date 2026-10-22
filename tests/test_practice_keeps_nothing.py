@@ -100,7 +100,7 @@ def test_the_stores_refuse_to_write_while_practising(tmp_path):
             sessions.Reservations().hold(("p", "s"), "Ann", ["tile"])
         with pytest.raises(practice.NotKept):
             sessions.update(tmp_path, "some_session", open=False)
-    assert not store.log_path(tmp_path).exists()
+    assert not store.log_path(tmp_path).exists() and not store.files(tmp_path)
     assert store.append(tmp_path, [{"id": "x", "source": "Ann", "task": "class"}])  # outside the practice: kept as always
 
 

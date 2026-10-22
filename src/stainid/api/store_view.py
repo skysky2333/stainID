@@ -301,16 +301,17 @@ def field_excluded(project, tile: dict) -> tuple[dict, bytes | None]:
 PAINTED_TYPES = ("1", "2", "3", "4")  # the types the brush paints (labels.exclusions.KINDS)
 
 
-def field_areas(project, tile: dict) -> dict:
-    """Each brush type's current area over a field (`current_areas`), placed in the field picture's pixels."""
+def field_areas(project, tile: dict, session: str | None = None) -> dict:
+    """Each brush type's current area over a field (`current_areas`), placed in the field picture's pixels. `session`:
+    detection's areas with that labelling session's edits only."""
     from stainid.labels import frames  # noqa: PLC0415
 
     x0, y0 = frames.field_origin(tile, project.context_px)
     x1, y1 = int(tile["x_px"]) + int(tile["width_px"]) + project.context_px, int(tile["y_px"]) + int(tile["height_px"]) + project.context_px
-    return current_areas(project, str(tile["core_id"]), str(tile["stain"]), (x0, y0, x1, y1), ai=False)
+    return current_areas(project, str(tile["core_id"]), str(tile["stain"]), (x0, y0, x1, y1), ai=False, session=session)
 
 
-def not_counted(project, tile: dict) -> dict:
+def not_counted(project, tile: dict, session: str | None = None) -> dict:
     """AT8 threads mode: where the field is not counted, so the page shades it and fades the thread lines there (people
     judge the thread threshold on counted tissue only). Detection's automatic areas (fold, artifact, no tissue, focus,
     the edge guard, …) with people's saved edits on top (`exclusions.final_say`, without AI areas), as one
@@ -322,7 +323,7 @@ def not_counted(project, tile: dict) -> dict:
 
     from stainid.labels import frames  # noqa: PLC0415
 
-    layer = excluded_areas.final_say(project, str(tile["core_id"]), str(tile["stain"]), ai=False)
+    layer = excluded_areas.final_say(project, str(tile["core_id"]), str(tile["stain"]), ai=False, session=session)
     if layer is None:
         return {"status": "not_made"}
     x0, y0 = frames.field_origin(tile, project.context_px)
@@ -350,7 +351,8 @@ def not_counted(project, tile: dict) -> dict:
     return out
 
 
-def current_areas(project, core_id: str, stain: str, box: tuple[int, int, int, int] | None = None, ai: bool = True) -> dict:
+def current_areas(project, core_id: str, stain: str, box: tuple[int, int, int, int] | None = None, ai: bool = True,
+                  session: str | None = None) -> dict:
     """Each brush type's current area, as the one brush (field tool and "Mark bad areas") starts from it: detection's
     area of that type with every edit people saved merged in (`exclusions.final_say`, one region set per type), a
     white-on-transparent PNG per type (data URL, one pixel per layer cell) and where it lies (`x`, `y`, `width`,
@@ -361,7 +363,7 @@ def current_areas(project, core_id: str, stain: str, box: tuple[int, int, int, i
 
     import cv2  # noqa: PLC0415
 
-    layer = excluded_areas.final_say(project, core_id, stain, ai=ai)
+    layer = excluded_areas.final_say(project, core_id, stain, ai=ai, session=session)
     if layer is None:
         return {"status": "not_made", "kinds": {}}
     x0, y0, x1, y1 = box if box is not None else (0, 0, layer.codes.shape[1] * layer.scale, layer.codes.shape[0] * layer.scale)
@@ -382,14 +384,14 @@ def current_areas(project, core_id: str, stain: str, box: tuple[int, int, int, i
 
 
 def people_areas(project, core_id: str, stain: str, origin: tuple[int, int] = (0, 0),
-                 box: tuple[float, float, float, float] | None = None, ai: bool = True) -> dict:
+                 box: tuple[float, float, float, float] | None = None, ai: bool = True, session: str | None = None) -> dict:
     """People's areas of a core image for the Annotations layers (`stainid.exclusions.annotated`; they train and evaluate
     models, the analysis never reads them): each painted or cleared area as polygons (core px less `origin`; only those
     reaching into `box`, x0 y0 x1 y1 core px), how they compare with detection's areas, and the edits (who, when, type,
     `ai`: the AI reviewer's). `ai` False (the annotation pages): people's own only (`labels.store.is_ai_label`)."""
     from stainid.labels.store import is_ai_label  # noqa: PLC0415
 
-    found = excluded_areas.annotated(project, core_id, stain, ai=ai)
+    found = excluded_areas.annotated(project, core_id, stain, ai=ai, session=session)
     if found is None:
         return {"regions": [], "agreement": None, "edits": []}
     regions = found.regions()

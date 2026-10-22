@@ -185,7 +185,7 @@ def test_a_non_member_gets_403_on_every_annotation_request_and_labels_carry_the_
     saved = ann.post("/api/annotate/plaques_together/labels", json={"records": [{"task": "class", "tile_id": TILE, "x": 100.0, "y": 200.0,
                                                                                   "value": "not a plaque"}]}).json()
     assert saved[0]["source"] == "Ann" and saved[0]["account"] == ann.account["id"]
-    logged = [json.loads(line) for line in store.log_path(_reviews()).read_text().splitlines()]
+    logged = store.raw_records(_reviews())
     assert logged[-1]["account"] == ann.account["id"]
 
 

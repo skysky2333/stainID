@@ -307,6 +307,20 @@ function People({ people, fields }: { people: Labeller[]; fields: number | null 
   )
 }
 
+function DeleteSession({ s, onClose, onChanged, onError }: { s: SessionInfo; onClose: () => void; onChanged: () => void; onError: (e: string | null) => void }) {
+  const count = useFetch<{ labels: number }>(`/api/labels/sessions/${s.name}/labels-count`)
+  const n = count.data?.labels
+  return (
+    <ConfirmDialog title={`Delete “${s.title}”?`} confirm={n ? `Delete session and ${n.toLocaleString()} labels` : 'Delete session'} danger onClose={onClose}
+      onConfirm={() => withError(async () => { await api.del(`/api/labels/sessions/${s.name}`); onChanged() }, onError)}>
+      <p>The session closes for everyone and disappears from this list.{' '}
+        {n == null ? <>Counting its labels…</> : n === 0 ? <>Nobody has saved a label in it.</>
+          : <><b>Its {n.toLocaleString()} label{n === 1 ? '' : 's'} will be removed</b>: they no longer count for training, models or any page.</>}</p>
+      <p className="small secondary">The session and its labels are moved into an archive, not erased. To stop labelling but keep the labels, close the session instead.</p>
+    </ConfirmDialog>
+  )
+}
+
 function SessionMore({ s, onChanged, onError }: { s: SessionInfo; onChanged: () => void; onError: (e: string | null) => void }) {
   const defaults = useFetch<Defaults>(s.kind === 'queue' ? '/api/labels/defaults' : null)
   const [confirm, setConfirm] = useState<'delete' | null>(null)
@@ -362,13 +376,7 @@ function SessionMore({ s, onChanged, onError }: { s: SessionInfo; onChanged: () 
           </div>
         )}
       </Advanced>
-      {confirm === 'delete' && (
-        <ConfirmDialog title={`Delete “${s.title}”?`} confirm="Delete session" danger onClose={() => setConfirm(null)}
-          onConfirm={() => withError(async () => { await api.del(`/api/labels/sessions/${s.name}`); onChanged() }, onError)}>
-          <p>The session closes for everyone and disappears from this list. <b>Labels people made are kept</b> and still count for training;
-            the session’s settings are moved aside, not erased.</p>
-        </ConfirmDialog>
-      )}
+      {confirm === 'delete' && <DeleteSession s={s} onClose={() => setConfirm(null)} onChanged={onChanged} onError={onError} />}
     </div>
   )
 }

@@ -125,8 +125,7 @@ def _person(admin, name):
 def _log_lines() -> int:
     from stainid.labels import store
 
-    path = store.log_path(state.get_state().project.output("reviews"))
-    return len(path.read_text().splitlines()) if path.exists() else 0
+    return store.line_count(state.get_state().project.output("reviews"))
 
 
 def _save(client, name, tile, records, submit=False):

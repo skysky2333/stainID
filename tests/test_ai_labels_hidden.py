@@ -65,7 +65,7 @@ def test_a_field_and_a_core_with_ai_labels_open_exactly_as_detection_made_them(r
     assert exclusions.shares(project, "6E10", CORE, [covered])[covered] >= exclusions.EXCLUDED_AT
     assert exclusions.shares(project, "6E10", CORE, [covered], ai=False)[covered] < exclusions.EXCLUDED_AT
     assert not next(o for o in again["objects"] if o["candidate_id"] == covered).get("excluded")
-    assert decisions.state(project, "6E10", known_tiles(project)).by(cid) == ["import: reference_6e10", "ai:round4"]
+    assert sorted(decisions.state(project, "6E10", known_tiles(project)).by(cid)) == ["ai:round4", "import: reference_6e10"]  # saved at one time, in two logs
     layer = admin.get(f"/api/cores/{CORE}/6E10/annotations").json()
     assert {r["kind"] for r in layer["areas"]["regions"]} == {"2"} and all(e["ai"] for e in layer["areas"]["edits"])
     assert any(o["candidate_id"] == cid for o in layer["objects"])

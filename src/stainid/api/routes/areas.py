@@ -36,16 +36,24 @@ _HELD = sessions.Reservations(areas.HOLD_SECONDS)  # cores on someone's screen
 PRACTICE = "practice-areas"
 
 
-def hold_key() -> tuple:
-    return get_state().id, "areas"
+def hold_key(meta: dict) -> tuple:
+    """Holds on cores are per session (sessions are separate)."""
+    return get_state().id, "areas", meta["name"]
 
 
-def held() -> dict[str, set[str]]:
-    return _HELD.held(hold_key())
+def held(meta: dict) -> dict[str, set[str]]:
+    return _HELD.held(hold_key(meta))
 
 
 def checked(labels: pd.DataFrame | None = None) -> dict[tuple[str, str], set[str]]:
+    """Who checked each core image's bad areas: in every session (the overview, a new session's choice of cores), or in
+    the `labels` given."""
     return status.areas_checked(store.current(root()) if labels is None else labels)
+
+
+def session_checked(meta: dict, labels: pd.DataFrame | None = None) -> dict[tuple[str, str], set[str]]:
+    """Who checked each core image in this session: its own labels only (`store.current(root, session)`)."""
+    return checked(store.current(root(), session=meta["name"]) if labels is None else labels)
 
 
 # ---------------------------------------------------------------- making a session (admin)
@@ -116,12 +124,12 @@ def areas_meta(name: str, request: Request) -> dict:
 def progress(meta: dict, labels: pd.DataFrame | None = None) -> dict:
     if meta.get("practice"):
         return areas.progress(meta, {}, {})
-    return areas.progress(meta, areas.finished(meta, checked(labels)), held())
+    return areas.progress(meta, areas.finished(meta, session_checked(meta, labels)), held(meta))
 
 
 def detail(meta: dict, person: str | None) -> dict:
     """What the session page shows: the round, how far it is, and the cores this person did."""
-    done = {} if meta.get("practice") else areas.finished(meta, checked())
+    done = {} if meta.get("practice") else areas.finished(meta, session_checked(meta))
     mine = [c for c in meta.get("cores") or [] if person and person in done.get(c, set())]
     return {"round": areas.KIND, "progress": progress(meta), "done_by_me": len(mine)}
 
@@ -138,9 +146,9 @@ def core_payload(meta: dict, core_id: str, person: str) -> dict:
     second check is wanted. Opening it holds it for this person."""
     stains = _core(meta, core_id)
     state = get_state()
-    found = {} if meta.get("practice") else checked()
+    found = {} if meta.get("practice") else session_checked(meta)
     if not meta.get("practice"):
-        _HELD.hold(hold_key(), person, [core_id])
+        _HELD.hold(hold_key(meta), person, [core_id])
     images = []
     for stain in stains:
         try:
@@ -150,8 +158,8 @@ def core_payload(meta: dict, core_id: str, person: str) -> dict:
         layer = store_view.excluded_info(state.project, core_id, stain)
         by = sorted(found.get((core_id, stain), set()))
         images.append({"stain": stain, "picture": picture, "excluded": layer, "checked_by": by, "checked_by_me": person in by,
-                       "edits": len(exclusions.edits(state.project, core_id, stain, ai=False))})
-    others = sorted(held().get(core_id, set()) - {person})
+                       "edits": len(exclusions.edits(state.project, core_id, stain, ai=False, session=meta["name"]))})
+    others = sorted(held(meta).get(core_id, set()) - {person})
     return {"core_id": core_id, "images": images, "second_check": core_id in set(meta.get("second") or []), "open_by": others,
             "progress": progress(meta), "pixel_size_um": state.project.pixel_size_um}
 
@@ -162,15 +170,15 @@ def next_core(name: str, request: Request, skip: str = "", person: str = Depends
     meta = areas_meta(name, request)
     if meta.get("practice"):
         return {"core_id": meta["cores"][0], "after": None, "taken": 0, "progress": progress(meta)}
-    done = areas.finished(meta, checked())
-    now = held()
+    done = areas.finished(meta, session_checked(meta))
+    now = held(meta)
     if skip:
-        _HELD.release(hold_key(), person, [skip])
-        now = held()
+        _HELD.release(hold_key(meta), person, [skip])
+        now = held(meta)
     core, taken = areas.next_core(meta, done, person, now, skip)
     after = None
     if core:
-        _HELD.hold(hold_key(), person, [core])
+        _HELD.hold(hold_key(meta), person, [core])
         after, _ = areas.next_core(meta, done, person, {**now, core: {"(someone)"}}, core)
     return {"core_id": core, "after": after, "taken": taken, "progress": progress(meta)}
 
@@ -185,8 +193,8 @@ def hold_core(name: str, core_id: str, request: Request, person: str = Depends(a
     meta = areas_meta(name, request)
     _core(meta, core_id)
     if not meta.get("practice"):
-        _HELD.hold(hold_key(), person, [core_id])
-    return {"open_by": sorted(held().get(core_id, set()) - {person})}
+        _HELD.hold(hold_key(meta), person, [core_id])
+    return {"open_by": sorted(held(meta).get(core_id, set()) - {person})}
 
 
 @router.get("/annotate/{name}/cores/{core_id}/{stain}/picture")
@@ -250,7 +258,8 @@ def core_annotated(name: str, core_id: str, stain: str, request: Request, person
     meta = areas_meta(name, request)
     if stain not in _core(meta, core_id):
         raise HTTPException(404, f"{core_id} has no {stain} image in this session")
-    return store_view.people_areas(get_state().project, core_id, stain, ai=False)  # people's own: never the AI reviewer's
+    return store_view.people_areas(get_state().project, core_id, stain, ai=False,
+                                   session=meta["name"])  # this session's people: never the AI reviewer's
 
 
 @router.get("/annotate/{name}/cores/{core_id}/{stain}/areas")
@@ -260,7 +269,8 @@ def core_areas(name: str, core_id: str, stain: str, request: Request, person: st
     meta = areas_meta(name, request)
     if stain not in _core(meta, core_id):
         raise HTTPException(404, f"{core_id} has no {stain} image in this session")
-    return store_view.current_areas(get_state().project, core_id, stain, ai=False)  # the automatic layer and people's edits only
+    return store_view.current_areas(get_state().project, core_id, stain, ai=False,
+                                    session=meta["name"])  # the automatic layer and this session's edits only
 
 
 @router.get("/annotate/{name}/cores/{core_id}/{stain}/objects")
@@ -325,7 +335,7 @@ def save_core(meta: dict, core_id: str, body: CoreSave, person: str) -> dict:
         return {"saved": [{"confirmed": False, "deleted": False, "time": now, **r} for r in records], "progress": progress(meta)}
     writable(meta)
     saved = store.append(root(), records)
-    _HELD.release(hold_key(), person, [core_id])
+    _HELD.release(hold_key(meta), person, [core_id])
     return {"saved": saved, "progress": progress(meta)}
 
 
@@ -378,8 +388,8 @@ def core_status(core_id: str, stain: str) -> dict:
     labels = store.current(root())
     tiles = state.tiles[(state.tiles.core_id.astype(str) == core_id) & (state.tiles.stain == stain)].drop_duplicates("tile_id")
     claims: dict[str, set[str]] = {}
-    for round_ in (1, 2):
-        for tile, people in round_routes._TILES_HELD.held((state.id, "tiles", round_, stain)).items():
+    for name in _round_sessions(stain):  # holds are per session: who is on each tile in any session of the stain
+        for tile, people in round_routes._TILES_HELD.held(round_routes.hold_key(state.id, name)).items():
             claims.setdefault(tile, set()).update(people)
     states = status.tile_states(labels, stain, list(tiles.tile_id), claims)
     rows = [{"tile_id": t.tile_id, "x": int(t.x_px), "y": int(t.y_px), "width": int(t.width_px), "height": int(t.height_px), **states[t.tile_id]}
@@ -391,6 +401,12 @@ def core_status(core_id: str, stain: str) -> dict:
     return {"core_id": core_id, "stain": stain, "width": size[0] if size else None, "height": size[1] if size else None, "tiles": rows,
             "not_analysed": grid, "counts": counts, "areas_checked_by": sorted(status.areas_checked(labels, stain).get((core_id, stain), set())),
             "sessions": _sessions_covering(stain, set(tiles.tile_id))}
+
+
+def _round_sessions(stain: str) -> list[str]:
+    from stainid.labels import rounds  # noqa: PLC0415
+
+    return [name for name in sessions.names(root()) if rounds.is_round(meta := sessions.meta(root(), name)) and meta.get("stain") == stain]
 
 
 def _image_size(core_id: str, stain: str) -> tuple[int, int] | None:

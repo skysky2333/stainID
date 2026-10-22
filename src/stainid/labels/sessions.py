@@ -126,12 +126,20 @@ def update(root: Path, name: str, **changes) -> dict:
     return updated
 
 
-def remove(root: Path, name: str) -> Path:
-    """Moves the session aside (into sessions/.deleted); its labels stay in the label store."""
+def remove(root: Path, name: str) -> tuple[Path, int]:
+    """Deletes a session: its folder and its label logs (`store.remove_session`) move aside into
+    sessions/.deleted/<name>-<when>, an archive nothing reads, so every label made in it leaves training, scoring and
+    every page. Where it went and how many labels left with it. (Closing a session keeps its labels.)"""
     practice.guard("the sessions")
     target = root / FOLDER / ".deleted" / f"{name}-{time.strftime('%Y%m%d-%H%M%S')}"
     target.parent.mkdir(parents=True, exist_ok=True)
-    return Path(shutil.move(folder(root, name), target))
+    moved = Path(shutil.move(folder(root, name), target))
+    return moved, store.remove_session(root, name, moved)
+
+
+def labels_in(root: Path, name: str) -> int:
+    """How many labels a session holds (those deleting it removes)."""
+    return len(store.current(root, session=name))
 
 
 def names(root: Path) -> list[str]:

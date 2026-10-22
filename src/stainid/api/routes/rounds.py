@@ -8,6 +8,10 @@ finished ("Save and continue") is done for that round and, once `labels_needed` 
 else. Pages keep every change on the page until the person saves: `save_tile` writes all of a tile's labels at once
 (and, when it finishes the tile, the calls left as the AI made them, confirmed, and its `done` label), or nothing.
 
+Sessions are separate: everything here reads the session's own labels (`session_labels`, `decided_by_people`, the
+areas of `session=`): who finished or holds a field, the progress, the next field, and what a field starts from
+(detection's output and this session's labels, nothing another session said). Holds are per session too.
+
 The generic session routes (`routes.annotate`) hand round sessions to the functions here; the paths only round sessions
 have are registered on this router.
 
@@ -47,6 +51,7 @@ from stainid.api.routes.annotate import (
     measure_added_soon,
     people_only,
     root,
+    session_labels,
     session_meta,
     vocabulary,
     writable,
@@ -81,8 +86,12 @@ SHAPE_POINTS = 96  # at most this many corners per outline sent to the field pag
 
 
 def tile_hold(meta: dict) -> tuple:
-    """Holds on tiles are shared by every session of a round and stain: a tile is the same work whichever session shows it."""
-    return get_state().id, "tiles", rounds.round_of(meta), meta["stain"]
+    """Holds on tiles are per session: sessions are separate, so someone on a field in one session holds it there only."""
+    return hold_key(get_state().id, meta["name"])
+
+
+def hold_key(state_id: str, name: str) -> tuple:
+    return state_id, "tiles", name
 
 
 def tiles_held(meta: dict) -> dict[str, set[str]]:
@@ -111,10 +120,10 @@ def leave_field(meta: dict, tile_id: str, person: str) -> None:
 
 
 def finished_tiles(meta: dict, labels: pd.DataFrame | None = None) -> dict[str, set[str]]:
-    """Who finished each tile in this round (in any session of the stain)."""
+    """Who finished each tile in this session (its own labels only, `session_labels`)."""
     if meta.get("practice"):
         return {}
-    return store.reviewed_fields(people_only(store.current(root()) if labels is None else labels), meta["stain"], rounds.done_kind(meta))
+    return store.reviewed_fields(people_only(session_labels(meta) if labels is None else labels), meta["stain"], rounds.done_kind(meta))
 
 
 def round_items(meta: dict) -> pd.DataFrame:
@@ -136,15 +145,13 @@ def tile_of(meta: dict, tile_id: str) -> dict:
     return field_tile(meta, tile_id)
 
 
-def decided_now(stain: str, stale_ok: bool = False) -> decisions.State:
+def decided_by_people(meta: dict, stale_ok: bool = False) -> decisions.State:
+    """The decisions a Fix the field session shows and starts from: its own people's only (`decisions.session_people`),
+    never the AI's labels nor another session's."""
     state = get_state()
-    return decisions.state(state.project, stain, state.tiles, stale_ok)
-
-
-def decided_by_people(stain: str, stale_ok: bool = False) -> decisions.State:
-    """The decisions Fix the field shows and starts from: people's only, never the AI's labels (`store.is_ai_label`)."""
-    state = get_state()
-    return decisions.people(state.project, stain, state.tiles, stale_ok)
+    if meta.get("practice"):
+        return decisions.State()
+    return decisions.session_people(state.project, meta["stain"], state.tiles, meta["name"], stale_ok)
 
 
 def store_ready(stain: str, tiles: pd.DataFrame) -> pd.DataFrame:
@@ -314,7 +321,7 @@ def warm_up(state) -> None:
             meta = sessions.meta(root(), name)
             if not (rounds.is_round(meta) and meta.get("open")):
                 continue
-            decided_now(meta["stain"])
+            decided_by_people(meta)
             if rounds.round_of(meta) == 2:
                 finished = finished_tiles(meta)
                 for tile in [t for t in meta["fields"] if len(finished.get(t, set())) < rounds.needed(meta)][:NEXT_FIELDS]:
@@ -402,7 +409,7 @@ def session_fields(meta: dict, person: str | None) -> list[dict]:
 
 
 def admin_fields(meta: dict) -> list[dict]:
-    labels = store.current(root())
+    labels = session_labels(meta)
     working = sessions.labelled_by(people_only(labels[labels.tile_id.isin(set(meta["fields"]))]), meta["stain"])
     return rounds.field_states(meta, finished_tiles(meta, labels), working, tiles_held(meta), ready_fields(meta))
 
@@ -509,7 +516,8 @@ def excluded_ids(meta: dict, ids) -> set[str]:
             continue
     out: set[str] = set()
     for core_id, group in by_core.items():
-        shares = excluded_areas.shares(get_state().project, meta["stain"], core_id, group, ai=False)  # people's areas, not the AI reviewer's
+        shares = excluded_areas.shares(get_state().project, meta["stain"], core_id, group, ai=False,
+                                       session=meta["name"])  # this session's people's areas, not the AI reviewer's
         out |= {c for c, v in shares.items() if v >= excluded_areas.EXCLUDED_AT}
     return out
 
@@ -535,7 +543,7 @@ def field_prepared(meta: dict, tile: dict) -> bool:
     with _OBJECTS_LOCK:
         kept = _OBJECTS.get(_objects_key(meta, tile))
     return (kept is not None and kept[0] is vocabulary(meta["stain"]) and render.field_path(state, str(tile["tile_id"])).exists()
-            and (bool(meta.get("practice")) or decisions.cached(state.project, meta["stain"])))
+            and (bool(meta.get("practice")) or decisions.cached(state.project, meta["stain"], meta["name"])))
 
 
 def _same_core_fields(meta: dict, tile: dict) -> list[str]:
@@ -558,7 +566,7 @@ def prepare_field(meta: dict, tile_id: str, task: work.Task | None = None) -> bo
     field_objects(meta, tile)
     step(2, 3)
     if not meta.get("practice"):
-        decided_now(meta["stain"])
+        decided_by_people(meta)
     step(3, 3)
     return True
 
@@ -608,9 +616,9 @@ def open_field(meta: dict, tile_id: str, person: str):
             return made
     found = _field_candidates(meta, tile)
     objects = field_objects(meta, tile)
-    decided = decisions.State() if practice else decided_by_people(meta["stain"])  # never the AI's labels
+    decided = decided_by_people(meta)  # this session's people only: never the AI's labels nor another session's
     x0, y0 = render.crop_origin(tile, state.project.context_px)
-    labels = store.current(root())
+    labels = session_labels(meta)
     mine = labels[(labels.source == person) & (labels.tile_id == tile_id) & (labels.stain == meta["stain"])]
     if practice:
         mine = mine.iloc[:0]
@@ -687,7 +695,7 @@ def live(meta: dict, body: Live, person: str) -> dict:
         out |= {"open_by": sorted(tiles_held(meta).get(body.tile_id, set()) - {person}),
                 "done_by": sorted(finished.get(body.tile_id, set()) - {person})}
         if rounds.round_of(meta) == 2:
-            out["checked"] = checks(_field_candidates(meta, tile), decided_by_people(meta["stain"], stale_ok=True))
+            out["checked"] = checks(_field_candidates(meta, tile), decided_by_people(meta, stale_ok=True))
     return out | {"progress": progress(meta)}
 
 
@@ -874,8 +882,8 @@ class TileSave(BaseModel):
 
 
 def _mine_after(meta: dict, tile_id: str, person: str, batch: list[dict]) -> pd.DataFrame:
-    """This person's labels on a tile as they will stand once this batch is saved."""
-    labels = store.current(root())
+    """This person's labels on a tile (in this session) as they will stand once this batch is saved."""
+    labels = session_labels(meta)
     mine = labels[(labels.source == person) & (labels.tile_id == tile_id) & (labels.stain == meta["stain"])]
     if not batch:
         return mine
@@ -1023,7 +1031,7 @@ def field_threads_areas(name: str, tile_id: str, request: Request, person: str =
     meta = _round_meta(name, request)
     if meta["stain"] != "AT8":
         raise HTTPException(404, "threads are an AT8 step")
-    return store_view.not_counted(get_state().project, field_tile(meta, tile_id))
+    return store_view.not_counted(get_state().project, field_tile(meta, tile_id), session=meta["name"])
 
 
 @router.get("/annotate/practice-threads/ladder")
@@ -1081,7 +1089,8 @@ def field_annotated(name: str, tile_id: str, request: Request, person: str = Dep
     x0, y0 = render.crop_origin(tile, get_state().project.context_px)
     x1 = int(tile["x_px"]) + int(tile["width_px"]) + get_state().project.context_px
     y1 = int(tile["y_px"]) + int(tile["height_px"]) + get_state().project.context_px
-    return store_view.people_areas(get_state().project, str(tile["core_id"]), str(tile["stain"]), (x0, y0), (x0, y0, x1, y1), ai=False)
+    return store_view.people_areas(get_state().project, str(tile["core_id"]), str(tile["stain"]), (x0, y0), (x0, y0, x1, y1), ai=False,
+                                   session=meta["name"])
 
 
 @router.get("/annotate/{name}/fields/{tile_id}/areas")
@@ -1091,7 +1100,7 @@ def field_areas(name: str, tile_id: str, request: Request, person: str = Depends
     from stainid.api import store_view  # noqa: PLC0415
 
     meta = _round_meta(name, request)
-    return store_view.field_areas(get_state().project, field_tile(meta, tile_id))
+    return store_view.field_areas(get_state().project, field_tile(meta, tile_id), session=meta["name"])
 
 
 class Split(BaseModel):

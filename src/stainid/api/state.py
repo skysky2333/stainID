@@ -167,6 +167,10 @@ def open_project(path: Path | str) -> ProjectState:
     with _LOCK:
         new = registry.project_id(path) not in _STATES
         state = _load(path)
+        if state.project.is_configured:
+            from stainid.labels import store  # noqa: PLC0415
+
+            store.check_layout(state.project.output("reviews"))  # an earlier release's label log: split it first (`stainid labels split`)
         _LAST = state.id
         if state.project.is_configured:
             registry.remember(state.root)
