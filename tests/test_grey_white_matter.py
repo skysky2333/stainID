@@ -105,6 +105,31 @@ def test_white_matter_is_painted_on_neun_carried_to_the_other_stains_and_saved_p
     assert overview["cores_done"] == 1 and [s["stain"] for s in overview["stains"]][0] == "NeuN"
 
 
+def test_reset_this_core_replaces_every_stain_of_this_person_on_save(rounds_project):
+    admin, (ann, _), _ = rounds_project
+    project = state.get_state().project
+    _plain_mask(project)
+    _registration(project)
+    name = admin.post("/api/labels/sessions", json={"stain": "all", "kind": "matter", "open": True, "seed": 1}).json()["name"]
+    base = f"/api/annotate/{name}/matter/cores/{CORE}"
+    ann.get(base)
+    assert ann.post(f"{base}/NeuN/save", json={"png": _square(150, (100, 150, 40, 80)), "scale": 8}).status_code == 200
+    assert ann.post(f"{base}/6E10/save", json={"accepted": True}).status_code == 200
+    fresh = ann.get(f"{base}?fresh=true").json()
+    assert not any(i["saved_by_me"] for i in fresh["images"])  # as if Ann had never worked on it
+    assert ann.get(f"{base}/NeuN/area?fresh=true").json()["from"] == "new"
+    assert ann.get(f"{base}/6E10/area?fresh=true").json()["from"] == "waiting"
+    redone = ann.post(f"{base}/NeuN/save", json={"png": _square(150, (120, 150, 40, 80)), "scale": 8, "reset": True})
+    assert redone.status_code == 200, redone.text
+    labels = store.current(project.output("reviews"))
+    mine = labels[(labels.source == "Ann") & (labels.tile_id == CORE)]
+    assert set(mine.stain) == {"NeuN"}  # the old 6E10 acceptance is gone; the log keeps it
+    assert matter.final(labels, CORE, "6E10") is None
+    assert len(store.history(project.output("reviews"))) > len(labels)
+    after = ann.get(base).json()
+    assert [i["stain"] for i in after["images"] if i["saved_by_me"]] == ["NeuN"]
+
+
 def test_one_person_per_core_no_second_checks(rounds_project):
     admin, _, _ = rounds_project
     meta = admin.post("/api/labels/sessions", json={"stain": "all", "kind": "matter", "open": True, "seed": 3}).json()

@@ -1,7 +1,7 @@
 /* Fix the field's two smaller zoom levels (levelmap.tsx), beside the field: the whole core with the session's fields by
-   state (a click on another field opens it) and the part the middle level shows, then the middle level around this
-   field with the detailed view's extent. A click or a drag on either moves the detailed view there (zooming in when
-   it shows the whole field). GET …/fields/{tile}/core: the core's size, where the field picture lies in it, and its
+   state, this field highlighted (it only shows: a click on another field opens it, no view box, no dragging), then
+   the middle level around this field with the detailed view's extent, where a click or a drag moves the detailed view
+   (zooming in when it shows the whole field). GET …/fields/{tile}/core: the core's size, where the field picture lies in it, and its
    pictures. */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { SessionDetail } from '../api'
@@ -62,12 +62,12 @@ export function FieldStrip({ name, tile, fields, levels, onOpen }: {
     <div className="level-strip">
       <div className="card level-card">
         <div className="level-title small"><b>Whole core</b><span className="muted"> · fields by state</span></div>
-        <LevelMap src={apiUrl(c.thumb)} width={c.width} height={c.height} window={whole} next={mid} squares={squares} onMove={move}
-          label="The whole core: this session's fields by state, the part shown next to it" />
+        <LevelMap src={apiUrl(c.thumb)} width={c.width} height={c.height} window={whole} next={null} squares={squares}
+          label="The whole core: this session's fields by state; click a field to open it" />
         <div className="level-legend small muted"><span><i className="filled" style={{ borderColor: STATE_COLOUR.done, background: STATE_COLOUR.done }} />done</span>
           <span title="Saved but not finished, or open now"><i className="filled" style={{ borderColor: STATE_COLOUR.in_progress, background: STATE_COLOUR.in_progress }} />in progress</span>
           <span><i style={{ borderColor: STATE_COLOUR.not_started }} />to do</span><span><i className="current" />this field</span></div>
-        <div className="level-hint small muted">click a field to open it · drag to move the view</div>
+        <div className="level-hint small muted">click a field to open it</div>
       </div>
       <div className="card level-card">
         <div className="level-title small"><b>Around this field</b></div>

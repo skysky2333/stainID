@@ -503,6 +503,9 @@ def _field_shapes(meta: dict, tile: dict) -> tuple[list[dict], dict[str, list]]:
     return objects, masks
 
 
+NOBODY = "\x00nobody"  # an area scope of no person: detection's areas only (a field reset to detection's output)
+
+
 def area_scope(meta: dict, person: str | None = None) -> exclusions_scope:
     """Whose bad areas a field page starts from: the session's people's, or with `person` (an extra annotation of a
     finished field, an independent second opinion) that person's own only."""
@@ -620,11 +623,12 @@ def is_complete(meta: dict, finished: dict[str, set[str]], tile_id: str, person:
     return not meta.get("practice") and (person in by or len(by) >= rounds.needed(meta))
 
 
-def open_field(meta: dict, tile_id: str, person: str, edit: bool = False, own: bool = False):
+def open_field(meta: dict, tile_id: str, person: str, edit: bool = False, own: bool = False, fresh: bool = False):
     """Round 2: a field with every candidate of the session's level (the field's own and, faded, its neighbours' in the
     margin), the AI's call and outline of each, who decided it already, this person's own saved labels there, and who
     else is on it or finished it. Opening a field holds it for this person. A field that is not ready yet (its core not
-    read, its picture not cut) is made ready in the background: a 202 `pending` answer says how far that is."""
+    read, its picture not cut) is made ready in the background: a 202 `pending` answer says how far that is. `fresh`:
+    as if this person had never labelled it (Reset: detection's output, no painted areas; saved with `reset`)."""
     state = get_state()
     tile = field_tile(meta, tile_id)
     practice = bool(meta.get("practice"))
@@ -644,11 +648,11 @@ def open_field(meta: dict, tile_id: str, person: str, edit: bool = False, own: b
         if isinstance(made, Response):
             return made
     found = _field_candidates(meta, tile)
-    objects = field_objects(meta, tile, person if own else None)
+    objects = field_objects(meta, tile, NOBODY if fresh else person if own else None)
     decided = decisions.State() if own else decided_by_people(meta)  # this session's people only (an extra annotation: nobody's)
     x0, y0 = render.crop_origin(tile, state.project.context_px)
     mine = labels[(labels.source == person) & (labels.tile_id == tile_id) & (labels.stain == meta["stain"])]
-    if practice:
+    if practice or fresh:
         mine = mine.iloc[:0]
     box = {"x": int(tile["x_px"]) - x0, "y": int(tile["y_px"]) - y0, "width": int(tile["width_px"]), "height": int(tile["height_px"])}
     sam = sam_embeddings.prepare_field(state, meta, tile_id, {t for t, people in finished.items() if person in people})
@@ -666,7 +670,8 @@ def open_field(meta: dict, tile_id: str, person: str, edit: bool = False, own: b
             "open_by": sorted(tiles_held(meta).get(tile_id, set()) - {person}), "done_by": sorted(finished.get(tile_id, set()) - {person}),
             "finished": finishers(meta, labels, tile_id), "complete": complete, "read_only": looking, "closed": closed, "own": own,
             "pixel_size_um": state.project.pixel_size_um,
-            **({"simple": simple_field(meta, objects, labels, tile_id, own)} if rounds.is_simple(meta) else {})}
+            **({"simple": simple_field(meta, objects, labels[~((labels.source == person) & (labels.tile_id == tile_id))] if fresh else labels, tile_id, own)}
+               if rounds.is_simple(meta) else {}), "fresh": fresh}
 
 
 def simple_start(meta: dict, objects: list[dict]) -> dict[str, str]:
@@ -1029,12 +1034,16 @@ class TileSave(BaseModel):
     records: list[Mark] = []  # every change on the page since the last save
     submit: bool = False  # "Finish field": the tile is finished for this round
     own: bool = False  # an extra annotation of a finished field (its objects faded by this person's own areas only)
+    reset: bool = False  # after Reset: this person's earlier labels on the field (in this session) are deleted first
 
 
-def _mine_after(meta: dict, tile_id: str, person: str, batch: list[dict]) -> pd.DataFrame:
-    """This person's labels on a tile (in this session) as they will stand once this batch is saved."""
+def _mine_after(meta: dict, tile_id: str, person: str, batch: list[dict], reset: bool = False) -> pd.DataFrame:
+    """This person's labels on a tile (in this session) as they will stand once this batch is saved (`reset`: none of
+    the earlier ones)."""
     labels = session_labels(meta)
     mine = labels[(labels.source == person) & (labels.tile_id == tile_id) & (labels.stain == meta["stain"])]
+    if reset:
+        mine = mine.iloc[:0]
     if not batch:
         return mine
     latest = {r["id"]: r for r in mine.to_dict(orient="records")} | {r["id"]: r for r in batch}
@@ -1087,7 +1096,20 @@ def _confirmations(meta: dict, tile: dict, person: str, mine: pd.DataFrame, own:
     return records
 
 
-def save_tile(meta: dict, tile_id: str, marks: list, submit: bool, person: str, own: bool = False) -> dict:
+def deletions(labels: pd.DataFrame, person: str, tile_id: str, session: str, keep: set[str] = frozenset()) -> list[dict]:
+    """Reset: a delete of each of this person's current labels on this tile (or core) in this session, but `keep`
+    (written anew in the same save). The log keeps every earlier version (`labels.store`)."""
+    mine = labels[(labels.source == person) & (labels.tile_id == tile_id)]
+    out = []
+    for r in mine.itertuples():
+        if r.id in keep:
+            continue
+        out.append({"id": r.id, "source": person, "stain": r.stain, "task": r.task, "tile_id": tile_id, "session": session, "deleted": True,
+                    "candidate": r.candidate if isinstance(r.candidate, str) else None, "meta": {"reset": True}})
+    return out
+
+
+def save_tile(meta: dict, tile_id: str, marks: list, submit: bool, person: str, own: bool = False, reset: bool = False) -> dict:
     """Save everything this person changed on a tile, all at once (or nothing, when one label is wrong). With `submit`
     ("Finish field") the field is finished: the calls and outlines left as the AI made them are confirmed. The field
     stays this person's until it is finished. An old round-1 session takes no more labels."""
@@ -1113,12 +1135,14 @@ def save_tile(meta: dict, tile_id: str, marks: list, submit: bool, person: str, 
     if submit:
         if not practice and not marked_bad:  # a field marked bad as a whole: nothing in it was checked
             confirm = _simple_confirmations if rounds.is_simple(meta) else _confirmations
-            cleaned += confirm(meta, tile, person, _mine_after(meta, tile_id, person, cleaned), own)
+            cleaned += confirm(meta, tile, person, _mine_after(meta, tile_id, person, cleaned, reset), own)
         cleaned.append({"id": rounds.done_id(meta, tile_id), "source": person, "stain": meta["stain"], "task": "done", "tile_id": tile_id,
                         "session": meta["name"], "value": rounds.done_kind(meta) or None})
     if practice:  # nothing of the tutorial is kept
         now = time.time()
         return {"saved": [{"confirmed": False, "deleted": False, "time": now, **r} for r in cleaned], "submitted": submit, "progress": progress(meta)}
+    if reset:  # everything this person had on the field goes first: only what this save writes stands
+        cleaned = deletions(session_labels(meta), person, tile_id, meta["name"], {r["id"] for r in cleaned}) + cleaned
     saved = store.append(root(), cleaned) if cleaned else []
     if submit:
         _TILES_HELD.release(tile_hold(meta), person, [tile_id])
@@ -1131,7 +1155,7 @@ def save_tile(meta: dict, tile_id: str, marks: list, submit: bool, person: str, 
 
 @router.post("/annotate/{name}/tiles/{tile_id}/save")
 def save_route(name: str, tile_id: str, body: TileSave, request: Request, person: str = Depends(annotator)) -> dict:
-    return save_tile(_round_meta(name, request), tile_id, body.records, body.submit, person, body.own)
+    return save_tile(_round_meta(name, request), tile_id, body.records, body.submit, person, body.own, body.reset)
 
 
 # ---------- one-click outlines ----------
@@ -1231,7 +1255,7 @@ def field_excluded_png(name: str, tile_id: str, request: Request, person: str = 
 
 
 @router.get("/annotate/{name}/fields/{tile_id}/annotated")
-def field_annotated(name: str, tile_id: str, request: Request, own: bool = False, person: str = Depends(annotator)) -> dict:
+def field_annotated(name: str, tile_id: str, request: Request, own: bool = False, fresh: bool = False, person: str = Depends(annotator)) -> dict:
     """People's areas over a field (`store_view.people_areas`, field-picture px): painted areas by type and the parts
     marked fine, with how they compare with detection's. They train and evaluate models; the analysis never reads them."""
     from stainid.api import store_view  # noqa: PLC0415
@@ -1242,17 +1266,17 @@ def field_annotated(name: str, tile_id: str, request: Request, own: bool = False
     x1 = int(tile["x_px"]) + int(tile["width_px"]) + get_state().project.context_px
     y1 = int(tile["y_px"]) + int(tile["height_px"]) + get_state().project.context_px
     return store_view.people_areas(get_state().project, str(tile["core_id"]), str(tile["stain"]), (x0, y0), (x0, y0, x1, y1), ai=False,
-                                   session=area_scope(meta, person if own else None))
+                                   session=area_scope(meta, NOBODY if fresh else person if own else None))
 
 
 @router.get("/annotate/{name}/fields/{tile_id}/areas")
-def field_areas(name: str, tile_id: str, request: Request, own: bool = False, person: str = Depends(annotator)) -> dict:
+def field_areas(name: str, tile_id: str, request: Request, own: bool = False, fresh: bool = False, person: str = Depends(annotator)) -> dict:
     """Each brush type's current area over a field (`store_view.field_areas`: detection's area of the type with
     people's saved edits merged in), what the brush adds to and takes from."""
     from stainid.api import store_view  # noqa: PLC0415
 
     meta = _round_meta(name, request)
-    return store_view.field_areas(get_state().project, field_tile(meta, tile_id), session=area_scope(meta, person if own else None))
+    return store_view.field_areas(get_state().project, field_tile(meta, tile_id), session=area_scope(meta, NOBODY if fresh else person if own else None))
 
 
 class Split(BaseModel):

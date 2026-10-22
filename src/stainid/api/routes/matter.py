@@ -183,8 +183,13 @@ def next_core(name: str, request: Request, skip: str = "", person: str = Depends
     return {"core_id": core, "taken": taken, "progress": progress(meta)}
 
 
+def _without_mine(labels, core_id: str, person: str):
+    """Reset this core (`fresh`): the session's labels as if this person had never worked on the core."""
+    return labels[~((labels.source == person) & (labels.tile_id == core_id))]
+
+
 @router.get("/annotate/{name}/matter/cores/{core_id}")
-def open_core(name: str, core_id: str, request: Request, edit: bool = False, person: str = Depends(annotator)) -> dict:
+def open_core(name: str, core_id: str, request: Request, edit: bool = False, fresh: bool = False, person: str = Depends(annotator)) -> dict:
     """One core: its stain images (NeuN first; the one the others start from is `source`), which this person saved, and
     whether it opens to look at (`read_only`: finished by this person, or by the people it needs, unless `edit`).
     Opening it to work on holds it for this person; someone else on it → 409."""
@@ -194,6 +199,8 @@ def open_core(name: str, core_id: str, request: Request, edit: bool = False, per
     stains = _core(meta, core_id)
     practice = bool(meta.get("practice"))
     labels = store.current(root()).iloc[:0] if practice else session_labels(meta)
+    if fresh:
+        labels = _without_mine(labels, core_id, person)
     found = {} if practice else session_checked(meta, labels)
     by = areas.finished(meta, found).get(core_id, set())
     closed = not practice and not meta.get("open", True)  # a closed session: its cores open to look at, for admins too
@@ -258,7 +265,8 @@ def _carried(meta: dict, labels: pd.DataFrame, core_id: str, stain: str, source:
 
 
 @router.get("/annotate/{name}/matter/cores/{core_id}/{stain}/area")
-def stain_area(name: str, core_id: str, stain: str, request: Request, look: bool = False, person: str = Depends(annotator)) -> dict:
+def stain_area(name: str, core_id: str, stain: str, request: Request, look: bool = False, fresh: bool = False,
+               person: str = Depends(annotator)) -> dict:
     """What the brush starts from on one stain image (the brush's form: a white-on-transparent PNG at 1/`scale`):
     `from` "saved" (this person's saved area; `look`: else anyone's in the session), "carried" (the source stain's
     saved area carried over, with the registration's status), "new" (the source stain, nothing saved yet: no white
@@ -266,6 +274,8 @@ def stain_area(name: str, core_id: str, stain: str, request: Request, look: bool
     meta = matter_meta(name, request)
     stains = _stain(meta, core_id, stain)
     labels = store.current(root()).iloc[:0] if meta.get("practice") else session_labels(meta)
+    if fresh:  # Reset this core: as if this person had never worked on it
+        labels = _without_mine(labels, core_id, person)
     width, height, base = _base(core_id, stain)
     mine = matter.latest(labels, core_id, stain, person) or (matter.latest(labels, core_id, stain) if look else None)
     if mine is not None:
@@ -319,6 +329,7 @@ class MatterSave(BaseModel):
     png: str = ""  # the whole white-matter area as painted (a PNG at 1/`scale` of the core image); empty: none
     scale: float = matter.SCALE
     accepted: bool = False  # "accept as carried": the source stain's area carried over, exactly (`png` is not read)
+    reset: bool = False  # after Reset this core: this person's earlier labels on the core (every stain) are deleted first
 
 
 @router.post("/annotate/{name}/matter/cores/{core_id}/{stain}/save")
@@ -340,6 +351,11 @@ def save_stain(name: str, core_id: str, stain: str, body: MatterSave, request: R
     writable(meta)
     refuse_if_taken(meta, core_id, person)
     labels = session_labels(meta)
+    from stainid.api.routes.rounds import deletions  # noqa: PLC0415
+
+    gone = deletions(labels, person, core_id, meta["name"]) if body.reset else []
+    if body.reset:
+        labels = _without_mine(labels, core_id, person)
     carried_from, status = None, None
     if stain != source:
         found = _carried(meta, labels, core_id, stain, source, person)
@@ -357,7 +373,9 @@ def save_stain(name: str, core_id: str, stain: str, body: MatterSave, request: R
         except ValueError as error:
             raise HTTPException(400, str(error)) from error
     stamp = {"source": person, "session": meta["name"], "tile_id": core_id, "x": None, "y": None}
-    saved = store.append(root(), matter.records(core_id, stain, rings, holes, stamp, carried_from, body.accepted, status))
+    written = matter.records(core_id, stain, rings, holes, stamp, carried_from, body.accepted, status)
+    keep = {r["id"] for r in written}
+    saved = store.append(root(), [r for r in gone if r["id"] not in keep] + written)
     now = session_checked(meta)
     finished = all(person in now.get((core_id, s), set()) for s in stains)
     if finished:

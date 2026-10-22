@@ -341,8 +341,13 @@ decided counts and at 1 only those scoring 1; a person overrides any call with a
 follows the same rule. The panel counts them ("142
 accepted at 0.43 (detection: 128 at 0.50)"). *Start editing* (or Enter) locks it, and so does the first edit of any
 kind (a class key, Del, `, an outline, a precise edit, a split, a merge, a brush stroke); locked, it shows a lock and
-its value and cannot move. The only way back is *Reset field*, which asks first, discards the field's unsaved edits and
-unlocks it (`labels/fieldStart.ts`). The locked value is saved with the field (a `threshold` label, value e.g.
+its value and cannot move. The only way back is *Reset field*, which asks once ("Reset this field to detection's output? Your saved
+work on it will be replaced when you save") and opens the field as if this person had never labelled it in this session
+(`?fresh=true`: detection's objects, calls and threshold, detection's areas only, no notes or tags). The field is then
+unsaved: *Save progress* or *Finish field* sends `reset: true`, which deletes every earlier label of this person on the
+field in this session (the log keeps them, `labels.store.history`) before writing the new state; *Undo reset* or
+Discard brings the saved work back. Other people's labels are untouched. Grey/white sets have *Reset this core*, the
+same for the core (every stain). The tutorial's practice field resets in the page. The locked value is saved with the field (a `threshold` label, value e.g.
 `0.430`, with every Save progress): on *Finish field* the objects left as they started are saved as that person's labels at
 that threshold, and the value itself is a training and evaluation signal (to tune each stain's cut-off later). Nothing
 in the analysis reads it. The Cores view has the same slider as a preview only ("Preview only — the analysis uses

@@ -1171,13 +1171,14 @@ def leave_field(name: str, tile_id: str, request: Request, person: str = Depends
 
 
 @router.get("/annotate/{name}/fields/{tile_id}")
-def open_field(name: str, tile_id: str, request: Request, edit: bool = False, own: bool = False, person: str = Depends(annotator)) -> dict:
+def open_field(name: str, tile_id: str, request: Request, edit: bool = False, own: bool = False, fresh: bool = False,
+               person: str = Depends(annotator)) -> dict:
     """A field to label. An annotation round's field that is finished (by this person, or by as many as it needs) opens
     to look at (`read_only`); `edit` (Redo this field: the person who finished it, from their own labels) or `own` (Add
     an extra annotation: someone else, from detection's output and their own labels only) open it to work on."""
     meta = session_meta(name, request)
     if rounds.is_round(meta):
-        out = _rounds().open_field(meta, tile_id, person, edit, own)
+        out = _rounds().open_field(meta, tile_id, person, edit, own, fresh)
         return out if isinstance(out, Response) else fast_json(request, out)
     tile = field_tile(meta, tile_id)
     objects = field_objects(meta, tile_id)

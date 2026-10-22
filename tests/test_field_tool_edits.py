@@ -191,3 +191,34 @@ def test_an_automatic_split_gives_two_real_pieces():
     assert pieces is not None and len(pieces) == 2
     sizes = sorted(objectedit.area(p) for p in pieces)
     assert sizes[0] > 0.3 * sum(sizes)
+
+
+def test_reset_then_finish_leaves_only_detection_s_start(rounds_project):
+    """Reset: the field opens as detection made it (`fresh`), and the next save first deletes every earlier label of
+    this person on the field in this session (the log keeps them): after Finish only detection's start stands, no
+    earlier call, added object, tag or painted area."""
+    admin, (ann, _), _ = rounds_project
+    project = state.get_state().project
+    name = _session(admin)
+    field = ann.get(f"/api/annotate/{name}/fields/{TILE}").json()
+    own = [o for o in field["objects"] if o["own"]]
+    target = own[0]["candidate_id"]
+    first = _save(ann, name, TILE, [{"task": "class", "candidate": target, "value": "CAA"}, {"task": "class", "x": 50, "y": 60, "value": "plaque"},
+                                    {"task": "tag", "value": "fold or tear"}, {"task": "exclude", "pngs": {"1": _png((60, 90, 10, 40))}, "scale": 4}])
+    assert first.status_code == 200, first.text
+    assert exclusions.edits(project, CORE, "6E10", session=name)
+    fresh = ann.get(f"/api/annotate/{name}/fields/{TILE}?fresh=true").json()
+    assert fresh["mine"] == [] and fresh["fresh"] is True and fresh["added"] == []
+    assert ann.get(f"/api/annotate/{name}/fields/{TILE}/areas?fresh=true").status_code == 200
+    done = ann.post(f"/api/annotate/{name}/tiles/{TILE}/save", json={"records": [], "submit": True, "reset": True})
+    assert done.status_code == 200, done.text
+    mine = store.current(project.output("reviews"), session=name)
+    mine = mine[(mine.source == "Ann") & (mine.tile_id == TILE)]
+    assert set(mine.task) <= {"class", "outline", "done"}  # no tag, no painted area
+    calls = mine[mine.task == "class"]
+    assert calls.candidate.notna().all() and len(calls) == len(own)  # the added object is gone; every candidate: detection's call, confirmed
+    assert calls.confirmed.all() and (calls[calls.candidate == target].value != "CAA").all()
+    exclusions.forget()
+    assert exclusions.edits(project, CORE, "6E10", session=name) == []
+    old = store.history(project.output("reviews"), session=name)
+    assert ((old.value == "CAA") & (old.candidate == target)).any()  # the earlier version stays in the log

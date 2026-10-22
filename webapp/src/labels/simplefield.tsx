@@ -17,6 +17,7 @@ import { api, apiUrl, enc, pendingText } from '../api'
 import { ErrorNote, Loading } from '../components'
 import { INACTIVE_GREY } from '../classPalette'
 import { PALETTE } from '../palette'
+import { ConfirmDialog } from '../labelling'
 import { useFetch, useStored } from '../hooks'
 import type { ImagePoint } from '../viewer'
 import { RASTER_LAYERS, ZoomViewer } from '../viewer'
@@ -43,7 +44,9 @@ interface Shown { key: string; x: number; y: number; r: number; candidate?: Roun
 interface Change { mark: Rec | null; label: Mine | null }
 /** One step back with Z: the changes and the wand's segments as they were. */
 interface Undo { changes: Record<string, Change>; segments: number[] }
-interface Hooks { onEvent?: (event: RoundEvent) => void; onFinished?: () => void; coach?: ReactNode }
+interface Hooks { onEvent?: (event: RoundEvent) => void; onFinished?: () => void; coach?: ReactNode
+  /** Reset (`fresh`: the field as detection made it, unsaved) and Undo reset (`onReset(false)`) */
+  fresh?: boolean; onReset?: (on: boolean) => void }
 
 function inside(polygon: number[][], x: number, y: number) {
   let hit = false
@@ -64,7 +67,7 @@ const finishedText = (finished: { person: string; time: number }[]) => finished.
 
 /* ---------- the page ---------- */
 
-export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, coach, onOpen }: { detail: SessionDetail; reload: () => void; tile: string
+export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, coach, onOpen, fresh, onReset }: { detail: SessionDetail; reload: () => void; tile: string
   field: RoundField; onOpen: (how: 'edit' | 'own') => void } & Hooks) {
   const meta = detail.meta as Meta
   const name = meta.name
@@ -146,7 +149,8 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
     return out
   }, [saved, changes])
   const segmentsDirty = segmentsOn.length !== segmentsSaved.length || segmentsOn.some((s) => !segmentsSaved.includes(s))
-  const unsaved = Object.keys(changes).filter((id) => !id.startsWith('outline:')).length + (segmentsDirty ? 1 : 0)
+  const [resetPending, setResetPending] = useState(!!fresh)  // Reset: unsaved until the next save (which deletes the earlier labels first)
+  const unsaved = Object.keys(changes).filter((id) => !id.startsWith('outline:')).length + (segmentsDirty ? 1 : 0) + (resetPending ? 1 : 0)
   const discarding = useRef(false)
   useEffect(() => { if (!discarding.current) writeDraft(draftAt, unsaved ? { changes, segments: segmentsOn } : null) }, [draftAt, changes, segmentsOn, unsaved])
 
@@ -289,7 +293,9 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
   const send = async (records: Rec[], finish: boolean) => {
     setSaving(true)
     try {
-      const result = await api.post<RoundSaved>(`/api/annotate/${name}/tiles/${enc(tile)}/save`, { records: records.map((r) => ({ tile_id: tile, ...r })), submit: finish, own: !!field.own })
+      const result = await api.post<RoundSaved>(`/api/annotate/${name}/tiles/${enc(tile)}/save`, { records: records.map((r) => ({ tile_id: tile, ...r })), submit: finish, own: !!field.own,
+        reset: resetPending })  // the first save after Reset: this person's earlier labels on the field go first
+      setResetPending(false)
       setSaved((current) => {
         const next = { ...current }
         for (const r of result.saved) { if (r.deleted) delete next[r.id]; else next[r.id] = r }
@@ -334,6 +340,9 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
     else setError('No other field is waiting for you right now.')
   })())
   const discardAndClose = () => leave(() => navigate(`/annotate/${name}`))  // Close field: the leave dialog asks first
+  const [resetting, setResetting] = useState(false)  // "Reset field": detection's output, as in the detailed mode
+  const doReset = () => { writeDraft(draftAt, null); discarding.current = true; onReset?.(true) }
+  const undoReset = () => { writeDraft(draftAt, null); discarding.current = true; onReset?.(false) }
   const finishedBy = field.finished ?? []
   const iFinished = finishedBy.some((f) => f.person === detail.annotator)
   const workOnIt = () => {
@@ -373,6 +382,13 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
         progress={<RoundProgressLine progress={progress} me={detail.annotator} />}
         actions={<button className="btn small" onClick={() => void skip()} disabled={saving} title="Come back to this field later: the next field waiting for you opens">Skip for now</button>} />
       {leaveDialog}
+      {resetPending && <div className="found found-warn small field-reset" role="status"><b>Reset to detection’s output — not saved yet.</b>
+        {' '}Save progress or Finish field replaces your saved work on this field. <button className="link-btn small" onClick={undoReset}>Undo reset</button></div>}
+      {resetting && <ConfirmDialog title="Reset this field?" confirm="Reset field" danger onClose={() => setResetting(false)} onConfirm={async () => { doReset() }}>
+        <p>Reset this field to detection’s output? Your saved work on it will be replaced when you save.</p>
+        <p className="small secondary">Every call you changed, object you added, outline, split or merge, painted area, threads choice, note and tag goes; the threshold goes
+          back to detection’s. Other people’s work is not touched. Until you save, Undo reset brings your saved work back.</p>
+      </ConfirmDialog>}
       {meta.instructions && <div className="instructions">{meta.instructions}</div>}
       <ErrorNote error={error} />
       {restored > 0 && <div className="found found-warn small round-restored" role="status">{changesText(restored)} you had not saved came back from this browser.
@@ -517,7 +533,9 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
                 continueTitle="Finish field: every object counts as you leave it, and the next field opens (Ctrl+Enter)" />
             </div>
             <p className="small muted finish-note">{FINISH_NOTE}</p>
-            {!onFinished && <div className="row side-discard"><span className="spacer" />
+            {!onFinished && <div className="row side-discard">
+              {onReset && <button className="link-btn small" onClick={() => setResetting(true)} disabled={saving}
+                title="Back to detection’s output, as if nobody had labelled this field (asks first)">Reset field</button>}<span className="spacer" />
               <button className="link-btn small" onClick={discardAndClose} title="Back to the session’s page (with unsaved changes it asks first: save, finish or discard them)">Close field</button></div>}
           </div>}
           <div className="side-foot small">{!onFinished && <Link to="/tutorial?kind=simple">Tutorial</Link>}<span className="spacer" /><span className="muted">{tile}</span></div>

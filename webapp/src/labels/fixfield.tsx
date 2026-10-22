@@ -1,7 +1,7 @@
 /* Round 2, "Fix the field". Step 1 of every field is the acceptance threshold (fieldStart.ts): a slider starting at
    detection's own threshold re-decides, live, which objects start solid and which dotted grey; it locks on "Start
-   editing" (Enter) or by itself on the first edit, and only "Reset field" unlocks it (discarding the field's unsaved
-   edits). Then the whole field with every object detection considered and its outline, always shown, one
+   editing" (Enter) or by itself on the first edit, and only "Reset field" unlocks it (the field back to detection's
+   output, as if this person had never labelled it; unsaved until saved, and Undo reset brings the saved work back). Then the whole field with every object detection considered and its outline, always shown, one
    shape per object: solid in its type's colour (each counted type and each named look-alike its own colour), dotted
    light grey when it is not active: rejected by detection or by a person (Del), or just added and waiting for its type;
    dotted amber with a "?" when someone is unsure. Objects in an excluded area are drawn faint.
@@ -28,6 +28,7 @@ import type { AddedState, FieldAreas, Label, PeopleAreas, RoundCheck, RoundDetai
 import { api, apiUrl, enc, pendingText } from '../api'
 import { ErrorNote, Loading, Modal, fmt } from '../components'
 import { PALETTE } from '../palette'
+import { ConfirmDialog } from '../labelling'
 import { useFetch, useStored } from '../hooks'
 import type { ImagePoint } from '../viewer'
 import { RASTER_LAYERS, ZoomViewer } from '../viewer'
@@ -136,13 +137,19 @@ const choiceIndex = (value: unknown, o?: { mask: number }) => (value === 'sam' ?
 
 /** `onEvent` hears what the person does (the tutorial follows it); `onFinished` replaces going to the next field; `coach`
  *  is shown at the top of the side panel (the tutorial's steps). */
-interface Hooks { onEvent?: (event: RoundEvent) => void; onFinished?: () => void; coach?: ReactNode }
+interface Hooks { onEvent?: (event: RoundEvent) => void; onFinished?: () => void; coach?: ReactNode
+  /** Reset (`fresh`: the field as detection made it, unsaved) and Undo reset (`onReset(false)`) */
+  fresh?: boolean; onReset?: (on: boolean) => void }
 
 export function FixField({ detail, reload, tile, onEvent, onFinished, coach }: { detail: SessionDetail; reload: () => void; tile: string } & Hooks) {
   // a finished field opens to look at; Redo this field (`edit`) or Add an extra annotation (`own`) open it to work on
   const [opening, setOpening] = useState<{ tile: string; how: 'edit' | 'own' } | null>(null)
   const how = opening?.tile === tile ? opening.how : null
-  const work = useFetch<RoundField<number[]>>(`/api/annotate/${detail.meta.name}/fields/${enc(tile)}${how ? `?${how}=true` : ''}`)
+  const [freshAt, setFreshAt] = useState<string | null>(null)  // Reset: this field as detection made it, until saved or undone
+  const fresh = freshAt === tile
+  useEffect(() => { setFreshAt(null) }, [tile])  // another field: a Reset not saved is dropped (as Discard)
+  const query = [how && `${how}=true`, fresh && 'fresh=true'].filter(Boolean).join('&')
+  const work = useFetch<RoundField<number[]>>(`/api/annotate/${detail.meta.name}/fields/${enc(tile)}${query ? `?${query}` : ''}`)
   // every outline of every object, after the field is drawn (the field brings only each object's default one)
   const shapes = useFetch<Record<string, (number[] | null)[]>>(work.data ? `/api/annotate/${detail.meta.name}/fields/${enc(tile)}/masks` : null)
   const field = useMemo(() => (work.data ? unflatten(work.data, shapes.data) : null), [work.data, shapes.data])
@@ -187,11 +194,11 @@ export function FixField({ detail, reload, tile, onEvent, onFinished, coach }: {
     )
   }
   if ((detail.meta as { mode?: string }).mode === 'simple' && (detail.meta as { simple?: unknown }).simple) {  // the simple classes, in passes
-    return <SimpleFixer key={`${tile}:${how ?? ''}:${field.read_only ? 'look' : 'work'}`} detail={detail} reload={reload} tile={tile} field={field} onEvent={onEvent}
-      onFinished={onFinished} coach={coach} onOpen={(h) => setOpening({ tile, how: h })} />
+    return <SimpleFixer key={`${tile}:${how ?? ''}:${field.read_only ? 'look' : 'work'}:${fresh ? 'fresh' : ''}`} detail={detail} reload={reload} tile={tile} field={field} onEvent={onEvent}
+      onFinished={onFinished} coach={coach} onOpen={(h) => setOpening({ tile, how: h })} fresh={fresh} onReset={(on) => setFreshAt(on ? tile : null)} />
   }
-  return <Fixer key={`${tile}:${how ?? ''}:${field.read_only ? 'look' : 'work'}`} detail={detail} reload={reload} tile={tile} field={field} onEvent={onEvent}
-    onFinished={onFinished} coach={coach} onOpen={(h) => setOpening({ tile, how: h })} />
+  return <Fixer key={`${tile}:${how ?? ''}:${field.read_only ? 'look' : 'work'}:${fresh ? 'fresh' : ''}`} detail={detail} reload={reload} tile={tile} field={field} onEvent={onEvent}
+    onFinished={onFinished} coach={coach} onOpen={(h) => setOpening({ tile, how: h })} fresh={fresh} onReset={(on) => setFreshAt(on ? tile : null)} />
 }
 
 /** The field with its outlines as [x, y] corners: the server sends them flat ([x0, y0, x1, y1, …], whole pixels), the
@@ -288,12 +295,14 @@ function finishedText(finished: { person: string; time: number }[]): string {
   return finished.map((f) => `${f.person} on ${new Date(f.time * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}`).join(', ')
 }
 
-function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coach, onOpen }: { detail: SessionDetail; reload: () => void; tile: string; field: RoundField
+function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coach, onOpen, fresh: startsFresh, onReset }: { detail: SessionDetail; reload: () => void; tile: string; field: RoundField
   onOpen: (how: 'edit' | 'own') => void } & Hooks) {
   const field = useMemo(() => lighter(arrived), [arrived])
   const readOnly = !!field.read_only  // a finished field, looked at: nothing changes until Redo / Add an extra annotation
   const closed = !!field.closed  // a closed session: every field is looked at, for admins too
   const ownOnly = field.own ? '?own=true' : ''  // an extra annotation: the bad areas it starts from are this person's own
+  const [resetPending, setResetPending] = useState(!!startsFresh)  // Reset: unsaved until the next save (which deletes the earlier labels first)
+  const areaScope = [field.own && 'own=true', resetPending && 'fresh=true'].filter(Boolean).join('&')  // Reset: detection's areas only
   useEffect(() => {  // looking only: no key edits anything (Space still hides the overlays)
     if (!readOnly) return
     const stop = (e: KeyboardEvent) => {
@@ -382,9 +391,9 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   // what the analysis leaves out over the field: its part of detection's automatic layer, as on the Cores view
   const excluded = useFetch<FieldExcluded>(`/api/annotate/${name}/fields/${enc(tile)}/excluded`)
   // people's areas over the field (painted and marked fine), outlined; they never change the layer above
-  const people = useFetch<PeopleAreas>(`/api/annotate/${name}/fields/${enc(tile)}/annotated${ownOnly}`)
+  const people = useFetch<PeopleAreas>(`/api/annotate/${name}/fields/${enc(tile)}/annotated${areaScope ? `?${areaScope}` : ''}`)
   // each brush type's current area (detection's with people's saved edits merged in): what the brush adds to and takes from
-  const areas = useFetch<FieldAreas>(`/api/annotate/${name}/fields/${enc(tile)}/areas${ownOnly}`)
+  const areas = useFetch<FieldAreas>(`/api/annotate/${name}/fields/${enc(tile)}/areas${areaScope ? `?${areaScope}` : ''}`)
   const brushType = EXCLUDE_TYPES.find((t) => t.key === brushKind) ?? EXCLUDE_TYPES[0]
   const [shiftDown, setShiftDown] = useState(false)  // Shift held while the brush is on: it erases (the cursor shows it)
   useEffect(() => {
@@ -411,7 +420,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     if (live.done_by) setDoneBy(live.done_by)
     if (live.progress) setProgress(live.progress)
   })
-  const unsaved = changedThings(changes) + (brush.dirty ? 1 : 0)
+  const unsaved = changedThings(changes) + (brush.dirty ? 1 : 0) + (resetPending ? 1 : 0)
   const discarding = useRef(false)  // Discard and close: no draft is kept again on the way out
   useEffect(() => { if (!discarding.current) writeDraft(draftAt, unsaved ? { changes, slider: start } : null) }, [draftAt, changes, unsaved, start])
   useEffect(() => {  // Segment Anything still preparing this field: look again until clicks answer at once
@@ -895,15 +904,21 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     }
   }
 
-  /** "Reset field" (after a confirmation): this field's unsaved edits discarded and the acceptance threshold free again. */
+  /** "Reset field" (one confirmation, in the app): the field as if nobody had ever labelled it — detection's output,
+   *  no changed call, added object, outline, split, merge, painted area, threads choice, note or tag, the threshold
+   *  detection's. Unsaved until Save progress / Finish field, which delete this person's earlier labels on it first;
+   *  Undo reset (or Discard) brings the saved work back. The tutorial's practice resets in the page. */
   const resetField = () => {
-    if (!window.confirm('Reset this field? Your unsaved changes on it are discarded and you can set the acceptance threshold again.')) return
+    if (!(meta as { practice?: boolean }).practice && onReset) { setResetting(true); return }
     setChanges({}); setUndos([]); setRestored(0); setFresh({}); setPrompts({}); setPrecise(null); setDraft([]); setByHand(false)
     setMasks(chosenMasks(saved)); leaveMode(); brush.reset(); setError(null)
     setStart((s) => (s ? unlock(s) : s))
     writeDraft(draftAt, null)
     tell('reset')
   }
+  const [resetting, setResetting] = useState(false)
+  const doReset = () => { writeDraft(draftAt, null); discarding.current = true; tell('reset'); onReset?.(true) }
+  const undoReset = () => { writeDraft(draftAt, null); discarding.current = true; onReset?.(false) }
 
   /** One click on empty tissue: Segment Anything outlines it (three sizes) as a new candidate without a class. */
   const addAt = useCallback(async (x: number, y: number) => {
@@ -1063,7 +1078,9 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   const send = async (records: Rec[], finish: boolean) => {
     setSaving(true)
     try {
-      const result = await api.post<RoundSaved>(`/api/annotate/${name}/tiles/${enc(tile)}/save`, { records: records.map((r) => ({ tile_id: tile, ...r })), submit: finish, own: !!field.own })
+      const result = await api.post<RoundSaved>(`/api/annotate/${name}/tiles/${enc(tile)}/save`, { records: records.map((r) => ({ tile_id: tile, ...r })), submit: finish, own: !!field.own,
+        reset: resetPending })  // the first save after Reset: this person's earlier labels on the field go first
+      setResetPending(false)
       setSaved((current) => {
         const next = { ...current }
         for (const r of result.saved) { if (r.deleted) delete next[r.id]; else next[r.id] = r }
@@ -1188,6 +1205,13 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
         actions={<button className="btn small" onClick={() => void skip()} disabled={!!precise || busy}
           title={locked ?? 'Come back to this field later: the next field waiting for you opens'}>Skip for now</button>} />
       {leaveDialog}
+      {resetPending && <div className="found found-warn small field-reset" role="status"><b>Reset to detection’s output — not saved yet.</b>
+        {' '}Save progress or Finish field replaces your saved work on this field. <button className="link-btn small" onClick={undoReset}>Undo reset</button></div>}
+      {resetting && <ConfirmDialog title="Reset this field?" confirm="Reset field" danger onClose={() => setResetting(false)} onConfirm={async () => { doReset() }}>
+        <p>Reset this field to detection’s output? Your saved work on it will be replaced when you save.</p>
+        <p className="small secondary">Every call you changed, object you added, outline, split or merge, painted area, threads choice, note and tag goes; the threshold goes
+          back to detection’s. Other people’s work is not touched. Until you save, Undo reset brings your saved work back.</p>
+      </ConfirmDialog>}
       {meta.instructions && <div className="instructions">{meta.instructions}</div>}
       <ErrorNote error={error} />
       {wholeBad && <div className="found found-warn small whole-bad" role="status">You marked this whole field as bad:
@@ -1354,7 +1378,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
             <div className="card side-block start-card locked small row">
               <LockIcon /><span>Acceptance threshold <b>{start.value.toFixed(2)}</b>{Math.abs(start.value - start.detection) > 1e-9 ? ` (detection ${start.detection.toFixed(2)})` : ' (detection’s)'}</span>
               <span className="spacer" /><button className="link-btn small" onClick={resetField} disabled={saving}
-                title="Discard this field’s unsaved changes and set the threshold again">Reset field</button>
+                title="Back to detection’s output, as if nobody had labelled this field: the threshold too (asks first)">Reset field</button>
             </div>
           ))}
           {threading && <ThreadsCard ladder={ladder.data} pending={ladder.pending ? pendingText(ladder.pending) : null} error={ladder.error} index={threadIndex}
@@ -1468,6 +1492,8 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
             </div>
             <p className="small muted finish-note">{FINISH_NOTE}</p>
             {!onFinished && <div className="row side-discard">
+              <button className="link-btn small" onClick={resetField} disabled={busy || !!precise}
+                title="Back to detection’s output, as if nobody had labelled this field (asks first)">Reset field</button>
               {!wholeBad && <button className="link-btn small" onClick={() => setMarkingBad(true)} disabled={busy || !!precise}
                 title="The whole field is unusable (a fold, out of focus, an artifact, no tissue): mark it bad and go on">Mark whole field as bad…</button>}
               <span className="spacer" />

@@ -22,10 +22,11 @@ export function middleWindow(view: Rect, width: number, height: number, times = 
 }
 
 /** One panel: the picture (`src`, `width` × `height` in the coordinates everything else is in) shown over `window`,
- *  the squares, and `next` (the next level's extent). A press or a drag reports where the next level should be centred. */
+ *  the squares, and `next` (the next level's extent). A press or a drag reports where the next level should be centred;
+ *  without `onMove` the panel only shows (a click on a square opens it). */
 export function LevelMap({ src, width, height, window: win, next, squares = [], onMove, label, children }: {
   src: string; width: number; height: number; window: Rect; next: Rect | null; squares?: Square[]
-  onMove: (x: number, y: number, done: boolean) => void; label: string; children?: ReactNode
+  onMove?: (x: number, y: number, done: boolean) => void; label: string; children?: ReactNode
 }) {
   const svg = useRef<SVGSVGElement>(null)
   const press = useRef<{ x: number; y: number; moved: boolean; square?: Square } | null>(null)
@@ -38,7 +39,7 @@ export function LevelMap({ src, width, height, window: win, next, squares = [], 
   const w = win.x1 - win.x0, h = win.y1 - win.y0
   const stroke = w / 160
   return (
-    <svg ref={svg} className="level-map" viewBox={`${win.x0} ${win.y0} ${w} ${h}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label={label}
+    <svg ref={svg} className={`level-map${onMove ? '' : ' shows-only'}`} viewBox={`${win.x0} ${win.y0} ${w} ${h}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label={label}
       onPointerDown={(e) => {
         if (e.button !== 0) return
         const p = at(e)
@@ -46,14 +47,15 @@ export function LevelMap({ src, width, height, window: win, next, squares = [], 
         e.currentTarget.setPointerCapture(e.pointerId)
         const square = squares.find((s) => !s.current && s.onOpen && p.x >= s.x && p.x <= s.x + s.w && p.y >= s.y && p.y <= s.y + s.h)
         press.current = { x: e.clientX, y: e.clientY, moved: false, square }
-        if (!square) onMove(p.x, p.y, false)
+        if (!square && !onMove) { press.current = null; return }
+        if (!square) onMove?.(p.x, p.y, false)
       }}
       onPointerMove={(e) => {
         const d = press.current
         if (!d) return
         if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > 4) d.moved = true
         const p = at(e)
-        if (p && (d.moved || !d.square)) onMove(p.x, p.y, false)
+        if (p && (d.moved || !d.square)) onMove?.(p.x, p.y, false)
       }}
       onPointerUp={(e) => {
         const d = press.current
@@ -61,7 +63,7 @@ export function LevelMap({ src, width, height, window: win, next, squares = [], 
         if (!d) return
         if (d.square && !d.moved) { d.square.onOpen?.(); return }
         const p = at(e)
-        if (p) onMove(p.x, p.y, true)
+        if (p) onMove?.(p.x, p.y, true)
       }}
       onPointerCancel={() => { press.current = null }}>
       <rect x={0} y={0} width={width} height={height} fill="var(--surface-0)" />
