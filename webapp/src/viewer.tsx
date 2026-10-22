@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { PALETTE } from './palette'
 import { MAX_ZOOM, useViewKeys } from './viewkeys'
@@ -208,6 +208,16 @@ export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, on
     viewHeard.current({ x0: Math.max(0, x0), y0: Math.max(0, y0), x1: Math.min(size.w, x1), y1: Math.min(size.h, y1) })
   }, [view, boxSize.w, boxSize.h, shown.width, origin.x, origin.y, size.w, size.h, loaded])
 
+  /** A pan keeps the picture on screen: dragged far (even beyond the window, the viewer holds the pointer) it stops
+   *  where its edge meets the viewer's. */
+  const kept = (v: View): View => {
+    const { origin: o, shown: sh, boxSize: b } = layout.current
+    const span = (at: number, start: number, length: number, room: number) => {
+      const lo = Math.min(room - start - length, -start), hi = Math.max(room - start - length, -start)
+      return Math.min(hi, Math.max(lo, at))
+    }
+    return { ...v, x: span(v.x, o.x, sh.width * v.zoom, b.w), y: span(v.y, o.y, sh.height * v.zoom, b.h) }
+  }
   const zoomBy = (factor: number) => setView((v) => zoomedAt(v, factor, layout.current.boxSize.w / 2, layout.current.boxSize.h / 2))
   const keys = useViewKeys({ zoomBy, panBy: (dx, dy) => setView((v) => (v.zoom > 1 ? { ...v, x: v.x + dx, y: v.y + dy } : v)) })
 
@@ -217,12 +227,34 @@ export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, on
     return { x: (e.clientX - rect.left - origin.x - view.x) * unit, y: (e.clientY - rect.top - origin.y - view.y) * unit, unit }
   }
   const onPicture = (p: ImagePoint) => p.x >= 0 && p.y >= 0 && p.x <= size.w && p.y <= size.h  // not the room around it
+  /** A drag ended without its release reaching the viewer (the pointer lost or cancelled, the window left): it ends
+   *  as if let go there, so a brush stroke or a line is never left half-made. */
+  const lastAt = useRef<ImagePoint | null>(null)
+  const released = useRef(onRelease)
+  released.current = onRelease
+  const abandon = useCallback(() => {
+    if (!drag.current) return
+    const p = lastAt.current
+    drag.current = null
+    if (p) released.current?.(p, new MouseEvent('mouseup') as unknown as React.MouseEvent)
+  }, [])
+  useEffect(() => {
+    window.addEventListener('blur', abandon)
+    return () => window.removeEventListener('blur', abandon)
+  }, [abandon])
 
   const viewer = (
     <div ref={box} className={`viewer${filled ? ' viewer-filled' : ''}`}
       style={{ ...(filled ? { width: filled.w, height: filled.h } : { aspectRatio: `${size.w} / ${size.h}` }), cursor: cursor ?? (zoom > 1 ? 'grab' : 'default') }}
       onContextMenu={(e) => { e.preventDefault(); if (onContext) { const p = toImage(e); if (onPicture(p)) onContext(p, e) } }}
       onMouseEnter={keys.activate}
+      onPointerDown={(e) => {  // the viewer holds the pointer while a button is down: the moves and the release reach it beyond the window
+        if (e.button !== 0 && e.button !== 1) return
+        try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* the window's ends still end it */ }
+      }}
+      onPointerCancel={abandon}
+      onLostPointerCapture={() => { setTimeout(abandon, 0) }}  // after the release's own mouseup, which ends it the usual way
+      onDragStart={(e) => e.preventDefault()}
       onMouseDown={(e) => {
         keys.activate()
         if (e.button === 2) return  // the right button: the menu (onContext); the middle one pans
@@ -234,8 +266,10 @@ export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, on
       onMouseMove={(e) => {
         const d = drag.current
         if (d && Math.hypot(e.clientX - d.x, e.clientY - d.y) > 4) d.moved = true
-        if (d?.moved && d.pan && zoom > 1) setView((v) => ({ ...v, x: d.ox + e.clientX - d.x, y: d.oy + e.clientY - d.y }))
-        onMove?.(toImage(e))
+        if (d?.moved && d.pan && zoom > 1) setView((v) => kept({ ...v, x: d.ox + e.clientX - d.x, y: d.oy + e.clientY - d.y }))
+        const p = toImage(e)
+        lastAt.current = p
+        onMove?.(p)
       }}
       onMouseUp={(e) => {
         if (e.button === 2) return
@@ -243,7 +277,7 @@ export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, on
         if (drag.current && !drag.current.moved && e.button !== 1) { const p = toImage(e); if (onPicture(p)) onClick?.(p, e) }
         drag.current = null
       }}
-      onMouseLeave={(e) => { if (drag.current && onRelease) onRelease(toImage(e), e); drag.current = null }}>
+      onMouseLeave={(e) => { if (drag.current && e.buttons === 0) { onRelease?.(toImage(e), e); drag.current = null } }}>  {/* held: the capture keeps the drag going */}
       {!loaded && <div className="viewer-loading">Loading the field image… the first field of a core takes a few seconds; the others then open instantly.</div>}
       <div className="viewer-plane" style={{ width: shown.width, height: shown.height, transform: `translate(${origin.x + view.x}px, ${origin.y + view.y}px) scale(${zoom})` }}>
         <img src={src} alt="field" draggable={false} />

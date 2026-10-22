@@ -118,7 +118,7 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
   const [brushSize, setBrushSize] = useStored<number>(BRUSH_KEY, BRUSH_PX.start)
   const [erasing, setErasing] = useState(false)
   const [stroke, setStroke] = useState<{ points: number[][]; erase: boolean; radius: number } | null>(null)
-  const [ring, setRing] = useState<[number, number, number] | null>(null)  // the brush under the pointer: x, y, radius
+  const [ring, setRing] = useState<[number, number, number] | null>(null)  // the brush under the pointer: x, y and the zoom's unit (its size follows the brush at once)
   const [hovered, setHovered] = useState<string | null>(null)
   const [hidden, setHidden] = useState(false)
   const [undos, setUndos] = useState<Undo[]>([])
@@ -297,7 +297,7 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
   }
   const move = (p: ImagePoint) => {
     if (wandOn && !readOnly) {
-      setRing([p.x, p.y, stroke?.radius ?? brushRadius(p.unit)])
+      setRing([p.x, p.y, p.unit])
       if (stroke) setStroke({ ...stroke, points: [...stroke.points, [p.x, p.y]] })
     }
     const now = wandOn ? null : hit(p)?.key ?? null
@@ -490,7 +490,7 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
                 {wandOn && lines && <WandLines lines={lines} picked={chosenLines} unit={unit} colour={wandClass!.colour} />}
                 {wandOn && stroke && <polyline points={polygonPoints(stroke.points)} fill="none" stroke={stroke.erase ? '#ffffff' : wandClass!.colour} strokeOpacity={0.28}
                   strokeWidth={stroke.radius * 2} strokeLinecap="round" strokeLinejoin="round" pointerEvents="none" />}
-                {wandOn && ring && !readOnly && <circle className="brush-ring" cx={ring[0]} cy={ring[1]} r={ring[2]} fill="none" stroke={erasing ? '#ffffff' : wandClass!.colour}
+                {wandOn && ring && !readOnly && <circle className="brush-ring" cx={ring[0]} cy={ring[1]} r={stroke?.radius ?? brushRadius(ring[2])} fill="none" stroke={erasing ? '#ffffff' : wandClass!.colour}
                   strokeWidth={1.5 * unit} strokeDasharray={erasing ? `${4 * unit} ${3 * unit}` : undefined} pointerEvents="none" />}
                 {layers.box && <>
                   <path d={`M0 0H${size.w}V${size.h}H0Z M${box.x} ${box.y}v${box.height}h${box.width}v${-box.height}Z`} fill="#000" fillOpacity={0.22} fillRule="evenodd" />

@@ -660,6 +660,9 @@ function Minimap({ core, stain, status, view, onJump, onOpen }: {
         onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); dragging.current = true; const p = at(e); onJump(p.x, p.y) }}
         onPointerMove={(e) => { if (dragging.current) { const p = at(e); onJump(p.x, p.y) } }}
         onPointerUp={() => { dragging.current = false }}
+        onPointerCancel={() => { dragging.current = false }}
+        onLostPointerCapture={() => { dragging.current = false }}
+        onDragStart={(e) => e.preventDefault()}
         onDoubleClick={(e) => { const p = at(e); const tile = tileAt(p.x, p.y); if (tile) onOpen(tile) }}>
         <defs>
           <pattern id="minimap-hatch" width={width / 40} height={width / 40} patternUnits="userSpaceOnUse" patternTransform="rotate(45)">

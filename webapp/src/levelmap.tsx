@@ -65,7 +65,9 @@ export function LevelMap({ src, width, height, window: win, next, squares = [], 
         const p = at(e)
         if (p) onMove?.(p.x, p.y, true)
       }}
-      onPointerCancel={() => { press.current = null }}>
+      onPointerCancel={() => { press.current = null }}
+      onLostPointerCapture={() => { press.current = null }}
+      onDragStart={(e) => e.preventDefault()}>
       <rect x={0} y={0} width={width} height={height} fill="var(--surface-0)" />
       <image href={src} x={0} y={0} width={width} height={height} preserveAspectRatio="none" />
       {squares.filter((s) => !s.current).map((s) => (  // the others first, inset a little so neighbours never paint over each other

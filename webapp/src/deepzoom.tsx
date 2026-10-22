@@ -571,6 +571,20 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
     return { left: t.col * pyramid.tile * f, top: t.row * pyramid.tile * f,
       width: Math.min(pyramid.tile, info.width - t.col * pyramid.tile) * f + pad, height: Math.min(pyramid.tile, info.height - t.row * pyramid.tile) * f + pad }
   }
+  /** A press that ends without its release reaching the picture (the pointer lost or cancelled, the window left). */
+  const endPress = () => {
+    if (painting.current) { painting.current = false; onRelease?.() }
+    const d = drag.current
+    drag.current = null
+    if (d) { setDragging(false); if (d.moved) setView(viewRef.current, true) }
+  }
+  const ended = useRef(endPress)
+  ended.current = endPress
+  useEffect(() => {
+    const away = () => ended.current()
+    window.addEventListener('blur', away)
+    return () => window.removeEventListener('blur', away)
+  }, [])
   const markLoaded = (key: string) => setLoaded((old) => (old.has(key) ? old : new Set(old).add(key)))
 
   let scaleBar = null
@@ -631,6 +645,9 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
           if (d?.moved) setView(viewRef.current, true)
           if (d && !d.moved && onPick && e.button === 0) { const { px, py } = local(e); onPick(nearest(px, py)) }
         }}
+        onPointerCancel={() => endPress()}
+        onLostPointerCapture={() => endPress()}  // after a release it has nothing left to end; else (lost, cancelled) it ends the stroke or the pan
+        onDragStart={(e) => e.preventDefault()}
         onPointerLeave={() => { pointer.current = null; setTip(null); setHovered(null); onMove?.(null) }}
         onDoubleClick={(e) => { if (panLock) return; const { px, py } = local(e); zoomAt(2, px, py, true) }}>
         {view && (
