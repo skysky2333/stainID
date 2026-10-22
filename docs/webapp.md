@@ -389,6 +389,7 @@ fields; and the *Tutorial* link. Pointing at an object also shows its name besid
 | Enter | precise editing: keep the edit; drawing by hand: close the outline |
 | Ctrl+S (⌘S) | Save progress: keep the changes, the field stays unfinished |
 | Ctrl+Enter (⌘Enter) | Finish field: everything on it recorded as checked by you, the next field opens |
+| *Fit* (the picture's toolbar) | "Fit the picture to the window": the whole field again, after zooming in (the wheel zooms, up to 10×) |
 
 In round 2, a click on empty tissue outlines a missed object with one click (Segment Anything). It is a new
 candidate, dotted grey, and Tab / Shift+Tab switch to a smaller or bigger one of Segment Anything's three sizes, until a class key makes it solid. *Draw an object by hand…* is the last resort. One click answers at once,

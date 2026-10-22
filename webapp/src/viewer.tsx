@@ -262,7 +262,7 @@ export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, on
         <button className="btn small" onClick={() => zoomBy(1 / 1.5)} title="Zoom out (−)" aria-label="Zoom out">−</button>
         <span className="small muted viewer-zoom">{zoom.toFixed(1)}×</span>
         <button className="btn small" onClick={() => zoomBy(1.5)} title={`Zoom in (+), up to ${MAX_ZOOM}×`} aria-label="Zoom in">+</button>
-        <button className="btn small" onClick={() => setView({ zoom: 1, x: 0, y: 0 })} title="The whole picture">Reset</button>
+        <button className="btn small" onClick={() => setView({ zoom: 1, x: 0, y: 0 })} title="Fit the picture to the window">Fit</button>
         {fit && <FullScreenButton />}
       </div>
       {fit ? <div className={`viewer-row${aside ? ' with-aside' : ''}`}>{aside}<div ref={room} className="viewer-room">{viewer}</div></div> : viewer}

@@ -499,7 +499,7 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
               <li><span className="kbd">click</span> empty tissue: a missed object of this class</li>
               <li><span className="kbd">right-click</span> an object: choose its class from a list</li>
               <li><span className="kbd">1</span>–<span className="kbd">{passes.length}</span> the classes · <span className="kbd">Del</span> out of every class</li>
-              <li><span className="kbd">Z</span> undo · <span className="kbd">Space</span> hide the drawings · <span className="kbd">+</span> <span className="kbd">−</span> zoom · arrows move</li>
+              <li><span className="kbd">Z</span> undo · <span className="kbd">Space</span> hide the drawings · <span className="kbd">+</span> <span className="kbd">−</span> zoom · arrows move · <b>Fit</b> the whole picture</li>
             </ul>
             <ul className="look-legend small secondary">
               <li><span className="look-swatch" style={{ borderColor: activeClass?.colour, background: activeClass?.colour }} />in the class you are on: bright</li>

@@ -1644,7 +1644,7 @@ function Controls({ sam, precise, excluding, mode }: { sam: boolean; precise: bo
       <li><span className="kbd">Tab</span> switch its outline: Segment Anything / stain</li>
       <li><span className="kbd">Del</span> reject — dotted grey · <span className="kbd">`</span> unsure — dotted amber ?</li>
       <li><span className="kbd">right-click</span> an object: choose its class from a list</li>
-      <li><span className="kbd">+</span> <span className="kbd">−</span> or the wheel zoom (up to 10×) · arrow keys move</li>
+      <li><span className="kbd">+</span> <span className="kbd">−</span> or the wheel zoom (up to 10×) · arrow keys move · <b>Fit</b> (toolbar) the whole picture</li>
       <li><span className="kbd">click</span> empty tissue: {sam ? 'a new candidate' : 'draw a new one by hand'}</li>
       <li><span className="kbd">click</span> an object: precise edit{sam ? ' (click add, ⇧ click remove, drag dots, click beyond the frame done)' : ' (drag dots, click beyond the frame done)'}</li>
       <li><span className="kbd">Space</span> hide / show the drawings</li>
