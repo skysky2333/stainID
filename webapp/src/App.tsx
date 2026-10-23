@@ -25,6 +25,7 @@ import Settings from './pages/Settings'
 import Users from './pages/Users'
 import Setup from './setup/Setup'
 import Workflow from './pages/Workflow'
+import { NavIcon } from './navicons'
 
 /** A sidebar link: [address, label, what the page is for, other addresses that belong to the page]. */
 type NavItem = [string, string, string, string[]?]
@@ -189,6 +190,15 @@ function Shell({ admin }: { admin: boolean }) {
           title={collapsed ? 'Show the menu' : 'Hide the menu: more room for the picture'} aria-label={collapsed ? 'Show the menu' : 'Hide the menu'}>
           {collapsed ? '»' : '«'}
         </button>
+        {collapsed && (  /* folded: one icon per page, the current one lit; the project's icon unfolds the menu */
+          <nav className="nav-strip" aria-label="Pages">
+            {admin && <button className="nav-icon-link" onClick={() => setCollapsed(false)} title={info?.name ? `Project: ${info.name} (show the menu to switch)` : 'Project'}
+              aria-label="Show the menu to switch the project"><NavIcon of="project" /></button>}
+            {[...LABELLING_NAV, ...(admin ? ADMIN_NAV.flatMap((g) => g.links) : [])].map((item) => <StripLink key={item[0]} item={item} />)}
+            <span className="nav-strip-gap" />
+            {[...(admin ? ADMIN_FOOT : []), ...FOOT_NAV].map((item) => <StripLink key={item[0]} item={item} />)}
+          </nav>
+        )}
         <div className="sidebar-body">
         <BrandLink />
         {admin && <ProjectSwitcher />}
@@ -235,6 +245,16 @@ function Shell({ admin }: { admin: boolean }) {
         </Routes>
       </main>
     </div>
+  )
+}
+
+/** A page's icon in the folded menu: its name as the tooltip, lit on the current page (as `SideLink`). */
+function StripLink({ item: [to, label, , more = []] }: { item: NavItem }) {
+  const { pathname } = useLocation()
+  const inside = more.some((m) => belongs(pathname, m))
+  return (
+    <NavLink to={to} end={to === '/'} title={label} aria-label={label} aria-current={inside ? 'page' : undefined}
+      className={({ isActive }) => `nav-icon-link${isActive || inside ? ' active' : ''}`}><NavIcon of={to} /></NavLink>
   )
 }
 
