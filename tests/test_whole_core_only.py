@@ -2,9 +2,6 @@
 whole-core tiles, and older projects' sampled fields still readable where their labels refer to them."""
 from __future__ import annotations
 
-import os
-import time
-
 import cv2
 import numpy as np
 import pandas as pd
@@ -111,52 +108,12 @@ def test_labelling_fields_come_from_full_whole_core_tiles_and_old_fields_stay_kn
              {**base, "tile_id": "C_AT8_W0100", "x_px": 0, "y_px": 2048, "width_px": 2048, "height_px": 2048, "preview_tissue_fraction": 0.6},
              {**base, "tile_id": "C_AT8_W0101", "x_px": 2048, "y_px": 2048, "width_px": 2048, "height_px": 2048, "preview_tissue_fraction": 0.05}]
     write_csv(project.analysis_tiles(), whole, list(whole[0]))
-    assert list(labelling_tiles(project).tile_id) == ["C_AT8_S01", "C_AT8_W0001", "C_AT8_W0100"]  # full size, at least 10 % tissue (5 % stays out)
+    assert list(labelling_tiles(project).tile_id) == ["C_AT8_S01", "C_AT8_W0001", "C_AT8_W0100", "C_AT8_W0101"]  # full size, any tissue
     old = [{**base, "tile_id": "C_AT8_S01", "x_px": 0, "y_px": 0, "width_px": 2048, "height_px": 2048},
            {**base, "tile_id": "C_AT8_S02", "x_px": 9000, "y_px": 0, "width_px": 2048, "height_px": 2048}]
     write_csv(project.input("tile_manifest"), old, list(old[0]))  # an older project's sampled fields, named by its labels
     assert list(known_tiles(project).tile_id) == ["C_AT8_S01", "C_AT8_W0001", "C_AT8_W0002", "C_AT8_W0100", "C_AT8_W0101", "C_AT8_S02"]
     assert known_tile_rows(project)["C_AT8_S02"]["x_px"] == "9000" and "C_AT8_S02" not in set(labelling_tiles(project).tile_id)
-
-
-def test_labelling_fields_count_tissue_by_detection_s_tissue_mask_not_the_preview(tmp_path):
-    from stainid import exclusions
-    from stainid.sampling import tiles as tile_tables
-
-    project = load_project(tmp_path)
-    base = {"core_id": "C", "tma": "1", "stain": "AT8", "disease_group": "AD", "image_path": "x.png", "selection_order": 100,
-            "width_px": 2048, "height_px": 2048}
-    rows = [{**base, "tile_id": "C_AT8_W0001", "x_px": 0, "y_px": 0, "preview_tissue_fraction": 0.05},  # a pale core: the preview sees 5 %
-            {**base, "tile_id": "C_AT8_W0002", "x_px": 2048, "y_px": 0, "preview_tissue_fraction": 0.6},  # the mask: 4 %
-            {**base, "tile_id": "C_AT8_W0003", "x_px": 0, "y_px": 2048, "preview_tissue_fraction": 0.5},  # not in the mask: the preview
-            {**base, "core_id": "D", "tile_id": "D_AT8_W0001", "x_px": 0, "y_px": 0, "preview_tissue_fraction": 0.04}]  # no mask: the preview
-    write_csv(project.analysis_tiles(), rows, list(rows[0]))
-    bits = np.zeros((256, 512), np.uint8)  # 1/8 of the core: two tiles across, the row below not analysed (0)
-    bits[:, :256] = 32 | 1  # in a tile, tissue
-    bits[200:, :256] = 32  # in a tile, no tissue: 56 of 256 rows
-    bits[:, 256:] = 32
-    bits[:10, 256:] = 32 | 16 | 1  # tissue under the AT8 edge guard counts as tissue: 10 of 256 rows
-    path = exclusions.mask_path(project, "C", "AT8")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(path), bits)
-    old = time.time() - 60
-    os.utime(path, (old, old))
-    shares = tile_tables.tissue_fractions(project, tile_tables.table(project.analysis_tiles()))
-    assert list(shares) == pytest.approx([200 / 256, 10 / 256, 0.5, 0.04], abs=1e-4)
-    assert list(tile_tables.labelling_tiles(project).tile_id) == ["C_AT8_W0001", "C_AT8_W0003"]
-    tile_tables._SHARES.clear()  # a new server: the shares come from the kept file, no mask is read again
-    read = []
-    real = tile_tables.mask_tissue
-    tile_tables.mask_tissue = lambda *a, **k: read.append(a) or real(*a, **k)
-    try:
-        assert tile_tables.tissue_fractions(project, tile_tables.table(project.analysis_tiles())).iloc[0] == pytest.approx(200 / 256, abs=1e-4)
-        assert read == []
-        bits[:, :256] = 32  # the mask made again: no tissue in the first tile
-        cv2.imwrite(str(path), bits)
-        os.utime(path, (old + 1, old + 1))
-        assert tile_tables.tissue_fractions(project, tile_tables.table(project.analysis_tiles())).iloc[0] == 0.0 and len(read) == 1
-    finally:
-        tile_tables.mask_tissue = real
 
 
 @pytest.fixture()
