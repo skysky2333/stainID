@@ -5,7 +5,8 @@
    one class: the last click wins (it moves). Members of the other classes show faint in their own colour; what is in
    no class is dotted grey ("not an object"). Then the next class. AT8 "neurite" is a brush over the thread network
    (wand.ts): a stroke takes every thread segment under it that exists at the thread level the slider is at (the thread
-   ladder of threads mode, its factor on the DAB cut: further right a lower factor, so more and fainter lines count),
+   ladder of threads mode made twice as wide, 0.25x-4x, its factor on the DAB cut: further right a lower factor, so
+   more and fainter lines count),
    Shift-painting or the eraser takes them out, and painting again over a part redoes it at the slider's level. The
    lines show only in that pass; each chosen piece is [step, index] of the ladder, the slider's factor is saved with
    them. There is no outline editing: outlines stay detection's.
@@ -53,9 +54,13 @@ interface Undo { changes: Record<string, Change>; segments: string[] }
 /** A chosen neurite piece: `step:index`, a segment of the thread network at that step of the thread ladder. */
 const pieceKey = (step: number, index: number) => `${step}:${index}`
 const pieceOf = (key: string) => key.split(':').map(Number) as [number, number]
-const LEGACY_STEP = 8  // labels.thread_threshold.DETECTION: the magic wand of earlier pages chose segments of detection's step
-const piecesOf = (meta: { pieces?: number[][]; segments?: number[] } | null | undefined): string[] =>
-  meta?.pieces ? meta.pieces.map(([a, b]) => pieceKey(a, b)) : (meta?.segments ?? []).map((i) => pieceKey(LEGACY_STEP, i))
+// the brush reads the wide thread ladder (labels/thread_threshold.py WIDE_FACTORS, 0.25x-4x, 33 steps): pieces saved
+// on the standard one (0.5x-2x, no `ladder`) are its steps WIDE_OFFSET further on, the magic wand's segments its 1.0
+const WIDE_DETECTION = 16
+const WIDE_OFFSET = 8
+const piecesOf = (meta: { pieces?: number[][]; segments?: number[]; ladder?: string } | null | undefined): string[] =>
+  meta?.pieces ? meta.pieces.map(([a, b]) => pieceKey(a + (meta.ladder === 'wide' ? 0 : WIDE_OFFSET), b))
+    : (meta?.segments ?? []).map((i) => pieceKey(WIDE_DETECTION, i))
 interface Hooks { onEvent?: (event: RoundEvent) => void; onFinished?: () => void; coach?: ReactNode
   /** Reset (`fresh`: the field as detection made it, unsaved) and Undo reset (`onReset(false)`) */
   fresh?: boolean; onReset?: (on: boolean) => void }
@@ -105,13 +110,13 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
   }, [readOnly])
 
   const draftAt = practice ? '' : draftKey(detail.annotator, name, tile)
-  const kept = readOnly ? null : readDraft<{ changes: Record<string, Change>; pieces?: string[] }>(draftAt)
+  const kept = readOnly ? null : readDraft<{ changes: Record<string, Change>; wide?: string[] }>(draftAt)
   const [saved, setSaved] = useState<Record<string, Mine>>(() => Object.fromEntries(field.mine.map((m) => [m.id, m])))
   const [changes, setChanges] = useState<Record<string, Change>>(() => kept?.changes ?? {})
   const [restored, setRestored] = useState(() => Object.keys(kept?.changes ?? {}).length)
   const savedArea = Object.values(saved).find((m) => m.task === 'simple_area' && m.value === wandClass?.id)
   const areaMeta = savedArea?.meta
-  const [segmentsOn, setSegmentsOn] = useState<string[]>(() => kept?.pieces ?? piecesOf(areaMeta))
+  const [segmentsOn, setSegmentsOn] = useState<string[]>(() => kept?.wide ?? piecesOf(areaMeta))  // a draft keeps wide-ladder pieces
   const [segmentsSaved, setSegmentsSaved] = useState<string[]>(() => piecesOf(areaMeta))
   const [active, setActive] = useState<string>(objectClasses[0]?.id ?? '')
   const [level, setLevel] = useState<number | null>(null)  // the thread level (a step of the ladder) the next stroke uses
@@ -178,7 +183,7 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
   const [resetPending, setResetPending] = useState(!!fresh)  // Reset: unsaved until the next save (which deletes the earlier labels first)
   const unsaved = Object.keys(changes).filter((id) => !id.startsWith('outline:')).length + (segmentsDirty ? 1 : 0) + (resetPending ? 1 : 0)
   const discarding = useRef(false)
-  useEffect(() => { if (!discarding.current) writeDraft(draftAt, unsaved ? { changes, pieces: segmentsOn } : null) }, [draftAt, changes, segmentsOn, unsaved])
+  useEffect(() => { if (!discarding.current) writeDraft(draftAt, unsaved ? { changes, wide: segmentsOn } : null) }, [draftAt, changes, segmentsOn, unsaved])
 
   const own = useMemo(() => field.objects.filter((o) => o.own), [field.objects])
   const added = [...myCalls.values()].filter((m) => !m.candidate && m.value !== NONE && m.x != null)
@@ -368,7 +373,7 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
       .map((m) => (m.candidate ? { task: m.task, candidate: m.candidate, value: m.value, deleted: m.deleted } : m))
     if (segmentsDirty && wandClass) {
       marks.push({ task: 'simple_area', value: wandClass.id, deleted: !segmentsOn.length,
-        meta: { pieces: segmentsOn.map(pieceOf), factor: ladderDone ? ladderDone.factors[step] : 1 } })  // the slider's thread level, as the threads step keeps it
+        meta: { pieces: segmentsOn.map(pieceOf), ladder: 'wide', factor: ladderDone ? ladderDone.factors[step] : 1 } })  // the slider's thread level, as the threads step keeps it
     }
     if (!(await send(marks, finish))) return false
     setChanges({}); setUndos([]); setRestored(0); setSegmentsSaved(segmentsOn)

@@ -16,6 +16,11 @@ gives ({"factor", "detection": 1.0, "thread_threshold" (the DAB level of the rid
 "length_um" and "detection_length_um" in the tile}). AI labels are never shown here (`store.is_ai_label`), and the
 tutorial saves nothing. The Models page's "Thread detector" panel (`summary`) reads them: they only tune; the analysis
 keeps detection's threshold until a new setting is validated and the pipeline run again.
+
+The simple mode's neurite brush reads a wider ladder (`WIDE_FACTORS`: 0.25x to 4x, the same steps of 2^(1/8), 33 of
+them, `wide=True`): its own cache file, made only for simple sessions' fields (ahead with their pictures, like the
+detailed one). The ridge response is the whole picture's at every value, so a step of the wide ladder at a factor of
+`FACTORS` is that step of the standard one to the pixel: step i of the standard ladder is step i + `WIDE_OFFSET` here.
 """
 from __future__ import annotations
 
@@ -30,6 +35,10 @@ import pandas as pd
 TASK = "thread_threshold"
 FACTORS = tuple(round(2 ** (k / 8), 4) for k in range(-8, 9))  # 0.5 … 2, 17 steps, 1.0 in the middle
 DETECTION = FACTORS.index(1.0)
+WIDE_FACTORS = tuple(round(2 ** (k / 8), 4) for k in range(-16, 17))  # 0.25 … 4, 33 steps: the simple neurite brush
+WIDE_DETECTION = WIDE_FACTORS.index(1.0)
+WIDE_OFFSET = WIDE_DETECTION - DETECTION  # a standard step's index in the wide ladder
+WIDE = "wide"
 RIDGE = 0.25  # the ridge cut of `thread_network`, as a share of the slide's DAB threshold
 VERSION = 1  # of the cached ladder
 _KEPT: OrderedDict[tuple, dict] = OrderedDict()
@@ -49,7 +58,11 @@ def _stage2_tiles(project, core_id: str) -> tuple[list[dict], float | None, froz
     return found, threshold, nuclei
 
 
-def _ladder_networks(project, tile_id: str, core_id: str):
+def factors_of(wide: bool) -> tuple[float, ...]:
+    return WIDE_FACTORS if wide else FACTORS
+
+
+def _ladder_networks(project, tile_id: str, core_id: str, factors=FACTORS):
     """(stage 2's field of the tile, its `tau.maps`, the network at every step) or None when stage 2 cannot run there."""
     from stainid.imaging.shared import shared_pictures  # noqa: PLC0415
     from stainid.stains.tau.threads import thread_ladder  # noqa: PLC0415
@@ -73,20 +86,24 @@ def _ladder_networks(project, tile_id: str, core_id: str):
     field = work.cut_field(tile, box)
     with shared_pictures(field.rgb):
         found = tau.maps(field)
-        networks = thread_ladder(field.rgb, found["maps"]["valid"], field.threshold, field.pixel_size_um, FACTORS, nuclei=field.nuclei)
+        networks = thread_ladder(field.rgb, found["maps"]["valid"], field.threshold, field.pixel_size_um, factors, nuclei=field.nuclei)
     return field, found, networks
 
 
-def compute(project, tile: dict) -> dict:
-    """The thread network of one AT8 field at every step of `FACTORS`, in the field picture's pixels: per step the
-    factor, the thread length in the tile (µm) and the lines (flat [x0, y0, x1, y1, …] polylines, stage 2's segments)."""
+def compute(project, tile: dict, wide: bool = False) -> dict:
+    """The thread network of one AT8 field at every step of `FACTORS` (`wide`: `WIDE_FACTORS`), in the field picture's
+    pixels: per step the factor, the thread length in the tile (µm) and the lines (flat [x0, y0, x1, y1, …] polylines,
+    stage 2's segments)."""
     from stainid.labels import frames  # noqa: PLC0415
     from stainid.v2.threads import segments  # noqa: PLC0415
 
     started = time.time()
-    made = _ladder_networks(project, str(tile["tile_id"]), str(tile["core_id"]))
+    factors = factors_of(wide)
+    detection = factors.index(1.0)
+    kind = {"ladder": WIDE} if wide else {}
+    made = _ladder_networks(project, str(tile["tile_id"]), str(tile["core_id"]), factors)
     if made is None:
-        return {"status": "unavailable", "factors": list(FACTORS), "detection": DETECTION, "steps": []}
+        return {"status": "unavailable", "factors": list(factors), "detection": detection, "steps": [], **kind}
     field, found, networks = made
     inner = np.zeros(field.shape, bool)
     inner[field.inner] = True
@@ -95,13 +112,13 @@ def compute(project, tile: dict) -> dict:
     shift = np.array([field.origin[0] - ox, field.origin[1] - oy])
     owner = np.zeros(field.shape, np.int32)
     steps = []
-    for factor, network in zip(FACTORS, networks):
+    for factor, network in zip(factors, networks):
         pieces = segments(network["skeleton"] & keep, network["width_um"], owner, field.pixel_size_um)
         steps.append({"factor": factor, "length_um": round(float(sum(p["length_um"] for p in pieces)), 1),
                       "lines": [(np.asarray(p["points"]) + shift).reshape(-1).astype(int).tolist() for p in pieces]})
     field.release()
-    return {"status": "done", "factors": list(FACTORS), "detection": DETECTION, "dab_threshold": float(field.threshold),
-            "ridge_threshold": RIDGE * float(field.threshold), "steps": steps, "seconds": round(time.time() - started, 2)}
+    return {"status": "done", "factors": list(factors), "detection": detection, "dab_threshold": float(field.threshold),
+            "ridge_threshold": RIDGE * float(field.threshold), "steps": steps, "seconds": round(time.time() - started, 2), **kind}
 
 
 def _stamp(project, core_id: str) -> str | None:
@@ -111,18 +128,24 @@ def _stamp(project, core_id: str) -> str | None:
     return None if made is None else f"{VERSION}:{made.get('digest', '')}"
 
 
-def field_ladder(project, tile: dict) -> dict:
+def _ladder_file(project, tile: dict, wide: bool):
+    from stainid import disk_cache  # noqa: PLC0415
+
+    return disk_cache.path(project.root, "thread_ladder", f"{tile['tile_id']}{'.wide' if wide else ''}.json")
+
+
+def field_ladder(project, tile: dict, wide: bool = False) -> dict:
     """`compute`, kept in memory and on disk (`thread_ladder` cache) until the core's stage-2 output changes."""
     from stainid import disk_cache  # noqa: PLC0415
 
     stamp = _stamp(project, str(tile["core_id"]))
-    key = (str(project.root), str(tile["tile_id"]))
+    key = (str(project.root), str(tile["tile_id"]), wide)
     with _LOCK:
         kept = _KEPT.get(key)
         if kept is not None and kept.get("stamp") == stamp:
             _KEPT.move_to_end(key)
             return kept
-    target = disk_cache.path(project.root, "thread_ladder", f"{tile['tile_id']}.json")
+    target = _ladder_file(project, tile, wide)
     out = None
     try:
         saved = json.loads(target.read_text())
@@ -132,7 +155,7 @@ def field_ladder(project, tile: dict) -> dict:
     except (OSError, ValueError):
         pass
     if out is None:
-        out = {**compute(project, tile), "stamp": stamp}
+        out = {**compute(project, tile, wide), "stamp": stamp}
         if out["status"] == "done":
             try:
                 disk_cache.write(target, json.dumps(out).encode())
@@ -145,34 +168,34 @@ def field_ladder(project, tile: dict) -> dict:
     return out
 
 
-def ready(project, tile: dict) -> bool:
+def ready(project, tile: dict, wide: bool = False) -> bool:
     """Whether the field's ladder is made (in memory or on disk) for the core's current stage-2 output."""
-    from stainid import disk_cache  # noqa: PLC0415
-
     stamp = _stamp(project, str(tile["core_id"]))
-    kept = _KEPT.get((str(project.root), str(tile["tile_id"])))
+    kept = _KEPT.get((str(project.root), str(tile["tile_id"]), wide))
     if kept is not None and kept.get("stamp") == stamp:
         return True
-    target = disk_cache.path(project.root, "thread_ladder", f"{tile['tile_id']}.json")
+    target = _ladder_file(project, tile, wide)
     try:
         return json.loads(target.read_text()).get("stamp") == stamp
     except (OSError, ValueError):
         return False
 
 
-def nearest_step(factor: float) -> int:
-    return int(np.argmin([abs(np.log(f) - np.log(max(float(factor), 1e-6))) for f in FACTORS]))
+def nearest_step(factor: float, factors=FACTORS) -> int:
+    return int(np.argmin([abs(np.log(f) - np.log(max(float(factor), 1e-6))) for f in factors]))
 
 
 def record(ladder: dict, factor: float) -> dict:
     """The label fields of a chosen thread threshold: `value` the factor, `points` what it gives (see the module)."""
-    step = nearest_step(factor)
+    factors = tuple(ladder.get("factors") or FACTORS)
+    step = nearest_step(factor, factors)
+    detection = factors.index(1.0)
     steps = ladder.get("steps") or []
     dab = ladder.get("dab_threshold")
     length = steps[step]["length_um"] if steps else None
-    detected = steps[DETECTION]["length_um"] if steps else None
-    return {"task": TASK, "value": f"{FACTORS[step]:.4f}", "confirmed": step == DETECTION,
-            "points": {"factor": FACTORS[step], "detection": 1.0, "thread_threshold": None if dab is None else round(RIDGE * dab * FACTORS[step], 5),
+    detected = steps[detection]["length_um"] if steps else None
+    return {"task": TASK, "value": f"{factors[step]:.4f}", "confirmed": step == detection,
+            "points": {"factor": factors[step], "detection": 1.0, "thread_threshold": None if dab is None else round(RIDGE * dab * factors[step], 5),
                        "detection_threshold": None if dab is None else round(RIDGE * dab, 5), "length_um": length, "detection_length_um": detected}}
 
 

@@ -63,6 +63,10 @@ def test_the_field_ladder_is_stage_2_s_threads_at_detection_s_threshold(syntheti
     assert stage2 > 0 and ladder["steps"][tt.DETECTION]["length_um"] == pytest.approx(stage2, abs=0.2)
     assert len({s["length_um"] for s in ladder["steps"]}) > 1  # the threshold changes what is found (in no fixed order on a synthetic picture)
     assert all(len(line) >= 4 and len(line) % 2 == 0 for line in ladder["steps"][tt.DETECTION]["lines"])
+    wide = tt.compute(project, tile, wide=True)  # the simple neurite brush's: 0.25x-4x, the standard steps inside it to the pixel
+    assert wide["ladder"] == "wide" and len(wide["steps"]) == len(tt.WIDE_FACTORS) and wide["detection"] == tt.WIDE_DETECTION
+    assert [s["lines"] for s in wide["steps"][tt.WIDE_OFFSET:tt.WIDE_OFFSET + len(tt.FACTORS)]] == [s["lines"] for s in ladder["steps"]]
+    assert wide["steps"][0]["length_um"] >= ladder["steps"][0]["length_um"]
 
 
 def test_the_summary_of_people_s_thread_thresholds():
@@ -107,8 +111,8 @@ def test_a_field_s_thread_threshold_is_one_label_and_comes_back(rounds_project, 
              "class": "tau+ neuron", "subtype": "pretangle"}]
     candidate_store.write_core(project, "AT8", "LIP-1_B-2", pd.DataFrame(rows))
     decisions.forget()
-    monkeypatch.setattr(tt, "field_ladder", lambda project, tile: LADDER)
-    monkeypatch.setattr(tt, "ready", lambda project, tile: True)
+    monkeypatch.setattr(tt, "field_ladder", lambda project, tile, wide=False: LADDER)
+    monkeypatch.setattr(tt, "ready", lambda project, tile, wide=False: True)
     made = admin.post("/api/labels/sessions", json={"stain": "AT8", "round": 2, "open": True, "tile_ids": [AT8_TILE]})
     assert made.status_code == 200, made.text
     name = made.json()["name"]

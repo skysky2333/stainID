@@ -245,7 +245,7 @@ export interface Label {
   meta?: { edit?: 'split' | 'merge'; group?: string; into?: number[][]; split_outline?: number[][]; whole_field?: boolean; reason?: string | null
     segments?: number[]; reach_um?: number | null; from?: string
     /** the neurite brush: [step, index] of each chosen thread piece, and the thread level (factor) it was saved at */
-    pieces?: number[][]; factor?: number } | null
+    pieces?: number[][]; factor?: number; ladder?: string } | null
 }
 export interface FieldObjectLite { x: number; y: number; radius_px: number; ai_value?: string; ai_probability?: number }
 export interface FieldWork {

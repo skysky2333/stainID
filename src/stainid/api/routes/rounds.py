@@ -600,11 +600,16 @@ def prefetch(meta: dict, tile_id: str, person: str) -> None:
         if not field_prepared(meta, state.tile(tile)):
             work.submit("field", _prepare_key(meta, tile), lambda task, t=tile: prepare_field(meta, t, task), work.AHEAD, "Preparing the next field")
     if meta["stain"] == "AT8":  # threads mode's network at every thread threshold: this field's and the next ones'
+        wide = rounds.is_simple(meta)  # the simple neurite brush: the wide ladder (0.25x-4x)
         for tile in [tile_id, *nexts]:
             found = state.tile(tile)
-            if not thread_threshold.ready(state.project, found):
-                work.submit("thread_ladder", (state.id, tile), lambda task, t=found: thread_threshold.field_ladder(get_state().project, t), work.AHEAD,
-                            "Preparing the threads of a field")
+            if not thread_threshold.ready(state.project, found, wide):
+                work.submit("thread_ladder", ladder_key(state.id, tile, wide), lambda task, t=found, w=wide: thread_threshold.field_ladder(get_state().project, t, w),
+                            work.AHEAD, "Preparing the threads of a field")
+
+
+def ladder_key(state_id, tile_id: str, wide: bool) -> tuple:
+    return (state_id, tile_id, thread_threshold.WIDE) if wide else (state_id, tile_id)
 
 
 def finishers(meta: dict, labels: pd.DataFrame, tile_id: str) -> list[dict]:
@@ -914,9 +919,10 @@ def clean(meta: dict, mark, person: str) -> dict | None:
 def clean_simple(meta: dict, mark, person: str) -> dict:
     """A label of a simple session (`labels.simple`): a candidate's simple class (or an added object's, at x, y), or
     the neurite brush's thread segments of a field (`meta.pieces`: [step, index] of each, a segment of the thread
-    network at that step of the thread ladder, `labels.thread_threshold.FACTORS`, which the server reads again:
-    `points` are those lines; `meta.factor` the thread level the slider was at, as the threads step keeps it; an older
-    page's `meta.segments` are pieces of detection's own step)."""
+    network at that step of the wide thread ladder, `labels.thread_threshold.WIDE_FACTORS`, which the server reads
+    again: `points` are those lines; `meta.factor` the thread level the slider was at, as the threads step keeps it;
+    pieces sent without `meta.ladder` "wide" are steps of the standard ladder, and an older page's `meta.segments`
+    pieces of detection's own step)."""
     stain = meta["stain"]
     words = simple.of(get_state().project, stain)
     record = {"source": person, "stain": stain, "task": mark.task, "session": meta["name"], "deleted": bool(mark.deleted), "value": mark.value,
@@ -928,15 +934,16 @@ def clean_simple(meta: dict, mark, person: str) -> dict:
         tile = field_tile(meta, mark.tile_id)
         given = mark.meta or {}
         try:
-            pieces = sorted({(int(a), int(b)) for a, b in given.get("pieces") or []}
-                            | {(thread_threshold.DETECTION, int(i)) for i in given.get("segments") or []})
+            shift = 0 if given.get("ladder") == thread_threshold.WIDE else thread_threshold.WIDE_OFFSET
+            pieces = sorted({(int(a) + shift, int(b)) for a, b in given.get("pieces") or []}
+                            | {(thread_threshold.WIDE_DETECTION, int(i)) for i in given.get("segments") or []})
         except (TypeError, ValueError):
             raise HTTPException(400, "the chosen thread segments are not [step, index] pairs") from None
         lines: list = []
         factor = _number(given.get("factor"))
         ladder: dict = {}
         if pieces and not mark.deleted:
-            ladder = thread_threshold.field_ladder(get_state().project, tile) if stain == "AT8" else {"status": "unavailable"}
+            ladder = thread_threshold.field_ladder(get_state().project, tile, wide=True) if stain == "AT8" else {"status": "unavailable"}
             steps = ladder.get("steps") or []
             if ladder.get("status") != "done" or not steps:
                 raise HTTPException(409, "The threads of this field are not ready yet: try again in a moment.")
@@ -947,9 +954,10 @@ def clean_simple(meta: dict, mark, person: str) -> dict:
         kept = None
         if lines:
             level = thread_threshold.record(ladder, factor if factor is not None else 1.0)["points"]
-            kept = {"pieces": [list(p) for p in pieces], "factor": level["factor"], "thread_threshold": level["thread_threshold"],
-                    "detection_threshold": level["detection_threshold"],
-                    "factors": sorted({float(thread_threshold.FACTORS[p[0]]) for p in pieces})}
+            factors = ladder.get("factors") or thread_threshold.WIDE_FACTORS
+            kept = {"pieces": [list(p) for p in pieces], "ladder": thread_threshold.WIDE, "factor": level["factor"],
+                    "thread_threshold": level["thread_threshold"], "detection_threshold": level["detection_threshold"],
+                    "factors": sorted({float(factors[p[0]]) for p in pieces})}
         return record | {"id": f"{simple.AREA_TASK}:{mark.tile_id}:{chosen.id}", "value": chosen.id, "x": None, "y": None, "candidate": None,
                          "points": lines or None, "deleted": bool(mark.deleted) or not lines, "meta": kept}
     if not mark.deleted and mark.value != simple.NONE and (chosen is None or chosen.kind != simple.OBJECTS):
@@ -1199,7 +1207,8 @@ def field_threads(name: str, tile_id: str, request: Request, person: str = Depen
         raise HTTPException(404, "the threads practice is its own tutorial (/api/annotate/practice-threads/ladder)")
     state = get_state()
     tile = field_tile(meta, tile_id)
-    return work.answer("thread_ladder", (state.id, tile_id), lambda task: thread_threshold.field_ladder(state.project, tile), work.NOW,
+    wide = rounds.is_simple(meta)  # the simple neurite brush reads the wide ladder
+    return work.answer("thread_ladder", ladder_key(state.id, tile_id, wide), lambda task: thread_threshold.field_ladder(state.project, tile, wide), work.NOW,
                        "Drawing the threads of this field")
 
 

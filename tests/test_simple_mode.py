@@ -151,27 +151,35 @@ def test_the_neurite_brush_keeps_pieces_of_any_thread_level_and_the_slider_s_fac
     from fastapi import HTTPException
 
     from stainid.api.routes import rounds as routes
-    from stainid.labels import thread_threshold
+    from stainid.labels import thread_threshold as tt
 
-    steps = [{"factor": f, "length_um": 1.0, "lines": [[k, 0, k + 5, 0], [k, 9, k + 5, 9]]} for k, f in enumerate(thread_threshold.FACTORS)]
-    ladder = {"status": "done", "factors": list(thread_threshold.FACTORS), "detection": thread_threshold.DETECTION, "steps": steps, "dab_threshold": 0.2}
+    wide = tt.WIDE_FACTORS
+    assert wide[0] == 0.25 and wide[-1] == 4.0 and len(wide) == 33 and wide[tt.WIDE_DETECTION] == 1.0
+    assert wide[tt.DETECTION + tt.WIDE_OFFSET] == tt.FACTORS[tt.DETECTION] and wide[tt.WIDE_OFFSET:tt.WIDE_OFFSET + len(tt.FACTORS)] == tt.FACTORS
+    steps = [{"factor": f, "length_um": 1.0, "lines": [[k, 0, k + 5, 0], [k, 9, k + 5, 9]]} for k, f in enumerate(wide)]
+    ladder = {"status": "done", "factors": list(wide), "detection": tt.WIDE_DETECTION, "steps": steps, "dab_threshold": 0.2, "ladder": tt.WIDE}
+    asked = []
     monkeypatch.setattr(routes, "field_tile", lambda meta, tile_id: {"tile_id": tile_id, "core_id": "C"})
-    monkeypatch.setattr(routes.thread_threshold, "field_ladder", lambda project, tile: ladder)
+    monkeypatch.setattr(routes.thread_threshold, "field_ladder", lambda project, tile, wide=False: asked.append(wide) or ladder)
     meta = {"stain": "AT8", "name": "s"}
 
     def mark(**given):
         return SimpleNamespace(task=simple.AREA_TASK, value="neurite", deleted=False, tile_id="T", x=None, y=None, candidate=None, points=None, meta=given)
 
-    low = thread_threshold.FACTORS.index(min(thread_threshold.FACTORS))  # 0.5×: further right on the slider, more lines
-    record = routes.clean_simple(meta, mark(pieces=[[low, 1], [thread_threshold.DETECTION, 0]], factor=0.5), "Ann")
-    assert record["points"] == [steps[low]["lines"][1], steps[thread_threshold.DETECTION]["lines"][0]]  # each piece at its own level
-    assert record["meta"]["pieces"] == [[low, 1], [thread_threshold.DETECTION, 0]] and record["meta"]["factor"] == 0.5
-    assert record["meta"]["thread_threshold"] == pytest.approx(thread_threshold.RIDGE * 0.2 * 0.5) and not record["deleted"]
+    low = 0  # 0.25×: at the right end of the slider, the most lines
+    record = routes.clean_simple(meta, mark(pieces=[[low, 1], [tt.WIDE_DETECTION, 0]], factor=0.25, ladder="wide"), "Ann")
+    assert asked == [True]  # the simple brush reads the wide ladder
+    assert record["points"] == [steps[low]["lines"][1], steps[tt.WIDE_DETECTION]["lines"][0]]  # each piece at its own level
+    assert record["meta"]["pieces"] == [[low, 1], [tt.WIDE_DETECTION, 0]] and record["meta"]["factor"] == 0.25 and record["meta"]["ladder"] == "wide"
+    assert record["meta"]["thread_threshold"] == pytest.approx(tt.RIDGE * 0.2 * 0.25) and record["meta"]["factors"] == [0.25, 1.0]
+    standard = routes.clean_simple(meta, mark(pieces=[[0, 1]], factor=0.5), "Ann")  # saved before the wide ladder: its step 0 is 0.5×
+    assert standard["meta"]["pieces"] == [[tt.WIDE_OFFSET, 1]] and standard["meta"]["factors"] == [0.5]
     older = routes.clean_simple(meta, mark(segments=[1]), "Ann")  # an earlier page's wand: pieces of detection's step
-    assert older["meta"]["pieces"] == [[thread_threshold.DETECTION, 1]] and older["meta"]["factor"] == 1.0
+    assert older["meta"]["pieces"] == [[tt.WIDE_DETECTION, 1]] and older["meta"]["factor"] == 1.0
     with pytest.raises(HTTPException):
-        routes.clean_simple(meta, mark(pieces=[[low, 7]]), "Ann")
+        routes.clean_simple(meta, mark(pieces=[[low, 7]], ladder="wide"), "Ann")
     assert routes.clean_simple(meta, mark(pieces=[]), "Ann")["deleted"]
+    assert tt.record(ladder, 4.0)["value"] == "4.0000" and tt.record({"factors": list(tt.FACTORS)}, 4.0)["value"] == "2.0000"
 
 
 def test_the_wand_logic():

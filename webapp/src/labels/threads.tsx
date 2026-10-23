@@ -18,6 +18,8 @@ export interface ThreadLadder {
   /** the tutorial's practice: its picture's size, its field box and its credit line */
   width?: number; height?: number; box?: { x: number; y: number; width: number; height: number }; credit?: string; tile_id?: string
   not_counted?: NotCounted
+  /** "wide": the simple neurite brush's ladder, 0.25x-4x */
+  ladder?: string
 }
 
 /** GET …/fields/{tile}/threads/areas (the tutorial: in its ladder): where the field is not counted — detection's
