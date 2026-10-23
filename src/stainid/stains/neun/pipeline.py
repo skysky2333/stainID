@@ -9,8 +9,8 @@ import numpy as np
 from joblib import load
 from PIL import Image
 
-from stainid.imaging.core_images import open_image
-from stainid.imaging.tissue import core_glass_darkness, linear_artifact_mask, tissue_area_mask
+from stainid.imaging.core_images import glass_darkness, open_image
+from stainid.imaging.tissue import linear_artifact_mask, tissue_area_mask
 from stainid.nuclei import CELLPOSE_SETTINGS, cellpose_masks, load_cellpose
 from stainid.pipelines.cohort_v1 import context_crop, local_profile_density
 from stainid.stains.neun.cellpose import classify_cellpose_masks
@@ -281,7 +281,7 @@ def run_neun_cohort(
             image_path = row["image_path"]
             image = open_image(image_path)
             image.load()
-            glass = core_glass_darkness(image)
+            glass = glass_darkness(image_path, image)
         x, y = int(row["x_px"]), int(row["y_px"])
         width, height = int(row["width_px"]), int(row["height_px"])
         rgb, inner = context_crop(image, x, y, width, height, context_px)

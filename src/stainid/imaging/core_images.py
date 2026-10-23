@@ -28,6 +28,8 @@ LINKS = Path("data") / "images" / "links"
 KIND = "images"  # in disk_cache.KINDS
 _LOCKS: dict[str, threading.Lock] = {}
 _GUARD = threading.Lock()
+SLIDE_GLASS_PX = 4096  # a whole slide's glass is measured on a picture this size (the longer side)
+_SLIDE_GLASS: dict[tuple, float | str | None] = {}  # (source, its time, recipe) -> the slide's glass darkness, or "own"
 
 
 def is_link(path: Path | str) -> bool:
@@ -134,6 +136,34 @@ def open_image(path: Path | str) -> Image.Image:
         return Image.open(path)
     image = _from_kept(path, Image.open)
     return image if image is not None else Image.fromarray(render(path))
+
+
+def glass_darkness(path: Path | str, image: Image.Image) -> float | None:
+    """How dark the bare glass is for the core image at `path` (`image`: it, opened): for a region of a whole slide (a
+    link to part of its source) that of the slide's own glass (`tissue.slide_glass_darkness`, measured once per slide),
+    as a region cut down to its tissue has little glass at its edge; for any other core image its own outer edge
+    (`tissue.core_glass_darkness`)."""
+    from stainid.imaging.sources import open_source
+    from stainid.imaging.tissue import core_glass_darkness, slide_glass_darkness
+
+    path = Path(path)
+    if not is_link(path):
+        return core_glass_darkness(image)
+    data = read_link(path)
+    source_path = Path(data["source"])
+    key = (str(source_path), source_path.stat().st_mtime_ns, json.dumps(data["recipe"], sort_keys=True))
+    with _GUARD:
+        known = _SLIDE_GLASS.get(key, "unknown")
+    if known == "unknown":
+        source = open_source(source_path)
+        if [int(v) for v in data["box"]] == [0, 0, source.width, source.height]:
+            known = "own"  # the whole image, not a region of a slide
+        else:
+            thumb, _ = source.thumbnail(SLIDE_GLASS_PX)
+            known = slide_glass_darkness(to_analysis_rgb(thumb, Recipe.from_dict(data["recipe"])))
+        with _GUARD:
+            _SLIDE_GLASS[key] = known
+    return core_glass_darkness(image) if known == "own" else known
 
 
 def _imread(flag: int):

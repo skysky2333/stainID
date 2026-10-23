@@ -378,3 +378,27 @@ def test_ome_zarr_is_read_level_by_level(tmp_path):
     assert np.array_equal(source.read(250, 150, 100, 100), rgb[150:250, 250:350])
     reduced = source.region((0, 0, 600, 400), 0.11 / 0.2738)  # to the analysis scale: read from the coarser level
     assert reduced.shape[:2] == (round(400 * 0.11 / 0.2738), round(600 * 0.11 / 0.2738))
+
+
+def test_a_slide_region_full_of_pale_tissue_measures_its_tissue_against_the_slide_s_glass(tmp_path):
+    import cv2
+
+    from stainid.imaging.tissue import core_glass_darkness, tissue_area_mask
+
+    slide = np.full((1200, 1200, 3), 236, np.uint8)  # light-grey glass
+    slide[200:1000, 200:1000] = (222, 222, 224)  # pale tissue (white matter, a faint stain)
+    source = tmp_path / "slide.png"
+    cv2.imwrite(str(source), slide)
+    link = core_images.write_link(tmp_path / "data" / "images" / "links" / "S_R01.json", source, (400, 400, 400, 400), 1.0,
+                                  chromogens.recipe("DAB"), False, (400, 400))  # a region inside the tissue: no glass in it
+    with core_images.open_image(link) as image:
+        rgb = np.asarray(image.convert("RGB"))
+        glass = core_images.glass_darkness(link, image)
+        assert core_glass_darkness(image) > 0.13  # the region's own edge is pale tissue, taken for glass
+    assert glass == pytest.approx(-np.log(236 / 255), abs=0.005)  # the slide's glass
+    assert tissue_area_mask(rgb, glass).mean() == 1.0
+    whole = core_images.write_link(tmp_path / "data" / "images" / "links" / "S.json", source, (0, 0, 1200, 1200), 1.0,
+                                   chromogens.recipe("DAB"), False, (1200, 1200))
+    core_images._SLIDE_GLASS.clear()
+    with core_images.open_image(whole) as image:
+        assert core_images.glass_darkness(whole, image) == core_glass_darkness(image)  # a whole image: its own edge

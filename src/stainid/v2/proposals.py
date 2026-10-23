@@ -22,9 +22,8 @@ from scipy.spatial import cKDTree
 
 from stainid import candidates as store
 from stainid.imaging import shared_arrays
-from stainid.imaging.core_images import open_image
+from stainid.imaging.core_images import glass_darkness, open_image
 from stainid.imaging.shared import shared_pictures
-from stainid.imaging.tissue import core_glass_darkness
 from stainid.nuclei import nucleus_centroids
 from stainid.v2 import amyloid, manifest, neun, tau
 from stainid.v2.context import context_features_many
@@ -606,11 +605,11 @@ def expected(project, stain: str, core_id: str, tiles: list[dict], threshold: fl
 
 def decode_core(path, shared: bool = False) -> tuple[np.ndarray, float | None, str | None]:
     """A core image decoded once: its RGB picture (as `image.crop(box).convert("RGB")` cuts it; read-only), the glass
-    darkness (`core_glass_darkness`) and, `shared`, the shared-memory file holding the picture (tile processes map it;
+    darkness (`core_images.glass_darkness`) and, `shared`, the shared-memory file holding the picture (tile processes map it;
     the caller removes it, `shared_arrays.remove`)."""
     with open_image(path) as image:
         image.load()
-        glass = core_glass_darkness(image)
+        glass = glass_darkness(path, image)
         shape = (image.height, image.width, 3)
         if shared:
             file, rgb = shared_arrays.create("core.rgb", shape, np.uint8)

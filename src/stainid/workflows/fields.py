@@ -7,8 +7,8 @@ import numpy as np
 from joblib import load
 from PIL import Image
 
-from stainid.imaging.core_images import open_image
-from stainid.imaging.tissue import core_glass_darkness, fold_mask, linear_artifact_mask
+from stainid.imaging.core_images import glass_darkness, open_image
+from stainid.imaging.tissue import fold_mask, linear_artifact_mask
 from stainid.pipelines.cohort_v1 import context_crop
 from stainid.project import Project
 from stainid.qc.exclusions import rasterize_core_exclusions
@@ -88,7 +88,7 @@ def run_fields(project: Project, stains: list[str] = ("6E10", "AT8"), shard_inde
             features, objects = [], []
             with open_image(project.root / tiles[0]["image_path"]) as image:
                 image.load()
-                glass = core_glass_darkness(image)
+                glass = glass_darkness(project.root / tiles[0]["image_path"], image)
                 for tile in tiles:
                     feature, items = analyze_field(project, image, tile, stain, calibration, manual, bundles, nuclei_dir, glass)
                     features.append(feature)

@@ -77,8 +77,24 @@ def core_glass_darkness(image) -> float | None:
     border = max(4, round(0.04 * min(small.shape[:2])))
     ring = np.concatenate([small[:border].reshape(-1, 3), small[-border:].reshape(-1, 3),
                            small[:, :border].reshape(-1, 3), small[:, -border:].reshape(-1, 3)])
-    glass = ring[(ring.max(axis=1) - ring.min(axis=1) <= GLASS_MAX_CHROMA) & (ring.min(axis=1) >= GLASS_MIN_LEVEL)]
-    if len(glass) < GLASS_MIN_FRACTION * len(ring):
+    return _glass_level(ring, len(ring))
+
+
+def slide_glass_darkness(rgb: np.ndarray) -> float | None:
+    """How dark the bare glass of a whole slide is, from a small picture of the whole slide (RGB, analysis colours):
+    the bright, colourless pixels around its tissue (outside `field_tissue_mask`). A region cut out of a slide has
+    little glass at its edge, often none, so `core_glass_darkness` would take the pale tissue at its edge for glass;
+    the slide's own glass is measured once for all its regions instead. Pure white (outside the scanned area) is left
+    out."""
+    pixels = rgb[~field_tissue_mask(rgb)].astype(np.int16)
+    return _glass_level(pixels[pixels.min(axis=1) < 254], rgb.shape[0] * rgb.shape[1])
+
+
+def _glass_level(pixels: np.ndarray, out_of: int) -> float | None:
+    """The darkness of the glass among `pixels` (N x 3): the median of the bright, colourless ones, when at least
+    GLASS_MIN_FRACTION of `out_of` are."""
+    glass = pixels[(pixels.max(axis=1) - pixels.min(axis=1) <= GLASS_MAX_CHROMA) & (pixels.min(axis=1) >= GLASS_MIN_LEVEL)]
+    if len(glass) < GLASS_MIN_FRACTION * out_of:
         return None
     return float(np.max(-np.log(np.maximum(np.median(glass, axis=0), 1.0) / 255.0)))
 

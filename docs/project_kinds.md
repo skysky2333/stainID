@@ -41,6 +41,8 @@ The *Prepare images* step (`stainid images`) replaces Find cores, Export cores a
 - **Whole slides**: each slide is covered by a grid of square regions of 6144 analysis pixels (about 1.7 mm, a large
   TMA core); every region holding at least 5 % tissue on an 8 µm/px picture, cut down to its tissue plus 60 µm, is one
   core image. Regions never overlap. They are tiled like whole cores (every square with tissue, at least 0.5 %).
+  A region's tissue area is measured against the slide's own glass, found once per slide around all its tissue
+  (`core_images.glass_darkness`): a region cut down to its tissue has little glass at its edge to measure.
 
 ### Whole slides on the pages (`stainid.imageset.slides`)
 
