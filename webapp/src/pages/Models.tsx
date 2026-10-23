@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import type { BadAreas, Detection, Job, LabelSet, LabelsOverview, Metrics, ModelInfo, TrainedModel } from '../api'
+import type { BadAreas, Detection, ExtraProject, Job, LabelSet, LabelsOverview, Metrics, ModelInfo, TrainedModel } from '../api'
 import { api, runStep } from '../api'
 import { Empty, ErrorNote, HelpBox, Loaded, Modal, PageHead, PathLine, Progress, Term, fmt, timeAgo, withError } from '../components'
 import { useFetch } from '../hooks'
@@ -76,6 +76,7 @@ export default function Models() {
           <ErrorNote error={trained.error} />
           <ScoreOnLabels />
           <SimpleTraining />
+          <ExtraProjects />
           <h2 className="stage-title">Outlines</h2>
           <OutlineFixes />
           <SegmentationCheck />
@@ -206,16 +207,60 @@ function addedNote(model: TrainedModel): string {
   return `, including ${added.objects.toLocaleString()} that people added where detection proposed nothing${unmeasured}`
 }
 
-/** " · from Round 1 and AI reference labels": the sessions a model learned from (models trained before sessions were recorded say nothing). */
+/** " · from Round 1 and AI reference labels": the sessions a model learned from (models trained before sessions were recorded say nothing),
+ *  and " + 412 from JOG AI training (training only)": other projects' labels it was also fitted on. */
 function trainedOn(model: TrainedModel): string {
   const titles = (model.sessions ?? []).map((s) => s.title)
-  return titles.length ? ` · from ${titles.length > 1 ? `${titles.slice(0, -1).join(', ')} and ${titles[titles.length - 1]}` : titles[0]}` : ''
+  const own = titles.length ? ` · from ${titles.length > 1 ? `${titles.slice(0, -1).join(', ')} and ${titles[titles.length - 1]}` : titles[0]}` : ''
+  const lent = (model.extra_projects ?? []).filter((p) => p.objects > 0)
+  return own + (lent.length ? ` + ${lent.map((p) => `${p.objects.toLocaleString()} from ${p.name}`).join(', ')} (training only)` : '')
+}
+
+/** Other projects whose labels every model here also learns from: switched on per project; they are never used to test a model. */
+function ExtraProjects() {
+  const state = useFetch<{ projects: ExtraProject[]; stains: string[] }>('/api/models/extra-projects')
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const toggle = (list: ExtraProject[], p: ExtraProject) => withError(async () => {
+    setBusy(true)
+    try {
+      const on = list.filter((q) => q.enabled && q.path !== p.path).map((q) => q.path)
+      await api.put('/api/models/extra-projects', { projects: p.enabled ? on : [...on, p.path] })
+      state.reload()
+    } finally { setBusy(false) }
+  }, setError)
+  return (
+    <section className="card extra-projects" id="extra-projects">
+      <div className="row"><h2 style={{ margin: 0 }}>Training cases from other projects</h2><span className="spacer" /><span className="badge">training only</span></div>
+      <p className="muted small">A new model can also learn from the objects people labelled in other projects, such as whole slides scanned for training.
+        They only add examples to learn from: every test score on this page still comes from this project’s own labels and TMAs, and no result of this
+        project uses them. Simple labels there count through the mapping above. Each model records which projects it learned from.</p>
+      <Loaded state={state} label="Loading the projects…">
+        {(data) => data.projects.length ? (
+          <div className="train-sets">{data.projects.map((p) => (
+            <label key={p.path} className={`choice-card${p.enabled ? ' chosen' : ''}`}>
+              <input type="checkbox" checked={p.enabled} disabled={busy || (!p.enabled && !p.exists)} onChange={() => toggle(data.projects, p)} />
+              <span><b>{p.name}</b>
+                {p.enabled && p.labels && <span className="small secondary">{data.stains.filter((s) => (p.labels?.[s] ?? 0) > 0)
+                  .map((s) => `${s} ${p.labels![s].toLocaleString()} labelled objects`).join(' · ') || 'nothing labelled yet'}</span>}
+                {p.enabled && !p.exists && <span className="small status-failed">The folder is gone; switch it off or bring it back.</span>}
+                {p.error && <span className="small status-failed">{p.error}</span>}
+                <span className="small muted ellipsis" title={p.path}>{p.path}</span></span>
+            </label>
+          ))}</div>
+        ) : <Empty>No other project is on the Projects list yet.</Empty>}
+      </Loaded>
+      <ErrorNote error={error} />
+    </section>
+  )
 }
 
 /** Which sessions a new model learns from: every session with labels of this stain is listed with its label counts per class;
  *  all are chosen at first. */
 function TrainDialog({ stain, onClose, onStart }: { stain: string; onClose: () => void; onStart: (sessions: string[] | null) => Promise<unknown> }) {
   const sets = useFetch<LabelSet[]>(`/api/labels/sets?stain=${encodeURIComponent(stain)}`)
+  const lenders = useFetch<{ projects: ExtraProject[] }>('/api/models/extra-projects')
+  const lent = (lenders.data?.projects ?? []).filter((p) => p.enabled && (p.labels?.[stain] ?? 0) > 0)
   const [left, setLeft] = useState<string[]>([])  // sessions left out
   const [busy, setBusy] = useState(false)
   const all = sets.data ?? []
@@ -245,6 +290,9 @@ function TrainDialog({ stain, onClose, onStart }: { stain: string; onClose: () =
             ))}</div>
           ) : <Empty>No {stain} objects are labelled yet. Start a labelling session on <Link to="/labels">Labels</Link> first.</Empty>}
         </Loaded>
+        {lent.length > 0 && <p className="small secondary" style={{ margin: 0 }}>It also learns from {lent.map((p) =>
+          `${p.labels![stain].toLocaleString()} objects labelled in ${p.name}`).join(' and ')}: for learning only, never for its test
+          (see <a href="#extra-projects">Training cases from other projects</a>).</p>}
         <div className="row"><span className="spacer" />
           <span className="small secondary">{chosen.length} of {all.length} session{all.length === 1 ? '' : 's'} · {objects.toLocaleString()} objects</span>
           <button className="btn" onClick={onClose}>Cancel</button>
@@ -272,7 +320,9 @@ function VersionTable({ versions }: { versions: TrainedModel[] }) {
                 {t.sessions ? t.sessions.map((s) => s.title).join(', ') : t.sources ? `${Object.keys(t.sources).length} label sources` : (t.sets ?? []).join(', ')}</div>
                 {mappingText(t) && <div className="muted small simple-used">{mappingText(t)}</div>}</td>
               <td className="num">{t.new_model.n.toLocaleString()}<div className="muted small">{t.new_model.positives.toLocaleString()} positive</div>
-                {t.person_added && t.person_added.objects > 0 && <div className="muted small">{t.person_added.objects.toLocaleString()} added by people</div>}</td>
+                {t.person_added && t.person_added.objects > 0 && <div className="muted small">{t.person_added.objects.toLocaleString()} added by people</div>}
+                {(t.fitted_on?.extra_projects ?? 0) > 0 && <div className="muted small" title={(t.extra_projects ?? []).filter((p) => p.objects).map((p) => `${p.name}: ${p.objects}`).join(', ')}>
+                  + {t.fitted_on!.extra_projects.toLocaleString()} from other projects (training only)</div>}</td>
               <td className="small">{t.validation}</td>
               <td><MetricLine m={t.new_model} /></td>
               <td>{t.current_model ? <MetricLine m={t.current_model} /> : <span className="muted small">none</span>}</td>

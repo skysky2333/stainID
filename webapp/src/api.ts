@@ -118,6 +118,14 @@ export interface TrainedModel {
   person_added?: { objects: number; positive: number; could_not_be_measured: number; detection: Detection }
   /** how simple labels trained (simple class -> detailed class), when the training used any */
   simple_mapping?: { classes: Record<string, string>; training: Record<string, string>; labels: Record<string, number> } | null
+  /** other projects' labels the model was also fitted on (training only: the test figures are this project's) */
+  extra_projects?: { path: string; name: string; objects: number; positives: number; negatives?: number; note?: string }[]
+  fitted_on?: { objects: number; positives: number; this_project: number; extra_projects: number }
+}
+/** A project whose labels this project's models may also learn from (Models → Training cases from other projects). */
+export interface ExtraProject {
+  path: string; id: string; name: string; enabled: boolean; exists: boolean; kind?: string; stains?: string[]
+  labels?: Record<string, number>; error?: string
 }
 export interface CoreRow {
   core_id: string; tma: string; core_label: string; donor_id: string | null; sample_region_id: string | null
