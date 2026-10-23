@@ -91,3 +91,16 @@ def test_every_view_draws_the_outline_one_rule_chooses(project, setting):
         page = [int(round(v)) for point in found[default] for v in point]
         assert store.outline_rings(row) == [page], (setting, row["candidate_id"])
 
+
+
+def test_the_cores_view_draws_rejected_candidates_once_zoomed_in():
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    node = shutil.which("node") or str(Path.home() / ".local/node/bin/node")
+    if not Path(node).exists():
+        pytest.skip("Node.js is not installed")
+    script = Path(__file__).parent / "js" / "core_layers.test.ts"
+    done = subprocess.run([node, "--experimental-strip-types", "--no-warnings", str(script)], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stdout + done.stderr

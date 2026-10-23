@@ -18,6 +18,7 @@ import { ThresholdSlider } from '../labels/threshold'
 import { whyFound } from '../labels/reasons'
 import { isAiLabel } from '../labels/aiLabels'
 import { passes } from '../labels/fieldStart'
+import { REJECTED_VIEW_UM, closeEnough as isCloseEnough, drawnObjects, rejectedNote, viewSpanUm } from './coreLayers'
 
 interface CoreInfo extends CoreDetail {
   images: (CoreDetail['images'][number] & { pixel_width_um?: number })[]
@@ -130,9 +131,6 @@ interface Found {
 
 // exact outlines are drawn instead of circles wherever the Outline objects step has made them; every candidate is shown,
 // rejected ones dotted grey (stored under a new key, so the choice of hiding them made before applies no more)
-/** Rejected candidates are drawn (and their outlines fetched) only once the view spans at most this much across, about
- *  two labelling fields: further out they are too small to tell apart and only crowd the accepted objects. */
-const REJECTED_VIEW_UM = 1100
 const LAYER_DEFAULTS = { objects: true, rejected: true, outlines: true, threads: false, unproposed: false, excluded: true, annotations: true, dab: false, tiles: false }
 type Layers = typeof LAYER_DEFAULTS
 /* The colours of the objects on the core picture: saturated, and clear of DAB brown and haematoxylin blue, each drawn
@@ -313,8 +311,7 @@ function CoreImage({ unit, core, stain, start }: { unit: Unit; core: CoreInfo; s
   const [target, setTarget] = useState<ViewTarget | null>(start ? { ...start, scale: 0.5, key: 0 } : null)
   const [viewRect, setViewRect] = useState<ViewRect | null>(null)
   const image = core.images.find((i) => i.stain === stain)
-  const viewUm = viewRect ? (viewRect.x1 - viewRect.x0) * (image?.pixel_width_um ?? 0.5) : Infinity
-  const closeEnough = viewUm <= REJECTED_VIEW_UM  // rejected candidates are drawn from here in
+  const closeEnough = isCloseEnough(viewSpanUm(viewRect, image?.pixel_width_um))  // rejected candidates are drawn from here in
   const [rejectsWanted, setRejectsWanted] = useState(false)  // fetched once needed, kept after zooming out again
   const ready = picture.data?.ready ? picture.data : null
   const settled = !!ready || (picture.data && !picture.data.ready && picture.data.state === 'failed')
@@ -363,8 +360,9 @@ function CoreImage({ unit, core, stain, start }: { unit: Unit; core: CoreInfo; s
   const counted = useMemo(() => objects.filter((o) => o.cls.startsWith('label:') && !!vocabulary
     && roleOf(vocabulary, o.cls.slice(6).split('/')[0]) === 'positive').length, [objects, vocabulary])
   const showOutlines = layers.outlines && outlinesMade && !!shapes.data
-  const drawn = useMemo(() => objects.filter((o) => (o.cls !== 'rejected' || (layers.rejected && closeEnough)) && (layers.objects || (showOutlines && o.outline))),
-    [objects, layers.objects, layers.rejected, closeEnough, showOutlines])
+  const drawn = useMemo(() => drawnObjects(objects, layers, closeEnough, showOutlines), [objects, layers.objects, layers.rejected, closeEnough, showOutlines])  // eslint-disable-line react-hooks/exhaustive-deps
+  const rejectedLine = useMemo(() => rejectedNote(objects, layers, closeEnough, viewRect, word),
+    [objects, layers.objects, layers.rejected, closeEnough, viewRect, word])  // eslint-disable-line react-hooks/exhaustive-deps
   // an object with an exact outline shown is drawn by its outline instead of the circle
   const marks = useMemo<Mark[]>(() => drawn.map((o) => {
     const outlined = showOutlines && !!o.outline
@@ -556,9 +554,9 @@ function CoreImage({ unit, core, stain, start }: { unit: Unit; core: CoreInfo; s
                   <span className="swatch" style={swatchOf(INACTIVE_GREY, true)} />also show rejected candidates<span className="spacer" /><span className="muted">{counts.rejected.toLocaleString()}</span>
                 </label>
               )}
-              {!!counts.rejected && layers.rejected && layers.objects && !closeEnough && (
-                <div className="small muted indent rejected-zoom-note" title={`Rejected candidates are drawn once the view spans ${(REJECTED_VIEW_UM / 1000).toFixed(1)} mm or less`}>
-                  Zoom in to see rejected candidates</div>
+              {rejectedLine && (
+                <div className={`small muted indent ${closeEnough ? 'rejected-view-note' : 'rejected-zoom-note'}`}
+                  title={`Rejected candidates are drawn once the view spans ${(REJECTED_VIEW_UM / 1000).toFixed(1)} mm or less`}>{rejectedLine}</div>
               )}
               <OutlinesToggle made={outlinesMade} on={layers.outlines} onToggle={() => toggle('outlines')} state={shapes}
                 count={drawn.filter((o) => o.outline).length} v2={found.data.source === 'v2'} />

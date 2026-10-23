@@ -363,6 +363,21 @@ export function DeepZoom({ pyramid, tileUrl, layers = [], marks = [], lines, lin
     g.lineJoin = 'round'
     for (const key of cells) for (const i of p.home.get(key)!) {  // objects without an outline: a circle, or a dot when small
       const m = ms[i]
+      if (m.rings?.length) {  // an outline only a few screen px across (a small rejected speck): a dot too, so it is seen
+        const b = p.bounds[i]
+        if (Math.max(b.x1 - b.x0, b.y1 - b.y0) * v.s < DOT_PX) {
+          const x = m.x * v.s + ox, y = m.y * v.s + oy
+          if (x < -4 || y < -4 || x > w + 4 || y > h + 4) continue
+          g.beginPath()
+          g.arc(x, y, m.dashed ? 1.8 : 2.4, 0, 2 * Math.PI)
+          g.fillStyle = m.color
+          g.strokeStyle = HALO_COLOR
+          g.lineWidth = 1
+          g.fill()
+          g.stroke()
+        }
+        continue
+      }
       if (m.circle === false) continue
       const x = m.x * v.s + ox, y = m.y * v.s + oy
       const r = (m.r ?? 4) * v.s + 2
