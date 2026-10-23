@@ -388,6 +388,26 @@ def thumbnail(state: ProjectState, core_id: str, stain: str, size: int) -> Path:
     return target
 
 
+def field_preview(state: ProjectState, tile: dict, box: tuple[int, int, int, int]) -> Path | None:
+    """The field's picture (`box`: its place in the core, core px) cut from the core's thumbnail base: blurred, but
+    there in a fraction of a second while the sharp one is made. None when the base needs the whole image decoded."""
+    core_id, stain = str(tile["core_id"]), str(tile["stain"])
+    if thumbnail_state(state, core_id, stain, THUMB_BASE) == "slow":
+        return None
+    core = state.core_image(core_id, stain)
+    source = _source(state, core_id, stain)
+    target = state.cache_dir("thumbs") / f"{tile['tile_id']}_preview.jpg"
+    with _maker(target):
+        if not _fresh(target, source):
+            base = cv2.imread(str(_make_base(state, core_id, stain)), cv2.IMREAD_COLOR)
+            scale = base.shape[1] / float(core["native_width_px"])
+            x0, y0, x1, y1 = (int(round(v * scale)) for v in box)
+            part = base[y0:max(y0 + 1, y1), x0:max(x0 + 1, x1)]
+            write_atomic(target, jpeg(part, 80))
+    disk_cache.used(target)
+    return target
+
+
 def field_thumbnail(state: ProjectState, tile: dict, size: int = 192) -> Path:
     """A small JPEG of one tile (a labelling field), cut from its core's thumbnail: cheap, so pickers can show many."""
     core = state.core_image(str(tile["core_id"]), str(tile["stain"]))

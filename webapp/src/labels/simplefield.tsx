@@ -141,7 +141,10 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
   const levels = useLevels()  // the whole core and the middle zoom level beside the field (fieldstrip.tsx)
   const [stripOn, setStripOn] = useStripShown()
   const wandOn = !!wandClass && active === wandClass.id
-  const ladder = useFetch<ThreadLadder>(wandClass && !practice ? `/api/annotate/${name}/fields/${enc(tile)}/threads` : null)
+  // the thread ladder only once the neurite pass is open (made ahead in the background; never on the field's way in)
+  const [ladderAsked, setLadderAsked] = useState(false)
+  useEffect(() => { if (wandClass && active === wandClass.id) setLadderAsked(true) }, [active, wandClass])
+  const ladder = useFetch<ThreadLadder>(wandClass && !practice && ladderAsked ? `/api/annotate/${name}/fields/${enc(tile)}/threads` : null)
   const ladderDone = ladder.data?.status === 'done' && ladder.data.steps.length ? ladder.data : null
   const step = ladderDone ? (level ?? stepOf(ladderDone.factors, areaMeta?.factor, ladderDone.detection)) : 0
   const lines = ladderDone ? ladderDone.steps[step]?.lines ?? null : null
@@ -466,6 +469,7 @@ export function SimpleFixer({ detail, reload, tile, field, onEvent, onFinished, 
           {menu && byKey.get(menu.key) && <SimpleMenu at={menu} classes={objectClasses} current={callOf(byKey.get(menu.key)!).value}
             onPick={(value) => { const s = byKey.get(menu.key)!; setMenu(null); giveClass(s, value); tell('menu') }} onClose={() => setMenu(null)} />}
           <ZoomViewer fit src={apiUrl(`/api/annotate/${name}/fields/${enc(tile)}/image.jpg`)}
+            preview={apiUrl(`/api/annotate/${name}/fields/${enc(tile)}/preview.jpg`)} pictureSize={field.picture}
             layers={hidden ? [] : field.layers.filter((l) => layers[l]).map((l) => apiUrl(`/api/annotate/${name}/fields/${enc(tile)}/layer/${l}.png`))}
             title={<span className="row">{!practice && <button className={`btn small levels-toggle${stripOn ? ' chosen' : ''}`} onClick={() => setStripOn(!stripOn)} aria-pressed={stripOn}
               title={stripOn ? 'Hide the whole core and the middle zoom level' : 'Show the whole core and a middle zoom level beside the field'}>Overview</button>}

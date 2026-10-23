@@ -38,7 +38,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from stainid import candidates as candidate_store_ids
-from stainid.api import render, sam_embeddings, work
+from stainid.api import ahead, render, sam_embeddings, work
 from stainid.api.routes.annotate import (
     LAYERS,
     Mark,
@@ -275,40 +275,19 @@ def add_fields(meta: dict, n: int, tile_ids: list[str] | None, seed: int | None 
 
 def warm(meta: dict, force: bool = False) -> None:
     """Make ahead what people will see: the Segment Anything features and the pictures of a "Fix the field" session's
-    fields (when the session is open). An old round-1 session needs nothing: nobody works on it any more."""
+    fields (when the session is open; the pictures by the idle-time preparation, `stainid.api.ahead`, which gives way to
+    people and jobs). An old round-1 session needs nothing: nobody works on it any more."""
     state = get_state()
     if meta.get("practice") or rounds.round_of(meta) != 2:
         return
     sam_embeddings.prepare_session(state, meta, force=force)
-    prepare_pictures(meta, force)
-
-
-def prepare_pictures(meta: dict, force: bool = False) -> work.Task | None:
-    """Cut the pictures of an open round-2 session's fields in the background (one decode per core image), so that
-    nobody waits for them; its progress is the session's `preparing`."""
-    state = get_state()
-    if not meta.get("open") or not meta.get("fields"):
-        return None
-    made = render.fields_made(state)  # one listing (a session may have hundreds of fields)
-    if all(t in made for t in meta["fields"]):
-        return None
-    return work.submit("pictures", ("pictures", str(state.root), meta["name"]),
-                       lambda task: render.field_jpegs(state, [t for t in meta["fields"] if _known(t)], task.step), work.AHEAD,
-                       "Preparing the session's pictures", fresh=lambda task: not force)
-
-
-def _known(tile_id: str) -> bool:
-    try:
-        get_state().tile(tile_id)
-    except KeyError:
-        return False
-    return True
+    ahead.wake()
 
 
 def warm_up(state) -> None:
     """When the server starts (a background thread): load Segment Anything (its import alone takes seconds, never in a
-    request), make the decisions of the stains of the open round sessions, and queue the pictures and first fields of
-    those sessions."""
+    request), make the decisions of the stains of the open round sessions, and queue their first fields (the pictures of
+    all their fields: the idle-time preparation, `stainid.api.ahead`)."""
     from stainid.api.state import use_project  # noqa: PLC0415
 
     with use_project(state.id):
@@ -324,7 +303,6 @@ def warm_up(state) -> None:
                 for tile in [t for t in meta["fields"] if len(finished.get(t, set())) < rounds.needed(meta)][:NEXT_FIELDS]:
                     work.submit("field", _prepare_key(meta, tile), lambda task, t=tile, m=meta: prepare_field(m, t, task), work.AHEAD,
                                 "Preparing the first fields")
-                prepare_pictures(meta)
 
 
 @router.get("/labels/rounds/scope", dependencies=admin)
@@ -547,13 +525,18 @@ def field_masks(meta: dict, tile: dict) -> dict[str, list]:
     return _field_shapes(meta, tile)[1]
 
 
-def field_prepared(meta: dict, tile: dict) -> bool:
-    """Whether a field opens at once: its picture made, its candidates read and the decisions up to date."""
+def objects_ready(meta: dict, tile: dict) -> bool:
+    """Whether a field's objects answer at once: its candidates read and the decisions up to date (its picture is
+    the page's own request, `annotate.image`: never waited for here)."""
     state = get_state()
     with _OBJECTS_LOCK:
         kept = _OBJECTS.get(_objects_key(meta, tile))
-    return (kept is not None and kept[0] is vocabulary(meta["stain"]) and render.field_path(state, str(tile["tile_id"])).exists()
-            and (bool(meta.get("practice")) or decisions.cached(state.project, meta["stain"], meta["name"])))
+    return kept is not None and kept[0] is vocabulary(meta["stain"]) and (bool(meta.get("practice")) or decisions.cached(state.project, meta["stain"], meta["name"]))
+
+
+def field_prepared(meta: dict, tile: dict) -> bool:
+    """Whether a field opens at once: its picture made, its candidates read and the decisions up to date."""
+    return objects_ready(meta, tile) and render.field_path(get_state(), str(tile["tile_id"])).exists()
 
 
 def _same_core_fields(meta: dict, tile: dict) -> list[str]:
@@ -564,14 +547,16 @@ def _same_core_fields(meta: dict, tile: dict) -> list[str]:
     return list(mine.tile_id[mine.image_path == tile["image_path"]])
 
 
-def prepare_field(meta: dict, tile_id: str, task: work.Task | None = None) -> bool:
+def prepare_field(meta: dict, tile_id: str, task: work.Task | None = None, pictures: bool = True) -> bool:
     """Make what opening a field needs: its picture (and those of the session's other fields on that core, from the same
-    decode), its candidates and the decisions."""
+    decode; not with `pictures` False: someone waits, the picture is its own request), its candidates and the
+    decisions."""
     state = get_state()
     tile = state.tile(tile_id)
     step = task.step if task else (lambda *a: None)
     step(0, 3)
-    render.field_jpegs(state, [tile_id, *_same_core_fields(meta, tile)], urgent=task is None or task.priority <= work.NOW)
+    if pictures:
+        render.field_jpegs(state, [tile_id, *_same_core_fields(meta, tile)], urgent=task is None or task.priority <= work.NOW)
     step(1, 3)
     field_objects(meta, tile)
     step(2, 3)
@@ -596,6 +581,12 @@ def prefetch(meta: dict, tile_id: str, person: str) -> None:
     nexts = [t for t in order if person not in finished.get(t, set()) and len(finished.get(t, set())) < rounds.needed(meta)
              and not (held.get(t, set()) - {person})][:NEXT_FIELDS]
     state = get_state()
+    here = state.tile(tile_id)
+    others = [t for t in _same_core_fields(meta, here) if not render.field_path(state, t).exists()]
+    if others:  # the core's other fields, from one decode, once this one's picture is made (the person's comes first)
+        work.submit("field", ("core fields", str(state.root), str(here["image_path"])),
+                    lambda task, t=tile_id, o=others: (render.wait_for_picture(state, t), render.field_jpegs(state, o, task.step)), work.AHEAD,
+                    "Preparing the fields of this core")
     for tile in nexts:
         if not field_prepared(meta, state.tile(tile)):
             work.submit("field", _prepare_key(meta, tile), lambda task, t=tile: prepare_field(meta, t, task), work.AHEAD, "Preparing the next field")
@@ -647,9 +638,9 @@ def open_field(meta: dict, tile_id: str, person: str, edit: bool = False, own: b
         refuse_if_taken(meta, tile_id, person)
         _TILES_HELD.hold(tile_hold(meta), person, [tile_id])
         busy(meta["name"], tile_id, person)
-    if not field_prepared(meta, tile):
-        made = work.answer("field", _prepare_key(meta, tile_id), lambda task: prepare_field(meta, tile_id, task), work.NOW, "Opening the field",
-                           fresh=work.within(10))
+    if not objects_ready(meta, tile):  # the objects only: the picture is the page's own request, made as it is asked
+        made = work.answer("field objects", _prepare_key(meta, tile_id), lambda task: prepare_field(meta, tile_id, task, pictures=False), work.NOW,
+                           "Opening the field", fresh=work.within(10))
         if isinstance(made, Response):
             return made
     found = _field_candidates(meta, tile)
@@ -674,7 +665,7 @@ def open_field(meta: dict, tile_id: str, person: str, edit: bool = False, own: b
             "segment_anything": sam["state"] != "unavailable", "segment_ready": bool(sam.get("ready")),
             "open_by": sorted(tiles_held(meta).get(tile_id, set()) - {person}), "done_by": sorted(finished.get(tile_id, set()) - {person}),
             "finished": finishers(meta, labels, tile_id), "complete": complete, "read_only": looking, "closed": closed, "own": own,
-            "pixel_size_um": state.project.pixel_size_um,
+            "pixel_size_um": state.project.pixel_size_um, "picture": render.picture_size(state, tile),
             **({"simple": simple_field(meta, objects, labels[~((labels.source == person) & (labels.tile_id == tile_id))] if fresh else labels, tile_id, own)}
                if rounds.is_simple(meta) else {}), "fresh": fresh}
 

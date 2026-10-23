@@ -1201,6 +1201,7 @@ def open_field(name: str, tile_id: str, request: Request, edit: bool = False, ow
     mine = labels[(labels.source == person) & (labels.tile_id == tile_id) & (labels.stain == meta["stain"])]
     box = {"x": int(tile["x_px"]) - x0, "y": int(tile["y_px"]) - y0, "width": int(tile["width_px"]), "height": int(tile["height_px"])}
     return {"tile_id": tile_id, "box": box, "objects": shown, "outlines": outlines, "layers": LAYERS[meta["stain"]] if meta["ai_view"] == "full" else [],
+            "picture": render.picture_size(state, tile),
             "mine": mine.replace({np.nan: None}).to_dict(orient="records"), "added": added_states(state.project, meta["stain"], tile_id, mine, objects)}
 
 
@@ -1307,6 +1308,25 @@ def finish(name: str, tile_id: str, request: Request, person: str = Depends(anno
 def image(name: str, tile_id: str, request: Request, person: str | None = Depends(viewer)) -> FileResponse:
     field_tile(session_meta(name, request), tile_id)
     return FileResponse(render.field_jpeg(get_state(), tile_id), headers={"Cache-Control": "private, max-age=86400"})
+
+
+@router.get("/annotate/{name}/fields/{tile_id}/preview.jpg")
+def preview(name: str, tile_id: str, request: Request, person: str | None = Depends(viewer)) -> FileResponse:
+    """A blurred picture of the field, cut from its core's thumbnail: shown at once beneath the sharp one (image.jpg)
+    while that is made (the first field of a core). The sharp one itself when it is made already; 404 when neither is
+    quick."""
+    tile = field_tile(session_meta(name, request), tile_id)
+    state = get_state()
+    made = render.field_path(state, tile_id)
+    if made.exists():
+        return FileResponse(made, headers={"Cache-Control": "private, max-age=86400"})
+    try:
+        picture = pyramid.field_preview(state, tile, render.crop_box(state, tile))
+    except (KeyError, FileNotFoundError, OSError) as error:
+        raise HTTPException(404, str(error)) from error
+    if picture is None:
+        raise HTTPException(404, "no quick preview of this field")
+    return FileResponse(picture, headers={"Cache-Control": "private, max-age=600"})
 
 
 MID_PX = 2048  # the middle zoom level's picture of the core, at most this many px across

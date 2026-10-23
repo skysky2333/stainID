@@ -570,6 +570,36 @@ def _total(root: str) -> int:
         return int(db.execute("SELECT coalesce(sum(size), 0) FROM files").fetchone()[0])
 
 
+def used_bytes(project_root: Path | str) -> int:
+    """What the project's caches take now, as the index counts them (0 before there is one)."""
+    root = str(cache_root(project_root))
+    return _total(root) if os.path.isdir(root) else 0
+
+
+def kind_bytes(project_root: Path | str, kind: str) -> int:
+    """What one kind of cache file of the project takes now (the index's count)."""
+    root = str(cache_root(project_root))
+    if not os.path.isdir(root):
+        return 0
+    with _index(root) as db:
+        return int(db.execute("SELECT coalesce(sum(size), 0) FROM files WHERE kind = ?", (kind,)).fetchone()[0])
+
+
+def evict_kind(project_root: Path | str, kind: str, target: int, keep_seconds: float = IN_USE_SECONDS) -> dict:
+    """Delete the least recently used files of one kind until that kind takes at most `target` bytes (the idle-time
+    preparation makes room for field pictures from Segment Anything features of fields far off: `stainid.api.ahead`)."""
+    root = str(cache_root(project_root))
+    with _cleaning(root) as allowed:
+        if not allowed:
+            return {"files": 0, "bytes": 0, "skipped": True}
+        with _index(root) as db:
+            total = int(db.execute("SELECT coalesce(sum(size), 0) FROM files WHERE kind = ?", (kind,)).fetchone()[0])
+            units = db.execute("SELECT unit, sum(size), max(used) FROM files WHERE kind = ? GROUP BY unit ORDER BY max(used)", (kind,)).fetchall()
+        done = _drop(((root, *u) for u in units), lambda freed: total - freed <= target, keep_seconds, "limit")
+        files, freed = done.get(root, (0, 0))
+        return {"files": files, "bytes": freed, "skipped": False}
+
+
 def evict(project_root: Path | str, target: int, keep_seconds: float = IN_USE_SECONDS) -> dict:
     """Delete the least recently used cache files of a project until they take at most `target` bytes, keeping any used
     or written in the last `keep_seconds`. Returns what was deleted ({"files", "bytes"}), or nothing when

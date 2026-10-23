@@ -62,8 +62,12 @@ export function FullScreenButton() {
 }
 
 export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, onMove, children, fit = false, onPress, onRelease, onWheelOver, onSize, panLock = false, under, paint, onContext,
-  onView, control, aside }: {
+  onView, control, aside, preview, pictureSize }: {
   src: string
+  /** a quick blurred picture of the same place (cut from the core's thumbnail), shown beneath while `src` loads */
+  preview?: string
+  /** the picture's size in px when known before it loads: laid out (and `children` drawn) at once */
+  pictureSize?: [number, number] | null
   layers?: string[]
   title: ReactNode
   /** zoom in on this spot (remembering the view before); with `back`, return to the view remembered */
@@ -96,8 +100,11 @@ export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, on
 }) {
   // the view: `x`, `y` move the picture from where it sits centred at 1× (screen px), `zoom` scales it
   const [view, setView] = useState<View>({ zoom: 1, x: 0, y: 0 })
-  const [size, setSize] = useState({ w: 2304, h: 2304 })
+  const [size, setSize] = useState(pictureSize ? { w: pictureSize[0], h: pictureSize[1] } : { w: 2304, h: 2304 })
   const [loaded, setLoaded] = useState(false)
+  const [previewShown, setPreviewShown] = useState(false)
+  const sizeKnown = useRef(!!pictureSize)
+  sizeKnown.current = !!pictureSize
   const [boxSize, setBoxSize] = useState({ w: 800, h: 800 })
   const drag = useRef<{ x: number; y: number; ox: number; oy: number; moved: boolean; pan: boolean } | null>(null)
   const box = useRef<HTMLDivElement>(null)
@@ -125,10 +132,31 @@ export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, on
   useEffect(() => {
     setLoaded(false)
     setView({ zoom: 1, x: 0, y: 0 })
+    let gone = false
     const img = new Image()
-    img.onload = () => { setSize({ w: img.naturalWidth, h: img.naturalHeight }); setLoaded(true); sizeHeard.current?.({ w: img.naturalWidth, h: img.naturalHeight }) }
+    img.onload = () => {
+      if (gone) return
+      setSize({ w: img.naturalWidth, h: img.naturalHeight }); setLoaded(true); sizeHeard.current?.({ w: img.naturalWidth, h: img.naturalHeight })
+    }
     img.src = src
+    return () => { gone = true }
   }, [src])
+  useEffect(() => {  // a size known before the picture: laid out at once
+    if (pictureSize && !loaded) setSize({ w: pictureSize[0], h: pictureSize[1] })
+  }, [pictureSize?.[0], pictureSize?.[1]])  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    setPreviewShown(false)
+    if (!preview) return
+    let gone = false
+    const img = new Image()
+    img.onload = () => {
+      if (gone) return
+      setPreviewShown(true)
+      if (!sizeKnown.current) setSize((s) => s.w === 2304 && s.h === 2304 ? { w: img.naturalWidth, h: img.naturalHeight } : s)  // its shape only
+    }
+    img.src = preview
+    return () => { gone = true }
+  }, [preview])
 
   const ratio = size.w / Math.max(1, size.h)
   const filled = fit && space && space.w > 0 && space.h > 0 ? space : null
@@ -278,8 +306,11 @@ export function ZoomViewer({ src, layers = [], title, focus, cursor, onClick, on
         drag.current = null
       }}
       onMouseLeave={(e) => { if (drag.current && e.buttons === 0) { onRelease?.(toImage(e), e); drag.current = null } }}>  {/* held: the capture keeps the drag going */}
-      {!loaded && <div className="viewer-loading">Loading the field image… the first field of a core takes a few seconds; the others then open instantly.</div>}
+      {!loaded && (previewShown
+        ? <div className="viewer-loading-note small">Sharpening the picture…</div>
+        : <div className="viewer-loading">Loading the field image… the first field of a core takes a few seconds; the others then open instantly.</div>)}
       <div className="viewer-plane" style={{ width: shown.width, height: shown.height, transform: `translate(${origin.x + view.x}px, ${origin.y + view.y}px) scale(${zoom})` }}>
+        {!loaded && previewShown && preview && <img src={preview} alt="" draggable={false} className="viewer-preview" />}
         <img src={src} alt="field" draggable={false} />
         {layers.map((layer) => <img key={layer} src={layer} alt="" draggable={false} style={{ imageRendering: 'pixelated' }} />)}
         {under && <svg className="viewer-under" viewBox={`0 0 ${size.w} ${size.h}`}>{under(zoom, size, unit)}</svg>}

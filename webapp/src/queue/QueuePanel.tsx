@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { Job, QueueOverview } from '../api'
+import type { AheadStatus, Job, QueueOverview } from '../api'
 import { api, queueText } from '../api'
 import { ErrorNote, Loaded, Progress, StatusBadge, withError } from '../components'
 import { useFetch } from '../hooks'
@@ -48,12 +48,55 @@ export function QueuePanel() {
                   </ul>
                 </div>
               ))}
+              <AheadLine />
               <ErrorNote error={error} />
             </>
           )
         }}
       </Loaded>
     </section>
+  )
+}
+
+const GB = 1e9
+const gb = (bytes: number) => bytes >= 100 * GB ? `${Math.round(bytes / GB)} GB` : `${(bytes / GB).toFixed(1)} GB`
+
+/** The lowest priority of all: the app making the open sessions' fields ready while the computer is idle (it waits for
+ *  people, every job and other programs), with its pause switch. */
+function AheadLine() {
+  const ahead = useFetch<AheadStatus>('/api/ahead', 5000)
+  const [error, setError] = useState<string | null>(null)
+  const data = ahead.data
+  if (!data || data.state === 'off') return null
+  const flip = () => withError(async () => { await api.post('/api/ahead', { paused: !data.paused }); ahead.reload() }, setError)
+  const fields = data.fields ?? 0
+  const ready = data.fields_ready ?? 0
+  const doing = data.state === 'preparing' ? (data.current ? `Now: ${data.current}` : 'Preparing…')
+    : data.state === 'waiting' ? `Waiting: ${data.why}` : data.state === 'paused' ? 'Paused' : data.state === 'done' ? 'Everything is prepared'
+    : data.state === 'full' ? data.why : 'Starting…'
+  const space = data.estimate_bytes ? `all of it takes about ${gb(data.estimate_bytes)}${data.limit_bytes ? ` (the cache may hold ${gb(data.limit_bytes)}${
+    data.estimate_bytes > data.limit_bytes ? ': the fields opened next come first' : ''})` : ''}` : ''
+  return (
+    <div className="queue-class ahead-line">
+      <div className="queue-class-title small"><b>Lowest. Preparing fields ahead</b> <span className="muted">· only while the computer is idle</span></div>
+      <div className="queue-row">
+        <div className="queue-main">
+          <div className="row small">
+            <span className={`badge status-${data.state === 'preparing' ? 'running' : data.state === 'done' ? 'done' : 'queued'}`}>{data.paused ? 'paused' : data.state}</span>
+            <b className="ellipsis" title="Field pictures, one-click outline features, thread levels and core thumbnails">The open sessions’ fields</b>
+          </div>
+          {fields > 0 && <Progress done={ready} total={fields} />}
+          <div className="muted small ellipsis" title={[doing, space].filter(Boolean).join(' · ')}>
+            {[fields ? `${ready.toLocaleString()} of ${fields.toLocaleString()} fields have their picture` : '', doing, space].filter(Boolean).join(' · ')}
+          </div>
+        </div>
+        <div className="queue-actions small">
+          <button className="link-btn" onClick={flip} title={data.paused ? 'Prepare fields again whenever the computer is idle'
+            : 'Stop preparing fields ahead (kept across restarts); fields are still made when someone opens them'}>{data.paused ? 'Resume' : 'Pause'}</button>
+        </div>
+      </div>
+      <ErrorNote error={error} />
+    </div>
   )
 }
 

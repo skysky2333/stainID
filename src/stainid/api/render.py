@@ -4,6 +4,8 @@ from __future__ import annotations
 import io
 import json
 import threading
+import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import cv2
@@ -22,10 +24,83 @@ Image.MAX_IMAGE_PIXELS = None
 FIELD_JPEG_QUALITY = 88
 _IMAGE_LOCKS: dict[str, threading.Lock] = {}
 URGENT_DECODE = threading.Semaphore(1)  # a field someone waits for: decoded besides the background's (`pyramid.DECODE`)
+_URGENT = [0]  # pictures someone waits for, being made now: work made ahead waits for them (`yield_to_people`)
+_URGENT_LOCK = threading.Lock()
+
+
+@contextmanager
+def someone_waits():
+    """Around the making of a picture someone waits for: what is made ahead (pictures, thread ladders, Segment
+    Anything features, the idle-time preparation) does not start a core decode meanwhile, so the person's has the
+    disk and the processor."""
+    with _URGENT_LOCK:
+        _URGENT[0] += 1
+    try:
+        yield
+    finally:
+        with _URGENT_LOCK:
+            _URGENT[0] -= 1
+
+
+def people_waiting() -> bool:
+    return _URGENT[0] > 0
+
+
+def yield_to_people(most: float = 60.0) -> None:
+    """Work made ahead calls this before a heavy step: it waits (at most `most` seconds) while someone waits for a
+    picture."""
+    end = time.monotonic() + most
+    while _URGENT[0] > 0 and time.monotonic() < end:
+        time.sleep(0.05)
+
+
+def wait_for_picture(state: ProjectState, tile_id: str, most: float = 20.0) -> bool:
+    """Work made ahead for a field someone has open waits (at most `most` seconds) for the field's picture, which the
+    page asks for at once, rather than decoding the core beside it."""
+    target = field_path(state, tile_id)
+    end = time.monotonic() + most
+    while not target.exists() and time.monotonic() < end:
+        time.sleep(0.1)
+    return target.exists()
+
+
+def open_rows(path: Path | str, rows: int):
+    """A core image with only its first `rows` rows read, where its format allows (a PNG is stored row by row: a
+    field near the top is cut after a fraction of the file is read and inflated; everything else: the whole image)."""
+    image = open_image(path)
+    try:
+        tiles = getattr(image, "tile", None) or []
+        if image.format == "PNG" and len(tiles) == 1 and tiles[0][0] == "zip" and 0 < rows < image.height:
+            width = image.width
+            image._size = (width, rows)
+            image.tile = [(tiles[0][0], (0, 0, width, rows), tiles[0][2], tiles[0][3])]
+    except Exception:  # noqa: BLE001 - another reader: read whole
+        pass
+    return image
 
 
 def crop_origin(tile: dict, context_px: int) -> tuple[int, int]:
     return max(0, int(tile["x_px"]) - context_px), max(0, int(tile["y_px"]) - context_px)
+
+
+def crop_box(state: ProjectState, tile: dict) -> tuple[int, int, int, int]:
+    """Where the field's picture (the tile with its context margin) lies in its core image: x0, y0, x1, y1 (core px),
+    as `_cut` cuts it, known without reading the image."""
+    context = state.project.context_px
+    x0, y0 = crop_origin(tile, context)
+    x1, y1 = int(tile["x_px"]) + int(tile["width_px"]) + context, int(tile["y_px"]) + int(tile["height_px"]) + context
+    try:
+        core = state.core_image(str(tile["core_id"]), str(tile["stain"]))
+        x1, y1 = min(x1, int(core["native_width_px"])), min(y1, int(core["native_height_px"]))
+    except (KeyError, IndexError, ValueError, TypeError):
+        pass
+    return x0, y0, x1, y1
+
+
+def picture_size(state: ProjectState, tile: dict) -> list[int]:
+    """The field picture's size in px, before it is made: the page lays the field out (and draws its objects) at once."""
+    x0, y0, x1, y1 = crop_box(state, tile)
+    return [x1 - x0, y1 - y0]
 
 
 def core_thumbnail(state: ProjectState, core_id: str, stain: str, size: int = 512) -> Path:
@@ -57,9 +132,15 @@ def field_rgb(state: ProjectState, tile_id: str) -> np.ndarray:
         return rgb
 
 
-def _crop_field(state: ProjectState, tile: dict, target: Path) -> None:
-    """Cut one tile (with its context margin) out of its core image."""
-    with pyramid.DECODE, open_image(state.root / tile["image_path"]) as image:
+def _bottom(state: ProjectState, tile: dict) -> int:
+    return int(tile["y_px"]) + int(tile["height_px"]) + state.project.context_px
+
+
+def _crop_field(state: ProjectState, tile: dict, target: Path, urgent: bool = False) -> None:
+    """Cut one tile (with its context margin) out of its core image: only the rows down to it are read. `urgent`
+    (someone waits for it): on the slot of its own; else on the background's (the callers made ahead look at
+    `yield_to_people` before: never here, under the core's lock, which the person's picture may wait for)."""
+    with URGENT_DECODE if urgent else pyramid.DECODE, open_rows(state.root / tile["image_path"], _bottom(state, tile)) as image:
         _cut(state, image, tile, target)
 
 
@@ -93,10 +174,13 @@ def field_jpegs(state: ProjectState, tile_ids, step=None, urgent: bool = False) 
     for done, (image_path, tiles) in enumerate(wanted.items()):
         if step:
             step(done, len(wanted))
+        if not urgent:
+            yield_to_people()
         with _IMAGE_LOCKS.setdefault(image_path, threading.Lock()):
             missing = [t for t in tiles if not field_path(state, t["tile_id"]).exists()]
             if missing:
-                with URGENT_DECODE if urgent else pyramid.DECODE, open_image(state.root / image_path) as image:
+                rows = max(_bottom(state, t) for t in missing)  # only down to the lowest field wanted
+                with URGENT_DECODE if urgent else pyramid.DECODE, open_rows(state.root / image_path, rows) as image:
                     for tile in missing:
                         _cut(state, image, tile, field_path(state, tile["tile_id"]))
                         made += 1
@@ -106,8 +190,17 @@ def field_jpegs(state: ProjectState, tile_ids, step=None, urgent: bool = False) 
 
 
 def field_jpeg(state: ProjectState, tile_id: str) -> Path:
-    field_rgb(state, tile_id)
-    return state.cache_dir("fields") / f"{tile_id}.jpg"
+    """The field's picture, made now if need be (someone waits for it: `someone_waits`): only it, from the rows down to
+    it; the core's other fields are cut afterwards, ahead (`field_jpegs`)."""
+    target = field_path(state, tile_id)
+    if not target.exists():
+        with someone_waits():
+            tile = state.tile(tile_id)
+            with _IMAGE_LOCKS.setdefault(tile["image_path"], threading.Lock()):
+                if not target.exists():
+                    _crop_field(state, tile, target, urgent=True)
+    disk_cache.used(target)
+    return target
 
 
 def _rgba_png(mask: np.ndarray, color: tuple[int, int, int], alpha: int, target: Path) -> Path:

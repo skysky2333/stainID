@@ -183,6 +183,7 @@ export function FixField({ detail, reload, tile, onEvent, onFinished, coach }: {
         <div className="annotate-workspace">
           <div className="annotate-image field-loading">
             <ZoomViewer fit src={apiUrl(`/api/annotate/${detail.meta.name}/fields/${enc(tile)}/image.jpg`)}
+              preview={apiUrl(`/api/annotate/${detail.meta.name}/fields/${enc(tile)}/preview.jpg`)}
               title={<span className="row"><span className="muted small">{tile}</span><span className="small muted">Loading the objects…</span></span>}>
               {() => null}
             </ZoomViewer>
@@ -1251,6 +1252,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
           {menu && byKey.get(menu.key) && <ClassMenu at={menu} groups={keyGroups(vocabulary, keys)} vocabulary={vocabulary} removeClass={meta.remove_class}
             current={callOf(byKey.get(menu.key)!).pick} onPick={pickFromMenu} onClose={() => setMenu(null)} />}
           <ZoomViewer fit src={apiUrl(`/api/annotate/${name}/fields/${enc(tile)}/image.jpg`)}
+            preview={apiUrl(`/api/annotate/${name}/fields/${enc(tile)}/preview.jpg`)} pictureSize={field.picture}
             layers={hidden ? [] : field.layers.filter((l) => layers[l]).map((l) => apiUrl(`/api/annotate/${name}/fields/${enc(tile)}/layer/${l}.png`))}
             title={<span className="row">{!(meta as { practice?: boolean }).practice && <button className={`btn small levels-toggle${stripOn ? ' chosen' : ''}`} onClick={() => setStripOn(!stripOn)} aria-pressed={stripOn}
               title={stripOn ? 'Hide the whole core and the middle zoom level' : 'Show the whole core and a middle zoom level beside the field'}>Overview</button>}

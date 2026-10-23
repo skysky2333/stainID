@@ -111,6 +111,26 @@ def queue_action(action: str) -> dict:
     return scheduler.overview()
 
 
+class AheadSwitch(BaseModel):
+    paused: bool
+
+
+@router.get("/ahead")
+def ahead_status() -> dict:
+    """The idle-time preparation of the open sessions' fields (`stainid.api.ahead`): what it does or waits for, how far
+    it is, the space all of it takes and its pause switch."""
+    from stainid.api import ahead
+
+    return ahead.status()
+
+
+@router.post("/ahead")
+def ahead_switch(body: AheadSwitch) -> dict:
+    from stainid.api import ahead
+
+    return ahead.set_paused(body.paused)
+
+
 @router.get("/jobs/{job_id}/log", response_class=PlainTextResponse)
 def log(job_id: str, tail: int = 400) -> str:
     path = get_state().jobs.log_path(job_id)

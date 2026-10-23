@@ -259,6 +259,8 @@ export interface FieldObjectLite { x: number; y: number; radius_px: number; ai_v
 export interface FieldWork {
   tile_id: string; box: { x: number; y: number; width: number; height: number }; objects: FieldObjectLite[]
   outlines: { x: number; y: number; points: number[][] }[]; layers: string[]; mine: Label[]; added?: AddedState[]
+  /** the field picture's size in px [w, h], known before the picture is made */
+  picture?: [number, number]
 }
 export interface QueueItem { tile_id: string; x: number; y: number; radius_px: number; ai_value: string; ai_probability: number; labels_so_far: number; remaining: number; key: string }
 /** Pictures of a quick-check queue made ahead, of all it may show. */
@@ -601,6 +603,8 @@ export interface RoundField<Shape = number[][]> {
   tile_id: string; box: { x: number; y: number; width: number; height: number }; objects: RoundObject<Shape>[]; checked: Record<string, RoundCheck>
   layers: string[]; mine: (Label & { candidate?: string | null })[]; added: AddedState[]; segment_anything: boolean; segment_ready: boolean
   open_by: string[]; done_by: string[]; pixel_size_um: number
+  /** the field picture's size in px [w, h], known before the picture is made: laid out (and its objects drawn) at once */
+  picture?: [number, number]
   /** who finished the field in this session and when; `complete`: finished for this person (they did, or as many as
    *  it needs); `read_only`: opened to look at (Redo this field / Add an extra annotation open it to work on);
    *  `own`: an extra annotation, starting from detection's output and this person's own labels only */
@@ -624,6 +628,12 @@ export interface RoundScope {
   cores: number; cores_ready: number; fields_ready: number; levels: Record<string, number | null>; from_pool: boolean
   /** ready fields not annotated yet and not in an open session: what "Fix the field" draws from */
   fields_remaining?: number
+}
+/** The idle-time preparation of the open sessions' fields (GET/POST /api/ahead; stainid.api.ahead). */
+export interface AheadStatus {
+  state: 'starting' | 'preparing' | 'waiting' | 'paused' | 'done' | 'full' | 'off'; why: string; current: string; paused: boolean; running: boolean
+  made: number; sessions?: number; fields?: number; fields_ready?: number; near_fields?: number
+  estimate_bytes?: number; used_bytes?: number; limit_bytes?: number; drive_low?: boolean
 }
 /** Segment Anything's outlines of a clicked object, smallest first, and the one it would choose. */
 export interface RoundSamOptions { options: { points: number[][]; area_px: number; score: number }[]; chosen: number }

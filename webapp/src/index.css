@@ -307,6 +307,9 @@ fieldset.field legend { padding: 0; margin-bottom: 4px; }
 .path-line.wrap-path code { white-space: normal; overflow-wrap: anywhere; }
 .viewer-loading { position: absolute; inset: 0; z-index: 2; display: grid; place-items: center; padding: 24px; text-align: center; color: #fff;
   background: repeating-linear-gradient(45deg, #1d1d1b, #1d1d1b 12px, #232321 12px, #232321 24px); font-size: 13px; }
+.viewer-loading-note { position: absolute; top: 8px; left: 8px; z-index: 2; padding: 2px 8px; border-radius: 4px; color: #fff;
+  background: rgba(0, 0, 0, 0.55); pointer-events: none; }
+.viewer .viewer-preview { filter: saturate(0.9); }
 .viewer { overscroll-behavior: contain; }
 .need-row { margin-bottom: 4px; }
 .need-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 2px 0 6px 17px; }

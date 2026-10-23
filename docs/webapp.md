@@ -147,6 +147,16 @@ project without saved maps uses the rule under *Map → Advanced* (`sample_regio
 - **Legacy detection (v1)** (folded, under the stages): the first detection (*Detect NeuN neurons*, *Detect plaques and
   tau*, *Outline objects*, *Make results tables*, each marked *legacy v1*). Still runnable one by one; never run by
   *Run what's left* or *Run everything*.
+- **Preparing fields ahead** (the queue's last line, the lowest priority of all): while the computer is idle the app
+  makes the open sessions' fields ready, so that none opens cold. First the cores people have open or opened in the
+  last hours, then each session's next fields, the admin pages' caches, then every other unfinished field in session
+  order: field pictures, core thumbnails, Segment Anything features (near fields, on a GPU) and AT8 thread levels. It
+  waits whenever someone waits for a page, any job runs or could start, *Pause all background work* is on, or other
+  programs keep the processors, the disk or a GPU busy (a quiet look every 30 s), and its thread runs at the lowest
+  processor and disk priority. The line shows how many fields have their picture, what it is on or waiting for, and
+  how much space all of it takes against the cache limit (Settings, *Cache*): the far fields stop at 85 % of the
+  limit, after Segment Anything features of fields far off beyond their share (each field's picture comes first) and
+  files nobody used for 3 days were deleted. *Pause* stops it until *Resume*, kept across restarts (`stainid.api.ahead`).
 - **All jobs** (folded): every run with its command and log.
 
 The *Register slides* step holds the slides-table editor (the same table as the Slides screen), and *Attach TMA map* the template download and the CSV
@@ -399,8 +409,15 @@ fields; and the *Tutorial* link. Pointing at an object also shows its name besid
 In round 2, a click on empty tissue outlines a missed object with one click (Segment Anything). It is a new
 candidate, dotted grey, and Tab / Shift+Tab switch to a smaller or bigger one of Segment Anything's three sizes, until a class key makes it solid. *Draw an object by hand…* is the last resort. One click answers at once,
 because the server makes the Segment Anything features of the session's fields ahead: on a GPU every field of the
-open sessions, and on the CPU the field someone has open and their next ones. They are kept in
+open sessions (as the lowest priority, while their share of the cache lasts: see *Preparing fields ahead* on the Run
+page), and on the CPU the field someone has open and their next ones. They are kept in
 `data/cache/sam_embeddings/`, and the page says *Preparing one-click outlines…* until its field is ready.
+
+A field nobody opened before opens in about a second: its objects answer without waiting for its picture, the page
+lays the field out at its known size at once and shows a blurred picture cut from the core's thumbnail beneath
+(*Sharpening the picture…*) while the sharp one is cut from only the rows of the core image down to the field. The
+Segment Anything features and the thread levels are made after the picture, and the thread levels only once the
+threads pass is opened.
 
 **The session's page** lists its fields by TMA (its name, e.g. LIP-3), then core; each level folds open and shut
 (a session of more than 300 fields starts with its TMAs folded, and a folded TMA or core loads no pictures).

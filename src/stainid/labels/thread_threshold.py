@@ -68,6 +68,9 @@ def _ladder_networks(project, tile_id: str, core_id: str, factors=FACTORS):
     from stainid.stains.tau.threads import thread_ladder  # noqa: PLC0415
     from stainid.v2 import proposals, tau  # noqa: PLC0415
 
+    from stainid.api import render  # noqa: PLC0415
+
+    render.yield_to_people()  # a core decode: after the pictures people wait for
     tiles, threshold, nuclei = _stage2_tiles(project, core_id)
     tile = next((t for t in tiles if str(t["tile_id"]) == str(tile_id)), None)
     if tile is None or threshold is None:

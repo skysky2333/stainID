@@ -233,6 +233,20 @@ def _run(task: _Task) -> bool:
         return True
     if task.priority == AHEAD and not clicks.encodes_on_gpu(weights):
         return True  # on the CPU only the fields people are on or about to see
+    if task.priority == AHEAD:
+        from stainid.api import ahead  # noqa: PLC0415
+
+        if ahead.sam_over_cap(task.state):
+            return True  # the features of fields far off take their share of the cache: each field's picture comes first
+        if ahead.others_busy():  # the lowest priority, as the idle-time preparation: after people, jobs and the pause switch
+            with _COND:
+                _COND.wait(timeout=5)  # woken at once by a field someone asks for
+            return False
+        urgent = _more_urgent(task)
+        return _make_field(task.state, task.tile_id, False, lambda: urgent() or bool(ahead.others_busy()))
+    if task.priority == NOW:
+        render.wait_for_picture(task.state, task.tile_id)  # the page asks for it at once: no second decode beside it
+    render.yield_to_people()
     return _make_field(task.state, task.tile_id, task.priority == NOW, _more_urgent(task))
 
 

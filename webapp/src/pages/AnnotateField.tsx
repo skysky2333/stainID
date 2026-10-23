@@ -356,6 +356,7 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
           <div className="annotate-workspace">
             <div className="annotate-image">
               <ZoomViewer fit src={apiUrl(`/api/annotate/${name}/fields/${enc(tile)}/image.jpg`)}
+                preview={apiUrl(`/api/annotate/${name}/fields/${enc(tile)}/preview.jpg`)} pictureSize={data.picture}
                 layers={data.layers.filter((l) => layers[l]).map((l) => apiUrl(`/api/annotate/${name}/fields/${enc(tile)}/layer/${l}.png`))}
                 title={<span className="row"><span className="muted small">{tile}</span>{done && <span className="badge status-done">finished</span>}</span>}
                 cursor={active?.id === 'label' ? 'pointer' : 'crosshair'} onClick={click} onMove={move}>

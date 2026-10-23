@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from stainid import palette, practice, tutorial
-from stainid.api import state, work
+from stainid.api import ahead, state, work
 from stainid.api.routes import accounts as account_routes
 from stainid.api.routes import analysis, annotate, cohort, images, imageset, jobs, models, project, projects, session, setup, slides
 from stainid.api.routes import areas as area_routes
@@ -65,6 +65,7 @@ async def _lifespan(app: FastAPI):
 
     anyio.to_thread.current_default_thread_limiter().total_tokens = REQUEST_THREADS
     queue.shared().start_thread()  # the shared job queue runs here unless `stainid jobs serve` (or another app) runs it
+    ahead.start()  # idle-time preparation of the open sessions' fields (the lowest priority of all)
     yield
 
 
@@ -113,6 +114,7 @@ def create_app() -> FastAPI:
         asking = work.ASKER.set(account.id if account is not None else f"guest:{new_guest or guest_id(request)}")
         on_practice = bool(practice.PATH.match(request.url.path))
         practising = practice.PRACTISING.set(on_practice)  # the tutorial: no store is written
+        in_flight = ahead.request_started()  # a request that takes a while: the idle-time preparation waits
         try:
             if on_practice and tutorial.built():  # the one tutorial of the server, whatever the project (`stainid.tutorial`)
                 with state.use_project(state.TUTORIAL):
@@ -120,6 +122,7 @@ def create_app() -> FastAPI:
             else:
                 response = await call_next(request)
         finally:
+            ahead.request_ended(in_flight)
             practice.PRACTISING.reset(practising)
             work.ASKER.reset(asking)
             store.ATTRIBUTION.reset(token)
