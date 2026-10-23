@@ -854,9 +854,10 @@ class Scheduler:
 
     def recover(self) -> None:
         """After a start: adopt the jobs still running, finish those that ended while no scheduler ran, and queue again
-        those a restart of the computer (or a killed runner) ended."""
+        those a restart of the computer (or a killed runner) ended. An array's parent has no process of its own: its state
+        is its chunks' (`_update_parent`)."""
         for job in list(self.jobs.values()):
-            if job.status == "running" and job.source != COMMAND_LINE:
+            if job.status == "running" and job.source != COMMAND_LINE and not job.children:
                 self._check_running(job, adopting=True)
 
     def _check_running(self, job: Job, adopting: bool = False) -> None:
@@ -881,7 +882,7 @@ class Scheduler:
 
     def _reap(self) -> None:
         for job in list(self.jobs.values()):
-            if job.status != "running":
+            if job.status != "running" or job.children:  # an array's parent: its chunks are reaped
                 continue
             if job.source == COMMAND_LINE:
                 if not alive(job.pid, job.started):

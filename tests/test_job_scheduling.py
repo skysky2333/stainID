@@ -130,6 +130,36 @@ def test_an_array_finishes_when_its_chunks_have_and_the_next_stage_waits_for_all
     assert proposals.status == "finished" and all(c.status == "running" for c in later)
 
 
+def test_a_restart_of_the_app_leaves_a_running_array_and_the_steps_after_it_waiting(tmp_path, started, monkeypatch):
+    import os
+
+    project = _tma_project(tmp_path / "p", tmas=2)
+    first = queue.Scheduler(tmp_path / "q", budget=queue.Budget(64, 0, 64), launcher=queue.ProcessLauncher())
+    proposals = first.submit_step(project, "v2_proposals", {"stain": ["AT8"], "workers": 2})
+    calls = first.submit_step(project, "v2_calls", {"stain": ["AT8"]})
+    first.tick()
+    chunks = [first.jobs[c] for c in proposals.children]
+    assert all(c.status == "running" for c in chunks)
+    for chunk in chunks:  # running in their own units, started a while ago
+        chunk.started = time.time() - 600
+        first._save(chunk)
+        Path(first.files(chunk)["pid"]).write_text(f"{os.getpid()} {os.getpid()}")
+    first.tick()
+    first.close()
+    monkeypatch.setattr(queue, "alive", lambda pid, since=None: True)
+    second = queue.Scheduler(tmp_path / "q", budget=queue.Budget(64, 0, 64), launcher=queue.ProcessLauncher())
+    assert second.leader
+    for _ in range(10):
+        second.tick()
+    parent = second.jobs[proposals.id]
+    assert parent.status == "running" and parent.attempts == 0 and not parent.waiting  # its state is its chunks'
+    assert {second.jobs[c].status for c in calls.children} == {"queued"}  # still waiting, not skipped
+    for chunk_id in proposals.children:
+        second._ended(second.jobs[chunk_id], 0)
+    second.tick()
+    assert second.jobs[proposals.id].status == "finished" and {second.jobs[c].status for c in calls.children} == {"running"}
+
+
 def test_fair_share_takes_turns_between_projects(tmp_path, started):
     a, b = _project(tmp_path / "a", "A"), _project(tmp_path / "b", "B")
     scheduler = queue.Scheduler(tmp_path / "q", budget=queue.Budget(4, 0, 64))
