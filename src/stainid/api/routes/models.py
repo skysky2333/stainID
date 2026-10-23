@@ -32,6 +32,10 @@ class ActivateRequest(BaseModel):
     path: str
 
 
+class ExtraProjects(BaseModel):
+    projects: list[str]  # folders of the other projects whose labels the models also learn from (all of them: the new list)
+
+
 @lru_cache(maxsize=16)
 def describe_bundle(path: str, mtime: float) -> dict:
     from joblib import load
@@ -77,6 +81,69 @@ def models() -> list[dict]:
 @router.get("/models/trained")
 def trained() -> list[dict]:
     return trained_models(get_state().project)
+
+
+def _labels_of(root: Path) -> dict[str, int]:
+    """How many objects people labelled in another project, per stain (what its training would add)."""
+    from stainid.labels import sessions as label_sessions
+    from stainid.labels import simple, store
+    from stainid.project import load_project
+
+    other = load_project(root)
+    labels = store.current(other.output("reviews"))
+    out = {}
+    for stain in other.stains:
+        sets = label_sessions.label_sets(labels, stain, {}, simple=simple.of(other, stain)) if len(labels) else []
+        out[stain] = int(sum(s["objects"] for s in sets))
+    return out
+
+
+@router.get("/models/extra-projects")
+def extra_projects() -> dict:
+    """The other projects whose labels this project's models also learn from (training-only cases, never in the test),
+    each with its labelled objects per stain, and the other projects on this server's list that could be added."""
+    from stainid.api.registry import entries, project_id
+    from stainid.project import CONFIG_NAME
+    from stainid.training.train import extra_projects as chosen
+
+    project = get_state().project
+    on = chosen(project)
+    out = []
+    for root in on:
+        entry = {"path": str(root), "id": project_id(root), "name": root.name, "enabled": True, "exists": (root / CONFIG_NAME).exists()}
+        if entry["exists"]:
+            try:
+                from stainid.project import load_project
+
+                other = load_project(root)
+                entry |= {"name": other.name, "kind": other.kind, "stains": list(other.stains), "labels": _labels_of(root)}
+            except Exception as error:  # noqa: BLE001 - a project that does not load is shown with why
+                entry["error"] = str(error)
+        out.append(entry)
+    here = project.root.resolve()
+    available = [{"path": e.path, "id": e.id, "name": e.name, "enabled": False, "exists": True} for e in entries()
+                 if e.exists and Path(e.path).resolve() != here and Path(e.path).resolve() not in on]
+    return {"projects": out + available, "stains": list(project.stains)}
+
+
+@router.put("/models/extra-projects")
+def set_extra_projects(request: ExtraProjects) -> dict:
+    """Choose the other projects whose labels the models also learn from (`training.extra_projects`)."""
+    from stainid.project import CONFIG_NAME, save_project
+
+    project = get_state().project
+    paths: list[str] = []
+    for text in request.projects:
+        path = Path(text).expanduser()
+        path = (path if path.is_absolute() else project.root / path).resolve()
+        if path == project.root.resolve():
+            raise HTTPException(400, "A project cannot lend its labels to itself")
+        if not (path / CONFIG_NAME).exists():
+            raise HTTPException(404, f"{path} is not a stainID project (it has no {CONFIG_NAME})")
+        if str(path) not in paths:
+            paths.append(str(path))
+    reload_project(save_project(project, {"training": {"extra_projects": paths}}).root)
+    return extra_projects()
 
 
 @router.post("/models/activate")

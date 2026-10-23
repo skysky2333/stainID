@@ -73,6 +73,9 @@ was last opened.
   layout and naming (core-name prefix, rows and columns, pixel size, how donor ids and donor-regions are written).
   Slides, maps, donors and results are never copied.
 - **Open existing folder…**: choose a folder that holds a `stainid.yaml`.
+- From a terminal: `stainid projects list`, `stainid projects add FOLDER` (puts it on the list without opening it, so
+  the order and the project the app shows first stay as they are) and `stainid projects remove FOLDER` (forgets it; no
+  file is touched).
 - **Remove from list**: takes the study off the list only. Its folder is not touched, steps still running carry on,
   and opening the folder again brings it back.
 - **Advanced → Projects folder**: the folder whose project folders are listed (`stainid serve --projects-dir DIR` sets
@@ -586,6 +589,18 @@ records the sessions it learned from:
   when there are enough, otherwise from the current model.
 - **Validation.** Leave-one-TMA-out; if a fold would train without one class, stratified folds of whole TMAs. Every donor sits on one TMA, so no donor is ever in both training and testing. The current model is scored on the same labels,
   so the Models page can show both side by side.
+- **Training cases from other projects.** Other stainID projects can lend their labels (`training: extra_projects:
+  [<folder>, …]` in `stainid.yaml`, relative to the project or absolute; the card *Training cases from other projects*
+  on the Models page turns each project on the Projects list on or off and shows how many objects it has labelled per
+  stain). Every model of the stain is then also fitted on those projects' labelled objects, with their own candidate
+  measurements (and, with slide-scaled inputs, their own slide thresholds); detailed labels count as they are and
+  simple labels through *this* project's mapping (*Simple labels in training*). They are training-only cases: the
+  out-of-fold check holds out only this project's TMAs and scores only this project's labels, an extra case of a donor
+  in the held-out fold is left out of that fold's fit, the model in use is compared on this project's labels alone,
+  and nothing else in the project (results, Labels, scoring, the detection line) reads them. The report records each
+  project (`extra_projects`: name, folder, objects, positives, negatives, sessions, the simple mapping used, or why it
+  gave nothing) and `fitted_on` (objects in the fit, of which this project's and the other projects'). `stainid train
+  --no-extra-projects` (or *Only this project's labels* under the step's Advanced options) fits on this project's labels only.
 
 The model is saved to `outputs.trained_models/<stain>_<time>/bundle.joblib` with `report.json`. It is used only after
 you press *Use this model*, which sets `models.<neun|amyloid|tau>` in `stainid.yaml`. Detection steps never mix

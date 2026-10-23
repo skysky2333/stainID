@@ -496,7 +496,10 @@ STEPS = (
          "your labels. The new model is only used after you choose it on the Models page.",
          ("label_store", "candidate_pool"), ("trained_models",), ("train",), (Option("stain", "Stain", "select", "AT8", choices=tuple(STAINS)),
           Option("session", "Sessions", "text", "", "Train only on the labels of these sessions (session IDs; reference = the imported "
-                 "reference labels). Empty: every session.", advanced=True)),
+                 "reference labels). Empty: every session.", advanced=True),
+          Option("no_extra_projects", "Only this project's labels", "bool", False, "Do not also learn from the labels of the other projects "
+                 "chosen under “Training cases from other projects” on the Models page (they are never used to test the model).",
+                 advanced=True)),
          view="/models", duration="under a minute", status=_trained_status),
     Step("score_segmentation", "Models", "Check segmentation", "Measure how well detection finds and outlines objects.",
          "Compares objects outlined completely (a dataset's expert polygons, or an older “Outline every object” session) with every candidate the "

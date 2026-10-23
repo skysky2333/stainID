@@ -166,6 +166,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--stain", required=True, choices=("NeuN", "6E10", "AT8"))
     p.add_argument("--session", action="append", help="train only on the labels of this session (repeat for several; \"reference\" = the "
                    "imported reference labels); default: every session")
+    p.add_argument("--no-extra-projects", dest="no_extra_projects", action="store_true",
+                   help="fit on this project's labels only, not also on those of the projects under training.extra_projects")
 
     p = sub.add_parser("score-segmentation", help="segmentation check: how well detection finds and outlines the objects people outlined")
     p.add_argument("--stain", default="all", choices=("all", "NeuN", "6E10", "AT8"))
@@ -185,6 +187,9 @@ def build_parser() -> argparse.ArgumentParser:
     from stainid.tutorial import add_parser as add_tutorial
 
     add_tutorial(sub)
+    p = sub.add_parser("projects", help="the app's list of projects (the Projects page): list them, or add or remove one")
+    p.add_argument("action", choices=("list", "add", "remove"))
+    p.add_argument("folder", nargs="?", type=Path, default=None, help="add / remove: the project folder (default: --project)")
     p = sub.add_parser("serve", help="start the web app")
     p.add_argument("--host", default="0.0.0.0", help="0.0.0.0 (default) lets other computers reach the annotation pages; 127.0.0.1 keeps it on this computer")
     p.add_argument("--port", type=int, default=8765)
@@ -236,6 +241,9 @@ def main(argv: list[str] | None = None) -> None:
         from stainid.tutorial import run as tutorial_command
 
         tutorial_command(args)
+        return
+    if args.command == "projects":
+        projects_command(args)
         return
     if args.command == "package":
         from stainid.imageset.package import create_project
@@ -366,7 +374,8 @@ def run(args: argparse.Namespace, project) -> None:
     elif args.command == "train":
         from stainid.training.train import train_model
 
-        train_model(project, args.stain, [s.strip() for v in args.session or [] for s in v.split(",") if s.strip()] or None)
+        train_model(project, args.stain, [s.strip() for v in args.session or [] for s in v.split(",") if s.strip()] or None,
+                    extra=not args.no_extra_projects)
 
 
 def _cores(values: list[str] | None) -> set[str] | None:
@@ -456,6 +465,30 @@ def refuse_old_label_logs(extra: list[Path]) -> None:
             problems.append(f"{root}: {error}")
     if problems:
         raise SystemExit("stainID does not start: " + "\n".join(problems) + "\nWith the app stopped: stainid labels split --all")
+
+
+def projects_command(args: argparse.Namespace) -> None:
+    """`stainid projects list | add | remove`: the projects the app lists on its Projects page (`stainid.api.registry`).
+    Adding never opens the project or changes which one the app shows first; removing only forgets it (no file is touched)."""
+    from stainid.api import registry
+
+    if args.action == "list":
+        for e in registry.entries():
+            print(f"{e.id}\t{e.name}\t{e.path}{'' if e.exists else '  (missing)'}", flush=True)
+        return
+    folder = args.folder or args.project
+    if folder is None:
+        raise SystemExit(f"stainid projects {args.action}: give the project folder (or --project)")
+    folder = folder.parent if folder.name == CONFIG_NAME else folder
+    if args.action == "add":
+        try:
+            new = registry.add(folder)
+        except FileNotFoundError as error:
+            raise SystemExit(str(error))
+        print(f"{'added' if new else 'already listed'}: {registry.project_id(folder)} {Path(folder).resolve()}", flush=True)
+    else:
+        registry.forget(folder)
+        print(f"removed from the list: {Path(folder).resolve()} (its files are untouched)", flush=True)
 
 
 def serve(args: argparse.Namespace) -> None:

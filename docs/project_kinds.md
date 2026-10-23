@@ -10,7 +10,7 @@ colours, how a dataset package becomes a project, and how the models are scored 
 |---|---|---|---|
 | **TMA study** (`tma`, the default) | slide scans of TMAs and their TMA maps | Slides → Cores → Map → Donors → Checks → Run | the cores found on each slide |
 | **Image set** (`images`) | image tiles or regions (PNG, JPEG, TIFF), each from a known donor | Images → Donors → Checks → Run | each image |
-| **Whole slides** (`slides`) | whole-slide scans (.svs, .ndpi, .tif, .mrxs, .scn, .czi, OME-Zarr, plain Zarr arrays) | Slides → Donors → Checks → Run | each region of tissue on a slide |
+| **Whole slides** (`slides`) | whole-slide scans (.svs, .ndpi, .tif, .mrxs, .scn, .czi, Olympus .vsi, OME-Zarr, plain Zarr arrays) | Slides → Donors → Checks → Run | each region of tissue on a slide |
 
 A new study's kind is chosen on the Projects page (*New study → What will you analyse?*), or comes from the dataset
 package it is made from. Image sets and whole slides have no TMA map and no core grid; the setup says so and skips
@@ -199,6 +199,14 @@ figures can be read against human agreement. Precision assumes the raters marked
 images they read: a rater who marked something on at least half of the annotated images is taken to have read them all
 (sets where every rater reads every image); otherwise only the images they marked count (sets that give each rater
 their own images).
+
+**Olympus .vsi and .czi.** Bio-Formats lists every picture in the file as a series of its own: a .vsi holds the
+slide label, the slide overview and the macro picture (camera pictures at about 2.7 µm/px) beside each scanned area and
+its reduced copies (`20x_BF_01`, `20x_BF_01 resolution 1`, …). stainID reads the scan: the largest of the series with
+the finest pixels, with its `resolution N` copies as its pyramid levels (`sources.scan_series`), so the tissue is found
+on a reduced copy and never by reading the whole scan. A slide scanned in two areas is read from the larger one (a
+narrow area scanned over the marker ink, as on one of the JOG slides, is left out). One reader is kept open per file and
+process (opening one takes about a second; regions of 6144 px read in about 1.3 s).
 
 ## Dependencies
 

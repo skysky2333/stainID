@@ -33,6 +33,7 @@ precision:                   # arithmetic on CUDA GPUs (CPU always fp32): fp32, 
 
 imaging: {native_pixel_size_um: null, rescale: on_import, stains: {}}   # image sets and whole slides (project_kinds.md)
 dataset: {}                  # the dataset package a project was made from (project_kinds.md)
+training: {extra_projects: []}   # other projects whose labels the models also learn from, training only (webapp.md#training-a-model)
 v2: {}                       # overrides of the v2 detection parameters (proposals, rules, outlines): pipeline_v2.md
 
 inputs:

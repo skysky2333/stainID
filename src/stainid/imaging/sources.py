@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -389,20 +390,97 @@ def _read_zarr_array(source: Source, x: int, y: int, width: int, height: int, le
 
 # --------------------------------------------------------------------------- Bio-Formats (czi, vsi)
 
+@dataclass(frozen=True)
+class Series:
+    """One image series of a Bio-Formats file (an Olympus .vsi holds the label, the slide overview, the macro picture
+    and each scanned area with its reduced copies as series of their own)."""
+    index: int
+    name: str
+    width: int
+    height: int
+    pixel_size_um: float | None
+
+
+def scan_series(series: list[Series]) -> list[Series]:
+    """The series of the scan itself, finest first: the largest of the series with the finest pixels (not the label, the
+    overview or the macro picture; of a slide scanned in two areas, the larger, e.g. not a strip over the marker ink), then its reduced copies (`<name> resolution N`, as Bio-Formats names a .vsi pyramid), largest first.
+    The study's TMA steps choose the same series (`stainid.slides.vsi`: the largest scene)."""
+    if not series:
+        raise ValueError("the file holds no image")
+    calibrated = [s for s in series if s.pixel_size_um]
+    if calibrated:  # the finest pixels are the scan's (the label and overview are camera pictures at ~2.7 µm)
+        finest = min(s.pixel_size_um for s in calibrated)
+        calibrated = [s for s in calibrated if s.pixel_size_um <= finest * 1.05]
+    full = max(calibrated or list(series), key=lambda s: (s.width * s.height, -s.index))
+    reduced = [s for s in series if s.name.startswith(f"{full.name} resolution ") and s.width < full.width]
+    return [full, *sorted(reduced, key=lambda s: s.width * s.height, reverse=True)]
+
+
+class _BioHandle:
+    """An open Bio-Formats reader and the series of its levels. One reader per file and process, shared by every Source
+    of that file (opening one takes about a second); its reads are serialised (a reader is not thread-safe)."""
+
+    def __init__(self, path: Path):
+        try:
+            from aicsimageio.readers.bioformats_reader import BioFile
+        except Exception as error:  # noqa: BLE001
+            raise MissingReader(f"{Path(path).suffix} slides need Bio-Formats: {INSTALL} ({error})") from None
+        self.lock = threading.Lock()
+        self.file = BioFile(str(path), series=0, meta=True)
+        reader = self.file._r
+        store = reader.getMetadataStore()
+        found = []
+        for index in range(int(reader.getSeriesCount())):
+            self.file.set_series(index)
+            *_, height, width, _ = self.file.core_meta.shape
+            size = store.getPixelsPhysicalSizeX(index)
+            pixel = float(size.value()) if size is not None and size.value() is not None else None
+            name = store.getImageName(index)
+            found.append(Series(index, str(name) if name is not None else f"series {index}", int(width), int(height), pixel))
+        self.levels = scan_series(found)
+        self.current = -1
+
+    def read(self, level: int, x0: int, y0: int, x1: int, y1: int) -> np.ndarray:
+        series = self.levels[level]
+        x0, y0, x1, y1 = max(0, x0), max(0, y0), min(series.width, x1), min(series.height, y1)
+        if x1 <= x0 or y1 <= y0:
+            return np.full((0, 0, 3), 255, np.uint8)
+        with self.lock:
+            if self.current != series.index:
+                self.file.set_series(series.index)
+                self.current = series.index
+            return _rgb(np.asarray(self.file._get_plane(y=slice(y0, y1), x=slice(x0, x1))))
+
+
+_BIO_HANDLES: dict[str, tuple[int, _BioHandle]] = {}
+_BIO_GUARD = threading.Lock()
+
+
+def _bio_handle(path: Path) -> _BioHandle:
+    key, stamp = str(Path(path).resolve()), Path(path).stat().st_mtime_ns
+    with _BIO_GUARD:
+        known = _BIO_HANDLES.get(key)
+        if known is None or known[0] != stamp:
+            _BIO_HANDLES[key] = (stamp, _BioHandle(Path(path)))
+        return _BIO_HANDLES[key][1]
+
+
 def _open_bioformats(path: Path) -> Source:
-    try:
-        from aicsimageio import AICSImage
-    except Exception as error:  # noqa: BLE001
-        raise MissingReader(f"{Path(path).suffix} slides need Bio-Formats: {INSTALL} ({error})") from None
-    image = AICSImage(str(path))
-    width, height = int(image.dims.X), int(image.dims.Y)
-    pixel = image.physical_pixel_sizes.X
-    return Source(Path(path), width, height, [(width, height)], float(pixel) if pixel else None, "bioformats", image)
+    handle = _bio_handle(path)
+    full = handle.levels[0]
+    return Source(Path(path), full.width, full.height, [(s.width, s.height) for s in handle.levels], full.pixel_size_um, "bioformats", handle)
 
 
 def _read_bioformats(source: Source, x: int, y: int, width: int, height: int, level: int) -> np.ndarray:
-    data = source._handle.get_image_dask_data("YXS")[y:y + height, x:x + width]
-    return _pad(_rgb(np.asarray(data.compute())), height, width)
+    down = source.downsample(level)
+    x0, y0 = int(x / down), int(y / down)
+    x1, y1 = x0 + max(1, round(width / down)), y0 + max(1, round(height / down))
+    rgb = source._handle.read(level, x0, y0, x1, y1)
+    if x0 >= 0 and y0 >= 0:
+        return _pad(rgb, y1 - y0, x1 - x0)
+    out = np.full((y1 - y0, x1 - x0, 3), 255, np.uint8)  # a box starting before the image: glass on that side
+    out[max(0, -y0):max(0, -y0) + rgb.shape[0], max(0, -x0):max(0, -x0) + rgb.shape[1]] = rgb
+    return out
 
 
 _READERS = {"picture": _read_picture, "openslide": _read_openslide, "tiff": _read_tiff, "zarr": _read_zarr, "zarr_array": _read_zarr_array,

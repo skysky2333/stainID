@@ -74,6 +74,22 @@ def remember(root: Path | str) -> None:
         _write(settings)
 
 
+def add(root: Path | str) -> bool:
+    """Put a project on the list without opening it (`stainid projects add`): it goes after the projects listed, with no
+    time of opening, so the list's order and the project the app opens last stay as they are. False if it was listed."""
+    path = str(Path(root).expanduser().resolve())
+    if not (Path(path) / CONFIG_NAME).exists():
+        raise FileNotFoundError(f"{path} is not a stainID project (it has no {CONFIG_NAME})")
+    with _LOCK:
+        settings = read_settings()
+        listed = path in settings["recent"] and path not in settings["hidden"]
+        if path not in settings["recent"]:
+            settings["recent"] = (settings["recent"] + [path])[-KEEP_RECENT:]
+        settings["hidden"] = [p for p in settings["hidden"] if p != path]
+        _write(settings)
+    return not listed
+
+
 def forget(root: Path | str) -> None:
     """Take the project off the list (a project in the projects folder stays hidden until it is opened again)."""
     path = str(Path(root).resolve())

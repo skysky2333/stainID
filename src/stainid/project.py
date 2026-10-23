@@ -59,6 +59,10 @@ DEFAULTS: dict = {
     # the images are prepared ("on_import") or each time they are read ("on_the_fly"), and per stain its model family and
     # colours. A TMA study reads brown (DAB) slides at the analysis scale and ignores this section.
     "imaging": {"native_pixel_size_um": None, "rescale": "on_import", "stains": {}},
+    # Model training (`stainid.training.train`): other stainID projects whose labels (and their candidates) every model
+    # of this project is also fitted on, as training-only cases (folders, relative to this project or absolute; the
+    # toggle on the Models page). They are never in the out-of-fold check or any analysis of this project.
+    "training": {"extra_projects": []},
     # The dataset package a project was made from (id, title, licence, citation, package folder); {} for your own data.
     "dataset": {},
     # Space the pictures the app makes for viewing (data/cache/) may take, in GB; the least recently used are deleted

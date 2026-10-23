@@ -6,6 +6,13 @@ the decisions people made there are class labels on its candidates). An object p
 position first (`labels.added`) and trains the model like a candidate; the report counts these person-added objects and
 those that could not be measured (their labels stay, but cannot train). Labels on positions with no candidate on fields
 that are not prepared are skipped.
+
+Other stainID projects can lend their labels as extra training cases (`training.extra_projects` in stainid.yaml, the
+toggle on the Models page; `extra_labelled`): their labelled candidates, with their own candidate features, join every
+fit, and never the evaluation. The out-of-fold (leave-one-TMA-out) check holds out only the study's own TMAs and scores
+only the study's own labels; an extra case of a donor in the held-out fold is left out of that fold's fit. The model in
+use is compared on the study's labels alone, and nothing else in the study (results, the Labels page, scoring) reads
+another project's labels. Simple labels of an extra project train through this project's mapping, as the study's own do.
 """
 from __future__ import annotations
 
@@ -26,7 +33,7 @@ from stainid import exclusions as excluded_areas
 from stainid.labels import added, candidate_store, decisions, frames, pool, simple, store
 from stainid.labels import sessions as label_sessions
 from stainid.labels.tasks import MODEL_KEY
-from stainid.project import Project, save_project
+from stainid.project import CONFIG_NAME, Project, load_project, save_project
 from stainid.sampling.tiles import known_tiles
 from stainid.stains.amyloid.model import MORPHOTYPE_MINIMUM_DIAMETER_UM, morphotype_threshold
 from stainid.v2 import scaled as v2_scaled
@@ -40,17 +47,19 @@ def forest():
                          RandomForestClassifier(n_estimators=500, min_samples_leaf=2, class_weight="balanced", random_state=0, n_jobs=-1))
 
 
-def labelled(project: Project, stain: str, sessions: list[str] | None = None) -> tuple[pd.DataFrame, list[str]]:
+def labelled(project: Project, stain: str, sessions: list[str] | None = None, mapping_from: Project | None = None) -> tuple[pd.DataFrame, list[str]]:
     """Consensus-labelled objects with their candidate features (one row per object), from the labels of these
-    sessions (`labels.sessions.in_sessions`; all labels when None)."""
+    sessions (`labels.sessions.in_sessions`; all labels when None). Simple labels train through the mapping of
+    `mapping_from` (the project whose model is trained; default this one)."""
     labels = frames.in_field_frame(excluded_areas.drop_excluded(project, store.current(project.output("reviews"))), known_tiles(project),
                                   project.context_px)
     counts = added.measure(project, stain)
     if any(counts.values()):
         print(f"measured {counts['measured']} object(s) people added; {counts['could_not_be_measured']} could not be measured", flush=True)
     chosen = label_sessions.in_sessions(labels, sessions)
-    mapping = simple.used_mapping(chosen, project, stain)  # simple sessions' labels train through the mapping on the Models page
-    chosen = simple.with_training_rows(chosen, project, stain)
+    mapper = mapping_from or project
+    mapping = simple.used_mapping(chosen, mapper, stain)  # simple sessions' labels train through the mapping on the Models page
+    chosen = simple.with_training_rows(chosen, mapper, stain)
     truth = decisions.consensus(project, stain, chosen, known_tiles(project))  # by candidate
     truth = truth[truth.positive.notna()]
     names = pool.feature_names(project, stain)
@@ -78,6 +87,9 @@ def labelled(project: Project, stain: str, sessions: list[str] | None = None) ->
         raise ValueError(f"No labelled {stain} objects {'in the chosen sessions ' if sessions else ''}yet: label some on the Labels page first")
     data = pd.DataFrame(rows).drop_duplicates(["tile_id", "x", "y"]).reset_index(drop=True)
     data["added_by_person"] = data.added_by_person.astype(bool)
+    if "donor_id" in tiles and "tile_id" in tiles:  # the donor of each object, for the extra cases' fold guard
+        donor = data.tile_id.map(tiles.drop_duplicates("tile_id").set_index("tile_id").donor_id)
+        data["donor_id"] = donor.where(donor.notna(), data["donor_id"]) if "donor_id" in data else donor
     data.attrs["unmeasured"] = unmeasured
     data.attrs["simple_mapping"] = mapping
     return data, names
@@ -101,21 +113,37 @@ def person_added(data: pd.DataFrame, oof: np.ndarray, threshold: float) -> dict:
                           "never_proposed_share": share(never), "rejected_share": share(rejected)}}
 
 
-def out_of_fold(fit_predict, n: int, y: np.ndarray, groups: np.ndarray) -> tuple[np.ndarray, str]:
+def out_of_fold(fit_predict, n: int, y: np.ndarray, groups: np.ndarray, fit_only: np.ndarray | None = None,
+                donors: np.ndarray | None = None) -> tuple[np.ndarray, str]:
     """Out-of-fold predictions that never split a group (TMA) between training and testing. Each donor sits on one TMA,
     so every split is by donor: leave-one-TMA-out when every training fold still sees both classes, otherwise
-    stratified folds of whole TMAs."""
+    stratified folds of whole TMAs. Rows marked `fit_only` (other projects' cases) are never tested and never make a
+    fold: they join the training of every fold, except those of a donor (`donors`) that the fold tests; their
+    predictions stay NaN."""
+    fit_only = np.zeros(n, bool) if fit_only is None else np.asarray(fit_only, bool)
+    own, extra = np.flatnonzero(~fit_only), np.flatnonzero(fit_only)
+    y_own, groups_own = y[own], groups[own]
+
+    def fold(train, test):  # positions among the study's rows -> rows of all, with the extra cases in training
+        train, test = own[train], own[test]
+        if len(extra):
+            keep = extra if donors is None else extra[~np.isin(donors[extra], [d for d in donors[test] if isinstance(d, str) and d])]
+            train = np.concatenate([train, keep])
+        return train, test
+
+    m = len(own)
     logo = LeaveOneGroupOut()
-    if len(set(groups)) >= 3 and all(len(set(y[train])) == 2 for train, _ in logo.split(np.zeros(n), y, groups)):
-        splits, scheme = logo.split(np.zeros(n), y, groups), "leave-one-TMA-out"
+    if len(set(groups_own)) >= 3 and all(len(set(y[fold(tr, te)[0]])) == 2 for tr, te in logo.split(np.zeros(m), y_own, groups_own)):
+        splits, scheme = logo.split(np.zeros(m), y_own, groups_own), "leave-one-TMA-out"
     else:
-        folds = min(5, len(set(groups)))
+        folds = min(5, len(set(groups_own)))
         if folds < 2:
             raise ValueError("Validation needs labels from at least two TMAs, so that no donor is in both training and testing")
-        splits = StratifiedGroupKFold(folds, shuffle=True, random_state=0).split(np.zeros(n), y, groups)
+        splits = StratifiedGroupKFold(folds, shuffle=True, random_state=0).split(np.zeros(m), y_own, groups_own)
         scheme = f"{folds}-fold, whole TMAs per fold"
     oof = np.full(n, np.nan)
     for train, test in splits:
+        train, test = fold(train, test)
         oof[test] = fit_predict(train, test)
     return oof, scheme
 
@@ -164,32 +192,104 @@ def with_scaled(project: Project, stain: str, data: pd.DataFrame, names: list[st
     return out, scaled
 
 
-def train_model(project: Project, stain: str, sessions: list[str] | None = None, scaled: bool | None = None) -> Path:
+def extra_projects(project: Project) -> list[Path]:
+    """The other projects whose labels this project's models also learn from (`training.extra_projects`: folders,
+    relative to this project or absolute; this project itself and repeats are left out)."""
+    out: list[Path] = []
+    for value in (project.config.get("training") or {}).get("extra_projects") or []:
+        text = str(value.get("path", "") if isinstance(value, dict) else value).strip()
+        if not text:
+            continue
+        path = Path(text).expanduser()
+        path = (path if path.is_absolute() else project.root / path).resolve()
+        if path.name == CONFIG_NAME:
+            path = path.parent
+        if path != project.root.resolve() and path not in out:
+            out.append(path)
+    return out
+
+
+EXTRA_GROUP = "extra:"  # the group (`tma`) of an extra case starts with this: never a fold of the out-of-fold check
+
+
+def extra_labelled(project: Project, stain: str, names: list[str], scaled: bool, log=print) -> tuple[pd.DataFrame, list[dict]]:
+    """The labelled objects of the extra projects (`extra_projects`) as training-only rows with this training's inputs
+    (`names`; an input another project lacks is empty and the model's imputer fills it), and per project what it
+    gave: its name, folder, objects and positives used, sessions and the simple mapping (this project's) its simple
+    labels trained through, or a note on why it gave nothing."""
+    frames_: list[pd.DataFrame] = []
+    used: list[dict] = []
+    for root in extra_projects(project):
+        entry: dict = {"path": str(root), "name": root.name, "objects": 0, "positives": 0}
+        used.append(entry)
+        if not (root / CONFIG_NAME).exists():
+            entry["note"] = "not found"
+            continue
+        try:
+            other = load_project(root)
+            entry["name"] = other.name
+            if stain not in other.stains:
+                entry["note"] = f"no {stain} slides"
+                continue
+            data, other_names = labelled(other, stain, None, mapping_from=project)
+            if scaled:
+                data, _ = with_scaled(other, stain, data, other_names)
+        except ValueError as error:  # no labels of this stain yet, or a table it cannot read
+            entry["note"] = "no labels yet" if str(error).startswith("No labelled") else str(error)
+            continue
+        data = data.copy()
+        for name in names:
+            if name not in data:
+                data[name] = np.nan
+        data["tma"] = EXTRA_GROUP + entry["name"] + ":" + data.tma.astype(str)
+        data["extra_project"] = str(root)
+        data["candidate_id"] = str(root.name) + "/" + data.tile_id.astype(str) + ":" + data.x.round().astype(int).astype(str) + ":" \
+            + data.y.round().astype(int).astype(str)
+        positives = data.positive.astype(bool)
+        entry |= {"objects": int(len(data)), "positives": int(positives.sum()), "negatives": int((~positives).sum()),
+                  "sessions": trained_on(other, stain, None, mapping_from=project), "simple_mapping": data.attrs.get("simple_mapping")}
+        log(f"extra training cases: {len(data)} labelled {stain} objects ({int(positives.sum())} positive) from {entry['name']} ({root})", flush=True)
+        frames_.append(data)
+    return (pd.concat(frames_, ignore_index=True) if frames_ else pd.DataFrame()), used
+
+
+def train_model(project: Project, stain: str, sessions: list[str] | None = None, scaled: bool | None = None, extra: bool = True) -> Path:
     """A new model from the labels of these sessions (all when None), checked by leaving one TMA out at a time. `scaled`
-    (default: `slide_scaled`): slide-scaled inputs instead of absolute DAB OD (`stainid.v2.scaled`)."""
+    (default: `slide_scaled`): slide-scaled inputs instead of absolute DAB OD (`stainid.v2.scaled`). `extra`: also fit
+    on the labels of the extra projects (`extra_projects`), which are never tested."""
     data, names = labelled(project, stain, sessions)
     scaled = slide_scaled(project, stain) if scaled is None else bool(scaled)
     current_names = names
     if scaled:
         data, names = with_scaled(project, stain, data, names)
-    y = data.positive.to_numpy(bool)
-    if y.sum() < MINIMUM_PER_CLASS or (~y).sum() < MINIMUM_PER_CLASS:
-        raise ValueError(f"Need at least {MINIMUM_PER_CLASS} positive and {MINIMUM_PER_CLASS} negative labels; have {int(y.sum())} and {int((~y).sum())}. "
-                         "Label more objects and try again.")
-    x = data[names].to_numpy(float)
-    groups = data.tma.astype(str).to_numpy()
-    ids = (data.tile_id + ":" + data.x.round().astype(int).astype(str) + ":" + data.y.round().astype(int).astype(str)).tolist()
+    y_own = data.positive.to_numpy(bool)
+    if y_own.sum() < MINIMUM_PER_CLASS or (~y_own).sum() < MINIMUM_PER_CLASS:
+        raise ValueError(f"Need at least {MINIMUM_PER_CLASS} positive and {MINIMUM_PER_CLASS} negative labels; have {int(y_own.sum())} and "
+                         f"{int((~y_own).sum())}. Label more objects and try again.")
+    own_ids = (data.tile_id + ":" + data.x.round().astype(int).astype(str) + ":" + data.y.round().astype(int).astype(str)).tolist()
     current, old = _current(project, stain, data[current_names].to_numpy(float), current_names)
     sources = data.sources.str.split(", ").explode().value_counts()
-    extra = int(data.added_by_person.sum())
-    print(f"[1/3] {len(y)} labelled objects ({int(y.sum())} positive) from {len(sources)} source(s)"
-          f"{f', including {extra} person-added object(s)' if extra else ''}", flush=True)
+    added_n = int(data.added_by_person.sum())
+    study = data
+    extra_rows, extra_used = extra_labelled(project, stain, names, scaled) if extra else (pd.DataFrame(), [])
+    if len(extra_rows):
+        data = pd.concat([study, extra_rows], ignore_index=True)
+    own = np.arange(len(data)) < len(study)
+    y = data.positive.to_numpy(bool)
+    x = data[names].to_numpy(float)
+    groups = data.tma.astype(str).to_numpy()
+    donors = data.donor_id.astype(object).where(data.donor_id.notna(), "").astype(str).to_numpy() if "donor_id" in data else None
+    ids = own_ids + (extra_rows.candidate_id.tolist() if len(extra_rows) else [])
+    print(f"[1/3] {len(study)} labelled objects ({int(y_own.sum())} positive) from {len(sources)} source(s)"
+          f"{f', including {added_n} person-added object(s)' if added_n else ''}"
+          f"{f'; {len(extra_rows)} more from other projects, for fitting only' if len(extra_rows) else ''}", flush=True)
 
     usable = np.any(np.isfinite(x), axis=0)
     threshold = float(old.get("probability_threshold", 0.4)) if stain == "AT8" else 0.5
     columns = usable if stain == "NeuN" else np.ones(len(names), bool)
-    oof, scheme = out_of_fold(lambda tr, te: forest().fit(x[tr][:, columns], y[tr]).predict_proba(x[te][:, columns])[:, 1], len(y), y, groups)
-    print(f"[2/3] cross-validated ({scheme})", flush=True)
+    oof, scheme = out_of_fold(lambda tr, te: forest().fit(x[tr][:, columns], y[tr]).predict_proba(x[te][:, columns])[:, 1], len(y), y, groups,
+                              fit_only=~own, donors=donors)
+    print(f"[2/3] cross-validated ({scheme}{', on this project' + chr(39) + 's labels only' if len(extra_rows) else ''})", flush=True)
 
     if stain == "NeuN":
         bundle = {"classifier": forest().fit(x[:, usable], y), "feature_names": names, "usable_features": usable, "decision_mode": "context_rf",
@@ -227,23 +327,26 @@ def train_model(project: Project, stain: str, sessions: list[str] | None = None,
     dump(bundle, folder / "bundle.joblib")
     report = {"stain": stain, "created": time.time(), "validation": scheme, "threshold": threshold, "sources": sources.to_dict(),
               "slide_scaled": bool(scaled),
-              "new_model": metrics(y, oof, threshold), "current_model": metrics(y, current, threshold) if current is not None else None,
+              "new_model": metrics(y[own], oof[own], threshold), "current_model": metrics(y_own, current, threshold) if current is not None else None,
               "current_model_path": project.relative(project.model(MODEL_KEY[stain])),
-              "sessions": trained_on(project, stain, sessions), "person_added": person_added(data, oof, threshold),
-              "simple_mapping": data.attrs.get("simple_mapping")}  # how simple labels mapped onto the classes (None: none used)
+              "sessions": trained_on(project, stain, sessions), "person_added": person_added(study, oof[own], threshold),
+              "simple_mapping": study.attrs.get("simple_mapping"),  # how simple labels mapped onto the classes (None: none used)
+              # other projects' labels the model was also fitted on (never tested; the figures above are this project's)
+              "extra_projects": extra_used, "fitted_on": {"objects": int(len(y)), "positives": int(y.sum()), "this_project": int(own.sum()),
+                                                          "extra_projects": int((~own).sum())}}
     (folder / "report.json").write_text(json.dumps(report, indent=1))
     new = report["new_model"]
     print(f"[3/3] new model: AUC {new['auc']:.2f}, precision {new['precision']:.2f}, recall {new['recall']:.2f} -> {project.relative(folder)}", flush=True)
     return folder
 
 
-def trained_on(project: Project, stain: str, sessions: list[str] | None) -> list[dict]:
+def trained_on(project: Project, stain: str, sessions: list[str] | None, mapping_from: Project | None = None) -> list[dict]:
     """The sessions whose labels a training used (every session with labels of this stain when None): name, title and
-    how many objects each labelled, for the model's report."""
+    how many objects each labelled, for the model's report (simple labels counted through `mapping_from`'s mapping)."""
     root = project.output("reviews")
     titles = {name: label_sessions.meta(root, name).get("title", name) for name in label_sessions.names(root)}
     used = label_sessions.label_sets(label_sessions.in_sessions(excluded_areas.drop_excluded(project, store.current(root)), sessions), stain, titles,
-                                     simple=simple.of(project, stain))
+                                     simple=simple.of(mapping_from or project, stain))
     return [{"name": s["name"], "title": s["title"], "objects": s["objects"]} for s in used]
 
 
