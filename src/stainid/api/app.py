@@ -21,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from stainid import palette, practice, tutorial
 from stainid.api import ahead, state, work
 from stainid.api.routes import accounts as account_routes
-from stainid.api.routes import analysis, annotate, cohort, images, imageset, jobs, models, project, projects, session, setup, slides
+from stainid.api.routes import analysis, annotate, cohort, images, imageset, jobs, models, project, projects, session, setup, slides, whole_slides
 from stainid.api.routes import areas as area_routes
 from stainid.api.routes import matter as matter_routes
 from stainid.api.routes import cache as cache_routes
@@ -71,7 +71,7 @@ async def _lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     app = FastAPI(title="stainID", version="2.0", docs_url=None, redoc_url=None, openapi_url=None, lifespan=_lifespan)
-    for module in (projects, project, slides, setup, imageset, cohort, images, jobs, analysis, models, session, annotate, cache_routes, label_classes, outline_routes, round_routes, area_routes, matter_routes, account_routes, user_routes):
+    for module in (projects, project, slides, whole_slides, setup, imageset, cohort, images, jobs, analysis, models, session, annotate, cache_routes, label_classes, outline_routes, round_routes, area_routes, matter_routes, account_routes, user_routes):
         app.include_router(module.router, prefix="/api")
 
     @app.get("/api/palette")

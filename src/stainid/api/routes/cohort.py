@@ -170,7 +170,19 @@ def core(core_id: str) -> dict:
         **{k: _text(first.get(k)) for k in CORE_COLUMNS},
         "images": records(images[image_columns].sort_values("stain")) if not images.empty else [],
         "neighbours": _neighbours(state, core_id, str(first["tma"])),
+        "slide": _slide_of(state, core_id),
     }
+
+
+def _slide_of(state: ProjectState, core_id: str) -> dict | None:
+    """A region of a whole slide: the slide and where the region lies on it (the Cores view shows the slide instead)."""
+    from stainid.api import slide_pyramid  # noqa: PLC0415
+
+    found = slide_pyramid.slide_of(state, core_id)
+    region = found.find(core_id) if found is not None else None
+    if region is None:
+        return None
+    return {"slide_id": found.slide_id, "stain": found.stain, "x": region.x, "y": region.y, "width": region.width, "height": region.height}
 
 
 def _core_tiles(state: ProjectState, core_id: str, stain: str) -> pd.DataFrame:

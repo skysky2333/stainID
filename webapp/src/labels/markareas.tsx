@@ -161,7 +161,7 @@ function CoreTask({ name, core, after, afterStains, practice, onEvent, coach, on
     const edits: Record<string, { pngs: Record<string, string>; scale: number }> = {}
     for (const i of images) {
       const pngs = masks.current.get(i.stain)?.pngs()
-      if (pngs) edits[i.stain] = { pngs, scale: AREA_SCALE }
+      if (pngs) edits[i.stain] = { pngs, scale: masks.current.get(i.stain)?.scale ?? AREA_SCALE }
     }
     setSaving(true)
     const done = await withError(() => api.post<{ progress: RoundProgress }>(`${base}/save`, { edits, checked: images.map((i) => i.stain) }), setError)
@@ -209,6 +209,7 @@ function CoreTask({ name, core, after, afterStains, practice, onEvent, coach, on
   }, [tell])
 
   if (!task.data) return <><ErrorNote error={task.error} />{!task.error && <Loading label="Opening the core…" />}</>
+  const word = task.data.unit === 'slide' ? 'slide' : 'core'  // a whole-slide project: the whole slide at once
   const allLooked = images.every((i) => looked.has(i.stain))
   const notYet = images.filter((i) => !looked.has(i.stain)).map((i) => i.stain)
   const second = task.data.second_check
@@ -233,7 +234,7 @@ function CoreTask({ name, core, after, afterStains, practice, onEvent, coach, on
               </button>
             ))}
             {images.length > 1 ? <span className="small muted area-tabs-keys"><span className="kbd">[</span> <span className="kbd">]</span> switch stains</span>
-              : <span className="small muted area-tabs-keys">one stain on this core</span>}
+              : <span className="small muted area-tabs-keys">one stain on this {word}</span>}
           </div>
           {image && <StainView key={image.stain} base={`${base}/${enc(image.stain)}`} image={image} masks={masks.current} kind={kind}
             brushRadius={brushSize / 2} hidden={hidden} objectsOn={objectsOn} tick={tick}
@@ -257,12 +258,12 @@ function CoreTask({ name, core, after, afterStains, practice, onEvent, coach, on
               it (one region, however many strokes; another type’s pixels become this type), Shift-drag takes out of it.</p>
           </div>
           <div className="card side-block">
-            <h3>This core</h3>
+            <h3>This {word}{task.data.unit === 'slide' && task.data.name ? `: ${task.data.name}` : ''}</h3>
             <p className="small secondary" style={{ marginTop: 0 }}>Look at each stain. Paint what should not be counted; press <span className="kbd">Enter</span> when a stain is done.
               {' '}{allLooked ? 'Every stain is looked at.' : `Still to look at: ${notYet.join(', ')}.`}</p>
             <button className="btn primary" disabled={saving || !allLooked} onClick={() => void save()}
-              title={allLooked ? 'Finish core: records it as checked by you, and the next core opens' : `Look at every stain first (Enter on each): ${notYet.join(', ')}`}>
-              {saving ? 'Saving…' : 'Finish core'}</button>
+              title={allLooked ? `Finish ${word}: records it as checked by you, and the next ${word} opens` : `Look at every stain first (Enter on each): ${notYet.join(', ')}`}>
+              {saving ? 'Saving…' : `Finish ${word}`}</button>
             {painted.length > 0 && <p className="small muted" style={{ marginBottom: 0 }}>Painted, not saved yet: {painted.join(', ')}.</p>}
           </div>
           <div className="card side-block key-help small">
@@ -316,7 +317,7 @@ function StainView({ base, image, masks, kind, brushRadius, hidden, objectsOn, t
   const masksFor = (): BrushMasks | null => {
     if (!pyramid) return null
     let m = masks.get(image.stain)
-    if (!m) { m = new BrushMasks(pyramid.width, pyramid.height, AREA_SCALE); masks.set(image.stain, m) }
+    if (!m) { m = new BrushMasks(pyramid.width, pyramid.height, image.mask_scale ?? AREA_SCALE); masks.set(image.stain, m) }
     return m
   }
   const host = useRef<HTMLDivElement | null>(null)

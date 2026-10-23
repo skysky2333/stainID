@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import type { CoreDetail } from '../api'
-import { apiUrl, coreThumb, enc } from '../api'
+import { apiUrl, enc } from '../api'
 import { ErrorNote, GroupBadge, Loaded, Loading, PageHead, Progress, fmt } from '../components'
 import type { Line, Mark, Pyramid, ViewTarget } from '../deepzoom'
 import { DeepZoom } from '../deepzoom'
@@ -22,6 +22,20 @@ import { passes } from '../labels/fieldStart'
 interface CoreInfo extends CoreDetail {
   images: (CoreDetail['images'][number] & { pixel_width_um?: number })[]
   neighbours: { previous: string | null; next: string | null }
+  /** a region of a whole slide: the slide it lies on and its place there (the view shows the slide instead) */
+  slide?: { slide_id: string; stain: string; x: number; y: number; width: number; height: number } | null
+  /** a whole slide (GET /api/whole-slides/{id}): its regions [core_id, x, y, width, height] in slide px */
+  unit?: 'slide'; regions?: [string, number, number, number, number][]
+}
+/** What the Cores view shows: one TMA core (or image), or a whole slide put together from its regions (the regions stay
+ *  the pipeline's units; the server moves every drawing into slide px). */
+type Unit = 'core' | 'slide'
+const UNIT_WORD: Record<Unit, string> = { core: 'core', slide: 'slide' }
+/** The JSON and the picture addresses of one stain of a core or a slide. */
+function addresses(unit: Unit, id: string, stain: string) {
+  return unit === 'slide'
+    ? { base: `/api/whole-slides/${enc(id)}/${enc(stain)}`, images: `/api/images/whole-slides/${enc(id)}/${enc(stain)}` }
+    : { base: `/api/cores/${enc(id)}/${enc(stain)}`, images: `/api/images/cores/${enc(id)}/${enc(stain)}` }
 }
 type PictureState = ({ ready: true } & Pyramid) | { ready: false; state: 'waiting' | 'preparing' | 'failed'; ahead?: number; error?: string; thumb_size: number | null }
 /** What detection measured on an AT8 core's neuropil threads (all tiles). */
@@ -173,18 +187,27 @@ function plus(x: number, y: number, arm: number, turned = false): number[] {
   return shape.flatMap(([dx, dy]) => [x + dx * c - dy * n, y + dx * n + dy * c])
 }
 
-export default function CoreView() {
-  const { coreId = '' } = useParams()
+export default function CoreView({ unit = 'core' }: { unit?: Unit }) {
+  const { coreId = '', slideId = '' } = useParams()
+  const id = unit === 'slide' ? slideId : coreId
+  const word = UNIT_WORD[unit]
   const [params, setParams] = useSearchParams()
   const navigate = useNavigate()
   const { tmaName } = useProject()
-  const core = useFetch<CoreInfo>(`/api/cores/${enc(coreId)}`)
-  const info = core.data?.core_id === coreId ? core.data : null
+  const core = useFetch<CoreInfo>(unit === 'slide' ? `/api/whole-slides/${enc(id)}` : `/api/cores/${enc(id)}`)
+  const info = core.data?.core_id === id ? core.data : null
+  const onSlide = unit === 'core' ? info?.slide : null
+  useEffect(() => {  // a region of a whole slide opens its slide, at the same place (a point of the region, or its middle)
+    if (!onSlide) return
+    const x = params.get('x'), y = params.get('y')
+    const at = x && y ? { x: Number(x) + onSlide.x, y: Number(y) + onSlide.y } : { x: onSlide.x + onSlide.width / 2, y: onSlide.y + onSlide.height / 2 }
+    navigate(`/slides/${enc(onSlide.slide_id)}?stain=${enc(onSlide.stain)}&x=${Math.round(at.x)}&y=${Math.round(at.y)}`, { replace: true })
+  }, [onSlide])  // eslint-disable-line react-hooks/exhaustive-deps
   const stains = (info?.images ?? []).map((i) => i.stain)
   const asked = params.get('stain')
   const stain = asked && stains.includes(asked) ? asked : stains[0]
-  const back = info ? `/cohort?tma=${enc(info.tma)}${stain ? `&stain=${enc(stain)}` : ''}` : '/cohort'
-  const open = (id: string | null) => id && navigate(`/cores/${enc(id)}${stain ? `?stain=${enc(stain)}` : ''}`)
+  const back = unit === 'slide' ? '/cohort' : info ? `/cohort?tma=${enc(info.tma)}${stain ? `&stain=${enc(stain)}` : ''}` : '/cohort'
+  const open = (next: string | null) => next && navigate(`/${unit === 'slide' ? 'slides' : 'cores'}/${enc(next)}${stain ? `?stain=${enc(stain)}` : ''}`)
   const openRef = useRef(open)
   openRef.current = open
   const neighbours = info?.neighbours
@@ -202,18 +225,19 @@ export default function CoreView() {
 
   return (
     <>
-      <Link to={back} className="back-link">← All cores{info ? ` of ${tmaName(info.tma)}` : ''}</Link>
-      <PageHead title={info ? `${tmaName(info.tma)} · ${info.core_label}` : coreId}
+      <Link to={back} className="back-link">{unit === 'slide' ? '← All slides' : `← All cores${info ? ` of ${tmaName(info.tma)}` : ''}`}</Link>
+      <PageHead title={info ? (unit === 'slide' ? info.core_label : `${tmaName(info.tma)} · ${info.core_label}`) : id}
         subtitle={info ? <span className="row core-facts"><GroupBadge group={info.disease_group} />
           {info.donor_id ? <span>donor {info.donor_id}</span> : <span>control tissue</span>}
-          {info.region && <span>{info.region}</span>}{info.technical_replicate && <span>replicate {info.technical_replicate}</span>}</span> : 'Loading the core…'}>
+          {info.region && <span>{info.region}</span>}{info.technical_replicate && <span>replicate {info.technical_replicate}</span>}
+          {unit === 'slide' && info.regions && <span>{info.regions.length} regions</span>}</span> : `Loading the ${word}…`}>
         {info && <span className="row">
-          <button className="btn" disabled={!info.neighbours.previous} onClick={() => open(info.neighbours.previous)} title="The core before this one on the TMA (key [)">← Previous core</button>
-          <button className="btn" disabled={!info.neighbours.next} onClick={() => open(info.neighbours.next)} title="The core after this one on the TMA (key ])">Next core →</button>
+          <button className="btn" disabled={!info.neighbours.previous} onClick={() => open(info.neighbours.previous)} title={`The ${word} before this one${unit === 'slide' ? '' : ' on the TMA'} (key [)`}>← Previous {word}</button>
+          <button className="btn" disabled={!info.neighbours.next} onClick={() => open(info.neighbours.next)} title={`The ${word} after this one${unit === 'slide' ? '' : ' on the TMA'} (key ])`}>Next {word} →</button>
         </span>}
       </PageHead>
-      <Loaded state={core} label="Loading the core…">
-        {() => !info ? <Loading label="Loading the core…" /> : !stain ? (
+      <Loaded state={core} label={`Loading the ${word}…`}>
+        {() => !info || onSlide ? <Loading label={onSlide ? 'Opening the whole slide…' : `Loading the ${word}…`} /> : !stain ? (
           <div className="empty-state">There is no picture of this core yet. Pictures of the cores are made by the <b>Cut out cores</b> step; see <Link to="/workflow">Run</Link>.</div>
         ) : (
           <>
@@ -221,7 +245,7 @@ export default function CoreView() {
               {stains.map((s) => <button key={s} role="tab" aria-selected={s === stain} className={`tab${s === stain ? ' active' : ''}`}
                 onClick={() => setParams({ stain: s }, { replace: true })}>{s}</button>)}
             </div>
-            <CoreImage key={`${coreId}-${stain}`} core={info} stain={stain} start={params.get('x') && params.get('y') ? { x: Number(params.get('x')), y: Number(params.get('y')) } : null} />
+            <CoreImage key={`${id}-${stain}`} unit={unit} core={info} stain={stain} start={params.get('x') && params.get('y') ? { x: Number(params.get('x')), y: Number(params.get('y')) } : null} />
           </>
         )}
       </Loaded>
@@ -230,8 +254,9 @@ export default function CoreView() {
 }
 
 /** One stain of one core: the zoomable picture with the detections on top, and what is shown beside it. */
-function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; start: { x: number; y: number } | null }) {
-  const base = `/api/cores/${enc(core.core_id)}/${enc(stain)}`
+function CoreImage({ unit, core, stain, start }: { unit: Unit; core: CoreInfo; stain: string; start: { x: number; y: number } | null }) {
+  const { base, images } = addresses(unit, core.core_id, stain)
+  const word = UNIT_WORD[unit]
   const navigate = useNavigate()
   const [poll, setPoll] = useState(true)
   const picture = useFetch<PictureState>(`${base}/picture`, poll ? 1500 : undefined)
@@ -453,7 +478,7 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
   }
   const go = (x: number, y: number, scale?: number) => setTarget((t) => ({ x, y, scale, key: (t?.key ?? 0) + 1 }))
   const tileUrl = ready ? (level: number, col: number, row: number, layer?: string) =>
-    apiUrl(`/api/images/cores/${enc(core.core_id)}/${enc(stain)}/tiles/${level}/${col}_${row}${layer ? `_${layer}.png` : '.jpg'}?v=${ready.version}`) : null
+    apiUrl(`${images}/tiles/${level}/${col}_${row}${layer ? `_${layer}.png` : '.jpg'}?v=${ready.version}`) : null
   const pictureBox = useRef<HTMLDivElement>(null)
   const screenScale = () => {  // screen px per image px now
     const element = pictureBox.current?.querySelector('.dz')
@@ -480,25 +505,25 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
               setSelected(i === null ? null : drawn[i].index)
             }} onTileError={() => setPoll(true)}
             toolbar={<span className="row dz-toolbar-info"><span className="small muted">Scroll to zoom · drag to move · click an object for details ·
-              {' '}<span className="kbd">Space</span> hides what is drawn · arrow keys move · <span className="kbd">[</span> <span className="kbd">]</span> other cores</span>
+              {' '}<span className="kbd">Space</span> hides what is drawn · arrow keys move · <span className="kbd">[</span> <span className="kbd">]</span> other {word}s</span>
               {hidden && <span className="badge">Overlays hidden · <span className="kbd">Space</span></span>}</span>} />
         ) : (
-          <Preparing core={core} stain={stain} state={picture.data} error={picture.error} />
+          <Preparing unit={unit} thumb={(size) => apiUrl(`${images}.jpg?size=${size}`)} state={picture.data} error={picture.error} />
         )}
         {!hidden && fixed && viewRect && [fixed.points, ...(fixed.more ?? [])].map((points, i) => (
           <FixedOutlineHint key={i} box={pictureBox.current} view={viewRect} points={points} color={fixed.color} />))}
       </div>
       <div className="core-side">
-        {(() => {  // three zoom levels: the whole core (the minimap: the middle level's extent), the middle level (the view's), the picture
+        {(() => {  // three zoom levels: the whole core or slide (the minimap: the middle level's extent), the middle level (the view's), the picture
           const size = status.data?.width && status.data.height ? { w: status.data.width, h: status.data.height } : null
           const mid = size && viewRect ? middleWindow(viewRect, size.w, size.h, 3.5) : null
           return <>
-            <Minimap core={core.core_id} stain={stain} status={status} view={mid ?? viewRect}
+            <Minimap picture={apiUrl(`${images}.jpg?size=${unit === 'slide' ? 1024 : 256}`)} word={word} regions={unit === 'slide' ? core.regions : undefined} status={status} view={mid ?? viewRect}
               onJump={(x, y) => go(x, y, screenScale())} onOpen={openTile} />
             {size && mid && <div className="card level-card core-mid">
               <div className="level-title small"><b>Around the view</b><span className="muted"> · click or drag to move the picture</span></div>
-              <LevelMap src={apiUrl(`/api/images/cores/${enc(core.core_id)}/${enc(stain)}.jpg?size=2048`)} width={size.w} height={size.h} window={mid}
-                next={viewRect} onMove={(x, y) => go(x, y, screenScale())} label="Around the part of the core in view" />
+              <LevelMap src={apiUrl(`${images}.jpg?size=2048`)} width={size.w} height={size.h} window={mid}
+                next={viewRect} onMove={(x, y) => go(x, y, screenScale())} label={`Around the part of the ${word} in view`} />
             </div>}
           </>
         })()}
@@ -570,7 +595,8 @@ function CoreImage({ core, stain, start }: { core: CoreInfo; stain: string; star
         )}
         <Advanced title="Details">
           <dl className="facts">
-            <dt>Core</dt><dd><code>{core.core_id}</code></dd>
+            <dt>{unit === 'slide' ? 'Slide' : 'Core'}</dt><dd><code>{core.core_id}</code></dd>
+            {unit === 'slide' && core.regions && <><dt>Regions</dt><dd>{core.regions.length} (the units detection and labelling work on)</dd></>}
             {image && <><dt>Image size</dt><dd>{image.native_width_px.toLocaleString()} × {image.native_height_px.toLocaleString()} px</dd></>}
             {image?.pixel_width_um && <><dt>Pixel size</dt><dd>{fmt(image.pixel_width_um, 3)} µm</dd></>}
             {image?.tissue_fraction !== undefined && <><dt>Tissue</dt><dd>{Math.round(image.tissue_fraction * 100)}% of the core{image.tissue_status ? ` (${image.tissue_status})` : ''}</dd></>}
@@ -636,8 +662,8 @@ function FixedOutlineHint({ box, view, points, color }: { box: HTMLDivElement | 
 /** The minimap: the whole core with its tiles shaded by how far their review is (labels/status.py), the squares no
  *  analysed tile covers hatched, and the main picture's view as a rectangle; a click (or a drag) moves the view there, a
  *  double-click on a tile opens it in the annotation session that has it. Not hidden by Space. */
-function Minimap({ core, stain, status, view, onJump, onOpen }: {
-  core: string; stain: string; status: { data: CoreStatus | null; error: string | null }; view: ViewRect | null
+function Minimap({ picture, word, regions, status, view, onJump, onOpen }: {
+  picture: string; word: string; regions?: [string, number, number, number, number][]; status: { data: CoreStatus | null; error: string | null }; view: ViewRect | null
   onJump: (x: number, y: number) => void; onOpen: (tile: StatusTile) => void
 }) {
   const data = status.data
@@ -656,7 +682,7 @@ function Minimap({ core, stain, status, view, onJump, onOpen }: {
   const line = (width / 256) * 1.5
   return (
     <div className="card minimap-card">
-      <svg ref={svg} className="minimap" viewBox={`0 0 ${width} ${height}`} style={{ aspectRatio: `${width} / ${height}` }} role="img" aria-label="The whole core: tiles by review status and the part in view"
+      <svg ref={svg} className="minimap" viewBox={`0 0 ${width} ${height}`} style={{ aspectRatio: `${width} / ${height}` }} role="img" aria-label={`The whole ${word}: tiles by review status and the part in view`}
         onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); dragging.current = true; const p = at(e); onJump(p.x, p.y) }}
         onPointerMove={(e) => { if (dragging.current) { const p = at(e); onJump(p.x, p.y) } }}
         onPointerUp={() => { dragging.current = false }}
@@ -670,7 +696,8 @@ function Minimap({ core, stain, status, view, onJump, onOpen }: {
             <line x1={0} y1={0} x2={0} y2={width / 40} stroke="rgb(100 116 139 / 85%)" strokeWidth={width / 160} />
           </pattern>
         </defs>
-        <image href={apiUrl(`/api/images/cores/${enc(core)}/${enc(stain)}.jpg?size=256`)} x={0} y={0} width={width} height={height} preserveAspectRatio="none" />
+        <image href={picture} x={0} y={0} width={width} height={height} preserveAspectRatio="none" />
+        {regions?.map(([id, x, y, w, h]) => <rect key={id} x={x} y={y} width={w} height={h} fill="none" stroke="rgb(255 255 255 / 30%)" strokeWidth={line / 2}><title>{id}</title></rect>)}
         {data.not_analysed.map((t, i) => <rect key={`n${i}`} x={t.x} y={t.y} width={t.width} height={t.height} fill="url(#minimap-hatch)" />)}
         {data.tiles.map((t) => (
           <rect key={t.tile_id} x={t.x} y={t.y} width={t.width} height={t.height} fill={TILE_STATES.find((s) => s.id === t.state)!.fill}
@@ -757,17 +784,19 @@ function AnnotationsToggle({ on, onToggle, state, vocabulary }: {
 }
 
 /** While the server prepares the zoomable picture (first view of a core only): the small picture, dimmed, and why. */
-function Preparing({ core, stain, state, error }: { core: CoreInfo; stain: string; state: PictureState | null; error: string | null }) {
+function Preparing({ unit, thumb, state, error }: { unit: Unit; thumb: (size: number) => string; state: PictureState | null; error: string | null }) {
   const failed = error ?? (state && !state.ready && state.state === 'failed' ? state.error ?? 'unknown error' : null)
   const ahead = state && !state.ready ? state.ahead ?? 0 : 0
   return (
     <div className="dz-preparing">
-      {state && !state.ready && state.thumb_size && <img src={coreThumb(core.core_id, stain, state.thumb_size)} alt="" />}
+      {state && !state.ready && state.thumb_size && <img src={thumb(state.thumb_size)} alt="" />}
       <div className="dz-preparing-note">
         {failed ? <><b>This picture could not be prepared.</b><ErrorNote error={failed} /></>
           : !state ? <Loading label="Loading the picture…" />
-          : <Loading label={<span><b>Preparing this core for viewing…</b><br />
-              <span className="small">{ahead ? `${ahead} other picture${ahead === 1 ? '' : 's'} first, then this one. ` : ''}The full scan is read once (about 10 s); after that it opens instantly.</span></span>} />}
+          : <Loading label={<span><b>Preparing this {UNIT_WORD[unit]} for viewing…</b><br />
+              <span className="small">{ahead ? `${ahead} other picture${ahead === 1 ? '' : 's'} first, then this one. ` : ''}{unit === 'slide'
+                ? 'The slide is put together from its regions once (a few minutes; also done ahead while the computer is idle); after that it opens instantly.'
+                : 'The full scan is read once (about 10 s); after that it opens instantly.'}</span></span>} />}
       </div>
     </div>
   )

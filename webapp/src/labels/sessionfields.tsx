@@ -32,12 +32,12 @@ const day = (t: number) => new Date(t * 1000).toLocaleDateString(undefined, { ye
 
 /** The hover text of a tile: its state, who is on it or has it open now, who finished it and when, how many of the
  *  people asked are done. */
-function hoverText(f: Field, i: number, needed: number, me: string | null, sure?: Sure): string {
+function hoverText(f: Field, i: number, needed: number, me: string | null, sure?: Sure, slides = false): string {
   const done = f.done_by ?? []
   const on = [...new Set([...(f.working ?? []), ...(f.open_by ?? [])])].filter((p) => !done.includes(p))
   return [
     `Field ${i + 1} · ${LOOK_TEXT[lookOf(f)]}`,
-    `${f.tma_name || f.tma || 'TMA ?'} · core ${f.core || '?'}`,
+    slides ? `slide ${f.core || '?'}` : `${f.tma_name || f.tma || 'TMA ?'} · core ${f.core || '?'}`,
     sure ? (sure.objects && sure.mean != null ? `average ${sure.mean.toFixed(2)} closeness · ${sure.objects} object${sure.objects === 1 ? '' : 's'}` : 'no objects') : '',
     on.length ? `In progress · ${who(on, me)} (saved but not finished, or open now)` : '',
     done.length ? `Finished by ${done.map((p) => `${p === me ? 'you' : p}${f.done_at?.[p] ? ` (${day(f.done_at[p])})` : ''}`).join(', ')}` : '',
@@ -65,6 +65,8 @@ function tally(list: Field[]) {
   const n = (s: FieldState) => list.filter((f) => stateOf(f) === s).length
   return { total: list.length, done: n('done'), progress: n('in_progress'), todo: n('not_started') + n('preparing'), mine: list.filter((f) => f.done_by_me).length }
 }
+/** How a session's units are named: the cores of a TMA study, or the slides of a whole-slide project. */
+const UNIT = { core: { one: 'core', title: 'Core' }, slide: { one: 'slide', title: 'Slide' } }
 const coresDone = (cores: Core[]) => cores.filter((c) => c.list.every(({ f }) => stateOf(f) === 'done')).length
 const progressText = (t: ReturnType<typeof tally>, todo = true) => [
   t.progress && `${t.progress.toLocaleString()} in progress`, todo && t.todo && `${t.todo.toLocaleString()} to do`, t.mine && `${t.mine.toLocaleString()} by you`,
@@ -76,9 +78,9 @@ function coreLine(list: Field[]) {
   return [`${of(t.done, t.total, 'field')} done`, progressText(t)].filter(Boolean).join(' · ')
 }
 /** A TMA's line: "2/30 cores · 120/900 fields done · 14 in progress · 40 by you" */
-function tmaLine(cores: Core[]) {
+function tmaLine(cores: Core[], unit = 'core') {
   const t = tally(cores.flatMap((c) => c.list.map(({ f }) => f)))
-  return [of(coresDone(cores), cores.length, 'core'), `${of(t.done, t.total, 'field')} done`, progressText(t, false)].filter(Boolean).join(' · ')
+  return [of(coresDone(cores), cores.length, unit), `${of(t.done, t.total, 'field')} done`, progressText(t, false)].filter(Boolean).join(' · ')
 }
 
 /** A level of the list that folds open and shut; what it holds is only drawn while it is open (a session of thousands
@@ -103,6 +105,8 @@ const natural = (a: string, b: string) => a.localeCompare(b, undefined, { numeri
 export function SessionFieldMap({ detail }: { detail: SessionDetail }) {
   const { meta, fields } = detail
   const name = meta.name
+  const slides = detail.unit === 'slide'
+  const unit = UNIT[slides ? 'slide' : 'core']
   const [order, setOrder] = useStored<Order>(`stainid.fieldOrder.${detail.annotator ?? ''}`, 'natural')
   const confidence = useFetch<Record<string, Sure>>(order === 'confidence' ? `/api/annotate/${name}/confidence` : null)
   const tmas = useMemo(() => {
@@ -128,7 +132,7 @@ export function SessionFieldMap({ detail }: { detail: SessionDetail }) {
   return (
     <div className="session-fields">
       <p className="session-progress small" aria-label="The session's progress">
-        <b>{of(tmasDone, tmas.length, 'TMA')} · {of(coresDone(allCores), allCores.length, 'core')} · {of(whole.done, whole.total, 'field')} done</b>
+        <b>{slides ? '' : `${of(tmasDone, tmas.length, 'TMA')} · `}{of(coresDone(allCores), allCores.length, unit.one)} · {of(whole.done, whole.total, 'field')} done</b>
         {progressText(whole) && <span className="muted"> · {progressText(whole)}</span>}
       </p>
       <div className="row session-fields-bar">
@@ -145,19 +149,19 @@ export function SessionFieldMap({ detail }: { detail: SessionDetail }) {
         </div>
       </div>
       {order === 'confidence' && !confidence.data && <p className="small muted" style={{ margin: 0 }}>{confidence.error ? 'The confidence could not be read; the natural order stands.' : 'Weighing detection’s confidence…'}</p>}
-      {order === 'confidence' && ranked ? <RankedTiles name={name} list={ranked} needed={detail.needed ?? 1} me={detail.annotator} sure={confidence.data!} />
+      {order === 'confidence' && ranked ? <RankedTiles name={name} list={ranked} needed={detail.needed ?? 1} me={detail.annotator} sure={confidence.data!} slides={slides} />
         : tmas.map(({ tma, cores }) => {
         return (
           <Fold key={tma} className="annotate-tma" open={fields.length <= FOLDED_FROM}
-            summary={<><b>{tma}</b><span className="small muted">{tmaLine(cores)}</span></>}>
-            {() => <div className="core-maps">{cores.map((core) => {
+            summary={<><b>{tma}</b><span className="small muted">{tmaLine(cores, unit.one)}</span></>}>
+            {() => <div className={`core-maps${slides ? ' slide-maps' : ''}`}>{cores.map((core) => {
               const list = core.list.map(({ f }) => f)
               const state = coreState(list)
               return (
                 <Fold key={core.id} className="core-map-card card" open
-                  summary={<><b>Core {core.name}</b><span className={`badge ${BADGE[state]}`}>{LOOK_TEXT[state]}</span>
+                  summary={<><b>{unit.title} {core.name}</b><span className={`badge ${BADGE[state]}`}>{LOOK_TEXT[state]}</span>
                     <span className="small muted">{coreLine(list)}</span></>}>
-                  {() => <CoreMap name={name} layout={detail.cores?.[core.id]} list={core.list} needed={detail.needed ?? 1} me={detail.annotator} />}
+                  {() => <CoreMap name={name} layout={detail.cores?.[core.id]} list={core.list} needed={detail.needed ?? 1} me={detail.annotator} slides={slides} />}
                 </Fold>
               )
             })}</div>}
@@ -172,14 +176,14 @@ export function SessionFieldMap({ detail }: { detail: SessionDetail }) {
  *  opens the field), the core's other tiles faint. Without a layout (no squares known), the tiles in a row. */
 /** One field's tile: its picture outlined in its state's colour, the AI dot, the facts on hover; a click opens it
  *  (not while someone else has it open). */
-function Tile({ name, n: { f, i }, needed, me, style, className = '', sure }: {
-  name: string; n: Numbered; needed: number; me: string | null; style?: React.CSSProperties; className?: string; sure?: Sure
+function Tile({ name, n: { f, i }, needed, me, style, className = '', sure, slides = false }: {
+  name: string; n: Numbered; needed: number; me: string | null; style?: React.CSSProperties; className?: string; sure?: Sure; slides?: boolean
 }) {
   const look = lookOf(f)
   const body = <><img src={apiUrl(`/api/annotate/${name}/fields/${enc(f.tile_id)}/thumb.jpg`)} alt="" loading="lazy" decoding="async"
     onError={(e) => { e.currentTarget.style.visibility = 'hidden' }} />{f.ai_reviewed && <span className="ai-dot" aria-hidden="true" />}{f.elsewhere?.length ? <span className={`elsewhere-dot${f.ai_reviewed ? ' second' : ''}`} aria-hidden="true" /> : null}</>
   const taken = takenBy(f, me).length > 0
-  const common = { className: `core-tile look-${look}${className}${taken ? ' taken' : ''}`, style, title: hoverText(f, i, needed, me, sure), 'aria-label': `Field ${i + 1}: ${LOOK_TEXT[look]}` }
+  const common = { className: `core-tile look-${look}${className}${taken ? ' taken' : ''}`, style, title: hoverText(f, i, needed, me, sure, slides), 'aria-label': `Field ${i + 1}: ${LOOK_TEXT[look]}` }
   return f.prepared && !taken ? <Link to={`/annotate/${name}/${enc(f.tile_id)}`} {...common}>{body}</Link> : <span {...common}>{body}</span>
 }
 
@@ -190,7 +194,7 @@ const RANKED_MORE = 240
 /** By confidence: every field of the session in one wrapping list of tiles, least confident first, with no TMA or core
  *  around them (the hover says where each is from). Drawn a few rows at a time as the list is scrolled, the pictures
  *  loading as they come into view, so thousands of fields stay quick. */
-function RankedTiles({ name, list, needed, me, sure }: { name: string; list: Numbered[]; needed: number; me: string | null; sure: Record<string, Sure> }) {
+function RankedTiles({ name, list, needed, me, sure, slides = false }: { name: string; list: Numbered[]; needed: number; me: string | null; sure: Record<string, Sure>; slides?: boolean }) {
   const [shown, setShown] = useState(RANKED_FIRST)
   const end = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -203,20 +207,26 @@ function RankedTiles({ name, list, needed, me, sure }: { name: string; list: Num
   }, [shown, list.length])
   return (
     <div className="ranked">
-      <div className="ranked-tiles">{list.slice(0, shown).map((n) => <Tile key={n.f.tile_id} name={name} n={n} needed={needed} me={me} className=" ranked-tile" sure={sure[n.f.tile_id]} />)}</div>
+      <div className="ranked-tiles">{list.slice(0, shown).map((n) => <Tile key={n.f.tile_id} name={name} n={n} needed={needed} me={me} className=" ranked-tile" sure={sure[n.f.tile_id]} slides={slides} />)}</div>
       {shown < list.length && <div ref={end} className="small muted ranked-more">{(list.length - shown).toLocaleString()} more fields below…</div>}
     </div>
   )
 }
 
-function CoreMap({ name, layout, list, needed, me }: { name: string; layout: Layout | undefined; list: Numbered[]; needed: number; me: string | null }) {
+/** One core (or a whole slide) as its tiles, each at its place. A slide has its picture under its tiles, the tiles
+ *  outside the session washed out over it. */
+function CoreMap({ name, layout, list, needed, me, slides = false }: { name: string; layout: Layout | undefined; list: Numbered[]; needed: number; me: string | null; slides?: boolean }) {
   const placed = layout && list.every(({ f }) => f.box)
   const pct = (v: number, of: number) => `${(100 * v) / of}%`
-  const tile = (n: Numbered, style?: React.CSSProperties) => <Tile key={n.f.tile_id} name={name} n={n} needed={needed} me={me} style={style} className={placed ? '' : ' in-row'} />
+  const tile = (n: Numbered, style?: React.CSSProperties) => <Tile key={n.f.tile_id} name={name} n={n} needed={needed} me={me} style={style} className={placed ? '' : ' in-row'} slides={slides} />
   if (!placed) return <div className="core-row">{list.map((n) => tile(n))}</div>
   const { x, y, width, height } = layout
+  const under = layout.picture && layout.slide ? layout.slide : null
   return (  // as wide as its column: three cores side by side fill the width (CSS), so the tiles' size follows the window
-    <div className="core-map" style={{ aspectRatio: `${width} / ${height}` }}>
+    <div className={`core-map${under ? ' slide-map' : ''}`} style={{ aspectRatio: `${width} / ${height}` }}>
+      {under && <img className="slide-map-picture" src={apiUrl(layout.picture!)} alt="" loading="lazy" decoding="async" draggable={false}
+        style={{ left: pct(under[0] - x, width), top: pct(under[1] - y, height), width: pct(under[2], width), height: pct(under[3], height) }}
+        onError={(e) => { e.currentTarget.style.visibility = 'hidden' }} />}
       {layout.others.map(([ox, oy, w, h, id], k) => <span key={k} className="core-tile-other" aria-hidden="true"
         style={{ left: pct(ox - x, width), top: pct(oy - y, height), width: pct(w, width), height: pct(h, height) }}>
         {id && <img src={apiUrl(`/api/annotate/${name}/fields/${enc(id)}/thumb.jpg`)} alt="" loading="lazy" decoding="async" draggable={false}

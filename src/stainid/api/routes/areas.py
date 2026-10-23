@@ -23,7 +23,7 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from stainid import exclusions
-from stainid.api import pyramid, render, store_view
+from stainid.api import pyramid, render, slide_pyramid, slide_units, store_view
 from stainid.api.routes.annotate import NewSession, free_name, root, session_meta, writable
 from stainid.api.session import annotator, require_admin
 from stainid.api.state import get_state
@@ -52,8 +52,9 @@ def checked(labels: pd.DataFrame | None = None) -> dict[tuple[str, str], set[str
 
 
 def session_checked(meta: dict, labels: pd.DataFrame | None = None) -> dict[tuple[str, str], set[str]]:
-    """Who checked each core image in this session: its own labels only (`store.current(root, session)`)."""
-    return checked(store.current(root(), session=meta["name"]) if labels is None else labels)
+    """Who checked each core image in this session: its own labels only (`store.current(root, session)`); in a
+    whole-slide project each slide too (who checked every one of its regions)."""
+    return slide_units.with_slides(checked(store.current(root(), session=meta["name"]) if labels is None else labels))
 
 
 # ---------------------------------------------------------------- making a session (admin)
@@ -69,10 +70,13 @@ def create(body: NewSession) -> dict:
     stains_of = areas.core_stains(tiles)
     if not stains_of:
         raise HTTPException(400, "No core has analysed tiles" + (" on these TMAs" if body.tmas else ""))
+    slides = slide_units.unit_stains(stains_of)  # a whole-slide project: the slides are the units, each checked whole
+    regions = {c: [r.core_id for r in slide_units.slide_unit(c).regions if r.core_id in stains_of] for c in slides}
+    stains_of = slides or stains_of
     order = body.order if body.order in areas.ORDERS else "problems"
     left = list(stains_of)
     seed = body.seed if body.seed is not None else secrets.randbelow(2**31)
-    scores = areas.priority({c: _signals(c, stains_of[c]) for c in left}) if order == "problems" else {}
+    scores = areas.priority({c: _signals(c, stains_of[c], regions.get(c)) for c in left}) if order == "problems" else {}
     ordered = areas.order(left, scores, order, seed)
     n = -1 if body.n_fields is None else body.n_fields
     chosen = ordered if n < 0 else ordered[:n]
@@ -84,8 +88,9 @@ def create(body: NewSession) -> dict:
     return sessions.update(root(), name, open=True) if body.open else meta
 
 
-def _signals(core_id: str, stains: list[str]) -> dict | None:
-    found = [s for s in (areas.signals(get_state().project, core_id, stain) for stain in stains) if s]
+def _signals(core_id: str, stains: list[str], regions: list[str] | None = None) -> dict | None:
+    """A core's problem signals over its stain images (a slide's over its regions: the worst of them)."""
+    found = [s for s in (areas.signals(get_state().project, core, stain) for core in (regions or [core_id]) for stain in stains) if s]
     if not found:
         return None
     return {k: max(s[k] for s in found) if k != "tissue_share" else min(s[k] for s in found) for k in found[0]}
@@ -154,18 +159,26 @@ def core_payload(meta: dict, core_id: str, person: str) -> dict:
     if not meta.get("practice"):
         _HELD.hold(hold_key(meta), person, [core_id])
     images = []
+    slide = slide_units.slide_unit(core_id)
     for stain in stains:
-        try:
-            picture = pyramid.picture(state, core_id, stain)
-        except (KeyError, FileNotFoundError):
-            picture = None
-        layer = store_view.excluded_info(state.project, core_id, stain)
+        if slide is not None:  # a whole slide: its picture and layers put together from its regions
+            picture = slide_pyramid.picture(state, slide.slide_id)
+            layer = slide_units.excluded_info(state.project, slide)
+            edits = sum(len(exclusions.edits(state.project, r.core_id, stain, ai=False, session=meta["name"])) for r in slide.regions)
+        else:
+            try:
+                picture = pyramid.picture(state, core_id, stain)
+            except (KeyError, FileNotFoundError):
+                picture = None
+            layer = store_view.excluded_info(state.project, core_id, stain)
+            edits = len(exclusions.edits(state.project, core_id, stain, ai=False, session=meta["name"]))
         by = sorted(found.get((core_id, stain), set()))
-        images.append({"stain": stain, "picture": picture, "excluded": layer, "checked_by": by, "checked_by_me": person in by,
-                       "edits": len(exclusions.edits(state.project, core_id, stain, ai=False, session=meta["name"]))})
+        images.append({"stain": stain, "picture": picture, "excluded": layer, "checked_by": by, "checked_by_me": person in by, "edits": edits,
+                       "mask_scale": slide_units.mask_scale(slide) if slide is not None else exclusions.SCALE})
     others = sorted(held(meta).get(core_id, set()) - {person})
     return {"core_id": core_id, "images": images, "second_check": core_id in set(meta.get("second") or []), "open_by": others,
-            "progress": progress(meta), "pixel_size_um": state.project.pixel_size_um}
+            "progress": progress(meta), "pixel_size_um": state.project.pixel_size_um, "unit": "slide" if slide is not None else "core",
+            **({"name": slide.name, "regions": len(slide.regions)} if slide is not None else {})}
 
 
 @router.get("/annotate/{name}/areas/next")
@@ -206,8 +219,9 @@ def core_picture(name: str, core_id: str, stain: str, request: Request, person: 
     meta = core_meta(name, request)
     if stain not in _core(meta, core_id):
         raise HTTPException(404, f"{core_id} has no {stain} image in this session")
+    slide = slide_units.slide_unit(core_id)
     try:
-        return pyramid.picture(get_state(), core_id, stain)
+        return slide_pyramid.picture(get_state(), slide.slide_id) if slide is not None else pyramid.picture(get_state(), core_id, stain)
     except (KeyError, FileNotFoundError) as error:
         raise HTTPException(404, str(error).strip("'"))
 
@@ -218,8 +232,9 @@ def core_tile(name: str, core_id: str, stain: str, level: int, col: int, row: in
     meta = core_meta(name, request)
     if stain not in _core(meta, core_id):
         raise HTTPException(404, f"{core_id} has no {stain} image in this session")
+    slide = slide_units.slide_unit(core_id)
     try:
-        data = pyramid.tile(get_state(), core_id, stain, level, col, row)
+        data = slide_pyramid.tile(get_state(), slide.slide_id, level, col, row) if slide is not None else pyramid.tile(get_state(), core_id, stain, level, col, row)
     except KeyError as error:
         raise HTTPException(404, str(error).strip("'"))
     return Response(data, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=31536000, immutable" if v else "private, max-age=86400"})
@@ -230,7 +245,10 @@ def core_thumb(name: str, core_id: str, stain: str, request: Request, size: int 
     meta = core_meta(name, request)
     if stain not in _core(meta, core_id):
         raise HTTPException(404, f"{core_id} has no {stain} image in this session")
+    slide = slide_units.slide_unit(core_id)
     try:
+        if slide is not None:
+            return FileResponse(slide_pyramid.thumbnail(get_state(), slide.slide_id, size), headers={"Cache-Control": "private, max-age=600"})
         return FileResponse(render.core_thumbnail(get_state(), core_id, stain, max(32, min(size, pyramid.THUMB_BASE))),
                             headers={"Cache-Control": "private, max-age=86400"})
     except (KeyError, FileNotFoundError) as error:
@@ -242,6 +260,9 @@ def core_excluded(name: str, core_id: str, stain: str, request: Request, person:
     meta = areas_meta(name, request)
     if stain not in _core(meta, core_id):
         raise HTTPException(404, f"{core_id} has no {stain} image in this session")
+    slide = slide_units.slide_unit(core_id)
+    if slide is not None:
+        return slide_units.excluded_info(get_state().project, slide)
     return store_view.excluded_info(get_state().project, core_id, stain)
 
 
@@ -250,7 +271,8 @@ def core_excluded_png(name: str, core_id: str, stain: str, request: Request, per
     meta = areas_meta(name, request)
     if stain not in _core(meta, core_id):
         raise HTTPException(404, f"{core_id} has no {stain} image in this session")
-    png = store_view.excluded_png(get_state().project, core_id, stain)
+    slide = slide_units.slide_unit(core_id)
+    png = slide_units.excluded_png(get_state().project, slide) if slide is not None else store_view.excluded_png(get_state().project, core_id, stain)
     if png is None:
         raise HTTPException(404, f"the excluded areas of {core_id} {stain} are not made yet (the v2 proposals make them)")
     return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
@@ -262,6 +284,9 @@ def core_annotated(name: str, core_id: str, stain: str, request: Request, person
     meta = areas_meta(name, request)
     if stain not in _core(meta, core_id):
         raise HTTPException(404, f"{core_id} has no {stain} image in this session")
+    slide = slide_units.slide_unit(core_id)
+    if slide is not None:
+        return slide_units.people_areas(get_state().project, slide, ai=False, session=meta["name"])
     return store_view.people_areas(get_state().project, core_id, stain, ai=False,
                                    session=meta["name"])  # this session's people: never the AI reviewer's
 
@@ -273,6 +298,9 @@ def core_areas(name: str, core_id: str, stain: str, request: Request, person: st
     meta = areas_meta(name, request)
     if stain not in _core(meta, core_id):
         raise HTTPException(404, f"{core_id} has no {stain} image in this session")
+    slide = slide_units.slide_unit(core_id)
+    if slide is not None:
+        return slide_units.current_areas(get_state().project, slide, session=meta["name"])
     return store_view.current_areas(get_state().project, core_id, stain, ai=False,
                                     session=meta["name"])  # the automatic layer and this session's edits only
 
@@ -283,23 +311,33 @@ def core_objects(name: str, core_id: str, stain: str, request: Request, person: 
     [x, y, accepted, rings] in core pixels (the stain's default outline, `candidates.outline_rings`); `accepted`: a class,
     counted or a look-alike detection names (CAA: `candidate_store.lookalike`), drawn solid; a reject, or a reject
     reason such as a thread-like stain (`Vocabulary.rejecting`), is dotted."""
-    from stainid import candidates  # noqa: PLC0415
-    from stainid.labels import candidate_store  # noqa: PLC0415
-    from stainid.labels import vocabulary as vocab  # noqa: PLC0415
-
     meta = core_meta(name, request)
     if stain not in _core(meta, core_id):
         raise HTTPException(404, f"{core_id} has no {stain} image in this session")
     project = get_state().project
+    slide = slide_units.slide_unit(core_id)
+    if slide is not None:  # a whole slide: every region's, in slide px
+        rows = [[x + r.x, y + r.y, accepted, [slide_units.flat_moved(ring, r) for ring in rings] if rings else rings]
+                for r in slide.regions for x, y, accepted, rings in object_rows(project, r.core_id, stain)]
+    else:
+        rows = object_rows(project, core_id, stain)
+    return {"columns": ["x", "y", "accepted", "rings"], "rows": rows}
+
+
+def object_rows(project, core_id: str, stain: str) -> list[list]:
+    """Detection's objects of a core image as [x, y, accepted, rings] (core px; see `core_objects`)."""
+    from stainid import candidates  # noqa: PLC0415
+    from stainid.labels import candidate_store  # noqa: PLC0415
+    from stainid.labels import vocabulary as vocab  # noqa: PLC0415
+
     frame = candidates.read_core(project, stain, core_id,
                                  ["x_core", "y_core", "decision", "reason", "class", "outline", "sam_outline", "sam_status", "outline_default"])
     words = vocab.of(project, stain)
     pairs = {(str(r.get("class") or ""), str(r.get("reason") or "")) for r in frame.to_dict("records")} if len(frame) else set()
     named = {pair for pair in pairs if candidate_store.lookalike(words, *pair) and not words.rejecting(candidate_store.lookalike(words, *pair))}
-    rows = [[round(float(r["x_core"]), 1), round(float(r["y_core"]), 1),
+    return [[round(float(r["x_core"]), 1), round(float(r["y_core"]), 1),
              r.get("decision") == "accepted" or (str(r.get("class") or ""), str(r.get("reason") or "")) in named, candidates.outline_rings(r)]
             for r in frame.to_dict("records")] if len(frame) else []
-    return {"columns": ["x", "y", "accepted", "rings"], "rows": rows}
 
 
 class StainEdit(BaseModel):
@@ -322,6 +360,10 @@ def save_core(meta: dict, core_id: str, body: CoreSave, person: str) -> dict:
     unknown = [s for s in body.edits if s not in stains]
     if unknown:
         raise HTTPException(400, f"{core_id} has no {', '.join(unknown)} image in this session")
+    slide = slide_units.slide_unit(core_id)
+    if slide is not None:
+        records = _slide_records(meta, slide, body, person)
+        return _saved(meta, core_id, records, person)
     records = []
     stamp = {"source": person, "session": meta["name"], "tile_id": core_id, "x": None, "y": None}
     for stain, edit in body.edits.items():
@@ -334,6 +376,29 @@ def save_core(meta: dict, core_id: str, body: CoreSave, person: str) -> dict:
                             "value": marks.value_text(holes, kinds)})
     for stain in stains:
         records.append({**stamp, "id": areas.done_id(core_id, stain), "stain": stain, "task": "done", "value": areas.AREAS})
+    return _saved(meta, core_id, records, person)
+
+
+def _slide_records(meta: dict, slide, body: CoreSave, person: str) -> list[dict]:
+    """A whole slide's save as its regions' labels: what was painted over the slide cut into each region's part (its
+    rings in region px, one edit per region painted on) and a `done` label for every region, as a core's save."""
+    records = []
+    for stain, edit in body.edits.items():
+        try:
+            parts = slide_units.split_pngs(slide, edit.pngs, edit.scale)
+        except ValueError as error:
+            raise HTTPException(400, str(error))
+        for core, (rings, holes, kinds) in parts.items():
+            stamp = {"source": person, "session": meta["name"], "tile_id": core, "x": None, "y": None}
+            records.append({**stamp, "id": marks.label_id(core), "stain": stain, "task": marks.TASK, "points": rings,
+                            "value": marks.value_text(holes, kinds)})
+    for r in slide.regions:
+        stamp = {"source": person, "session": meta["name"], "tile_id": r.core_id, "x": None, "y": None}
+        records.append({**stamp, "id": areas.done_id(r.core_id, slide.stain), "stain": slide.stain, "task": "done", "value": areas.AREAS})
+    return records
+
+
+def _saved(meta: dict, core_id: str, records: list[dict], person: str) -> dict:
     if meta.get("practice"):  # the tutorial: nothing is kept
         now = time.time()
         return {"saved": [{"confirmed": False, "deleted": False, "time": now, **r} for r in records], "progress": progress(meta)}

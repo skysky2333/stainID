@@ -40,7 +40,7 @@ const ADMIN_NAV: { section: string; links: NavItem[] }[] = [
     ['/workflow', 'Run', 'Run the analysis and follow its progress'],
   ] },
   { section: 'Check', links: [
-    ['/cohort', 'Cores', 'Look at every core and what was found in it', ['/cores']],
+    ['/cohort', 'Cores', 'Look at every core and what was found in it', ['/cores', '/slides']],
     ['/calibration', 'Stain thresholds', 'The stain level counted as positive on each slide'],
   ] },
   { section: '', links: [['/results', 'Results', 'Measures by diagnosis group, and the tables to download']] },
@@ -234,6 +234,7 @@ function Shell({ admin }: { admin: boolean }) {
             <Route path="/setup/:screen" element={<Setup />} />
             <Route path="/cohort" element={<Cohort />} />
             <Route path="/cores/:coreId" element={<CoreView />} />
+            <Route path="/slides/:slideId" element={<CoreView unit="slide" />} />
             <Route path="/calibration" element={<Calibration />} />
             <Route path="/labels" element={<Labels />} />
             <Route path="/models" element={<Models />} />

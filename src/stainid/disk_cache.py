@@ -78,6 +78,7 @@ LOCK_NAME = ".index.lock"
 # Every kind of cache, with what it is called in the app. New kinds are added here (a test checks it).
 KINDS: dict[str, str] = {
     "core_pyramids": "Zoomable core pictures",
+    "slide_pyramids": "Zoomable whole-slide pictures (put together from the slide's regions)",
     "thumbs": "Small core and tile pictures",
     "fields": "Tile pictures",
     "overlays": "Tile overlays (stain, threads, excluded areas)",

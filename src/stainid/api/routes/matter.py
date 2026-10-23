@@ -26,6 +26,7 @@ import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from stainid.api import slide_units
 from stainid.api.routes.annotate import NewSession, free_name, root, session_meta, writable
 from stainid.api.session import annotator, require_admin
 from stainid.api.state import get_state
@@ -51,7 +52,8 @@ def session_labels(meta: dict) -> pd.DataFrame:
 
 
 def session_checked(meta: dict, labels: pd.DataFrame | None = None) -> dict[tuple[str, str], set[str]]:
-    return matter.checked(session_labels(meta) if labels is None else labels)
+    """Who saved each stain image in this session (in a whole-slide project each slide too: who saved all its regions)."""
+    return slide_units.with_slides(matter.checked(session_labels(meta) if labels is None else labels))
 
 
 def working_text(people: set[str]) -> str:
@@ -69,6 +71,7 @@ def create(body: NewSession) -> dict:
     if body.tmas and not tiles.empty:
         tiles = tiles[tiles.tma.astype(str).isin({str(t) for t in body.tmas})]
     stains_of = {c: matter.ordered(s) for c, s in areas.core_stains(tiles).items()}
+    stains_of = slide_units.unit_stains(stains_of) or stains_of  # a whole-slide project: the slides are the units
     if not stains_of:
         raise HTTPException(400, "No core has analysed tiles" + (" on these TMAs" if body.tmas else ""))
     left = list(stains_of)
@@ -113,6 +116,11 @@ def progress(meta: dict, labels: pd.DataFrame | None = None) -> dict:
 
 
 def _places() -> dict[str, dict]:
+    from stainid.api import slide_pyramid  # noqa: PLC0415
+
+    slides = slide_pyramid.slides(get_state())
+    if slides:  # a whole-slide project: the slides, by donor
+        return {s.slide_id: {"tma": f"Donor {s.donor_id}" if s.donor_id else "Whole slides", "core": s.name, "unit": "slide"} for s in slides.values()}
     images = get_state().core_images
     if images.empty:
         return {}
@@ -184,8 +192,27 @@ def next_core(name: str, request: Request, skip: str = "", person: str = Depends
 
 
 def _without_mine(labels, core_id: str, person: str):
-    """Reset this core (`fresh`): the session's labels as if this person had never worked on the core."""
-    return labels[~((labels.source == person) & (labels.tile_id == core_id))]
+    """Reset this core (`fresh`): the session's labels as if this person had never worked on the core (a slide: on any
+    of its regions)."""
+    slide = slide_units.slide_unit(core_id)
+    units = set(slide.cores) if slide is not None else {core_id}
+    return labels[~((labels.source == person) & labels.tile_id.isin(units))]
+
+
+def _latest(labels, core_id: str, stain: str, person: str | None = None):
+    """The latest saved white matter of a stain image (`matter.latest`); of a whole slide, its regions' put together
+    (rings in slide px), the latest save's details."""
+    slide = slide_units.slide_unit(core_id)
+    if slide is None:
+        return matter.latest(labels, core_id, stain, person)
+    found = [(r, matter.latest(labels, r.core_id, stain, person)) for r in slide.regions]
+    found = [(r, a) for r, a in found if a is not None]
+    if not found:
+        return None
+    last = max((a for _, a in found), key=lambda a: (a.time, a.person))
+    rings = tuple(tuple((x + r.x, y + r.y) for x, y, *_ in ring) for r, a in found for ring in a.rings)
+    holes = tuple(h for _, a in found for h in a.holes)
+    return matter.Area(core_id, stain, last.person, last.time, last.session, rings, holes, last.carried_from, last.accepted, last.registration)
 
 
 @router.get("/annotate/{name}/matter/cores/{core_id}")
@@ -193,7 +220,7 @@ def open_core(name: str, core_id: str, request: Request, edit: bool = False, fre
     """One core: its stain images (NeuN first; the one the others start from is `source`), which this person saved, and
     whether it opens to look at (`read_only`: finished by this person, or by the people it needs, unless `edit`).
     Opening it to work on holds it for this person; someone else on it → 409."""
-    from stainid.api import pyramid  # noqa: PLC0415
+    from stainid.api import pyramid, slide_pyramid  # noqa: PLC0415
 
     meta = matter_meta(name, request)
     stains = _core(meta, core_id)
@@ -210,14 +237,16 @@ def open_core(name: str, core_id: str, request: Request, edit: bool = False, fre
         _HELD.hold(hold_key(meta), person, [core_id])
     state = get_state()
     images = []
+    slide = slide_units.slide_unit(core_id)
     for stain in stains:
         try:
-            picture = pyramid.picture(state, core_id, stain)
+            picture = slide_pyramid.picture(state, slide.slide_id) if slide is not None else pyramid.picture(state, core_id, stain)
         except (KeyError, FileNotFoundError):
             picture = None
-        mine = matter.latest(labels, core_id, stain, person)
+        mine = _latest(labels, core_id, stain, person)
         images.append({"stain": stain, "picture": picture, "saved_by": sorted(found.get((core_id, stain), set())),
-                       "saved_by_me": person in found.get((core_id, stain), set()), "mine": mine.to_api() if mine else None})
+                       "saved_by_me": person in found.get((core_id, stain), set()), "mine": mine.to_api() if mine else None,
+                       "mask_scale": slide_units.mask_scale(slide) if slide is not None else matter.SCALE})
     place = _places().get(core_id, {"tma": "", "core": core_id})
     return {"core_id": core_id, **place, "images": images, "source": matter.source_of(stains), "read_only": looking, "closed": closed, "done_by": sorted(by),
             "progress": progress(meta, labels), "pixel_size_um": state.project.pixel_size_um, "practice": practice}
@@ -244,6 +273,9 @@ def leave_core(name: str, core_id: str, request: Request, person: str = Depends(
 
 
 def _size(core_id: str, stain: str) -> tuple[int, int]:
+    slide = slide_units.slide_unit(core_id)
+    if slide is not None:
+        return slide.width, slide.height
     try:
         row = get_state().core_image(core_id, stain)
     except KeyError as error:
@@ -254,7 +286,7 @@ def _size(core_id: str, stain: str) -> tuple[int, int]:
 def _carried(meta: dict, labels: pd.DataFrame, core_id: str, stain: str, source: str, person: str | None):
     """The source stain's area (this person's, else anyone's when `person` is None) in `stain`'s pixels, with the
     carry; None before the source is saved."""
-    area = matter.latest(labels, core_id, source, person)
+    area = _latest(labels, core_id, source, person)
     if area is None:
         return None
     try:
@@ -277,9 +309,9 @@ def stain_area(name: str, core_id: str, stain: str, request: Request, look: bool
     if fresh:  # Reset this core: as if this person had never worked on it
         labels = _without_mine(labels, core_id, person)
     width, height, base = _base(core_id, stain)
-    mine = matter.latest(labels, core_id, stain, person) or (matter.latest(labels, core_id, stain) if look else None)
+    mine = _latest(labels, core_id, stain, person) or (_latest(labels, core_id, stain) if look else None)
     if mine is not None:
-        return {**base, "kinds": {matter.AREA: matter.png(mine.rings, mine.holes, width, height)}, "from": "saved", "saved": mine.to_api()}
+        return {**base, "kinds": {matter.AREA: matter.png(mine.rings, mine.holes, width, height, base["scale"])}, "from": "saved", "saved": mine.to_api()}
     source = matter.source_of(stains)
     if stain == source:
         return {**base, "kinds": {}, "from": "new"}
@@ -294,7 +326,8 @@ def stain_area(name: str, core_id: str, stain: str, request: Request, look: bool
 def _base(core_id: str, stain: str) -> tuple[int, int, dict]:
     """A stain image's size and the brush's frame for it (one mask px per `matter.SCALE` core px)."""
     width, height = _size(core_id, stain)
-    scale = matter.SCALE
+    slide = slide_units.slide_unit(core_id)
+    scale = slide_units.mask_scale(slide) if slide is not None else matter.SCALE
     shape = (-(-height // scale), -(-width // scale))
     return width, height, {"status": "done", "scale": scale, "x": 0, "y": 0, "width": shape[1] * scale, "height": shape[0] * scale}
 
@@ -356,6 +389,21 @@ def save_stain(name: str, core_id: str, stain: str, body: MatterSave, request: R
     gone = deletions(labels, person, core_id, meta["name"]) if body.reset else []
     if body.reset:
         labels = _without_mine(labels, core_id, person)
+    slide = slide_units.slide_unit(core_id)
+    if slide is not None:  # a whole slide (its one stain): each region's part of the area, saved as that region's
+        try:
+            parts = slide_units.split_png(slide, "" if body.accepted else body.png, body.scale)
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from error
+        gone = [g for r in slide.regions for g in deletions(session_labels(meta), person, r.core_id, meta["name"])] if body.reset else []
+        written = []
+        for core, (rings, holes) in parts.items():
+            written += matter.records(core, stain, rings, holes, {"source": person, "session": meta["name"], "tile_id": core, "x": None, "y": None},
+                                      None, False, None)
+        keep = {r["id"] for r in written}
+        saved = store.append(root(), [r for r in gone if r["id"] not in keep] + written)
+        _HELD.release(hold_key(meta), person, [core_id])
+        return {"saved": saved, "finished": True, "progress": progress(meta)}
     carried_from, status = None, None
     if stain != source:
         found = _carried(meta, labels, core_id, stain, source, person)

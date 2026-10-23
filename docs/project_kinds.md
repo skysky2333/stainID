@@ -42,6 +42,26 @@ The *Prepare images* step (`stainid images`) replaces Find cores, Export cores a
   TMA core); every region holding at least 5 % tissue on an 8 µm/px picture, cut down to its tissue plus 60 µm, is one
   core image. Regions never overlap. They are tiled like whole cores (every square with tissue, at least 0.5 %).
 
+### Whole slides on the pages (`stainid.imageset.slides`)
+
+The regions stay the units of every step, label and table; the pages show each slide whole. A slide's coordinates are
+analysis pixels of the scan from the corner of the grid cell of its first region; a region's offset is its
+`source_box` × `scale` less that corner (`layouts`, `Slide.to_slide` / `to_region`). On top of that:
+
+- **the slide's picture** (`stainid.api.slide_pyramid`): a zoomable pyramid made once from the regions' pictures, cell
+  by cell (glass between regions is one shared white tile), resumable, kept in the `slide_pyramids` cache until a
+  region's picture changes; made during idle time (`ahead`, tier 3) or when a slide is first opened. A 100,000 px slide
+  takes a few minutes and ~1–2 GB;
+- **the Cores view** (`/api/whole-slides…`, `api/routes/whole_slides.py`): each region's answer (objects, outlines,
+  threads, stained areas, excluded areas, annotations, the minimap's tiles) moved into slide pixels;
+- **labelling**: the field picker groups the fields by slide, each drawn as its tiles at their places over the slide's
+  picture (tiles outside the session washed out); the field strip shows the whole slide and the slide around the
+  field; *Mark bad areas* and *Grey / white matter* take a whole slide as their unit (`api/slide_units.py`): it is
+  painted on the slide picture with a coarser mask (at most ~2,000 px across) and each save is cut into the regions'
+  own labels (rings in region pixels, a `done` label per region), so a slide is finished when all its regions are.
+
+A TMA study or image set has no slides: none of this applies there.
+
 The core image table (`inputs.core_images`) records for every core image its source (`source_path`, `source_box` in the
 source's level-0 pixels, `scale`), its own antibody (`antibody`) and colour (`chromogen`); `stain` is the pipeline stain
 (below). Run *Prepare images* again after changing the image list or the imaging settings.
@@ -237,6 +257,8 @@ missing on the Images and Checks screens, and leaves out images it cannot read w
 | `stainid.imaging.core_images` | link files, `open_image` / `read_bgr` (every step opens core images through them), the image cache |
 | `stainid.imageset.table` | the image list, folder scan |
 | `stainid.imageset.prepare` | the Prepare images step: core image table, whole-slide regions, tiles |
+| `stainid.imageset.slides` | where each region lies on its slide; points and painted masks between slide and region |
+| `stainid.api.slide_pyramid`, `stainid.api.slide_units`, `stainid.api.routes.whole_slides` | the slide picture, the slide as the unit of the labelling pages, the Cores view of a slide |
 | `stainid.imageset.package` | reading a dataset package and making a project from it |
 | `stainid.imageset.annotations` | placing annotations, consensus, read-only sessions |
 | `stainid.imageset.scoring` | matching, precision / recall / F1 / AUC, rater agreement |

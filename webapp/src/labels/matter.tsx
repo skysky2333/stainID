@@ -88,7 +88,7 @@ export function MatterSession({ detail }: { detail: SessionDetail }) {
       </div>
       {byTma.map(([tma, cores]) => (
         <div key={tma} className="card matter-tma">
-          <h3>{tma ? `TMA ${tma}` : 'Cores'} <span className="muted small">· {cores.filter((r) => r.state === 'done').length} of {cores.length} done</span></h3>
+          <h3>{cores[0]?.unit === 'slide' ? tma : tma ? `TMA ${tma}` : 'Cores'} <span className="muted small">· {cores.filter((r) => r.state === 'done').length} of {cores.length} done</span></h3>
           <div className="matter-cores">
             {cores.map((r) => {
               const state = look(r)
@@ -296,7 +296,7 @@ export function MatterCorePage({ detail, core, onEvent, coach, onFinished }: {
             ))}
             <span className="small muted area-tabs-keys"><span className="kbd">[</span> <span className="kbd">]</span> switch stains</span>
           </div>
-          {image && <MatterView key={`${image.stain}:${readOnly}:${saves}:${fresh}`} name={name} core={core} stain={image.stain} picture={image.picture} masks={masks.current}
+          {image && <MatterView key={`${image.stain}:${readOnly}:${saves}:${fresh}`} name={name} core={core} stain={image.stain} picture={image.picture} maskScale={image.mask_scale} masks={masks.current}
             readOnly={readOnly} fresh={fresh} erase={erase} brushRadius={brushSize / 2} hidden={hidden} neurons={neuronsOn && image.stain === source}
             carryFrom={practice && image.stain !== source ? practised[source] ?? '' : undefined}
             onArea={(a) => setAreaOf((was) => ({ ...was, [image.stain]: a }))} onStroke={(erased) => { setTick((t) => t + 1); tell(erased ? 'erase' : 'paint') }} />}
@@ -349,8 +349,10 @@ export function MatterCorePage({ detail, core, onEvent, coach, onFinished }: {
 
 /** One stain image: the picture, its white matter (the brush's start: saved, carried or none) and on NeuN detection's
  *  neurons as a guide. */
-function MatterView({ name, core, stain, picture, masks, readOnly, fresh, erase, brushRadius, hidden, neurons, carryFrom, onArea, onStroke }: {
+function MatterView({ name, core, stain, picture, maskScale, masks, readOnly, fresh, erase, brushRadius, hidden, neurons, carryFrom, onArea, onStroke }: {
   name: string; core: string; stain: string; picture: PictureState | null; masks: Map<string, MatterMask>; readOnly: boolean
+  /** picture px per mask px (the core's 8; a whole slide's coarser) */
+  maskScale?: number
   /** Reset this core: the area as if this person had never worked on the core */
   fresh: boolean; erase: boolean
   brushRadius: number; hidden: boolean; neurons: boolean; onArea: (a: MatterArea) => void; onStroke: (erased: boolean) => void
@@ -383,9 +385,9 @@ function MatterView({ name, core, stain, picture, masks, readOnly, fresh, erase,
   const maskFor = useCallback((): MatterMask | null => {
     if (!pyramid) return null
     let m = masks.get(stain)
-    if (!m) { m = new MatterMask(pyramid.width, pyramid.height); masks.set(stain, m) }
+    if (!m) { m = new MatterMask(pyramid.width, pyramid.height, maskScale ?? MATTER_SCALE); masks.set(stain, m) }
     return m
-  }, [pyramid, masks, stain])
+  }, [pyramid, masks, stain, maskScale])
   const [started, setStarted] = useState(false)
   useEffect(() => {  // the area to start from (unless strokes are kept from before a stain switch)
     if (!area.data) return

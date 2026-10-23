@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { coreThumb, enc } from '../api'
+import { apiUrl, coreThumb, enc } from '../api'
 import { Empty, GroupBadge, HelpBox, Loaded, Loading, PageHead, Progress, StatusBadge } from '../components'
 import { useFetch, useStored } from '../hooks'
 import { useProject } from '../project'
@@ -14,10 +14,57 @@ interface GridCell {
 }
 interface TmaGrid { tma: string; stain: string; columns: string[]; rows: number[]; cells: GridCell[]; thumbs_waiting: number; detection: { done: number; total: number }; positional?: boolean }
 
+/** A whole slide of a whole-slide project (GET /api/whole-slides): its picture is put together from its regions. */
+interface SlideCard { slide_id: string; stain: string; name: string; donor_id: string; region: string; tma: string; width: number; height: number; regions: number; tiles: number; ready: boolean }
+interface SlideList { slides: SlideCard[]; unit: 'slide' | 'core' }
+
 const DETECTION_TEXT: Record<Detection, string> = { done: 'detected', partial: 'detection part-way', not_run: 'not detected yet' }
 const DETECTION_STATUS: Record<Detection, string> = { done: 'done', partial: 'partial', not_run: 'todo' }
 
 export default function Cohort() {
+  const whole = useFetch<SlideList>('/api/whole-slides')
+  if (!whole.data && !whole.error) return <Loading label="Loading…" />
+  if (whole.data?.unit === 'slide') return <Slides />
+  return <TmaCohort />
+}
+
+/** A whole-slide project: one card per slide (the section as one picture, put together from its regions). */
+function Slides() {
+  const navigate = useNavigate()
+  const [poll, setPoll] = useState(true)
+  const list = useFetch<SlideList>('/api/whole-slides?prepare=true', poll ? 5000 : undefined)
+  useEffect(() => setPoll(!!list.data?.slides.some((s) => !s.ready)), [list.data])
+  return (
+    <>
+      <PageHead title="Slides" subtitle="Every whole slide of the project. Open one to look at it closely, with what stainID detection found drawn on top." />
+      <HelpBox id="slides">
+        Each slide is shown as one picture of the whole section. Click a slide to open it: you can zoom in down to single cells and switch on what
+        detection found. Detection and labelling work on the slide in regions, so a slide that is still being analysed shows the regions done so far.
+      </HelpBox>
+      <Loaded state={list} label="Loading the slides…">
+        {(data) => data.slides.length ? (
+          <div className="slide-cards">
+            {data.slides.map((s) => {
+              const about = [s.name, s.donor_id && `donor ${s.donor_id}`, s.region, s.stain].filter(Boolean).join(' · ')
+              return (
+                <button key={s.slide_id} className="card slide-card" title={about} aria-label={about}
+                  onClick={() => navigate(`/slides/${enc(s.slide_id)}?stain=${enc(s.stain)}`)}>
+                  <span className="slide-card-pic" style={{ aspectRatio: `${s.width} / ${s.height}` }}>
+                    {s.ready ? <img loading="lazy" src={apiUrl(`/api/images/whole-slides/${enc(s.slide_id)}/${enc(s.stain)}.jpg?size=512`)} alt="" />
+                      : <span className="core-cell-wait"><Loading inline label="Putting the slide together…" /></span>}
+                  </span>
+                  <span className="slide-card-text"><b>{s.name}</b><span className="small muted">{[s.stain, s.donor_id && `donor ${s.donor_id}`, s.region, `${s.regions} regions`].filter(Boolean).join(' · ')}</span></span>
+                </button>
+              )
+            })}
+          </div>
+        ) : <Empty>There are no slide pictures yet. They are made when the slides are read in.<div style={{ marginTop: 10 }}><Link className="btn primary" to="/workflow">Go to Run</Link></div></Empty>}
+      </Loaded>
+    </>
+  )
+}
+
+function TmaCohort() {
   const cohort = useFetch<CohortInfo>('/api/cohort')
   return (
     <>

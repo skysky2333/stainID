@@ -250,7 +250,7 @@ def busy_now() -> str:
 @dataclass
 class Unit:
     tier: int  # 1 cores open, 2 next fields, 3 admin caches, 4 everything else
-    kind: str  # "pictures", "thumbs", "sam", "ladder", "caches"
+    kind: str  # "pictures", "thumbs", "sam", "ladder", "caches", "slide" (a whole slide's picture: `image_path` is its id)
     state: object
     label: str
     tiles: tuple[str, ...] = ()
@@ -356,6 +356,8 @@ def plan(state, now: float | None = None) -> tuple[list[Unit], dict]:
             core(tile_id, 2)
             field(tile_id, 2)
     units.append(Unit(3, "caches", state, "the step overview, the labelling tiles and the labels overview"))
+    for slide_id in _slides(state):  # a whole-slide project: each slide's picture, put together from its regions
+        units.append(Unit(3, "slide", state, f"{slide_id}: whole-slide picture", image_path=slide_id))
     for session in sessions:  # 4: every other field
         for tile_id in session.fields:
             core(tile_id, 4)
@@ -370,6 +372,15 @@ def plan(state, now: float | None = None) -> tuple[list[Unit], dict]:
     counts = {"sessions": len(sessions), "fields": len(info), "fields_ready": sum(t in pictures for t in info), "cores": len(by_image),
               "ladder_fields": len(ladders), "near_fields": len(near), "estimate_bytes": int(estimate)}
     return units, counts
+
+
+def _slides(state) -> list[str]:
+    from stainid.api import slide_pyramid  # noqa: PLC0415
+
+    try:
+        return list(slide_pyramid.slides(state))
+    except Exception:  # noqa: BLE001  (a project without a core image table yet)
+        return []
 
 
 # ---------------------------------------------------------------- making one unit
@@ -400,6 +411,10 @@ def done(unit: Unit) -> bool:
         return thread_threshold.ready(state.project, state.tile(unit.tiles[0]), unit.wide)
     if unit.kind == "caches":
         return time.monotonic() - _CACHES_WARMED.get(state.id, -1e9) < PLAN_SECONDS
+    if unit.kind == "slide":
+        from stainid.api import slide_pyramid  # noqa: PLC0415
+
+        return slide_pyramid.made(state, unit.image_path)
     return True
 
 
@@ -428,6 +443,15 @@ def make(unit: Unit, stop) -> None:
     elif unit.kind == "caches":
         _warm_caches(state, stop)
         _CACHES_WARMED[state.id] = time.monotonic()
+    elif unit.kind == "slide":
+        from stainid.api import slide_pyramid  # noqa: PLC0415
+
+        if slide_pyramid.build(state, unit.image_path, stop) is None:
+            return
+        for size in slide_pyramid.THUMBS:
+            if stop():
+                return
+            slide_pyramid.thumbnail(state, unit.image_path, size)
 
 
 def _warm_caches(state, stop) -> None:

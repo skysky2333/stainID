@@ -1588,3 +1588,18 @@ html.viewer-full.fit-screen .layout > .main, html.viewer-full.fit-screen .annota
 .leave-ways { display: grid; gap: 8px; }
 .leave-ways .btn { display: grid; justify-items: start; text-align: left; gap: 2px; padding: 8px 12px; }
 .finish-note { margin: 2px 0 0; }
+
+/* Cores page of a whole-slide project: one card per slide */
+.slide-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+button.slide-card { display: flex; flex-direction: column; gap: 8px; padding: 10px; text-align: left; font: inherit; color: inherit; cursor: pointer; }
+button.slide-card:hover { box-shadow: 0 0 0 2px var(--accent-soft); }
+button.slide-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.slide-card-pic { position: relative; display: block; width: 100%; max-height: 320px; background: #fff; border-radius: 6px; overflow: hidden; }
+.slide-card-pic img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.slide-card-text { display: flex; flex-direction: column; gap: 2px; }
+
+/* the field picker of a whole-slide project: each slide as wide as the list, its picture under its tiles */
+.core-maps.slide-maps { grid-template-columns: minmax(0, 1fr); }
+.core-map.slide-map { overflow: hidden; background: #ffffff; border-radius: 4px; }
+.slide-map-picture { position: absolute; max-width: none; pointer-events: none; user-select: none; }
+.slide-map .core-tile-other { background: rgb(255 255 255 / 55%); }

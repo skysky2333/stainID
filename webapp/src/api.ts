@@ -244,7 +244,11 @@ export interface SessionDetail {
   meta: SessionInfo & { fields: string[]; tags: string[]; vocabulary: Vocabulary; keys: KeyMap; subtypes: boolean }
   fields: SessionField[]; annotator: string | null
   /** each core drawn as its tiles: the frame around them and the tiles not in this session; how many people each field needs */
-  cores?: Record<string, { x: number; y: number; width: number; height: number; others: [number, number, number, number, string][] }>; needed?: number
+  cores?: Record<string, { x: number; y: number; width: number; height: number; others: [number, number, number, number, string][]
+    /** a whole slide (a whole-slide project): its picture under the tiles, covering `slide` (x, y, width, height) */
+    unit?: 'slide'; picture?: string; slide?: [number, number, number, number] }>; needed?: number
+  /** "slide": a whole-slide project, whose fields are grouped and drawn by slide (`core_id` the slide, `box` in slide px) */
+  unit?: 'core' | 'slide'
 }
 export interface Label {
   id: string; source: string; stain: string; task: 'class' | 'outline' | 'tag' | 'note' | 'done' | 'exclude' | 'threshold' | 'replaced' | 'simple' | 'simple_area'; tile_id: string  // exclude: an area marked as bad (points: its rings)
@@ -646,9 +650,13 @@ export interface ExcludedInfo {
   kinds?: { id: string; label: string; color: string; hatch?: boolean; type?: string; fraction?: number }[]
 }
 export type PictureState = (Pyramid & { ready: true }) | { ready: false; state?: string; ahead?: number; error?: string; thumb_size?: number | null }
-export interface AreaImage { stain: string; picture: PictureState | null; excluded: ExcludedInfo; checked_by: string[]; checked_by_me: boolean; edits: number }
+export interface AreaImage { stain: string; picture: PictureState | null; excluded: ExcludedInfo; checked_by: string[]; checked_by_me: boolean; edits: number
+  /** picture px per brush-mask px (8 for a core; coarser for a whole slide, whose masks stay ~2,000 px across) */
+  mask_scale?: number }
 /** One core of a "Mark bad areas" session: all its stain images. */
-export interface AreaCore { core_id: string; images: AreaImage[]; second_check: boolean; open_by: string[]; progress: RoundProgress; pixel_size_um?: number }
+export interface AreaCore { core_id: string; images: AreaImage[]; second_check: boolean; open_by: string[]; progress: RoundProgress; pixel_size_um?: number
+  /** "slide": a whole slide of a whole-slide project (its regions saved as one), `name` its image and `regions` how many */
+  unit?: 'core' | 'slide'; name?: string; regions?: number }
 export interface AreaNext { core_id: string | null; after: string | null; taken: number; progress: RoundProgress }
 /** People's areas of a core image so far (core px; the first ring outer, later ones holes; kind '1'–'4' or 'include'). */
 export interface PeopleAreas { regions: { kind: string; rings: number[][][] }[]; agreement: unknown; edits: { person: string; time: number; kinds: string[] }[] }
@@ -659,10 +667,12 @@ export interface AreasOverview {
 }
 /** "Grey / white matter" (routes/matter.py): the picker's row of a core (by TMA and core) and where it stands. */
 export interface MatterCoreRow { core_id: string; tma: string; core: string; stains: string[]; state: 'not_started' | 'in_progress' | 'done'
-  done_by: string[]; open_by: string[]; done_by_me: boolean; saved_by_me: string[] }
+  done_by: string[]; open_by: string[]; done_by_me: boolean; saved_by_me: string[]; unit?: 'slide' }
 /** Who saved a stain image's white matter, and how (carried from the source stain, accepted as carried). */
 export interface MatterSaved { person: string; time: number; session: string; carried_from: string | null; accepted: boolean; registration: string | null }
-export interface MatterImage { stain: string; picture: PictureState | null; saved_by: string[]; saved_by_me: boolean; mine: MatterSaved | null }
+export interface MatterImage { stain: string; picture: PictureState | null; saved_by: string[]; saved_by_me: boolean; mine: MatterSaved | null
+  /** picture px per brush-mask px (8 for a core; coarser for a whole slide) */
+  mask_scale?: number }
 /** One core: its stain images (NeuN first: `source`, which the others start from) and whether it opens to look at. */
 export interface MatterCore { core_id: string; tma: string; core: string; images: MatterImage[]; source: string; read_only: boolean; closed?: boolean; done_by: string[]
   progress: RoundProgress; pixel_size_um?: number; practice?: boolean }

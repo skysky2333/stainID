@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from stainid import cache, practice
-from stainid.api import label_crops, pyramid, queue_pictures, render, sam_embeddings, work
+from stainid.api import label_crops, pyramid, queue_pictures, render, sam_embeddings, slide_pyramid, work
 from stainid.api.routes.images import OVERLAYS
 from stainid.api.session import GUEST, annotator, annotator_name, is_admin, require_admin
 from stainid.api.state import get_state
@@ -749,6 +749,31 @@ def _with_place(meta: dict, fields: list[dict], states: dict[str, dict], labels:
                     "done_at": {p: float(when[(f["tile_id"], p)]) for p in done_by if (f["tile_id"], p) in when},
                     "ai_reviewed": f["tile_id"] in ai_reviewed, "marked_bad": bad.get(f["tile_id"], {}),
                     "elsewhere": elsewhere.get(f["tile_id"], [])})
+    return _on_slides(out)
+
+
+SLIDES_GROUP = "Whole slides"  # the one group of a whole-slide project's field picker (a TMA's place there)
+
+
+def _on_slides(fields: list[dict]) -> list[dict]:
+    """In a whole-slide project each field's place on its slide, not in its region: `core_id` the slide (the picker
+    draws each slide as its tiles), `box` in slide px, `region_id` the region it is in. Other projects as they are."""
+    slides = slide_pyramid.slides(get_state())
+    if not slides:
+        return fields
+    from stainid.imageset.slides import by_core  # noqa: PLC0415
+
+    where = by_core(slides)
+    out = []
+    for f in fields:
+        s = where.get(str(f.get("core_id")))
+        if s is None:
+            out.append(f)
+            continue
+        region = s.find(str(f["core_id"]))
+        box = f.get("box")
+        out.append({**f, "region_id": f["core_id"], "core_id": s.slide_id, "core": s.name, "tma": s.tma, "tma_name": SLIDES_GROUP,
+                    "box": [box[0] + region.x, box[1] + region.y, box[2], box[3]] if box else None})
     return out
 
 
@@ -789,6 +814,13 @@ def _core_layouts(meta: dict, fields: list[dict]) -> dict[str, dict]:
     if kept is not None:  # the page asks every few seconds: the same tiles, the same drawing
         return kept
     mine = {f["tile_id"] for f in fields}
+    slides = slide_pyramid.slides(get_state())
+    if slides:
+        out = _slide_layouts(meta, slides, cores, tiles, mine)
+        if len(_LAYOUTS) > 16:
+            _LAYOUTS.clear()
+        _LAYOUTS[key] = out
+        return out
     rows = tiles[(tiles.stain == meta["stain"]) & tiles.core_id.astype(str).isin(cores)].drop_duplicates("tile_id")
     out = {}
     for core_id, group in rows.groupby(rows.core_id.astype(str)):
@@ -804,6 +836,30 @@ def _core_layouts(meta: dict, fields: list[dict]) -> dict[str, dict]:
 
 
 _LAYOUTS: dict[tuple, dict[str, dict]] = {}
+
+
+def _slide_layouts(meta: dict, slides: dict, wanted: set[str], tiles: pd.DataFrame, mine: set[str]) -> dict[str, dict]:
+    """A whole-slide project: each slide of the session drawn as its tiles at their places (slide px), the frame
+    around all its tiles of the stain, its other tiles (faint) and its picture under them (`picture`, covering
+    `slide`: the whole slide's box)."""
+    out = {}
+    for slide_id in sorted(wanted):
+        s = slides.get(slide_id)
+        if s is None:
+            continue
+        offsets = {r.core_id: (r.x, r.y) for r in s.regions}
+        rows = tiles[(tiles.stain == meta["stain"]) & tiles.core_id.astype(str).isin(offsets)].drop_duplicates("tile_id")
+        if rows.empty:
+            continue
+        dx = rows.core_id.astype(str).map(lambda c: offsets[c][0])
+        dy = rows.core_id.astype(str).map(lambda c: offsets[c][1])
+        x, y = rows.x_px.astype(int) + dx, rows.y_px.astype(int) + dy
+        x0, y0 = int(x.min()), int(y.min())
+        x1, y1 = int((x + rows.width_px).max()), int((y + rows.height_px).max())
+        others = [[int(a), int(b), int(w), int(h), ""] for a, b, w, h, t in zip(x, y, rows.width_px, rows.height_px, rows.tile_id) if t not in mine]
+        out[slide_id] = {"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0, "others": others, "unit": "slide",
+                         "picture": f"/api/annotate/{meta['name']}/slides/{slide_id}.jpg?size=1024", "slide": [0, 0, s.width, s.height]}
+    return out
 
 
 NEAR_THRESHOLD = 0.2  # how far (in probability) from the acceptance threshold an object still counts as uncertain
@@ -1125,7 +1181,8 @@ def session_detail(name: str, request: Request, person: str | None = Depends(vie
         sam_embeddings.prepare_session(get_state(), meta)
     return {"meta": {**meta, "subtypes": asks_subtypes(meta), "vocabulary": words.to_api(), "keys": words.keymap(asks_subtypes(meta)), "tags": FIELD_TAGS,
                      **outlines},
-            "fields": fields, "cores": layouts, "needed": rounds.needed(meta), "annotator": person}
+            "fields": fields, "cores": layouts, "needed": rounds.needed(meta), "annotator": person,
+            "unit": "slide" if slide_pyramid.slides(get_state()) else "core"}
 
 
 def asks_subtypes(meta: dict) -> bool:
@@ -1344,16 +1401,77 @@ def _field_core(name: str, tile_id: str, request: Request) -> tuple[dict, dict]:
 @router.get("/annotate/{name}/fields/{tile_id}/core")
 def field_core(name: str, tile_id: str, request: Request, person: str | None = Depends(viewer)) -> dict:
     """The field's core for the smaller zoom levels beside it (webapp/src/labels/fieldstrip.tsx): the core's size (core
-    px), where the field's picture lies in it (`origin`, `field`: its size), and its pictures (whole core, middle level)."""
+    px), where the field's picture lies in it (`origin`, `field`: its size), and its pictures (whole core, middle level).
+    In a whole-slide project the field's slide instead (`unit` "slide", slide px), once its picture is made: the whole
+    slide, and around the field a part of it (`mid_box`, the box the middle picture covers); until then the region."""
     tile, core = _field_core(name, tile_id, request)
     width, height = int(core["native_width_px"]), int(core["native_height_px"])
     x0, y0 = render.crop_origin(tile, get_state().project.context_px)
     context = get_state().project.context_px
     x1 = min(int(tile["x_px"]) + int(tile["width_px"]) + context, width)
     y1 = min(int(tile["y_px"]) + int(tile["height_px"]) + context, height)
+    slide = slide_pyramid.slide_of(get_state(), str(tile["core_id"]))
+    if slide is not None:
+        region = slide.find(str(tile["core_id"]))
+        if slide_pyramid.ready(get_state(), slide.slide_id):
+            origin = [x0 + region.x, y0 + region.y]
+            return {"core_id": slide.slide_id, "unit": "slide", "width": slide.width, "height": slide.height, "origin": origin, "field": [x1 - x0, y1 - y0],
+                    "thumb": f"/api/annotate/{name}/slides/{slide.slide_id}.jpg?size=1024",
+                    "mid": f"/api/annotate/{name}/fields/{tile_id}/around.jpg?size={MID_PX}", "mid_box": list(_around(tile, slide))}
+        slide_pyramid.ask(get_state(), slide.slide_id)  # shown as soon as it is made
+        base = f"/api/annotate/{name}/fields/{tile_id}/core.jpg"
+        return {"core_id": slide.slide_id, "unit": "region", "shift": [region.x, region.y], "width": width, "height": height, "origin": [x0, y0],
+                "field": [x1 - x0, y1 - y0], "thumb": f"{base}?size=512", "mid": f"{base}?size={MID_PX}"}
     base = f"/api/annotate/{name}/fields/{tile_id}/core.jpg"
     return {"core_id": str(tile["core_id"]), "width": width, "height": height, "origin": [x0, y0], "field": [x1 - x0, y1 - y0],
             "thumb": f"{base}?size=512", "mid": f"{base}?size={MID_PX}"}
+
+
+AROUND = 2.6  # the middle picture of a field on a slide: this many field sides each way from the field's centre
+
+
+def _around(tile: dict, slide) -> tuple[int, int, int, int]:
+    """The part of the slide the middle zoom level of a field can show (slide px: x0, y0, x1, y1): square, around
+    the field's centre, inside the slide."""
+    region = slide.find(str(tile["core_id"]))
+    cx = region.x + int(tile["x_px"]) + int(tile["width_px"]) / 2
+    cy = region.y + int(tile["y_px"]) + int(tile["height_px"]) / 2
+    side = min(max(slide.width, slide.height), 2 * AROUND * max(int(tile["width_px"]), int(tile["height_px"])))
+    x0 = int(max(0, min(cx - side / 2, slide.width - side)))
+    y0 = int(max(0, min(cy - side / 2, slide.height - side)))
+    return x0, y0, int(x0 + side), int(y0 + side)
+
+
+@router.get("/annotate/{name}/fields/{tile_id}/around.jpg")
+def field_around(name: str, tile_id: str, request: Request, size: int = MID_PX, person: str | None = Depends(viewer)) -> Response:
+    """The part of a field's slide its middle zoom level shows (`field_core`'s `mid_box`), at most `size` px across."""
+    tile, _ = _field_core(name, tile_id, request)
+    slide = slide_pyramid.slide_of(get_state(), str(tile["core_id"]))
+    if slide is None:
+        raise HTTPException(404, f"{tile_id} is not on a whole slide")
+    try:
+        data = slide_pyramid.crop_jpeg(get_state(), slide.slide_id, _around(tile, slide), min(size, MID_PX))
+    except KeyError as error:
+        raise HTTPException(404, str(error).strip("'")) from error
+    return Response(data, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
+
+
+@router.get("/annotate/{name}/slides/{slide_id}.jpg")
+def session_slide_picture(name: str, slide_id: str, request: Request, size: int = 1024, person: str | None = Depends(viewer)) -> FileResponse:
+    """A whole slide of the session (one it has fields or units on), at most `size` px across: the field picker's
+    slide maps and the field strip's "Whole slide"."""
+    meta = session_meta(name, request)
+    slide = slide_pyramid.slides(get_state()).get(slide_id)
+    regions = set(slide.cores) if slide is not None else set()
+    tiles = get_state().tiles
+    mine = set(tiles[tiles.tile_id.isin(set(meta.get("fields") or []))].core_id.astype(str)) if not tiles.empty and meta.get("fields") else set()
+    if slide is None or not (regions & mine or slide_id in (meta.get("stains_of") or {})):
+        raise HTTPException(404, f"{slide_id} is not part of this session")
+    try:
+        return FileResponse(slide_pyramid.thumbnail(get_state(), slide_id, min(size, 2048)), headers={"Cache-Control": "private, max-age=600"})
+    except KeyError as error:
+        slide_pyramid.ask(get_state(), slide_id)
+        raise HTTPException(404, str(error).strip("'")) from error
 
 
 @router.get("/annotate/{name}/fields/{tile_id}/core.jpg")
@@ -1388,6 +1506,9 @@ def _session_cores(meta: dict) -> set[str]:
     if kept is None:
         tiles = get_state().tiles
         kept = {str(c) for c in tiles[tiles.tile_id.isin(set(meta["fields"]))].core_id} if not tiles.empty else set()
+        slides = slide_pyramid.slides(get_state())
+        if slides:  # a whole slide's field map: the other regions of its slides too
+            kept |= {c for s in slides.values() if kept & set(s.cores) for c in s.cores}
         _LAYOUTS[key] = kept
     return kept
 

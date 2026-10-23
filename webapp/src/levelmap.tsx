@@ -12,20 +12,22 @@ export interface Rect { x0: number; y0: number; x1: number; y1: number }
 export interface Square { key: string; x: number; y: number; w: number; h: number; colour: string; fill?: boolean; current?: boolean; title?: string; onOpen?: () => void }
 
 /** The middle level's window: `times` the detailed view's extent (at least `least` across), square, centred on it, kept
- *  inside the picture (`width` × `height`). */
-export function middleWindow(view: Rect, width: number, height: number, times = 3.5, least = 0): Rect {
+ *  inside the picture (`width` × `height`), and inside `within` when the middle picture covers only that part of it
+ *  (a field's surroundings on a whole slide). */
+export function middleWindow(view: Rect, width: number, height: number, times = 3.5, least = 0, within: Rect | null = null): Rect {
   const cx = (view.x0 + view.x1) / 2, cy = (view.y0 + view.y1) / 2
-  const side = Math.min(Math.max(width, height), Math.max(least, (view.x1 - view.x0) * times, (view.y1 - view.y0) * times))
+  const room = within ?? { x0: 0, y0: 0, x1: width, y1: height }
+  const side = Math.min(Math.max(room.x1 - room.x0, room.y1 - room.y0), Math.max(least, (view.x1 - view.x0) * times, (view.y1 - view.y0) * times))
   const half = side / 2
-  const x0 = Math.max(0, Math.min(cx - half, width - side)), y0 = Math.max(0, Math.min(cy - half, height - side))
+  const x0 = Math.max(room.x0, Math.min(cx - half, room.x1 - side)), y0 = Math.max(room.y0, Math.min(cy - half, room.y1 - side))
   return { x0, y0, x1: x0 + side, y1: y0 + side }
 }
 
-/** One panel: the picture (`src`, `width` × `height` in the coordinates everything else is in) shown over `window`,
- *  the squares, and `next` (the next level's extent). A press or a drag reports where the next level should be centred;
- *  without `onMove` the panel only shows (a click on a square opens it). */
-export function LevelMap({ src, width, height, window: win, next, squares = [], onMove, label, children }: {
-  src: string; width: number; height: number; window: Rect; next: Rect | null; squares?: Square[]
+/** One panel: the picture (`src`, `width` × `height` in the coordinates everything else is in; or covering only
+ *  `srcBox` of them) shown over `window`, the squares, and `next` (the next level's extent). A press or a drag reports
+ *  where the next level should be centred; without `onMove` the panel only shows (a click on a square opens it). */
+export function LevelMap({ src, srcBox, width, height, window: win, next, squares = [], onMove, label, children }: {
+  src: string; srcBox?: Rect; width: number; height: number; window: Rect; next: Rect | null; squares?: Square[]
   onMove?: (x: number, y: number, done: boolean) => void; label: string; children?: ReactNode
 }) {
   const svg = useRef<SVGSVGElement>(null)
@@ -69,7 +71,8 @@ export function LevelMap({ src, width, height, window: win, next, squares = [], 
       onLostPointerCapture={() => { press.current = null }}
       onDragStart={(e) => e.preventDefault()}>
       <rect x={0} y={0} width={width} height={height} fill="var(--surface-0)" />
-      <image href={src} x={0} y={0} width={width} height={height} preserveAspectRatio="none" />
+      {srcBox ? <image href={src} x={srcBox.x0} y={srcBox.y0} width={srcBox.x1 - srcBox.x0} height={srcBox.y1 - srcBox.y0} preserveAspectRatio="none" />
+        : <image href={src} x={0} y={0} width={width} height={height} preserveAspectRatio="none" />}
       {squares.filter((s) => !s.current).map((s) => (  // the others first, inset a little so neighbours never paint over each other
         <rect key={s.key} x={s.x + stroke} y={s.y + stroke} width={Math.max(0, s.w - 2 * stroke)} height={Math.max(0, s.h - 2 * stroke)}
           fill={s.colour} fillOpacity={s.fill ? 0.3 : 0} stroke={s.colour} strokeOpacity={s.fill ? 0.9 : 0.35} strokeWidth={stroke}
