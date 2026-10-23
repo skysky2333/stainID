@@ -225,19 +225,23 @@ def core_objects(core_id: str, stain: str) -> dict:
 
 
 @router.get("/cores/{core_id}/{stain}/outlines")
-def core_outlines(core_id: str, stain: str, request: Request, outline: str = "default") -> Response:
+def core_outlines(core_id: str, stain: str, request: Request, outline: str = "default", part: str = "all") -> Response:
     """The Segment Anything outline of each detection of `objects` that has one: rows of `columns`, where `x`, `y` are
     exactly that detection's position (to match them up), `area_um2` the outlined area and `rings` its polygons
     (flat [x0, y0, x1, y1, …] in core-image pixel indices). `status` is "not_made" until the step has outlined the core.
     `outline` picks which outline of each v2 candidate (`store_view.OUTLINE_CHOICES`: default, stain, sam0, sam1, sam2;
     `outline` in the answer says which); the current outputs have one outline per object, sent for every choice.
-    Sent gzip-compressed when the browser accepts it (a busy core is ~1.5 MB of JSON, ~0.6 MB compressed)."""
+    Sent gzip-compressed when the browser accepts it (a busy core is ~1.5 MB of JSON, ~0.6 MB compressed). `part`: every
+    object's outline, the kept ones' or the rejected candidates' only (`store_view.OUTLINE_PARTS`: the page asks for the
+    rejects' once zoomed in close enough to draw them)."""
     if outline not in store_view.OUTLINE_CHOICES:
         raise HTTPException(400, f"outline must be one of {', '.join(store_view.OUTLINE_CHOICES)}")
+    if part not in store_view.OUTLINE_PARTS:
+        raise HTTPException(400, f"part must be one of {', '.join(store_view.OUTLINE_PARTS)}")
     state = get_state()
     if store_view.available(state.project, core_id, stain):
-        return _json({"status": "done", "columns": OUTLINE_COLUMNS, "outline": outline,
-                      "rows": store_view.outline_rows(state.project, core_id, stain, outline)}, request)
+        return _json({"status": "done", "columns": OUTLINE_COLUMNS, "outline": outline, "part": part,
+                      "rows": store_view.outline_rows(state.project, core_id, stain, outline, part)}, request)
     tiles = _core_tiles(state, core_id, stain)
     made = outlines.core_outlines(state, core_id, stain, tiles) if not tiles.empty else None
     rows = []
@@ -247,8 +251,9 @@ def core_outlines(core_id: str, stain: str, request: Request, outline: str = "de
             points = found[["x", "y"]].to_numpy(float)
             distance, nearest = cKDTree(points).query(np.array([[o["x"], o["y"]] for o in made]), distance_upper_bound=MATCH_PX)
             taken = set()
+            kinds = found.model_class.astype(str).to_numpy()
             for outline, d, i in zip(made, distance, nearest):
-                if np.isfinite(d) and i not in taken:
+                if np.isfinite(d) and i not in taken and (part == "all" or (kinds[i] == "rejected") == (part == "rejected")):
                     taken.add(i)
                     rows.append([float(points[i, 0]), float(points[i, 1]), outline["area_um2"], outline["rings"]])
     return _json({"status": "not_made" if made is None else "done", "columns": OUTLINE_COLUMNS, "rows": rows}, request)

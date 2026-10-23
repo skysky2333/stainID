@@ -49,6 +49,16 @@ def test_outline_choices(project):
         store_view.outline_rows(project, CORE, "AT8", "sam3")
 
 
+def test_the_rejects_outlines_are_sent_apart(project):
+    """The Cores view fetches the kept objects' outlines at once and the rejected candidates' only once zoomed in."""
+    kept = store_view.outline_rows(project, CORE, "AT8", "default", "kept")
+    rejected = store_view.outline_rows(project, CORE, "AT8", "default", "rejected")
+    assert [r[:2] for r in kept] == [[10.0, 10.0]] and [r[:2] for r in rejected] == [[50.0, 50.0]]
+    assert sorted(kept + rejected) == sorted(store_view.outline_rows(project, CORE, "AT8", "default"))
+    with pytest.raises(ValueError):
+        store_view.outline_rows(project, CORE, "AT8", "default", "some")
+
+
 def test_annotation_pages_show_the_stains_default_outline_first(project):
     """The annotation pages' outlines (`candidate_store.masks`): the three SAM masks then the stain outline ("mask 3"),
     shown first by the stain's `default_outline`, also for a store assembled before the setting (no outline_default)."""

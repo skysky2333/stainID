@@ -130,6 +130,9 @@ interface Found {
 
 // exact outlines are drawn instead of circles wherever the Outline objects step has made them; every candidate is shown,
 // rejected ones dotted grey (stored under a new key, so the choice of hiding them made before applies no more)
+/** Rejected candidates are drawn (and their outlines fetched) only once the view spans at most this much across, about
+ *  two labelling fields: further out they are too small to tell apart and only crowd the accepted objects. */
+const REJECTED_VIEW_UM = 1100
 const LAYER_DEFAULTS = { objects: true, rejected: true, outlines: true, threads: false, unproposed: false, excluded: true, annotations: true, dab: false, tiles: false }
 type Layers = typeof LAYER_DEFAULTS
 /* The colours of the objects on the core picture: saturated, and clear of DAB brown and haematoxylin blue, each drawn
@@ -273,7 +276,9 @@ function CoreImage({ unit, core, stain, start }: { unit: Unit; core: CoreInfo; s
   const [allChoice, setAllChoice] = useState<Choice | null>(null)
   const defaultChoice: Choice = found.data?.outline_default ?? 'stain'
   const shownChoice: Choice = allChoice ?? defaultChoice
-  const shapes = useFetch<CoreOutlines>(wantOutlines && outlinesMade ? `${base}/outlines?outline=${allChoice ? CHOICE_OUTLINE[allChoice] : 'default'}` : null)  // the outline of each
+  const outlineChoice = allChoice ? CHOICE_OUTLINE[allChoice] : 'default'
+  // the outline of each kept object; the rejected candidates' only once they are drawn (zoomed in, or the threshold preview moved)
+  const shapes = useFetch<CoreOutlines>(wantOutlines && outlinesMade ? `${base}/outlines?outline=${outlineChoice}&part=kept` : null)
   const threadsMeasured = found.data?.threads ?? null
   const [threadPoll, setThreadPoll] = useState(true)
   const traced = useFetch<CoreThreads>(layers.threads && threadsMeasured ? `${base}/threads` : null, threadPoll ? 3000 : undefined)
@@ -308,6 +313,9 @@ function CoreImage({ unit, core, stain, start }: { unit: Unit; core: CoreInfo; s
   const [target, setTarget] = useState<ViewTarget | null>(start ? { ...start, scale: 0.5, key: 0 } : null)
   const [viewRect, setViewRect] = useState<ViewRect | null>(null)
   const image = core.images.find((i) => i.stain === stain)
+  const viewUm = viewRect ? (viewRect.x1 - viewRect.x0) * (image?.pixel_width_um ?? 0.5) : Infinity
+  const closeEnough = viewUm <= REJECTED_VIEW_UM  // rejected candidates are drawn from here in
+  const [rejectsWanted, setRejectsWanted] = useState(false)  // fetched once needed, kept after zooming out again
   const ready = picture.data?.ready ? picture.data : null
   const settled = !!ready || (picture.data && !picture.data.ready && picture.data.state === 'failed')
   useEffect(() => { if (settled) setPoll(false) }, [settled, picture.data])  // also after a tile went missing (onTileError)
@@ -320,13 +328,16 @@ function CoreImage({ unit, core, stain, start }: { unit: Unit; core: CoreInfo; s
   const [previewAt, setPreviewAt] = useState<number | null>(null)
   const detectionAt = preview.data?.detection ?? null
   const previewValue = previewOn && detectionAt != null ? previewAt ?? detectionAt : null
+  const previewMoved = previewValue != null && detectionAt != null && Math.abs(previewValue - detectionAt) >= 1e-9  // rejects may now be kept
+  useEffect(() => { if ((closeEnough && layers.rejected) || previewMoved) setRejectsWanted(true) }, [closeEnough, layers.rejected, previewMoved])
+  const rejectShapes = useFetch<CoreOutlines>(rejectsWanted && wantOutlines && outlinesMade ? `${base}/outlines?outline=${outlineChoice}&part=rejected` : null)
   const would = useMemo(() => new Map((preview.data?.rows ?? []).map(([id, p, identity, subtype, reason, fixed, below, belowSubtype]) =>
     [id, { p, identity, subtype, reason: reason ?? '', fixed: fixed ?? (!identity && !reason), below: below ?? '', belowSubtype: belowSubtype ?? '' }])), [preview.data])
   const objects = useMemo<Found[]>(() => {
     const data = found.data
     if (!data) return []
     const col = Object.fromEntries(data.columns.map((c, i) => [c, i]))
-    const outlines = new Map((shapes.data?.rows ?? []).map(([x, y, area, rings]) => [`${x},${y}`, { area, rings }]))
+    const outlines = new Map([...(shapes.data?.rows ?? []), ...(rejectShapes.data?.rows ?? [])].map(([x, y, area, rings]) => [`${x},${y}`, { area, rings }]))
     return data.rows.map((r, index) => ({ index, x: Number(r[col.x]), y: Number(r[col.y]), r: Number(r[col.radius_px] ?? 6),
       ...objectClass(vocabulary, String(r[col.model_class]), col.class === undefined ? undefined : String(r[col.class] ?? ''),
         col.subtype === undefined ? undefined : String(r[col.subtype] ?? '')),
@@ -343,7 +354,7 @@ function CoreImage({ unit, core, stain, start }: { unit: Unit; core: CoreInfo; s
       if (!w.identity) return { ...o, ...objectClass(vocabulary, 'rejected'), reason: w.reason }  // passes, but a rule after the model rejects it
       return { ...o, ...objectClass(vocabulary, 'accepted', w.identity, w.subtype), reason: w.reason || 'accepted' }  // its type, or the look-alike a rule names (CAA)
     })
-  }, [found.data, shapes.data, vocabulary, previewValue, detectionAt, would])
+  }, [found.data, shapes.data, rejectShapes.data, vocabulary, previewValue, detectionAt, would])
   const colorOfClass = useMemo(() => Object.fromEntries(objects.map((o) => [o.cls, o.color])), [objects])
   const labelOfClass = useMemo(() => Object.fromEntries(objects.map((o) => [o.cls, o.label])), [objects])
   const counts = useMemo(() => objects.reduce<Record<string, number>>((acc, o) => ({ ...acc, [o.cls]: (acc[o.cls] ?? 0) + 1 }), {}), [objects])
@@ -352,8 +363,8 @@ function CoreImage({ unit, core, stain, start }: { unit: Unit; core: CoreInfo; s
   const counted = useMemo(() => objects.filter((o) => o.cls.startsWith('label:') && !!vocabulary
     && roleOf(vocabulary, o.cls.slice(6).split('/')[0]) === 'positive').length, [objects, vocabulary])
   const showOutlines = layers.outlines && outlinesMade && !!shapes.data
-  const drawn = useMemo(() => objects.filter((o) => (layers.rejected || o.cls !== 'rejected') && (layers.objects || (showOutlines && o.outline))),
-    [objects, layers.objects, layers.rejected, showOutlines])
+  const drawn = useMemo(() => objects.filter((o) => (o.cls !== 'rejected' || (layers.rejected && closeEnough)) && (layers.objects || (showOutlines && o.outline))),
+    [objects, layers.objects, layers.rejected, closeEnough, showOutlines])
   // an object with an exact outline shown is drawn by its outline instead of the circle
   const marks = useMemo<Mark[]>(() => drawn.map((o) => {
     const outlined = showOutlines && !!o.outline
@@ -544,6 +555,10 @@ function CoreImage({ unit, core, stain, start }: { unit: Unit; core: CoreInfo; s
                   <input type="checkbox" checked={layers.rejected} disabled={!layers.objects} onChange={() => toggle('rejected')} />
                   <span className="swatch" style={swatchOf(INACTIVE_GREY, true)} />also show rejected candidates<span className="spacer" /><span className="muted">{counts.rejected.toLocaleString()}</span>
                 </label>
+              )}
+              {!!counts.rejected && layers.rejected && layers.objects && !closeEnough && (
+                <div className="small muted indent rejected-zoom-note" title={`Rejected candidates are drawn once the view spans ${(REJECTED_VIEW_UM / 1000).toFixed(1)} mm or less`}>
+                  Zoom in to see rejected candidates</div>
               )}
               <OutlinesToggle made={outlinesMade} on={layers.outlines} onToggle={() => toggle('outlines')} state={shapes}
                 count={drawn.filter((o) => o.outline).length} v2={found.data.source === 'v2'} />

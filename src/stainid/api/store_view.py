@@ -97,18 +97,27 @@ def _polygon_um2(flat: list[int], pixel_um: float) -> float:
     return float(abs(np.dot(xs, np.roll(ys, -1)) - np.dot(ys, np.roll(xs, -1))) / 2) * pixel_um ** 2
 
 
-def outline_rows(project, core_id: str, stain: str, outline: str = "default") -> list[list]:
+OUTLINE_PARTS = ("all", "kept", "rejected")  # every candidate's outline, the kept ones' (drawn at every zoom) or the rejects'
+
+
+def outline_rows(project, core_id: str, stain: str, outline: str = "default", part: str = "all") -> list[list]:
     """Each candidate's outline: [x, y, area µm², rings]. `outline`: "default" the outline the stain draws
     (`candidates.outline_rings`, with the area the measures use: `candidates.shown_area_um2`), "stain" the candidate's own outline (as the stain's segmentation found it), "sam0" /
     "sam1" / "sam2" the small / medium / large Segment Anything output (its own area), else the candidate's own outline
-    where Segment Anything gave none."""
+    where Segment Anything gave none. `part`: every candidate's, or only those the viewer draws as kept / as rejected
+    (`found`'s model_class: the page sends the rejects' outlines only once zoomed in)."""
     if outline not in OUTLINE_CHOICES:
         raise ValueError(f"outline must be one of {', '.join(OUTLINE_CHOICES)}")
+    if part not in OUTLINE_PARTS:
+        raise ValueError(f"part must be one of {', '.join(OUTLINE_PARTS)}")
     sam = outline.startswith("sam")
     frame = candidates.read_core(project, stain, core_id, [*COLUMNS, "sam_masks", "sam_default"] if sam else COLUMNS)
     shown = candidates.shown_area_um2(frame).to_numpy(float) if outline == "default" and not frame.empty else None
+    rejected = (found(project, core_id, stain).model_class.to_numpy() == "rejected") if part != "all" and not frame.empty else None
     rows = []
     for number, row in enumerate(frame.to_dict("records")):
+        if rejected is not None and bool(rejected[number]) != (part == "rejected"):
+            continue
         area = float(row["area_um2"])
         own = candidates.points(row.get("outline"))
         if outline == "default":

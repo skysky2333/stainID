@@ -192,23 +192,25 @@ def slide_objects(slide_id: str, stain: str, request: Request) -> Response:
 
 
 @router.get("/whole-slides/{slide_id}/{stain}/outlines")
-def slide_outlines(slide_id: str, stain: str, request: Request, outline: str = "default") -> Response:
+def slide_outlines(slide_id: str, stain: str, request: Request, outline: str = "default", part: str = "all") -> Response:
     """Every region's outlines (`cohort.core_outlines`), in slide px."""
     from stainid.api.routes import cohort  # noqa: PLC0415
 
     if outline not in store_view.OUTLINE_CHOICES:
         raise HTTPException(400, f"outline must be one of {', '.join(store_view.OUTLINE_CHOICES)}")
+    if part not in store_view.OUTLINE_PARTS:
+        raise HTTPException(400, f"part must be one of {', '.join(store_view.OUTLINE_PARTS)}")
     state, s = _slide(slide_id, stain)
 
     def make() -> dict:
         rows, statuses = [], set()
         for r in s.regions:
-            part = _decoded(cohort.core_outlines(r.core_id, s.stain, PLAIN, outline))
-            statuses.add(part["status"])
-            rows += [[row[0] + r.x, row[1] + r.y, row[2], [slide_units.flat_moved(ring, r) for ring in row[3]]] for row in part["rows"]]
-        return {"status": "done" if "done" in statuses else "not_made", "columns": cohort.OUTLINE_COLUMNS, "outline": outline, "rows": rows}
+            got = _decoded(cohort.core_outlines(r.core_id, s.stain, PLAIN, outline, part))
+            statuses.add(got["status"])
+            rows += [[row[0] + r.x, row[1] + r.y, row[2], [slide_units.flat_moved(ring, r) for ring in row[3]]] for row in got["rows"]]
+        return {"status": "done" if "done" in statuses else "not_made", "columns": cohort.OUTLINE_COLUMNS, "outline": outline, "part": part, "rows": rows}
 
-    found = cache.memo(("slide outlines", str(state.root), s.slide_id, outline), _inputs(state, s, "candidates", "outlines"), make, every=5)
+    found = cache.memo(("slide outlines", str(state.root), s.slide_id, outline, part), _inputs(state, s, "candidates", "outlines"), make, every=5)
     return _json(found, request)
 
 
