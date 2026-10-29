@@ -10,7 +10,9 @@ the name and account id they carry). Every admin action on accounts is kept in a
 admin password of earlier versions becomes the account `admin` (same password).
 
 Labelling sets are shared with a **join key** per session (`stainid-ab3k-9xqe` style: 10 characters of an alphabet
-without look-alikes, about 50 bits): whoever enters it adds that session (of that project) to their sets. A new key
+without look-alikes, about 50 bits): whoever enters it adds that session (of that project) to their sets. An admin's
+"Add to my home page" adds a set to the same collection (`pin`): one store of a person's sets (`members`), which their
+home page lists. A new key
 stops the old one from working; people who joined keep their access. Membership is checked on every annotation request
 (`require_member`), not only in the page.
 
@@ -127,8 +129,20 @@ def _db() -> sqlite3.Connection:
                     connection.execute(f"alter table accounts add column {column} {kind}")
             path.chmod(0o600)
             _migrate_admin(connection)
+            _migrate_pins(connection)
             _READY.add(str(path))
     return connection
+
+
+def _migrate_pins(db: sqlite3.Connection) -> None:
+    """Earlier releases kept an admin's "Add to my home page" apart from the sets joined with a key (`pins`): each pin
+    becomes a set in the person's collection (`members`, joined when it was pinned), once. The `pins` rows are left as
+    they were (nothing reads them any more)."""
+    db.execute("create table if not exists migrations (name text primary key, done real not null)")
+    if db.execute("select 1 from migrations where name = 'pins into members'").fetchone():
+        return
+    db.execute("insert or ignore into members (account, project, session, joined) select account, project, session, pinned from pins")
+    db.execute("insert or ignore into migrations (name, done) values ('pins into members', ?)", (time.time(),))
 
 
 def _migrate_admin(db: sqlite3.Connection) -> None:
@@ -621,18 +635,17 @@ def sets_of(account_id: str) -> list[tuple[str, str, float]]:
 
 
 def pin(account_id: str, project: str, session: str, on: bool) -> None:
-    """Put a session on an admin's home page (or take it off): their home lists only the sessions they added."""
-    with _db() as db:
-        if on:
-            db.execute("insert or ignore into pins (account, project, session, pinned) values (?, ?, ?, ?)", (account_id, project, session, time.time()))
-        else:
-            db.execute("delete from pins where account = ? and project = ? and session = ?", (account_id, project, session))
+    """An admin's "Add to my home page" (or "Remove from my home page"): the same as joining the set with its key (or
+    being taken out of it), one collection of sets per person (`members`). Admins open every set either way."""
+    if on:
+        add_member(account_id, project, session)
+    else:
+        remove_member(account_id, project, session)
 
 
 def pins_of(account_id: str) -> list[tuple[str, str, float]]:
-    """(project id, session, when added) of the sessions on an admin's home page, latest first."""
-    with _db() as db:
-        return [(r["project"], r["session"], r["pinned"]) for r in db.execute("select * from pins where account = ? order by pinned desc", (account_id,))]
+    """The sets on the person's home page: their collection (`sets_of`), whether joined with a key or added there."""
+    return sets_of(account_id)
 
 
 TUTORIALS = ("objects", "areas", "threads", "simple", "matter")  # "Fix the field", "Mark bad areas" and AT8 threads (its thread-threshold slider)

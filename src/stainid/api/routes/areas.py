@@ -15,7 +15,10 @@ status of a core image's tiles (`labels.status`) and the "Annotations" layer (`l
 from __future__ import annotations
 
 import secrets
+import threading
 import time
+from collections import OrderedDict
+from pathlib import Path
 
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -324,8 +327,33 @@ def core_objects(name: str, core_id: str, stain: str, request: Request, person: 
     return {"columns": ["x", "y", "accepted", "rings"], "rows": rows}
 
 
+_OBJECT_ROWS: OrderedDict[tuple, list[list]] = OrderedDict()  # (root, core, stain, the store's signatures) -> rows; a few cores kept
+_OBJECT_ROWS_LOCK = threading.Lock()
+OBJECT_ROWS_KEPT = 24
+
+
 def object_rows(project, core_id: str, stain: str) -> list[list]:
-    """Detection's objects of a core image as [x, y, accepted, rings] (core px; see `core_objects`)."""
+    """Detection's objects of a core image as [x, y, accepted, rings] (core px; see `core_objects`), kept for the last
+    few cores until their candidate store or the project's settings change (the Grey / white matter guide, made ahead
+    in idle time by `ahead`, answers at once)."""
+    from stainid import cache, candidates  # noqa: PLC0415
+    from stainid.project import CONFIG_NAME  # noqa: PLC0415
+
+    key = (str(project.root), core_id, stain, cache.signature(candidates.path(project, stain, core_id, "candidates")),
+           cache.signature(candidates.path(project, stain, core_id, "proposals")), cache.signature(Path(project.root) / CONFIG_NAME))
+    with _OBJECT_ROWS_LOCK:
+        if key in _OBJECT_ROWS:
+            _OBJECT_ROWS.move_to_end(key)
+            return _OBJECT_ROWS[key]
+    rows = _object_rows(project, core_id, stain)
+    with _OBJECT_ROWS_LOCK:
+        _OBJECT_ROWS[key] = rows
+        while len(_OBJECT_ROWS) > OBJECT_ROWS_KEPT:
+            _OBJECT_ROWS.popitem(last=False)
+    return rows
+
+
+def _object_rows(project, core_id: str, stain: str) -> list[list]:
     from stainid import candidates  # noqa: PLC0415
     from stainid.labels import candidate_store  # noqa: PLC0415
     from stainid.labels import vocabulary as vocab  # noqa: PLC0415

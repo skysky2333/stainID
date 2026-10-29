@@ -68,7 +68,8 @@ class OnHome(BaseModel):
 
 @router.get("/labels/home", dependencies=admin)
 def on_my_home(request: Request) -> dict:
-    """The sessions of this project on the signed-in admin's home page (they add each one: nothing is added by itself)."""
+    """The sessions of this project on the signed-in admin's home page: the sets in their collection (added there, or
+    joined with the key: the same)."""
     from stainid.api import session  # noqa: PLC0415
 
     project = state.get_state().id
@@ -77,7 +78,8 @@ def on_my_home(request: Request) -> dict:
 
 @router.put("/labels/sessions/{name}/home", dependencies=admin)
 def set_on_my_home(name: str, body: OnHome, request: Request) -> dict:
-    """Add the session to the signed-in admin's home page, or take it off."""
+    """Add the session to the signed-in admin's home page (their collection of sets, as joining with its key does), or
+    take it off."""
     from stainid.api import session  # noqa: PLC0415
 
     accounts.pin(session.require_account(request).id, state.get_state().id, _session(name), body.on)
@@ -141,21 +143,23 @@ def may_see_project(request: Request) -> None:
 
 
 def sets_of(account: accounts.Account, request: Request, here: str | None = None) -> list[dict]:
-    """The labelling sets of the person (the ones they joined with a key, were added to, or, for an admin, opened), of
-    every project, with their progress. `here`: the page's project (kept for older pages; it adds nothing)."""
+    """The labelling sets in the person's collection (`accounts.sets_of`: joined with a key, added by an admin, or put
+    on their home page with "Add to my home page": one store), with their progress, closed ones too (they open to look
+    at). `here`: only those of that project (the page's project); else of every project."""
     from stainid.api.routes import annotate  # noqa: PLC0415
 
     joined: dict[str, dict[str, float]] = defaultdict(dict)
-    for project, name, when in accounts.pins_of(account.id) if account.admin else accounts.sets_of(account.id):  # an admin: the ones they added
-        joined[project][name] = when
+    for project, name, when in accounts.sets_of(account.id):
+        if here is None or project == here:
+            joined[project][name] = when
     out = []
     for project, names in joined.items():
         try:
             with state.use_project(project):
                 current = state.get_state()
-                rows = annotate.open_sessions(request, account.handle, set(names))
+                rows = annotate.open_sessions(request, account.handle, set(names), closed=True)
                 title = current.project.name
-        except (state.UnknownProject, OSError, ValueError):
+        except Exception:  # noqa: BLE001 - a project that cannot be read now (moved, half set up): the others still show
             continue
         for row in rows:
             out.append({**row, "project": project, "project_name": title, "joined": names.get(row["name"]),

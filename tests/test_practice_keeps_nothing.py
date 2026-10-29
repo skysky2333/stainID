@@ -73,6 +73,7 @@ def _writes(client: TestClient) -> dict[str, tuple[str, dict]]:
         "/api/annotate/{name}/matter/cores/{core_id}/leave": (f"/api/annotate/{CORES}/matter/cores/{core}/leave", {}),
         "/api/annotate/{name}/matter/cores/{core_id}/{stain}/save": (f"/api/annotate/{CORES}/matter/cores/{core}/{stains[0]}/save", {"accepted": True}),
         "/api/annotate/{name}/matter/cores/{core_id}/{stain}/carry": (f"/api/annotate/{CORES}/matter/cores/{core}/{stains[0]}/carry", {}),
+        "/api/annotate/{name}/matter/cores/{core_id}/all-grey": (f"/api/annotate/{CORES}/matter/cores/{core}/all-grey", {}),
     }
 
 
@@ -143,3 +144,38 @@ def test_tutorials_are_kept_with_the_account_and_admins_sets_are_the_ones_they_a
     assert admin.put(f"/api/labels/sessions/{made}/home", json={"on": False}).json() == {"sessions": []}
     assert made not in {s["name"] for s in admin.get("/api/session/sets").json()}
     assert ann.put(f"/api/labels/sessions/{made}/home", json={"on": True}).status_code in (401, 403)  # admins only
+
+
+def test_one_collection_of_sets_joined_with_the_key_or_added_to_the_home_page(rounds_project):
+    """Entering a set's key and an admin's "Add to my home page" put it in the same collection (they show the same
+    way, on the home page of the set's project); closed sets are listed too and open to look at, saving nothing."""
+    import sqlite3
+
+    from stainid.api import accounts
+
+    admin, (ann, _), _ = rounds_project
+    project = state.get_state().id
+    made = admin.post("/api/labels/sessions", json={"stain": "6E10", "round": 2, "open": True, "tile_ids": [TILE]}).json()["name"]
+    key = admin.get(f"/api/labels/sessions/{made}/access").json()["key"]
+    assert admin.post("/api/session/sets", json={"key": key}).status_code == 200  # an admin joins with the key
+    assert made in {s["name"] for s in admin.get(f"/api/session/sets?here={project}").json()}  # on their home page, as a pinned one
+    assert admin.get("/api/labels/home").json()["sessions"] == [made]  # the page's "Remove from my home page"
+    assert any(m["role"] == "admin" for m in admin.get(f"/api/labels/sessions/{made}/access").json()["members"])  # one store: a member
+    assert made not in {s["name"] for s in admin.get("/api/session/sets?here=another-project").json()}  # only the page's project
+    assert admin.put(f"/api/labels/sessions/{made}/home", json={"on": False}).json() == {"sessions": []}
+    assert made not in {s["name"] for s in admin.get("/api/session/sets").json()}
+
+    assert admin.post(f"/api/labels/sessions/{made}/open", json={"open": False}).status_code == 200  # closed
+    listed = {s["name"]: s for s in ann.get("/api/session/sets").json()}
+    assert made in listed and listed[made]["open"] is False  # a closed set stays in the annotator's list
+    assert ann.get(f"/api/annotate/{made}").status_code == 200  # and opens to look at
+    saved = ann.post(f"/api/annotate/{made}/tiles/{TILE}/save", json={"records": [], "submit": True})
+    assert saved.status_code == 409  # nothing is saved in a closed set
+
+    # an earlier release's pins: each becomes a set of the collection, once
+    account = admin.get("/api/session").json()["account"]["id"]
+    with sqlite3.connect(accounts.db_path()) as db:
+        db.execute("insert into pins (account, project, session, pinned) values (?, ?, ?, 1.0)", (account, project, "old_pin"))
+        db.execute("delete from migrations")
+    accounts.forget()
+    assert (project, "old_pin", 1.0) in accounts.sets_of(account)

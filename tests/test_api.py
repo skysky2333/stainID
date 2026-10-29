@@ -235,7 +235,8 @@ def test_field_review_prefills_ai_and_confirms_on_finish(prepared):
     assert export[0].startswith("id,source,stain,task") and len(export) == 1 + 4 + 11 + 1 + 12 + 1
 
     client.post("/api/labels/sessions/plaques_together/open", json={"open": False})
-    assert ann.get(f"/api/annotate/plaques_together/fields/{TILE}").status_code == 403
+    assert ann.get(f"/api/annotate/plaques_together/fields/{TILE}").status_code == 200  # closed: it opens to look at
+    assert ann.post("/api/annotate/plaques_together/labels", json={"records": []}).status_code == 409  # and saves nothing
     assert ".deleted" in client.delete("/api/labels/sessions/plaques_together").json()["moved_to"]
 
 

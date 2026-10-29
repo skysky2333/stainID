@@ -291,7 +291,9 @@ def test_a_closed_session_is_closed_for_everyone(rounds_project):  # noqa: F811
     assert field["read_only"] is True and field["closed"] is True
     refused = _save(admin, name, TILE, [], submit=True)
     assert refused.status_code == 409 and "closed" in refused.text
-    assert ann.get(f"/api/annotate/{name}").status_code == 403  # people who joined: not open at the moment
+    assert ann.get(f"/api/annotate/{name}").status_code == 200  # people who joined: it opens to look at, read-only too
+    assert ann.get(f"/api/annotate/{name}/fields/{TILE}").json()["read_only"] is True
+    assert _save(ann, name, TILE, [], submit=True).status_code == 409
     assert admin.post(f"/api/labels/sessions/{name}/open", json={"open": True}).status_code == 200
     field = admin.get(f"/api/annotate/{name}/fields/{TILE}").json()
     assert field["read_only"] is False and field["closed"] is False

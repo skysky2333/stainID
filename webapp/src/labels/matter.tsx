@@ -5,7 +5,9 @@
 
    The session page is the picker: the cores by TMA, each with where it stands (to do, in progress, done, finished by
    you), and "Next core". A core page holds the core for this person while it is open (anyone else is told who is on
-   it); a core they finished opens to look at, with "Redo this core". The brush (mattermask.ts) paints white matter, E
+   it); a core they finished opens to look at, with "Redo this core". "All grey matter → next core" saves every stain of
+   the core with no white matter at once (most cores have none) and opens the next core; "Next core" goes on in the
+   picker's order (TMA, then core). The brush (mattermask.ts) paints white matter, E
    or Shift-drag erases, Tab / Shift+Tab a smaller / bigger brush, Z undoes a stroke, Space hides the drawing, [ / ] the
    other stain, Enter saves the stain (on a carried stain with nothing changed: accepts it as carried). The page is
    blinded: the core and its stains, never a group or a diagnosis. People's areas train and evaluate a grey / white
@@ -210,10 +212,24 @@ export function MatterCorePage({ detail, core, onEvent, coach, onFinished }: {
     if (done.finished) { setFinished(true); return }
     if (left >= 0) setAt(left)
   }
-  const nextCore = async () => {
-    const found = await withError(() => api.get<{ core_id: string | null }>(`/api/annotate/${name}/matter/next?skip=${enc(core)}`), setError)
+  /** The next core in the picker's order after this one (`skip`: this one is put aside, "Take another core"). */
+  const nextCore = async (skip = false) => {
+    const found = await withError(() => api.get<{ core_id: string | null }>(`/api/annotate/${name}/matter/next?${skip ? 'skip' : 'after'}=${enc(core)}`), setError)
     if (found?.core_id) navigate(`/annotate/${name}/${enc(found.core_id)}`)
     else if (found) navigate(`/annotate/${name}`)
+  }
+  /** "All grey matter → next core": every stain saved with no white matter at once, then the next core. */
+  const allGrey = async () => {
+    if (saving || readOnly || practice) return
+    if ((painted.length || images.some((i) => i.saved_by_me)) && !window.confirm('Save this core as all grey matter on every stain? What you painted or saved on it is replaced.')) return
+    setSaving(true)
+    const done = await withError(() => api.post<{ finished: boolean; progress: RoundProgress }>(`${base}/all-grey`, { reset: fresh }), setError)
+    setSaving(false)
+    if (!done) return
+    masks.current.clear()
+    setProgress(done.progress)
+    tell('finished')
+    await nextCore()
   }
   const undo = () => { if (image && masks.current.get(image.stain)?.undo()) { setTick((t) => t + 1); tell('undo') } }
   const enter = () => { if (!image || readOnly || locked(image.stain)) return; void save(carried && !dirty) }
@@ -260,7 +276,7 @@ export function MatterCorePage({ detail, core, onEvent, coach, onFinished }: {
       : area?.from === 'carried' ? <>Carried from <b>{area.carried_from}</b>: the images {REGISTRATION_TEXT[area.registration?.status ?? ''] ?? 'are lined up'}
         {area.registration?.how === 'computed' ? ' (lined up here, not in the registration table)' : ''}. Adjust it, or accept it as carried.</>
         : area?.from === 'saved' ? <>Saved{area.saved?.person && area.saved.person !== detail.annotator ? ` by ${area.saved.person}` : ' by you'}
-          {area.saved?.carried_from ? (area.saved.accepted ? `, accepted as carried from ${area.saved.carried_from}` : `, adjusted from ${area.saved.carried_from}`) : ''}.</>
+          {area.saved?.all_grey ? ': all grey matter (no white matter)' : area.saved?.carried_from ? (area.saved.accepted ? `, accepted as carried from ${area.saved.carried_from}` : `, adjusted from ${area.saved.carried_from}`) : ''}.</>
           : image.stain === source ? <>Paint the white matter: the paler tissue with few neurons. Nothing painted means no white matter on this core.</> : null
   return (
     <div className="annotate-page round-page fit-page areas-page matter-page">
@@ -327,9 +343,13 @@ export function MatterCorePage({ detail, core, onEvent, coach, onFinished }: {
               {(!carried || dirty) && <button className="btn primary" disabled={saving} onClick={() => void save(false)}
                 title="Save this stain's white matter as painted (Enter)">{saving ? 'Saving…' : lastOne ? 'Finish core' : savedHere && !dirty ? `Save ${image.stain} again` : `Save ${image.stain}`}</button>}
             </div>}
+            {!readOnly && !practice && <div className="row matter-all-grey">
+              <button className="btn" disabled={saving} onClick={() => void allGrey()}
+                title={`Save this core with no white matter on every stain (${images.map((i) => i.stain).join(', ')}) and open the next core`}>All grey matter → next core</button>
+            </div>}
             {painted.length > 0 && !readOnly && <p className="small muted" style={{ marginBottom: 0 }}>Painted, not saved yet: {painted.join(', ')}.</p>}
             {!readOnly && <p className="small muted" style={{ marginBottom: 0 }}>{images.filter((i) => i.saved_by_me).length} of {images.length} stains saved.{' '}
-              {!practice && <button className="link-btn small" onClick={() => leave(() => void nextCore())}>Take another core</button>}
+              {!practice && <button className="link-btn small" onClick={() => leave(() => void nextCore(true))}>Take another core</button>}
               {!practice && !fresh && <>{' · '}<button className="link-btn small" onClick={() => setResetting(true)} disabled={saving}
                 title="Back to detection’s output, as if you had never worked on this core (asks first)">Reset this core</button></>}</p>}
           </div>

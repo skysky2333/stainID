@@ -11,7 +11,9 @@ size, a thumbnail must be newer than it); the source images are only ever read.
 
 Decoding is the memory-hungry part, so it runs on one background thread, one image at a time (`DECODE` also guards
 the few decodes made while a request waits). Pages ask for a picture, get "waiting"/"preparing", and ask again; work
-that nobody has asked about for a while (the page was closed) is dropped from the queue.
+that nobody has asked about for a while (the page was closed) is dropped from the queue. The idle-time preparation
+(`ahead`) makes the pyramids of the Grey / white matter cores people open next on its own thread (`build_ahead`), and
+gives way while a picture someone looks at waits (`people_waiting`).
 """
 from __future__ import annotations
 
@@ -109,6 +111,13 @@ def _ask(key: str, priority: int, run: Callable[[], None], keep: bool = False) -
             return {"state": "preparing", "ahead": 0}
         ahead = sum(1 for t in _TASKS.values() if t is not task and (t.running or (t.priority, t.queued) < (task.priority, task.queued)))
         return {"state": "waiting" if ahead else "preparing", "ahead": ahead}
+
+
+def people_waiting() -> bool:
+    """Whether a picture someone is looking at waits in the queue (not yet started): the idle-time preparation
+    (`ahead`) gives way."""
+    with _COND:
+        return any(t.priority == 0 and not t.running for t in _TASKS.values())
 
 
 # ---------------------------------------------------------------- files
@@ -226,6 +235,36 @@ def picture(state: ProjectState, core_id: str, stain: str, prepare: bool = True)
     thumb_size = 1024 if thumbnail_state(state, core_id, stain, 1024) != "slow" else next(
         (n for n in (512, 256) if _fresh(_thumb_sized(state, core_id, stain, n), source)), None)
     return {"ready": False, **status, "thumb_size": thumb_size}
+
+
+def ready(state: ProjectState, core_id: str, stain: str) -> bool:
+    """Whether the core image's pyramid is made from its current image file."""
+    return _index(state, core_id, stain) is not None
+
+
+def build_ahead(state: ProjectState, core_id: str, stain: str) -> bool:
+    """Make a core image's pyramid now on the caller's thread (the idle-time preparation's, `ahead`), unless it is made
+    or queued already. Marked as running in the queue meanwhile, so a page asking for it waits for this one rather than
+    making it twice. True when it is made."""
+    if ready(state, core_id, stain):
+        return True
+    source = _source(state, core_id, stain)
+    if not source.exists():
+        raise FileNotFoundError(f"the image of {core_id} {stain} is missing: {state.project.relative(source)}")
+    pack, index_path = _pyramid_paths(state, core_id, stain)
+    key = str(pack)
+    with _COND:
+        if key in _TASKS:
+            return False
+        _TASKS[key] = _Task(key, 2, lambda: None, keep=True, running=True)
+    try:
+        build_pyramid(source, pack, index_path, _thumb_base(state, core_id, stain))
+        _FAILED.pop(key, None)
+    finally:
+        with _COND:
+            _TASKS.pop(key, None)
+            _COND.notify_all()
+    return True
 
 
 def tile(state: ProjectState, core_id: str, stain: str, level: int, col: int, row: int) -> bytes:

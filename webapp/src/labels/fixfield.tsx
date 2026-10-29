@@ -39,6 +39,7 @@ import type { RoundEvent } from './rounds'
 import { BRUSH_KEY, BRUSH_PX, BRUSH_SCALE, CLEARED, EXCLUDE_TYPES, INCLUDE, brushStep, useBrush } from './brush'
 import { SimpleFixer } from './simplefield'
 import { FieldStrip, useLevels, useStripShown } from './fieldstrip'
+import { fieldPath, nextFieldUrl, useFieldOrder } from './fieldOrder'
 import type { Slider } from './fieldStart'
 import { SLIDER_STEP, acceptedAt, lock, moveTo, slider, sliderText, startPick, unlock } from './fieldStart'
 import { LockIcon, ThresholdSlider } from './threshold'
@@ -315,6 +316,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   }, [readOnly])
   const tell = (event: RoundEvent) => onEvent?.(event)
   const navigate = useNavigate()
+  const order = useFieldOrder()  // "Next" follows the picker's order the field was opened from
   const meta = detail.meta as Meta
   const name = meta.name
   const { vocabulary, keys, subtypes: typesAsked } = meta
@@ -1121,8 +1123,8 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
     if (onFinished) { onFinished(); return true }
     reload()
     if (then) { then(); return true }  // finished from the leave dialog: on to where the person was going
-    const next = await api.get<{ tile_id: string | null }>(`/api/annotate/${name}/next`).catch(() => ({ tile_id: null }))
-    navigate(next.tile_id && next.tile_id !== tile ? `/annotate/${name}/${enc(next.tile_id)}` : `/annotate/${name}`)
+    const next = await api.get<{ tile_id: string | null }>(nextFieldUrl(name, tile, order)).catch(() => ({ tile_id: null }))
+    navigate(next.tile_id && next.tile_id !== tile ? fieldPath(name, next.tile_id, order) : `/annotate/${name}`)
     return true
   }
   /** Close field: back to the session's page; with unsaved changes the leave dialog asks first (Save progress, Finish,
@@ -1156,8 +1158,8 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
   }
   /** Skip for now: the server hands the next field (as Finish field does), this one put aside. */
   const skip = () => leave(() => void (async () => {
-    const next = await api.get<{ tile_id: string | null }>(`/api/annotate/${name}/next?skip=${enc(tile)}`).catch(() => ({ tile_id: null }))
-    if (next.tile_id && next.tile_id !== tile) navigate(`/annotate/${name}/${enc(next.tile_id)}`)
+    const next = await api.get<{ tile_id: string | null }>(nextFieldUrl(name, tile, order, true)).catch(() => ({ tile_id: null }))
+    if (next.tile_id && next.tile_id !== tile) navigate(fieldPath(name, next.tile_id, order))
     else setError('No other field is waiting for you right now.')
   })())
 
@@ -1244,8 +1246,8 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
       {!readOnly && !field.own && (openBy.length > 0 || doneBy.length > 0) && <div className="found found-warn small field-others" role="status">
         {doneBy.length > 0 ? `${checkedByText(doneBy)} already finished this field.` : `${openBy.join(', ')} ${openBy.length === 1 ? 'is' : 'are'} working on this field right now.`}
         {' '}You can still look and change things here, or <button className="link-btn small" onClick={() => leave(() => void (async () => {
-          const next = await api.get<{ tile_id: string | null }>(`/api/annotate/${name}/next?skip=${enc(tile)}`).catch(() => ({ tile_id: null }))
-          navigate(next.tile_id ? `/annotate/${name}/${enc(next.tile_id)}` : `/annotate/${name}`)
+          const next = await api.get<{ tile_id: string | null }>(nextFieldUrl(name, tile, order, true)).catch(() => ({ tile_id: null }))
+          navigate(next.tile_id ? fieldPath(name, next.tile_id, order) : `/annotate/${name}`)
         })())}>go to a field nobody is on</button>.</div>}
       <div className="annotate-workspace">
         <div className={`annotate-image${precise ? ' is-precise' : ''}`} onContextMenu={(e) => e.preventDefault()} onMouseLeave={() => { if (!precise && !menu) setHovered(null) }}>
@@ -1270,7 +1272,7 @@ function Fixer({ detail, reload, tile, field: arrived, onEvent, onFinished, coac
             onPress={readOnly ? undefined : press} onRelease={readOnly ? undefined : release} panLock={excluding || !!mode} onSize={setFieldSize}
             onView={levels.onView} control={levels.control}
             aside={stripOn && !(meta as { practice?: boolean }).practice ? <FieldStrip name={name} tile={tile} fields={detail.fields} levels={levels}
-              onOpen={(t) => leave(() => navigate(`/annotate/${name}/${enc(t)}`))} /> : null}
+              onOpen={(t) => leave(() => navigate(fieldPath(name, t, order)))} /> : null}
             paint={!hidden && fieldSize && (excluding || brush.dirty) ? (  // each type's area now: one merged region per type (brush.ts), from the first stroke
               <div ref={brush.host} className="exclude-painted" style={{ position: 'absolute', left: 0, top: 0,
                 width: `${(100 * Math.ceil(fieldSize.w / BRUSH_SCALE) * BRUSH_SCALE) / fieldSize.w}%`, height: `${(100 * Math.ceil(fieldSize.h / BRUSH_SCALE) * BRUSH_SCALE) / fieldSize.h}%` }} />

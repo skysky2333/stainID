@@ -30,13 +30,20 @@ from stainid.api import slide_units
 from stainid.api.routes.annotate import NewSession, free_name, root, session_meta, writable
 from stainid.api.session import annotator, require_admin
 from stainid.api.state import get_state
-from stainid.labels import areas, matter, sessions, store
+from stainid.labels import areas, matter, picker, sessions, store
 from stainid.labels import exclusions as marks
 from stainid.registration import cores as registration
 
 router = APIRouter(tags=["matter"])
 admin = [Depends(require_admin)]
 _HELD = sessions.Reservations(matter.HOLD_SECONDS)
+_OPENED: dict[tuple[str, str], dict[str, tuple[str, float]]] = {}  # (project, session) -> person -> (the core they opened last, when)
+
+
+def opened(state_id: str) -> dict[str, dict[str, tuple[str, float]]]:
+    """Per session of this project, the core each person opened last and when (wall clock): the idle-time
+    preparation (`ahead`) makes the cores after it ready."""
+    return {name: dict(people) for (sid, name), people in list(_OPENED.items()) if sid == state_id}
 
 
 def hold_key(meta: dict) -> tuple:
@@ -137,7 +144,7 @@ def core_rows(meta: dict, person: str | None, labels: pd.DataFrame | None = None
     now = {} if meta.get("practice") else held(meta)
     places = _places()
     out = []
-    for core in meta.get("cores") or []:
+    for core in picker_order(meta, places):
         stains = (meta.get("stains_of") or {}).get(core, [])
         by = done.get(core, set())
         started = any(found.get((core, s)) for s in stains)
@@ -176,9 +183,18 @@ def refuse_if_taken(meta: dict, core_id: str, person: str) -> None:
         raise HTTPException(409, working_text(others))
 
 
+def picker_order(meta: dict, places: dict[str, dict] | None = None) -> list[str]:
+    """The session's cores in the picker's order (`labels.picker.cores_natural`: TMA or donor, then core): what "Next
+    core" follows."""
+    places = _places() if places is None else places
+    cores = list(meta.get("cores") or [])
+    return picker.cores_natural([{"core_id": c, **places.get(c, {"tma": "", "core": c})} for c in cores])
+
+
 @router.get("/annotate/{name}/matter/next")
-def next_core(name: str, request: Request, skip: str = "", person: str = Depends(annotator)) -> dict:
-    """The next core for this person (None when none is left for them)."""
+def next_core(name: str, request: Request, skip: str = "", after: str = "", person: str = Depends(annotator)) -> dict:
+    """The next core for this person (None when none is left for them): in the picker's order, the first after the core
+    they are on (`after`, or the one they `skip`) that is not done and nobody else has open."""
     meta = matter_meta(name, request)
     if meta.get("practice"):
         return {"core_id": meta["cores"][0], "taken": 0, "progress": progress(meta)}
@@ -187,7 +203,7 @@ def next_core(name: str, request: Request, skip: str = "", person: str = Depends
     if skip:
         _HELD.release(hold_key(meta), person, [skip])
         now = held(meta)
-    core, taken = areas.next_core(meta, done, person, now, skip)
+    core, taken = areas.next_core({**meta, "cores": picker.rotated(picker_order(meta), after or skip)}, done, person, now, skip)
     return {"core_id": core, "taken": taken, "progress": progress(meta)}
 
 
@@ -212,7 +228,8 @@ def _latest(labels, core_id: str, stain: str, person: str | None = None):
     last = max((a for _, a in found), key=lambda a: (a.time, a.person))
     rings = tuple(tuple((x + r.x, y + r.y) for x, y, *_ in ring) for r, a in found for ring in a.rings)
     holes = tuple(h for _, a in found for h in a.holes)
-    return matter.Area(core_id, stain, last.person, last.time, last.session, rings, holes, last.carried_from, last.accepted, last.registration)
+    return matter.Area(core_id, stain, last.person, last.time, last.session, rings, holes, last.carried_from, last.accepted, last.registration,
+                       all(a.all_grey for _, a in found))
 
 
 @router.get("/annotate/{name}/matter/cores/{core_id}")
@@ -236,6 +253,8 @@ def open_core(name: str, core_id: str, request: Request, edit: bool = False, fre
         refuse_if_taken(meta, core_id, person)
         _HELD.hold(hold_key(meta), person, [core_id])
     state = get_state()
+    if not practice:
+        _OPENED.setdefault((state.id, meta["name"]), {})[person] = (core_id, time.time())
     images = []
     slide = slide_units.slide_unit(core_id)
     for stain in stains:
@@ -431,6 +450,39 @@ def save_stain(name: str, core_id: str, stain: str, body: MatterSave, request: R
     else:
         _HELD.hold(hold_key(meta), person, [core_id])
     return {"saved": saved, "finished": finished, "progress": progress(meta)}
+
+
+class AllGrey(BaseModel):
+    reset: bool = False  # after Reset this core: this person's earlier labels on the core (every stain) are deleted first
+
+
+@router.post("/annotate/{name}/matter/cores/{core_id}/all-grey")
+def save_all_grey(name: str, core_id: str, body: AllGrey, request: Request, person: str = Depends(annotator)) -> dict:
+    """"All grey matter → next core": every stain image of the core saved at once with no white matter (each its whole
+    area, empty, with `meta.all_grey`, and its `done` label), so the core is finished for this person and let go. It
+    replaces what this person saved on the core before. A whole slide: each of its regions, on its one stain."""
+    meta = matter_meta(name, request)
+    stains = _core(meta, core_id)
+    if meta.get("practice"):
+        return {"saved": [], "finished": True, "progress": progress(meta)}
+    writable(meta)
+    refuse_if_taken(meta, core_id, person)
+    from stainid.api.routes.rounds import deletions  # noqa: PLC0415
+
+    slide = slide_units.slide_unit(core_id)
+    units = [r.core_id for r in slide.regions] if slide is not None else [core_id]
+    labels = session_labels(meta)
+    gone = [g for unit in units for g in deletions(labels, person, unit, meta["name"])] if body.reset else []
+    source = matter.source_of(stains)
+    written = []
+    for unit in units:
+        stamp = {"source": person, "session": meta["name"], "tile_id": unit, "x": None, "y": None}
+        for stain in stains:
+            written += matter.records(unit, stain, [], [], stamp, None if stain == source or slide is not None else source, False, None, all_grey=True)
+    keep = {r["id"] for r in written}
+    saved = store.append(root(), [r for r in gone if r["id"] not in keep] + written)
+    _HELD.release(hold_key(meta), person, [core_id])
+    return {"saved": saved, "finished": True, "progress": progress(meta)}
 
 
 # ---------------------------------------------------------------- admin

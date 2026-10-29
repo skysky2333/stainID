@@ -1,12 +1,15 @@
 /* The fields of a session for the person labelling: by TMA, then core, each core drawn as its own tiles (each tile at
    its place in the core, the core's tiles outside the session faint), a tile's state by its outline colour, the full
-   facts on hover, a click opens the field. "By confidence" puts the cores detection is least sure of first. */
+   facts on hover, a click opens the field. "By confidence" puts the cores detection is least sure of first. A field
+   opened from either list goes on in it: its page's "Next" follows that order (fieldOrder.ts, labels/picker.py). */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import type { FieldState, SessionDetail } from '../api'
 import { apiUrl, enc } from '../api'
 import { useFetch, useStored } from '../hooks'
+import type { FieldOrder } from './fieldOrder'
+import { fieldPath, orderKey } from './fieldOrder'
 
 type Field = SessionDetail['fields'][number]
 /** A field's confidence (GET …/confidence): `mean` its objects' average closeness to the threshold (1 at it, 0 from 0.2
@@ -99,7 +102,6 @@ const FOLDED_FROM = 300
 
 type Numbered = { f: Field; i: number }
 type Core = { id: string; name: string; list: Numbered[] }
-type Order = 'natural' | 'confidence'
 const natural = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true })
 
 export function SessionFieldMap({ detail }: { detail: SessionDetail }) {
@@ -107,7 +109,7 @@ export function SessionFieldMap({ detail }: { detail: SessionDetail }) {
   const name = meta.name
   const slides = detail.unit === 'slide'
   const unit = UNIT[slides ? 'slide' : 'core']
-  const [order, setOrder] = useStored<Order>(`stainid.fieldOrder.${detail.annotator ?? ''}`, 'natural')
+  const [order, setOrder] = useStored<FieldOrder>(orderKey(detail.annotator), 'natural')
   const confidence = useFetch<Record<string, Sure>>(order === 'confidence' ? `/api/annotate/${name}/confidence` : null)
   const tmas = useMemo(() => {
     const byTma = new Map<string, Map<string, Core>>()
@@ -118,7 +120,10 @@ export function SessionFieldMap({ detail }: { detail: SessionDetail }) {
       const core = cores.get(coreId) ?? cores.set(coreId, { id: coreId, name: f.core || coreId, list: [] }).get(coreId)!
       core.list.push({ f, i })
     })
-    return [...byTma].sort(([a], [b]) => natural(a, b)).map(([tma, cores]) => ({ tma, cores: [...cores.values()].sort((a, b) => natural(a.name, b.name)) }))
+    const place = (n: Numbered) => (n.f.box ? [0, n.f.box[1], n.f.box[0]] : [1, 0, 0])  // top to bottom, left to right (labels/picker.py)
+    const byPlace = (a: Numbered, b: Numbered) => { const p = place(a), q = place(b); return p[0] - q[0] || p[1] - q[1] || p[2] - q[2] || a.i - b.i }
+    return [...byTma].sort(([a], [b]) => natural(a, b)).map(([tma, cores]) => ({ tma, cores: [...cores.values()].sort((a, b) => natural(a.name, b.name))
+      .map((c) => ({ ...c, list: [...c.list].sort(byPlace) })) }))
   }, [fields])
   const ranked = useMemo(() => {  // By confidence: every field, least confident first (the highest average closeness), no objects last
     if (!confidence.data) return null
@@ -176,15 +181,17 @@ export function SessionFieldMap({ detail }: { detail: SessionDetail }) {
  *  opens the field), the core's other tiles faint. Without a layout (no squares known), the tiles in a row. */
 /** One field's tile: its picture outlined in its state's colour, the AI dot, the facts on hover; a click opens it
  *  (not while someone else has it open). */
-function Tile({ name, n: { f, i }, needed, me, style, className = '', sure, slides = false }: {
+function Tile({ name, n: { f, i }, needed, me, style, className = '', sure, slides = false, order = 'natural' }: {
   name: string; n: Numbered; needed: number; me: string | null; style?: React.CSSProperties; className?: string; sure?: Sure; slides?: boolean
+  /** the list it is in: the field page's "Next" goes on in it */
+  order?: FieldOrder
 }) {
   const look = lookOf(f)
   const body = <><img src={apiUrl(`/api/annotate/${name}/fields/${enc(f.tile_id)}/thumb.jpg`)} alt="" loading="lazy" decoding="async"
     onError={(e) => { e.currentTarget.style.visibility = 'hidden' }} />{f.ai_reviewed && <span className="ai-dot" aria-hidden="true" />}{f.elsewhere?.length ? <span className={`elsewhere-dot${f.ai_reviewed ? ' second' : ''}`} aria-hidden="true" /> : null}</>
   const taken = takenBy(f, me).length > 0
   const common = { className: `core-tile look-${look}${className}${taken ? ' taken' : ''}`, style, title: hoverText(f, i, needed, me, sure, slides), 'aria-label': `Field ${i + 1}: ${LOOK_TEXT[look]}` }
-  return f.prepared && !taken ? <Link to={`/annotate/${name}/${enc(f.tile_id)}`} {...common}>{body}</Link> : <span {...common}>{body}</span>
+  return f.prepared && !taken ? <Link to={fieldPath(name, f.tile_id, order)} {...common}>{body}</Link> : <span {...common}>{body}</span>
 }
 
 /** Ranked tiles drawn so far, and how many more each time the end of the list comes into view. */
@@ -207,7 +214,7 @@ function RankedTiles({ name, list, needed, me, sure, slides = false }: { name: s
   }, [shown, list.length])
   return (
     <div className="ranked">
-      <div className="ranked-tiles">{list.slice(0, shown).map((n) => <Tile key={n.f.tile_id} name={name} n={n} needed={needed} me={me} className=" ranked-tile" sure={sure[n.f.tile_id]} slides={slides} />)}</div>
+      <div className="ranked-tiles">{list.slice(0, shown).map((n) => <Tile key={n.f.tile_id} name={name} n={n} needed={needed} me={me} className=" ranked-tile" sure={sure[n.f.tile_id]} slides={slides} order="confidence" />)}</div>
       {shown < list.length && <div ref={end} className="small muted ranked-more">{(list.length - shown).toLocaleString()} more fields below…</div>}
     </div>
   )

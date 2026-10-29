@@ -669,7 +669,9 @@ export interface AreasOverview {
 export interface MatterCoreRow { core_id: string; tma: string; core: string; stains: string[]; state: 'not_started' | 'in_progress' | 'done'
   done_by: string[]; open_by: string[]; done_by_me: boolean; saved_by_me: string[]; unit?: 'slide' }
 /** Who saved a stain image's white matter, and how (carried from the source stain, accepted as carried). */
-export interface MatterSaved { person: string; time: number; session: string; carried_from: string | null; accepted: boolean; registration: string | null }
+export interface MatterSaved { person: string; time: number; session: string; carried_from: string | null; accepted: boolean; registration: string | null
+  /** saved with "All grey matter → next core": no white matter on any stain of the core */
+  all_grey?: boolean }
 export interface MatterImage { stain: string; picture: PictureState | null; saved_by: string[]; saved_by_me: boolean; mine: MatterSaved | null
   /** picture px per brush-mask px (8 for a core; coarser for a whole slide) */
   mask_scale?: number }

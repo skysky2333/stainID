@@ -26,6 +26,7 @@ from stainid.api.state import get_state
 from stainid.api.util import fast_json
 from stainid.labels import added, frames, outline, overview, pool, readiness, rounds, sessions, simple, store
 from stainid.labels import objects as label_objects
+from stainid.labels import picker as field_order
 from stainid.labels import vocabulary as vocab
 from stainid.labels.overview import SPLIT
 from stainid.labels.tasks import CROP_UM, FIELD_TAGS, NEGATIVE, STAINS
@@ -95,9 +96,7 @@ def session_meta(name: str, request: Request) -> dict:
         return _rounds().practice_meta(name)
     if not re.fullmatch(r"[A-Za-z0-9_\-]+", name) or name not in sessions.names(root()):
         raise HTTPException(404, f"no labelling session {name}")
-    meta = sessions.meta(root(), name)
-    if not meta["open"] and not is_admin(request):
-        raise HTTPException(403, "this labelling session is not open at the moment")
+    meta = sessions.meta(root(), name)  # a closed one opens to look at, for everyone who may label it (`writable` refuses every save)
     from stainid.api.routes import accounts as access  # noqa: PLC0415 - who may label it: admins, and the people who joined it
 
     access.may_label(request, name)
@@ -942,6 +941,23 @@ def warm_confidence(meta: dict) -> None:
     threading.Thread(target=run, name=f"confidence-{meta['name']}", daemon=True).start()
 
 
+def picker_order(meta: dict, how: str = field_order.NATURAL) -> list[str]:
+    """The session's fields in the order its picker shows them (`labels.picker`): "natural" (TMA, core, place in the
+    core) or "confidence" (least confident first): what "Next" follows."""
+    fields = list(meta["fields"])
+    if how == field_order.CONFIDENCE and not meta.get("practice"):
+        try:
+            return field_order.by_confidence(fields, field_confidence(meta))
+        except Exception:  # noqa: BLE001 - no candidate store to score: the natural order stands, as on the picker
+            pass
+    facts = _field_facts(fields)
+    prefix = get_state().project.tma_prefix or ""
+    places = [{"tile_id": t, "tma": facts.get(t, {}).get("tma"), "tma_name": f"{prefix}{facts[t]['tma']}" if facts.get(t, {}).get("tma") else None,
+               "core_id": facts.get(t, {}).get("core_id"), "core": facts.get(t, {}).get("core_label") or facts.get(t, {}).get("core_id"),
+               "box": [facts[t][k] for k in BOX] if t in facts and all(facts[t].get(k) is not None for k in BOX) else None} for t in fields]
+    return field_order.natural(_on_slides(places))
+
+
 @router.get("/annotate/{name}/confidence")
 def session_confidence(name: str, request: Request, person: str | None = Depends(viewer)) -> dict:
     """How sure detection is on each field of a session (the fields page's "By confidence" order), `field_confidence`.
@@ -1131,14 +1147,15 @@ def list_open(request: Request, person: str | None = Depends(viewer)) -> list[di
     return open_sessions(request, person, joined)
 
 
-def open_sessions(request: Request, person: str | None, only: set[str] | None = None) -> list[dict]:
-    """The open sessions (an admin: every one) of the request's project, or of them the ones in `only`, with progress."""
+def open_sessions(request: Request, person: str | None, only: set[str] | None = None, closed: bool = False) -> list[dict]:
+    """The open sessions (an admin, or `closed`: the closed ones too) of the request's project, or of them the ones in
+    `only`, with progress."""
     out = []
     for name in sessions.names(root()):
         if only is not None and name not in only:
             continue
         meta = sessions.meta(root(), name)
-        if sessions.label_set_only(meta) or (not meta["open"] and not is_admin(request)):  # nobody labels in an AI review round
+        if sessions.label_set_only(meta) or (not meta["open"] and not is_admin(request) and not closed):  # nobody labels in an AI review round
             continue
         labels = session_labels(meta)
         reviewed = finished_fields(meta, labels)
@@ -1191,21 +1208,26 @@ def asks_subtypes(meta: dict) -> bool:
 
 
 @router.get("/annotate/{name}/next")
-def next_item(name: str, request: Request, person: str = Depends(annotator), count: int = 1, skip: str = "") -> dict:
+def next_item(name: str, request: Request, person: str = Depends(annotator), count: int = 1, skip: str = "", after: str = "",
+              order: str = "") -> dict:
     """A fields session: the next field for this person. A queue session: the next `count` objects (up to 20, the
     page shows the first and loads the others' pictures meanwhile), held for this person for a while so others get
     other objects; with how many the rule leaves them and how many of the queue's pictures are made. An annotation
-    round: the next field for this person; `skip` puts the field they are on aside (an old round-1 session: 410)."""
+    round: the next field for this person; `skip` puts the field they are on aside (an old round-1 session: 410).
+    A field session's next field follows the picker's `order` ("natural", the default, or "confidence": the list the
+    field was opened from, `picker_order`) from the field `after` (the one the person is on): the first after it that
+    is not done and nobody else has open."""
     meta = labelled_here(session_meta(name, request))
+    sequence = field_order.rotated(picker_order(meta, order), after or skip) if meta["kind"] != "queue" and meta.get("fields") else None
     if rounds.is_round(meta):
         if meta["kind"] == "queue":
             raise HTTPException(410, _rounds().NO_ROUND_ONE)
-        return _rounds().next_field(meta, person, skip)
+        return _rounds().next_field(meta, person, skip, sequence)
     labels = session_labels(meta)
     state = get_state()
     if meta["kind"] != "queue":
         prepared = ready_fields(meta)
-        ready = {**meta, "fields": [t for t in meta["fields"] if t in prepared]}
+        ready = {**meta, "fields": [t for t in (sequence or meta["fields"]) if t in prepared]}
         return {"tile_id": sessions.next_field(ready, finished_fields(meta, labels), person, busy(name)),
                 "waiting": len(meta["fields"]) - len(ready["fields"])}
     objects = pool.all_objects(state.project, meta["stain"])

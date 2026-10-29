@@ -24,7 +24,12 @@ What is made, most likely to be opened first:
 3. the caches the admin pages read (the step overview with the v2 counts, the labelling tiles' tissue shares, the labels
    overview);
 4. every other unfinished field of the open sessions, in session order: pictures, core thumbnails and AT8 thread
-   ladders (Segment Anything features only near: ~18 MB a field).
+   ladders (Segment Anything features only near: ~18 MB a field); and every other Grey / white matter core still to do.
+
+The open "Grey / white matter" sessions are prepared the same way, core by core (`_matter`): tier 2 the `MATTER_NEAR`
+cores after the one each person opened last, in the picker's order (and the picker's first ones), tier 4 the rest; a
+core is its stain images' deep-zoom pyramids (one decode each, the slow part of opening a core: 10-13 s an image), the
+carry from NeuN to the other stains and detection's neurons for the guide.
 
 Space: tiers 1-3 are what people open next and are made whatever the cache holds (the cache's own cleanup keeps it under
 its limit, least recently used first). Tier 4 stops while the project's caches take more than `SHARE` of their limit
@@ -66,6 +71,8 @@ PICTURE_BYTES = int(0.9 * MB)  # a field picture (2,304 px with its margin, JPEG
 SAM_BYTES = 18 * MB  # a field's Segment Anything features (nine windows of ~2 MB)
 LADDER_BYTES = 1 * MB  # a field's thread ladder (the wide one: 0.3-1.4 MB)
 THUMB_BYTES = int(1.5 * MB)  # a core's thumbnails (the base, 512 px, 2,048 px)
+MATTER_NEAR = 3  # Grey / white matter cores made ready after the one each person opened last (and from the picker's start)
+CORE_PICTURE_BYTES = 40 * MB  # one core image's deep-zoom pyramid (a ~16,000 px core: 30-45 MB)
 
 _LOCK = threading.Lock()
 _THREAD: threading.Thread | None = None
@@ -131,9 +138,9 @@ def someone_waits_for_a_page() -> bool:
 # ---------------------------------------------------------------- is the computer free?
 
 def _app_busy() -> str:
-    from stainid.api import render, sam_embeddings, work  # noqa: PLC0415
+    from stainid.api import pyramid, render, sam_embeddings, work  # noqa: PLC0415
 
-    if render.people_waiting() or someone_waits_for_a_page():
+    if render.people_waiting() or someone_waits_for_a_page() or pyramid.people_waiting():
         return "someone is waiting for a page"
     if not work.idle():
         return "the app is preparing something for someone"
@@ -250,7 +257,8 @@ def busy_now() -> str:
 @dataclass
 class Unit:
     tier: int  # 1 cores open, 2 next fields, 3 admin caches, 4 everything else
-    kind: str  # "pictures", "thumbs", "sam", "ladder", "caches", "slide" (a whole slide's picture: `image_path` is its id)
+    kind: str  # "pictures", "thumbs", "sam", "ladder", "caches", "slide" (a whole slide's picture: `image_path` is its id),
+    # "core_pictures" (a Grey / white matter core: `image_path` its id, `tiles` its stains)
     state: object
     label: str
     tiles: tuple[str, ...] = ()
@@ -355,6 +363,10 @@ def plan(state, now: float | None = None) -> tuple[list[Unit], dict]:
         for tile_id in session.near:
             core(tile_id, 2)
             field(tile_id, 2)
+    matter_sessions = _matter(state, now)
+    for _, _, near in matter_sessions:  # 2: the Grey / white matter cores people open next
+        for core_id, stains in near:
+            units.append(Unit(2, "core_pictures", state, f"{core_id}: Grey / white matter pictures", tuple(stains), core_id))
     units.append(Unit(3, "caches", state, "the step overview, the labelling tiles and the labels overview"))
     for slide_id in _slides(state):  # a whole-slide project: each slide's picture, put together from its regions
         units.append(Unit(3, "slide", state, f"{slide_id}: whole-slide picture", image_path=slide_id))
@@ -364,14 +376,53 @@ def plan(state, now: float | None = None) -> tuple[list[Unit], dict]:
         for tile_id in session.fields:
             if tile_id in ladders:
                 field(tile_id, 4, sam=False)
+    for _, todo, near in matter_sessions:  # 4: every other core still to do
+        first = {c for c, _ in near}
+        for core_id, stains in todo:
+            if core_id not in first:
+                units.append(Unit(4, "core_pictures", state, f"{core_id}: Grey / white matter pictures", tuple(stains), core_id))
     near = {t for s in sessions for t in s.near}
     from stainid.api import render  # noqa: PLC0415
 
     pictures = render.fields_made(state)
-    estimate = (len(info) * PICTURE_BYTES + len(ladders) * LADDER_BYTES + len(by_image) * THUMB_BYTES + len(near) * SAM_BYTES)
-    counts = {"sessions": len(sessions), "fields": len(info), "fields_ready": sum(t in pictures for t in info), "cores": len(by_image),
-              "ladder_fields": len(ladders), "near_fields": len(near), "estimate_bytes": int(estimate)}
+    matter_images = len({(c, s) for _, todo, _ in matter_sessions for c, stains in todo for s in stains})
+    estimate = (len(info) * PICTURE_BYTES + len(ladders) * LADDER_BYTES + len(by_image) * THUMB_BYTES + len(near) * SAM_BYTES
+                + matter_images * CORE_PICTURE_BYTES)
+    counts = {"sessions": len(sessions) + len(matter_sessions), "fields": len(info), "fields_ready": sum(t in pictures for t in info), "cores": len(by_image),
+              "ladder_fields": len(ladders), "near_fields": len(near), "matter_images": matter_images, "estimate_bytes": int(estimate)}
     return units, counts
+
+
+def _matter(state, now: float) -> list[tuple[dict, list[tuple[str, list[str]]], list[tuple[str, list[str]]]]]:
+    """Per open Grey / white matter session: its cores still to do in the picker's order (each with its stains), and
+    the ones to make ready first: the `MATTER_NEAR` after the core each person opened last (`RECENT_SECONDS`), and the
+    first ones of the picker (where "Start" begins). A whole slide's picture is made as a slide (tier 3)."""
+    from stainid.api import slide_units  # noqa: PLC0415
+    from stainid.api.routes import matter as routes  # noqa: PLC0415
+    from stainid.labels import areas, matter, picker, sessions  # noqa: PLC0415
+
+    out = []
+    reviews = state.project.output("reviews")
+    opened = routes.opened(state.id)
+    for name in sessions.names(reviews):
+        try:
+            meta = sessions.meta(reviews, name)
+        except Exception:  # noqa: BLE001 - a half-written session
+            continue
+        if meta.get("practice") or not matter.is_matter(meta) or not meta.get("open"):
+            continue
+        done = areas.finished(meta, routes.session_checked(meta))
+        order = [c for c in routes.picker_order(meta) if slide_units.slide_unit(c) is None]
+        stains = meta.get("stains_of") or {}
+        left = {c for c in order if len(done.get(c, set())) < areas.needed(meta, c)}
+        starts = [core for core, when in sorted(opened.get(name, {}).values(), key=lambda v: -v[1]) if now - when < RECENT_SECONDS]
+        near: list[str] = []
+        for start in [*starts, None]:
+            for core_id in [c for c in picker.rotated(order, start) if c in left][:MATTER_NEAR]:
+                if core_id not in near:
+                    near.append(core_id)
+        out.append((meta, [(c, list(stains.get(c, []))) for c in order if c in left], [(c, list(stains.get(c, []))) for c in near]))
+    return out
 
 
 def _slides(state) -> list[str]:
@@ -415,6 +466,8 @@ def done(unit: Unit) -> bool:
         from stainid.api import slide_pyramid  # noqa: PLC0415
 
         return slide_pyramid.made(state, unit.image_path)
+    if unit.kind == "core_pictures":
+        return all(pyramid.ready(state, unit.image_path, stain) for stain in unit.tiles)
     return True
 
 
@@ -452,6 +505,32 @@ def make(unit: Unit, stop) -> None:
             if stop():
                 return
             slide_pyramid.thumbnail(state, unit.image_path, size)
+    elif unit.kind == "core_pictures":
+        _core_pictures(state, unit.image_path, list(unit.tiles), stop)
+
+
+def _core_pictures(state, core_id: str, stains: list[str], stop) -> None:
+    """A Grey / white matter core ready to open: each stain image's pyramid (one decode each, looked at between them),
+    the carry of the white matter from the first stain to the others (`registration.cores`, kept in the cache when
+    computed) and detection's neurons for the guide (kept in memory, `routes.areas.object_rows`)."""
+    from stainid.api import pyramid  # noqa: PLC0415
+    from stainid.api.routes import areas as area_routes  # noqa: PLC0415
+    from stainid.labels import matter  # noqa: PLC0415
+    from stainid.registration import cores as registration  # noqa: PLC0415
+
+    for stain in stains:
+        if stop():
+            return
+        pyramid.build_ahead(state, core_id, stain)
+    source = matter.source_of(stains)
+    for stain in stains:
+        if stain != source and not stop():
+            try:
+                registration.carry(state, core_id, source, stain)
+            except (KeyError, FileNotFoundError, ValueError):
+                pass
+    if source and not stop():
+        area_routes.object_rows(state.project, core_id, source)
 
 
 def _warm_caches(state, stop) -> None:
@@ -582,10 +661,11 @@ def _plans() -> list[tuple[object, list[Unit], dict]]:
 
 
 def _signature() -> tuple:
-    from stainid.api.routes import annotate  # noqa: PLC0415
+    from stainid.api.routes import annotate, matter  # noqa: PLC0415
 
+    cores = tuple(sorted((sid, name, person, core) for (sid, name), people in list(matter._OPENED.items()) for person, (core, _) in list(people.items())))
     with annotate._BUSY_LOCK:
-        return tuple(sorted((sid, name, tile) for ((sid, name), tile) in annotate._BUSY))
+        return tuple(sorted((sid, name, tile) for ((sid, name), tile) in annotate._BUSY)) + cores
 
 
 def _units(plans) -> Iterator[Unit]:

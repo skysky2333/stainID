@@ -8,7 +8,8 @@ carried with one click.
   id. Unlike a bad-area edit, which adds to or takes from an area, a white-matter label is the whole area of its stain
   image as the person left it (no rings: no white matter): one label per person, session and stain image (id
   `matter:<core>:<stain>`, the latest save winning, the log keeping the history), with `meta` {carried_from: the stain
-  it was carried from or None, accepted: saved as carried, registration: the carry's status}.
+  it was carried from or None, accepted: saved as carried, registration: the carry's status, all_grey: true when saved
+  with "All grey matter → next core" (every stain image of the core at once, no white matter)}.
 - The one say per stain image (`final`) is the latest saved label of anyone; the Cores view shows it.
 - Every stain image saved also gets a `done` label (value `DONE`, id `done:matter:<core>:<stain>`); a core is finished
   for a person when all its stain images are (`labels.areas.finished`, `next_core` and `progress` work on these sessions
@@ -84,6 +85,7 @@ class Area:
     carried_from: str | None = None
     accepted: bool = False
     registration: str | None = None
+    all_grey: bool = False  # saved with "All grey matter → next core": no white matter on any stain of the core
 
     def mask(self, shape: tuple[int, int], scale: int = SCALE) -> np.ndarray:
         """The area on a grid of `scale` core px per cell."""
@@ -93,7 +95,7 @@ class Area:
 
     def to_api(self) -> dict:
         return {"person": self.person, "time": self.time, "session": self.session, "carried_from": self.carried_from,
-                "accepted": self.accepted, "registration": self.registration}
+                "accepted": self.accepted, "registration": self.registration, "all_grey": self.all_grey}
 
 
 def _parts(points, value) -> tuple[list, list[bool]]:
@@ -113,7 +115,7 @@ def areas_of(labels: pd.DataFrame, core_id: str, stain: str) -> list[Area]:
         rings, holes = _parts(r.points, r.value)
         meta = r.meta if isinstance(getattr(r, "meta", None), dict) else {}
         out.append(Area(str(core_id), stain, str(r.source), float(r.time or 0.0), str(r.session or ""), tuple(tuple(tuple(p) for p in g) for g in rings),
-                        tuple(holes), meta.get("carried_from"), bool(meta.get("accepted")), meta.get("registration")))
+                        tuple(holes), meta.get("carried_from"), bool(meta.get("accepted")), meta.get("registration"), bool(meta.get("all_grey"))))
     return sorted(out, key=lambda a: (a.time, a.person))
 
 
@@ -128,11 +130,15 @@ def final(labels: pd.DataFrame, core_id: str, stain: str) -> Area | None:
     return latest(labels, core_id, stain)
 
 
-def records(core_id: str, stain: str, rings, holes, stamp: dict, carried_from: str | None, accepted: bool, registration: str | None) -> list[dict]:
-    """The labels of one save: the stain image's whole white-matter area and its `done` label."""
+def records(core_id: str, stain: str, rings, holes, stamp: dict, carried_from: str | None, accepted: bool, registration: str | None,
+            all_grey: bool = False) -> list[dict]:
+    """The labels of one save: the stain image's whole white-matter area and its `done` label (`all_grey`: saved with
+    "All grey matter → next core", no rings)."""
     from stainid.labels import exclusions as marks  # noqa: PLC0415
 
     meta = {"carried_from": carried_from, "accepted": accepted, "registration": registration}
+    if all_grey:
+        meta["all_grey"] = True
     return [{**stamp, "id": label_id(core_id, stain), "stain": stain, "task": TASK, "points": [list(map(list, r)) for r in rings],
              "value": marks.value_text(list(holes), [AREA] * len(rings)), "meta": meta},
             {**stamp, "id": done_id(core_id, stain), "stain": stain, "task": "done", "value": DONE}]

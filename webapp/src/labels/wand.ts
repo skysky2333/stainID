@@ -1,6 +1,8 @@
 /* The neurite brush of "Fix the field (simple)" (simplefield.tsx): over the thread segments of an AT8 field (stage 2's
-   lines at one step of the thread ladder, field px, flat [x0, y0, x1, y1, …]), a brush stroke takes every segment it
-   touches. Plain functions: tests/js/wand.test.ts runs them. */
+   lines at one step of the thread ladder, field px, flat [x0, y0, x1, y1, …]), a brush stroke touches every segment it
+   reaches. Every segment at the slider's level starts chosen; the strokes (`Edit`) take out or put back the segments
+   they touch, in the order painted, at whatever level the slider is at (`chosenAt`): a place taken out stays out when
+   the slider moves. Plain functions: tests/js/wand.test.ts runs them. */
 
 export interface Segment { points: number[][]; box: [number, number, number, number] }
 
@@ -79,4 +81,47 @@ export function nearSegment(s: Segment, x: number, y: number, most: number): boo
   if (s.points.length === 1) return Math.hypot(s.points[0][0] - x, s.points[0][1] - y) <= most
   for (let k = 1; k < s.points.length; k++) if (toLine(x, y, s.points[k - 1], s.points[k]) <= most) return true
   return false
+}
+
+/** One stroke of the neurite brush (field px): `erase` takes out what it touches, else it puts it back. */
+export interface Edit { erase: boolean; points: number[][]; radius: number }
+
+/** The segments chosen at one level: all of them, then each stroke in turn takes out (or puts back) those it touches;
+ *  the last stroke over a segment decides. */
+export function chosenAt(segments: Segment[], edits: Edit[]): number[] {
+  const on = segments.map(() => true)
+  for (const e of edits) for (const i of underStroke(segments, e.points, e.radius)) on[i] = !e.erase
+  return on.flatMap((x, i) => (x ? [i] : []))
+}
+
+/** The points of a segment more than `end` px (along it) from both its ends, one every px: the inside it does not share
+ *  with the segments it meets; its middle when it is shorter. */
+function inner(points: number[][], end: number): number[][] {
+  const dense = densify(points, 2)
+  if (dense.length < 2) return dense
+  const along = [0]
+  for (let k = 1; k < dense.length; k++) along.push(along[k - 1] + Math.hypot(dense[k][0] - dense[k - 1][0], dense[k][1] - dense[k - 1][1]))
+  const total = along[along.length - 1]
+  const kept = dense.filter((_, k) => along[k] > end && along[k] < total - end)
+  if (kept.length) return kept
+  const middle = along.findIndex((a) => a >= total / 2)
+  return [dense[Math.max(0, middle)]]
+}
+
+/** A selection saved as pieces of one level (before the strokes were kept) as strokes: a thin one along the inside of
+ *  each segment of that level that is not chosen, so the same places stay out at any level. */
+export function outStrokes(segments: Segment[], chosen: Set<number>, radius = 0.75, end = 2): Edit[] {
+  return segments.flatMap((s, i) => (chosen.has(i) ? [] : [{ erase: true, points: inner(s.points, end), radius }]))
+}
+
+/** A stroke's points with those closer than `step` px to the last kept dropped (what is saved). */
+export function thinned(points: number[][], step: number): number[][] {
+  const out: number[][] = []
+  for (const p of points) {
+    const q = out[out.length - 1]
+    if (!q || Math.hypot(p[0] - q[0], p[1] - q[1]) >= step) out.push([Math.round(p[0] * 10) / 10, Math.round(p[1] * 10) / 10])
+  }
+  const last = points[points.length - 1]
+  if (last && out.length > 1 && (out[out.length - 1][0] !== last[0] || out[out.length - 1][1] !== last[1])) out.push([Math.round(last[0] * 10) / 10, Math.round(last[1] * 10) / 10])
+  return out
 }

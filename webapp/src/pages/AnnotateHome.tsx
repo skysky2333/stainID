@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { MySet } from '../api'
-import { api } from '../api'
+import { api, projectId } from '../api'
 import { Empty, ErrorNote, Loaded, PageHead, Progress, withError } from '../components'
 import { useFetch } from '../hooks'
 import { kindText } from '../labelling'
@@ -12,7 +12,9 @@ import { ChoosePassword, useSession } from '../session'
 import { TutorialCards } from '../labels/tutorial'
 
 /** Everyone's home after signing in (annotators; admins see it first on their Home, the study's status after it): the
- *  person's labelling sets, of every project on this server, "Add a set" with a key, and both tutorials. */
+ *  person's labelling sets — of the project the page is in (an admin's Home), else of every project on this server —,
+ *  "Add a set" with a key, and the tutorials. A set is in someone's sets once they entered its key or an admin put it on
+ *  their home page ("Add to my home page"): one collection per person. Closed sets are listed folded under "Closed". */
 export default function AnnotateHome() {
   return (
     <div className="annotate-home">
@@ -24,7 +26,7 @@ export default function AnnotateHome() {
 
 /** The labelling part of a home: my sets, "Add a set", the tutorials. */
 export function LabellingHome({ admin = false }: { admin?: boolean }) {
-  const list = useFetch<MySet[]>('/api/session/sets', 15000)
+  const list = useFetch<MySet[]>(`/api/session/sets${projectId ? `?here=${encodeURIComponent(projectId)}` : ''}`, 15000)
   return (
     <>
       <AddSet onAdded={list.reload} first={!admin && !list.data?.length} />
@@ -49,21 +51,22 @@ function MySets({ list, admin }: { list: ReturnType<typeof useFetch<MySet[]>>; a
             const older = mine.filter((s) => !s.round)
             return (
               <section key={p}>
-                {projects.length > 1 && <h2 className="annotate-older">{mine[0].project_name}</h2>}
+                {projects.length > 1 && <h2 className="annotate-older">{all[0].project_name}</h2>}
                 {rounds.length > 0 && <div className="grid grid-2">{rounds.map((s) => <SessionCard key={s.name} s={s} />)}</div>}
                 {older.length > 0 && <>
                   {rounds.length > 0 && <h2 className="annotate-older">Other kinds of session</h2>}
                   <div className="grid grid-2">{older.map((s) => <SessionCard key={s.name} s={s} />)}</div>
                 </>}
-                {closed.length > 0 && <>
-                  <h2 className="annotate-older">Closed</h2>
+                {closed.length > 0 && <details className="closed-sets">
+                  <summary><h2 className="annotate-older">Closed <span className="muted small">· {closed.length} set{closed.length === 1 ? '' : 's'}, read-only</span></h2></summary>
                   <div className="grid grid-2">{closed.map((s) => <SessionCard key={s.name} s={s} />)}</div>
-                </>}
+                </details>}
               </section>
             )
           })
         })() : admin ? (
-          <p className="small muted">No session on your home page yet: add one with “Add to my home page” on the <Link to="/labels">Labels</Link> page or on the session’s page.</p>
+          <p className="small muted">No session on your home page yet: add one with “Add to my home page” on the <Link to="/labels">Labels</Link> page or on the session’s page,
+            or with its key above.</p>
         ) : (
           <Empty>
             <p style={{ marginTop: 0 }}>No labelling set yet. Enter the key you were given above: the set then appears here.</p>

@@ -35,3 +35,19 @@ assert.ok(performance.now() - t0 < 300, 'the brush is fast')
 assert.equal(taken.length, 50)  // one row of 50
 assert.ok(taken.every((i) => Math.floor(i / 50) === 3))
 console.log('brush fast ok')
+
+// every piece starts chosen; strokes take out (erase) or put back, the last stroke over a piece decides, at any level
+{
+  const { chosenAt, outStrokes, thinned } = await import('../../webapp/src/labels/wand.ts')
+  const level = segmentsOf([[0, 0, 10, 0], [10, 0, 20, 0], [20, 0, 30, 0]])
+  assert.deepEqual(chosenAt(level, []), [0, 1, 2])
+  const out = { erase: true, points: [[15, 2]], radius: 3 }
+  assert.deepEqual(chosenAt(level, [out]), [0, 2])
+  assert.deepEqual(chosenAt(level, [out, { erase: false, points: [[15, 2]], radius: 3 }]), [0, 1, 2])  // put back
+  const finer = segmentsOf([[0, 0, 5, 0], [5, 0, 12, 0], [12, 0, 18, 0], [18, 0, 30, 0]])  // another level: the same place stays out
+  assert.deepEqual(chosenAt(finer, [out]), [0, 1, 3])
+  // a selection saved as pieces: strokes along the inside of the pieces left out, not touching their neighbours
+  assert.deepEqual(chosenAt(level, outStrokes(level, new Set([0, 2]))), [0, 2])
+  assert.ok(thinned([[0, 0], [0.2, 0], [0.4, 0], [3, 0], [3.1, 0]], 1).length === 3)
+  console.log('neurite pass ok')
+}

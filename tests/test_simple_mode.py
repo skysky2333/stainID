@@ -182,6 +182,45 @@ def test_the_neurite_brush_keeps_pieces_of_any_thread_level_and_the_slider_s_fac
     assert tt.record(ladder, 4.0)["value"] == "4.0000" and tt.record({"factors": list(tt.FACTORS)}, 4.0)["value"] == "2.0000"
 
 
+def test_the_neurite_pass_starts_from_every_thread_and_keeps_its_strokes(rounds_project, monkeypatch):
+    """Every thread at the slider's level starts chosen; the brush's strokes take pieces out and are kept (`edits`);
+    taking every piece out still stands as a label; a field finished with the pass untouched counts as every thread at
+    detection's level, confirmed."""
+    from types import SimpleNamespace
+
+    import pandas as pd
+
+    from stainid.api.routes import rounds as routes
+    from stainid.labels import thread_threshold as tt
+
+    wide = tt.WIDE_FACTORS
+    steps = [{"factor": f, "length_um": 1.0, "lines": [[k, 0, k + 5, 0], [k, 9, k + 5, 9]]} for k, f in enumerate(wide)]
+    ladder = {"status": "done", "factors": list(wide), "detection": tt.WIDE_DETECTION, "steps": steps, "dab_threshold": 0.2, "ladder": tt.WIDE}
+    monkeypatch.setattr(routes, "field_tile", lambda meta, tile_id: {"tile_id": tile_id, "core_id": "C"})
+    monkeypatch.setattr(routes.thread_threshold, "field_ladder", lambda project, tile, wide=False: ladder)
+    meta = {"stain": "AT8", "name": "s"}
+
+    def mark(**given):
+        return SimpleNamespace(task=simple.AREA_TASK, value="neurite", deleted=False, tile_id="T", x=None, y=None, candidate=None, points=None, meta=given)
+
+    stroke = {"erase": True, "radius": 4.0, "points": [[1.04, 9], [3, 9]]}
+    record = routes.clean_simple(meta, mark(pieces=[[20, 0]], factor=float(wide[20]), ladder="wide", edits=[stroke]), "Ann")
+    assert not record["deleted"] and record["points"] == [steps[20]["lines"][0]]
+    assert record["meta"]["edits"] == [{"erase": True, "radius": 4.0, "points": [[1.0, 9.0], [3.0, 9.0]]}] and record["meta"]["factor"] == wide[20]
+    nothing = routes.clean_simple(meta, mark(pieces=[], factor=1.0, ladder="wide", edits=[stroke]), "Ann")  # every piece taken out
+    assert not nothing["deleted"] and nothing["points"] is None and nothing["meta"]["pieces"] == [] and nothing["meta"]["factors"] == [1.0]
+    with pytest.raises(Exception):
+        routes.clean_simple(meta, mark(pieces=[], edits=[{"erase": True, "radius": 4, "points": []}]), "Ann")
+
+    tile = {"tile_id": "T", "core_id": "C"}
+    untouched = routes.neurite_default(meta, tile, "Ann", pd.DataFrame(columns=["task", "value"]))
+    assert untouched["confirmed"] and untouched["meta"]["untouched"] and untouched["meta"]["factor"] == 1.0
+    assert untouched["meta"]["pieces"] == [[tt.WIDE_DETECTION, 0], [tt.WIDE_DETECTION, 1]] and untouched["points"] == steps[tt.WIDE_DETECTION]["lines"]
+    chosen = pd.DataFrame([{"task": simple.AREA_TASK, "value": "neurite"}])
+    assert routes.neurite_default(meta, tile, "Ann", chosen) is None  # a choice saved: it stands
+    assert routes.neurite_default({**meta, "stain": "6E10"}, tile, "Ann", pd.DataFrame(columns=["task", "value"])) is None
+
+
 def test_the_wand_logic():
     node = shutil.which("node") or str(Path.home() / ".local/node/bin/node")
     if not Path(node).exists():

@@ -353,13 +353,15 @@ def ready_fields(meta: dict) -> set[str]:
     return set(store_ready(meta["stain"], tiles).tile_id)
 
 
-def hand_out(meta: dict, person: str, skip: str, ready: set[str] | None = None, prefer: set[str] | None = None) -> tuple[str | None, int]:
-    """The next tile for this person, held for them from now on (`skip`: the tile they put aside, released)."""
+def hand_out(meta: dict, person: str, skip: str, ready: set[str] | None = None, prefer: set[str] | None = None,
+             sequence: list[str] | None = None) -> tuple[str | None, int]:
+    """The next tile for this person, held for them from now on (`skip`: the tile they put aside, released;
+    `sequence`: the tiles in the order to hand them out, else the session's)."""
     if meta.get("practice"):
         return session_tiles(meta)[0] if session_tiles(meta) else None, 0
     if skip:
         _TILES_HELD.release(tile_hold(meta), person, [skip])
-    tile, taken = rounds.next_tile(session_tiles(meta), finished_tiles(meta), person, tiles_held(meta), rounds.needed(meta), ready,
+    tile, taken = rounds.next_tile(sequence or session_tiles(meta), finished_tiles(meta), person, tiles_held(meta), rounds.needed(meta), ready,
                                    {skip} if skip else None, prefer)
     if tile:
         _TILES_HELD.hold(tile_hold(meta), person, [tile])
@@ -367,10 +369,11 @@ def hand_out(meta: dict, person: str, skip: str, ready: set[str] | None = None, 
     return tile, taken
 
 
-def next_field(meta: dict, person: str, skip: str = "") -> dict:
-    """Round 2: the next field for this person (held for them), how many are still being prepared and how many others are on."""
+def next_field(meta: dict, person: str, skip: str = "", sequence: list[str] | None = None) -> dict:
+    """Round 2: the next field for this person (held for them), how many are still being prepared and how many others
+    are on (`sequence`: the fields in the picker's order from the one the person is on, `routes.annotate.next_item`)."""
     ready = set(meta["fields"]) if meta.get("practice") else ready_fields(meta)
-    tile, taken = hand_out(meta, person, skip, ready)
+    tile, taken = hand_out(meta, person, skip, ready, sequence=sequence)
     return {"tile_id": tile, "waiting": len(set(meta["fields"]) - ready), "taken": taken}
 
 
@@ -907,13 +910,38 @@ def clean(meta: dict, mark, person: str) -> dict | None:
     return record | {"id": ids[mark.task]()}
 
 
+BRUSH_EDITS_MOST = 1000  # strokes of the neurite brush one save keeps
+BRUSH_POINTS_MOST = 5000  # points of one stroke
+
+
+def brush_edits(raw) -> list[dict]:
+    """The neurite brush's strokes as the page sent them ({erase, radius, points [[x, y], …]}, field px, in the order
+    painted), checked and rounded (ValueError when they are not)."""
+    if raw is None:
+        return []
+    if not isinstance(raw, list) or len(raw) > BRUSH_EDITS_MOST:
+        raise ValueError("too many strokes")
+    out = []
+    for edit in raw:
+        points = [[round(float(x), 1), round(float(y), 1)] for x, y in edit["points"]]
+        radius = float(edit["radius"])
+        if not points or len(points) > BRUSH_POINTS_MOST or not 0 < radius < 1e4:
+            raise ValueError("a stroke without points or with too many")
+        out.append({"erase": bool(edit.get("erase")), "radius": round(radius, 2), "points": points})
+    return out
+
+
 def clean_simple(meta: dict, mark, person: str) -> dict:
     """A label of a simple session (`labels.simple`): a candidate's simple class (or an added object's, at x, y), or
     the neurite brush's thread segments of a field (`meta.pieces`: [step, index] of each, a segment of the thread
     network at that step of the wide thread ladder, `labels.thread_threshold.WIDE_FACTORS`, which the server reads
     again: `points` are those lines; `meta.factor` the thread level the slider was at, as the threads step keeps it;
     pieces sent without `meta.ladder` "wide" are steps of the standard ladder, and an older page's `meta.segments`
-    pieces of detection's own step)."""
+    pieces of detection's own step).
+
+    The brush of this page starts from every thread at the slider's level and takes pieces out (`meta.edits`: its
+    strokes, kept so the page can redo them at another level; see `simplefield.tsx`): such a label stands also with no
+    piece left (every thread taken out), so it is never mistaken for an untouched pass (`neurite_default`)."""
     stain = meta["stain"]
     words = simple.of(get_state().project, stain)
     record = {"source": person, "stain": stain, "task": mark.task, "session": meta["name"], "deleted": bool(mark.deleted), "value": mark.value,
@@ -924,16 +952,21 @@ def clean_simple(meta: dict, mark, person: str) -> dict:
             raise HTTPException(400, f"{mark.value!r} is not a class chosen with the wand")
         tile = field_tile(meta, mark.tile_id)
         given = mark.meta or {}
+        whole = "edits" in given  # every thread at the slider's level, but the pieces the brush took out
         try:
             shift = 0 if given.get("ladder") == thread_threshold.WIDE else thread_threshold.WIDE_OFFSET
             pieces = sorted({(int(a) + shift, int(b)) for a, b in given.get("pieces") or []}
                             | {(thread_threshold.WIDE_DETECTION, int(i)) for i in given.get("segments") or []})
         except (TypeError, ValueError):
             raise HTTPException(400, "the chosen thread segments are not [step, index] pairs") from None
+        try:
+            edits = brush_edits(given.get("edits")) if whole else []
+        except (TypeError, ValueError, KeyError) as error:
+            raise HTTPException(400, f"the neurite brush's strokes are not readable: {error}") from None
         lines: list = []
         factor = _number(given.get("factor"))
         ladder: dict = {}
-        if pieces and not mark.deleted:
+        if (pieces or whole) and not mark.deleted:
             ladder = thread_threshold.field_ladder(get_state().project, tile, wide=True) if stain == "AT8" else {"status": "unavailable"}
             steps = ladder.get("steps") or []
             if ladder.get("status") != "done" or not steps:
@@ -943,14 +976,16 @@ def clean_simple(meta: dict, mark, person: str) -> dict:
                     raise HTTPException(400, "a chosen thread segment is not one of this field's")
                 lines.append(steps[step]["lines"][index])
         kept = None
-        if lines:
+        if lines or (whole and not mark.deleted):
             level = thread_threshold.record(ladder, factor if factor is not None else 1.0)["points"]
             factors = ladder.get("factors") or thread_threshold.WIDE_FACTORS
             kept = {"pieces": [list(p) for p in pieces], "ladder": thread_threshold.WIDE, "factor": level["factor"],
                     "thread_threshold": level["thread_threshold"], "detection_threshold": level["detection_threshold"],
-                    "factors": sorted({float(factors[p[0]]) for p in pieces})}
+                    "factors": sorted({float(factors[p[0]]) for p in pieces}) or [float(level["factor"])]}
+            if whole:
+                kept["edits"] = edits
         return record | {"id": f"{simple.AREA_TASK}:{mark.tile_id}:{chosen.id}", "value": chosen.id, "x": None, "y": None, "candidate": None,
-                         "points": lines or None, "deleted": bool(mark.deleted) or not lines, "meta": kept}
+                         "points": lines or None, "deleted": bool(mark.deleted) or kept is None, "meta": kept}
     if not mark.deleted and mark.value != simple.NONE and (chosen is None or chosen.kind != simple.OBJECTS):
         raise HTTPException(400, f"{mark.value!r} is not a simple class of {stain}")
     if mark.candidate:
@@ -974,10 +1009,39 @@ def _near_lines(x: float, y: float, lines: list, reach_px: float) -> bool:
     return False
 
 
+def neurite_default(meta: dict, tile: dict, person: str, mine: pd.DataFrame) -> dict | None:
+    """An AT8 simple field finished with its neurite pass untouched (no neurite label of this person on it): the label of
+    what the pass opens with, every thread piece at detection's thread level (the slider's start), confirmed; None when
+    there is no neurite class, the person has a neurite label on the field, or the field has no threads."""
+    if meta["stain"] != "AT8":
+        return None
+    wand = next((c for c in simple.of(get_state().project, meta["stain"]).visible if c.kind == simple.WAND), None)
+    if wand is None or (len(mine) and ((mine.task == simple.AREA_TASK) & (mine.value == wand.id)).any()):
+        return None
+    ladder = thread_threshold.field_ladder(get_state().project, tile, wide=True)
+    steps = ladder.get("steps") or []
+    if ladder.get("status") != "done" or not steps:
+        return None
+    step = int(ladder.get("detection", thread_threshold.WIDE_DETECTION))
+    lines = steps[step]["lines"]
+    if not lines:
+        return None
+    factors = ladder.get("factors") or thread_threshold.WIDE_FACTORS
+    level = thread_threshold.record(ladder, float(factors[step]))["points"]
+    tile_id = str(tile["tile_id"])
+    return {"id": f"{simple.AREA_TASK}:{tile_id}:{wand.id}", "source": person, "stain": meta["stain"], "task": simple.AREA_TASK, "tile_id": tile_id,
+            "session": meta["name"], "value": wand.id, "subtype": None, "x": None, "y": None, "candidate": None, "points": lines, "confirmed": True,
+            "deleted": False, "meta": {"pieces": [[step, i] for i in range(len(lines))], "ladder": thread_threshold.WIDE, "factor": level["factor"],
+                                       "thread_threshold": level["thread_threshold"], "detection_threshold": level["detection_threshold"],
+                                       "factors": [float(level["factor"])], "edits": [], "untouched": True}}
+
+
 def _simple_confirmations(meta: dict, tile: dict, person: str, mine: pd.DataFrame, own: bool = False) -> list[dict]:
     """A simple session, finishing a field: every candidate of it this person left as it started is saved in the class
     it started in (detection's call in the simple classes, confirmed), "not an object" when none; one left in no class
-    that lies on the wand's chosen thread segments in the wand's class. No outline is recorded (they stay detection's)."""
+    that lies on the wand's chosen thread segments in the wand's class. An untouched neurite pass counts as checked
+    as it opened, every thread at detection's level (`neurite_default`). No outline is recorded (they stay
+    detection's)."""
     tile_id = str(tile["tile_id"])
     found = _field_candidates(meta, tile)
     alone = person if own else None
@@ -990,6 +1054,10 @@ def _simple_confirmations(meta: dict, tile: dict, person: str, mine: pd.DataFram
     reach = simple.NEAR_SEGMENT_UM / get_state().project.pixel_size_um
     stamp = {"source": person, "stain": meta["stain"], "tile_id": tile_id, "session": meta["name"]}
     records = []
+    untouched = neurite_default(meta, tile, person, mine)
+    if untouched is not None:  # the neurite pass left as it opened: every thread at its level, confirmed
+        records.append(untouched)
+        wands = pd.DataFrame([untouched])
     for r in own_rows.rename(columns={"class": "klass"}).itertuples():
         x, y = round(float(r.x), 1), round(float(r.y), 1)
         key = store.object_id(simple.TASK, tile_id, x, y)

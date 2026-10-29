@@ -15,6 +15,7 @@ import { FixField } from '../labels/fixfield'
 import { MarkAreas } from '../labels/markareas'
 import { MatterCorePage, MatterSession } from '../labels/matter'
 import { SessionFieldMap } from '../labels/sessionfields'
+import { fieldPath, nextFieldUrl, storedOrder, useFieldOrder } from '../labels/fieldOrder'
 import { ClosedNote, ROUND_TITLE, RoundProgressLine, useFitScreen } from '../labels/rounds'
 import { HomePin } from '../labels/access'
 import type { RoundDetail } from '../api'
@@ -96,9 +97,10 @@ function SessionOverview({ detail, reload }: { detail: SessionDetail; reload: ()
   }, [preparing, live, reload])
   const next = async () => {
     setFinding(true)
-    const found = await api.get<{ tile_id: string | null }>(`/api/annotate/${name}/next`).catch(() => ({ tile_id: null }))
+    const order = storedOrder(detail.annotator)  // the order the picker below shows
+    const found = await api.get<{ tile_id: string | null }>(nextFieldUrl(name, null, order)).catch(() => ({ tile_id: null }))
     setFinding(false)
-    if (found.tile_id) navigate(`/annotate/${name}/${enc(found.tile_id)}`)
+    if (found.tile_id) navigate(fieldPath(name, found.tile_id, order))
     else setNothing(true)
   }
   return (
@@ -127,6 +129,7 @@ function SessionOverview({ detail, reload }: { detail: SessionDetail; reload: ()
 
 function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: () => void; tile: string }) {
   const navigate = useNavigate()
+  const order = useFieldOrder()
   const meta = detail.meta
   const name = meta.name
   const work = useFetch<FieldWork>(`/api/annotate/${name}/fields/${enc(tile)}`)
@@ -287,8 +290,8 @@ function Workspace({ detail, reload, tile }: { detail: SessionDetail; reload: ()
     try {
       await api.post(`/api/annotate/${name}/fields/${enc(tile)}/finish`, {})
       reload()
-      const next = await api.get<{ tile_id: string | null }>(`/api/annotate/${name}/next`).catch(() => ({ tile_id: null }))
-      navigate(next.tile_id ? `/annotate/${name}/${enc(next.tile_id)}` : `/annotate/${name}`)
+      const next = await api.get<{ tile_id: string | null }>(nextFieldUrl(name, tile, order)).catch(() => ({ tile_id: null }))
+      navigate(next.tile_id ? fieldPath(name, next.tile_id, order) : `/annotate/${name}`)
     } catch (e) {
       setError((e as Error).message)
     } finally {

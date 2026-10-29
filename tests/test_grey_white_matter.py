@@ -163,3 +163,43 @@ def test_the_tutorial_practises_on_a_neun_core_and_keeps_nothing(rounds_project)
     assert guest.post(f"/api/annotate/{name}/matter/cores/{CORE}/6E10/save", json={"accepted": True}).status_code == 200
     assert guest.post(f"/api/annotate/{name}/matter/cores/{CORE}/hold").status_code == 200
     assert store.history(project.output("reviews")).equals(log)  # nothing kept
+
+
+def test_all_grey_matter_saves_every_stain_with_no_white_matter_and_finishes_the_core(rounds_project):
+    admin, (ann, _), _ = rounds_project
+    project = state.get_state().project
+    _plain_mask(project)
+    _registration(project)
+    name = admin.post("/api/labels/sessions", json={"stain": "all", "kind": "matter", "open": True, "seed": 1}).json()["name"]
+    base = f"/api/annotate/{name}/matter/cores/{CORE}"
+    ann.get(base)
+    assert ann.post(f"{base}/NeuN/save", json={"png": _square(150, (100, 150, 40, 80)), "scale": 8}).status_code == 200  # replaced below
+    done = ann.post(f"{base}/all-grey", json={})
+    assert done.status_code == 200, done.text
+    assert done.json()["finished"] and done.json()["progress"]["decided"] == 1
+    labels = store.current(project.output("reviews"))
+    for stain in ("NeuN", "6E10", "AT8"):
+        area = matter.final(labels, CORE, stain)
+        assert area is not None and area.rings == () and area.all_grey  # saved, with no white matter: not "not done yet"
+    assert matter.checked(labels)[(CORE, "AT8")] == {"Ann"}
+    row = ann.get(f"/api/annotate/{name}").json()["meta"]["core_rows"][0]
+    assert row["state"] == "done" and row["done_by_me"]
+    assert ann.get(base).json()["read_only"]  # finished: it opens to look at
+    assert ann.get(f"{base}/6E10/area?look=true").json()["saved"]["all_grey"]
+
+
+def test_the_picker_order_next_core_follows():
+    from stainid.labels import picker
+
+    rows = [{"core_id": c, "tma": t, "core": k} for c, t, k in
+            [("x10", "10", "A-2"), ("x2b", "2", "B-1"), ("x2a10", "2", "A-10"), ("x2a2", "2", "A-2")]]
+    order = picker.cores_natural(rows)
+    assert order == ["x2a2", "x2a10", "x2b", "x10"]  # TMA 2 before 10, A-2 before A-10
+    assert picker.rotated(order, "x2a10") == ["x2b", "x10", "x2a2", "x2a10"] and picker.rotated(order, "gone") == order
+    places = [{"tile_id": "t3", "tma_name": "LIP-2", "core": "A-1", "box": [0, 512, 512, 512]},
+              {"tile_id": "t2", "tma_name": "LIP-2", "core": "A-1", "box": [512, 0, 512, 512]},
+              {"tile_id": "t1", "tma_name": "LIP-2", "core": "A-1", "box": [0, 0, 512, 512]},
+              {"tile_id": "t0", "tma_name": "LIP-10", "core": "A-1", "box": [0, 0, 512, 512]}]
+    assert picker.natural(places) == ["t1", "t2", "t3", "t0"]  # top to bottom, left to right
+    scores = {"t1": {"mean": 0.2, "objects": 3}, "t2": {"mean": 0.9, "objects": 1}, "t3": {"mean": None, "objects": 0}}
+    assert picker.by_confidence(["t1", "t2", "t3", "t0"], scores) == ["t2", "t1", "t3", "t0"]  # least confident first, no objects last
