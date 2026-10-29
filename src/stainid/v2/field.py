@@ -52,6 +52,8 @@ class Field:
     glass: float | None = None
     smooth_px: float = 1.0
     background_um: float = 60.0
+    linear_contrast: float | None = None  # `proposals.linear_artifact_contrast` (stainid.imaging.tissue.linear_artifact_mask)
+    linear_background: float | None = None  # the core image's tissue darkness it is relative to (`core_tissue_darkness`)
     memo: dict = field(default_factory=dict)  # values derived once per field by the stain modules
     # the tile's own field, for a local window cut around an object of it: its crop-wide levels are the tile's (none for
     # the tile's own field)
@@ -130,7 +132,7 @@ class Field:
 
     @cached_property
     def linear(self) -> np.ndarray:
-        return linear_artifact_mask(self.rgb)
+        return linear_artifact_mask(self.rgb, self.linear_contrast, self.linear_background)
 
     @cached_property
     def fold(self) -> np.ndarray:
@@ -222,6 +224,6 @@ class Field:
         """Free the big derived pictures (the field is done)."""
         for name in list(self.__dict__):
             if name not in ("tile", "rgb", "inner", "origin", "threshold", "pixel_size_um", "manual", "raw_nuclei", "glass",
-                            "smooth_px", "background_um", "memo"):
+                            "smooth_px", "background_um", "linear_contrast", "linear_background", "memo"):
                 del self.__dict__[name]
         self.memo.clear()

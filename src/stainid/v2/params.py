@@ -47,7 +47,20 @@ DEFAULTS: dict = {
         "same_iou": 0.5,
         "same_inside": 0.8,
         "covered": 0.3,  # a new geometry overlapping kept candidates more than this (share of its area) is not added
+        # detection's linear-artifact mask (folds, knife lines; 6E10, AT8 and NeuN leave it out): a band must also be this
+        # much darker (1 - grey level) than the core image's tissue (`tissue.core_tissue_darkness`), not only darker than
+        # the fixed 0.35. null: the fixed cut alone. Where the tissue itself is nearly 0.35 dark the fixed cut takes
+        # ordinary tissue for a band: Tangle-Tracer's neuropil (a median 50 % of each region), and on the study's
+        # dark-background 6E10 cores a wide band along the core edge, plaques in it. Calibration leaves the same mask out.
+        "linear_artifact_contrast": 0.1,
     },
+    # slide calibration (`stainid calibrate`, not a v2 stage: a changed threshold re-runs stage 2 through its inputs).
+    # max_threshold_dab_od: the most a slide's DAB threshold may be (null: no bound). The threshold is the tissue's
+    # median + 6 MAD (or Otsu), so it follows the slide's DAB background; the models read absolute OD and were trained
+    # on slides at 0.017-0.046 OD (AT8). On slides whose tissue is browner throughout (public AT8 sets: median tissue
+    # DAB 2.4-6x the study's, thresholds 0.075-0.17) a threshold that high proposes only the darkest part of each tau+
+    # neuron, and pale ones not at all. The AT8 bound lies above every study slide, so it changes none of them.
+    "calibration": {"max_threshold_dab_od": {"NeuN": None, "6E10": None, "AT8": 0.05}},
     "outlines": {
         "select": "probable",  # probable: accepted or probability >= min_probability; accepted; all
         "min_probability": 0.2,
@@ -106,13 +119,30 @@ def default_outline(project, stain: str) -> str:
     return value
 
 
+# proposal settings added after projects had run stage 2: recorded in its manifests only when set, so an older
+# project's outputs stay current until it turns one on
+LATER_SHARED = {"linear_artifact_contrast": None}
+
+
+def max_threshold(project, stain: str) -> float | None:
+    """`calibration.max_threshold_dab_od` of a stain (None: no bound)."""
+    value = (params(project).get("calibration", {}).get("max_threshold_dab_od") or {}).get(stain)
+    return None if value is None else float(value)
+
+
+def linear_contrast(project) -> float | None:
+    """`proposals.linear_artifact_contrast` of a project (None: the fixed darkness cut alone)."""
+    value = params(project)["proposals"].get("linear_artifact_contrast")
+    return None if value is None else float(value)
+
+
 def stage_params(project, stage: str, stain: str) -> dict:
     """What one stage's output for one stain depends on (besides its inputs): stage 2 the proposal settings, stage 3 the
     outline settings (without the display choice), stage 4 the stain's rules (the model and its cut-off are recorded as
     inputs), the assembled store the stain's default outline."""
     p = params(project)
     if stage == "proposals":
-        shared = {k: v for k, v in p["proposals"].items() if k not in STAINS}
+        shared = {k: v for k, v in p["proposals"].items() if k not in STAINS and not (k in LATER_SHARED and v == LATER_SHARED[k])}
         return {"shared": shared, "stain": p["proposals"][stain], "context_px": project.context_px}
     if stage == "outlines":
         return {k: v for k, v in p["outlines"].items() if k != "default_outline"}

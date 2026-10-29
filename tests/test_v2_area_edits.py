@@ -104,7 +104,7 @@ def test_the_slide_calibration_leaves_the_excluded_areas_out(tmp_path, monkeypat
     tiles = [{"tile_id": "T", "core_id": "C", "stain": "6E10", "image_path": "c.png", "x_px": 0, "y_px": 0, "width_px": 600, "height_px": 600,
               "pixel_width_um": PS, "pixel_height_um": PS}]
     monkeypatch.setattr(field_module, "fold_mask", lambda rgb_, ps: FOLD[: rgb_.shape[0], : rgb_.shape[1]].copy())
-    monkeypatch.setattr(field_module, "linear_artifact_mask", lambda rgb_: np.zeros(rgb_.shape[:2], bool))
+    monkeypatch.setattr(field_module, "linear_artifact_mask", lambda rgb_, *_: np.zeros(rgb_.shape[:2], bool))
     samples = []
     for picture in (rgb, darker):
         Image.fromarray(picture).save(tmp_path / "c.png")

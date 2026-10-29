@@ -8,7 +8,30 @@ from stainid.imaging.parallel import map_all
 from stainid.imaging.shared import remembered
 
 
-def linear_artifact_mask(rgb: np.ndarray) -> np.ndarray:
+LINEAR_DARKNESS = 0.35  # a linear artifact (fold band, knife line, scratch) is at least this dark (1 - grey level)
+
+
+def core_tissue_darkness(rgb: np.ndarray) -> float | None:
+    """The median darkness (1 - grey level) of a core image's tissue outside brown stain, at 1/8 scale (`rgb`: the whole
+    core image, analysis colours): the level a linear artifact must stand out from (`linear_artifact_mask`). Measured
+    once per core image, not per field: in an edge field that is mostly fold, the field's own median is the fold's."""
+    height, width = rgb.shape[:2]
+    small = cv2.resize(np.ascontiguousarray(rgb[: height // 8 * 8, : width // 8 * 8]), (width // 8, height // 8), interpolation=cv2.INTER_AREA) \
+        if height >= 8 and width >= 8 else np.ascontiguousarray(rgb)
+    tissue = _field_tissue_mask(small, None) & (small[..., 0].astype(np.int16) <= small[..., 2].astype(np.int16) + 15)
+    if tissue.sum() < 100:
+        return None
+    return float(np.median(1.0 - cv2.cvtColor(small, cv2.COLOR_RGB2GRAY)[tissue].astype(np.float32) / 255.0))
+
+
+def linear_artifact_mask(rgb: np.ndarray, contrast: float | None = None, background: float | None = None) -> np.ndarray:
+    """Dark, long straight-ish bands inside the tissue: pixels at least LINEAR_DARKNESS dark (smoothed, brown stain
+    and the tissue's rim left out) that a line opening keeps, in components spanning at least 35 % of the picture.
+    `contrast` (None: off): a band must also be this much darker than the tissue's own darkness, `background` (the
+    core image's, `core_tissue_darkness`; None: the median of the smoothed darkness over the tissue of this picture).
+    On slides whose whole neuropil is darker than LINEAR_DARKNESS (a strong counterstain, another scanner) the fixed
+    cut takes most of the tissue for one band; relative to the tissue, a fold or knife line still stands out and the
+    neuropil does not."""
     height, width = rgb.shape[:2]
     minimum_dimension = min(height, width)
     kernel_size = min(81, max(31, round(minimum_dimension * 0.035)))
@@ -23,7 +46,14 @@ def linear_artifact_mask(rgb: np.ndarray) -> np.ndarray:
     internal = tissue & (distance >= max(5, kernel_size // 10))
     darkness = cv2.GaussianBlur(darkness * non_brown * internal, (0, 0), 2.0)
     candidates = np.zeros((height, width), dtype=np.uint8)
-    dark = (darkness >= 0.35).astype(np.uint8)
+    level = LINEAR_DARKNESS
+    if contrast is not None:
+        looked_in = internal & non_brown
+        if background is None and looked_in.any():
+            background = float(np.median(darkness[looked_in]))
+        if background is not None:
+            level = max(level, float(background) + float(contrast))
+    dark = (darkness >= level).astype(np.uint8)
 
     def opened(angle: int) -> np.ndarray:
         radians = np.deg2rad(angle)

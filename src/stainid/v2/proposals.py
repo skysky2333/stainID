@@ -24,13 +24,14 @@ from stainid import candidates as store
 from stainid.imaging import shared_arrays
 from stainid.imaging.core_images import glass_darkness, open_image
 from stainid.imaging.shared import shared_pictures
+from stainid.imaging.tissue import core_tissue_darkness
 from stainid.nuclei import nucleus_centroids
 from stainid.v2 import amyloid, manifest, neun, tau
 from stainid.v2.context import context_features_many
 from stainid.v2.field import Field
 from stainid.v2.geometry import Region, components, disk, outline
 from stainid.v2.measure import generic_features
-from stainid.v2.params import digest, params, stage_params
+from stainid.v2.params import digest, linear_contrast, params, stage_params
 from stainid.v2.threads import segments
 from stainid.v2.tree import stained_level
 
@@ -637,6 +638,7 @@ def core_spec(project, stain: str, tiles: list[dict], threshold: float, nuclei_n
         "pixel_size": {t["tile_id"]: float(np.sqrt(float(t["pixel_width_um"]) * float(t["pixel_height_um"]))) for t in tiles},
         "settings": settings, "shared": {k: v for k, v in p.items() if k not in ("NeuN", "6E10", "AT8")},
         "smooth_px": float(p["smooth_px"]), "background_um": float(p["local_background_um"]),
+        "linear_contrast": linear_contrast(project),
         "whole_objects": bool(p.get("whole_objects", True)),
     }
 
@@ -647,9 +649,12 @@ class CoreWork:
     tile by tile by `standard_masks` before any tile is detected). The same in the process that decoded the image and in
     a tile process that maps it from shared memory, so the outputs do not depend on where a tile is worked on."""
 
-    def __init__(self, spec: dict, image: np.ndarray, glass: float | None, automatic: tuple[np.ndarray, np.ndarray] | None):
+    def __init__(self, spec: dict, image: np.ndarray, glass: float | None, automatic: tuple[np.ndarray, np.ndarray] | None,
+                 background: float | None = None):
         self.spec, self.image, self.glass, self.automatic = spec, image, glass, automatic
         self.size = image.shape[:2]
+        # the core image's tissue darkness, which a linear artifact must stand out from (`linear_artifact_contrast`)
+        self.background = background if background is not None or spec.get("linear_contrast") is None else core_tissue_darkness(image)
         self.wide = spec["window"] > spec["context"]
 
     def crop(self, box: tuple[int, int, int, int]) -> np.ndarray:
@@ -675,7 +680,7 @@ class CoreWork:
         rgb = self.crop(box)
         inner = (slice(y - box[1], y - box[1] + h), slice(x - box[0], x - box[0] + w))
         field = Field({**tile, "context_px": context}, rgb, inner, (box[0], box[1]), float("nan"), self.spec["pixel_size"][tile["tile_id"]],
-                      np.zeros(rgb.shape[:2], bool), None)
+                      np.zeros(rgb.shape[:2], bool), None, linear_contrast=self.spec.get("linear_contrast"), linear_background=self.background)
         with shared_pictures(rgb):
             h, w = inner[0].stop - inner[0].start, inner[1].stop - inner[1].start
             self.automatic[0][y: y + h, x: x + w] = field.linear[inner]
@@ -692,7 +697,7 @@ class CoreWork:
         inner = (slice(y - box[1], y - box[1] + h), slice(x - box[0], x - box[0] + w))
         field = Field({**tile, "context_px": s["context"]}, rgb, inner, (box[0], box[1]), s["threshold"], s["pixel_size"][tile["tile_id"]],
                       np.zeros(rgb.shape[:2], bool), raw, self.glass, smooth_px=s["smooth_px"], background_um=s["background_um"],
-                      reference=reference)
+                      linear_contrast=s.get("linear_contrast"), linear_background=self.background, reference=reference)
         if self.automatic is not None:  # detection's masks as the standard crops make them (calibration, tile measures)
             field.__dict__["linear"] = np.asarray(self.automatic[0][box[1]: box[3], box[0]: box[2]])
             field.__dict__["fold"] = np.asarray(self.automatic[1][box[1]: box[3], box[0]: box[2]])
@@ -776,7 +781,7 @@ def _work_in_process(spec: dict, files: dict) -> CoreWork:
         if files.get("linear"):
             automatic = (shared_arrays.attach(files["linear"], (h, w), bool, writable=True),
                          shared_arrays.attach(files["fold"], (h, w), bool, writable=True))
-        work = CoreWork(spec, image, files["glass"], automatic)
+        work = CoreWork(spec, image, files["glass"], automatic, files.get("background"))
     _WORK[files["image"]] = work
     while len(_WORK) > _WORK_MAX:
         _WORK.pop(next(iter(_WORK)))
@@ -817,6 +822,7 @@ def propose_core(project, stain: str, core_id: str, tiles: list[dict], threshold
             else:
                 automatic = (np.zeros(size, bool), np.zeros(size, bool))
         work = CoreWork(spec, image, glass, automatic)
+        files["background"] = work.background
         indices = range(len(tiles))
         if pool is not None:
             if automatic is not None:

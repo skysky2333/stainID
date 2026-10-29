@@ -67,7 +67,7 @@ def test_calibration_pools_every_tile_and_keeps_existing_thresholds(tmp_path, mo
     from stainid.workflows.calibrate import calibrate_slides
 
     # the synthetic disc is dark and blue, which the linear-artifact mask (left out of the sample) would take for a scratch
-    monkeypatch.setattr(field, "linear_artifact_mask", lambda rgb: np.zeros(rgb.shape[:2], bool))
+    monkeypatch.setattr(field, "linear_artifact_mask", lambda rgb, *_: np.zeros(rgb.shape[:2], bool))
     project = _core_project(tmp_path, ("NeuN", "AT8"))
     write_whole_core_manifest(project, 512)
     calibrate_slides(project, stride=1)

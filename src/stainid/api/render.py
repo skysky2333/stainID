@@ -17,8 +17,9 @@ from stainid.api import pyramid
 from stainid.api.state import ProjectState
 from stainid.imaging.color import rgb_to_hed
 from stainid.imaging.core_images import open_image
-from stainid.imaging.tissue import field_tissue_mask, fold_mask, linear_artifact_mask
+from stainid.imaging.tissue import core_tissue_darkness, field_tissue_mask, fold_mask, linear_artifact_mask
 from stainid.tables import read_csv
+from stainid.v2.params import linear_contrast
 
 Image.MAX_IMAGE_PIXELS = None
 FIELD_JPEG_QUALITY = 88
@@ -212,12 +213,27 @@ def _rgba_png(mask: np.ndarray, color: tuple[int, int, int], alpha: int, target:
     return target
 
 
+def linear_mask(state: ProjectState, tile: dict, rgb: np.ndarray) -> np.ndarray:
+    """Detection's linear-artifact mask of a tile's field, as stage 2 makes it (`v2.proposals.linear_artifact_contrast`,
+    relative to the core image's tissue darkness, worked out once per core image)."""
+    contrast = linear_contrast(state.project)
+    if contrast is None:
+        return linear_artifact_mask(rgb)
+    path = state.root / tile["image_path"]
+
+    def darkness() -> float | None:
+        with open_image(path) as image:
+            return core_tissue_darkness(np.asarray(image.convert("RGB")))
+
+    return linear_artifact_mask(rgb, contrast, cache.memo(("core tissue darkness", str(path)), [path], darkness))
+
+
 def exclusion_overlay(state: ProjectState, tile_id: str) -> Path:
     target = state.cache_dir("overlays") / f"{tile_id}_exclusions.png"
     if not target.exists():
         rgb = field_rgb(state, tile_id)
         tile = state.tile(tile_id)
-        mask = ~field_tissue_mask(rgb) | linear_artifact_mask(rgb)
+        mask = ~field_tissue_mask(rgb) | linear_mask(state, tile, rgb)
         if tile["stain"] != "NeuN":
             mask |= fold_mask(rgb, state.project.pixel_size_um)
         _rgba_png(mask, palette.overlay("excluded"), 110, target)
@@ -250,7 +266,7 @@ def thread_overlay(state: ProjectState, tile_id: str) -> Path:
         rgb = field_rgb(state, tile_id)
         nuclei_path = state.project.output("nuclei") / f"{tile_id}.npz"
         nuclei = clean_nuclei(np.load(nuclei_path)["masks"], rgb) if nuclei_path.exists() else None
-        valid = field_tissue_mask(rgb) & ~linear_artifact_mask(rgb) & ~fold_mask(rgb, state.project.pixel_size_um)
+        valid = field_tissue_mask(rgb) & ~linear_mask(state, tile, rgb) & ~fold_mask(rgb, state.project.pixel_size_um)
         skeleton = thread_network(rgb, valid, threshold, state.project.pixel_size_um, nuclei=nuclei)["skeleton"]
         _rgba_png(cv2.dilate(skeleton.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool), palette.overlay("threads"), 235, target)
     disk_cache.used(target)
