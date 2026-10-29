@@ -69,6 +69,10 @@ MASK_SUFFIX = {
 }
 
 
+def _sentence_noun(noun: str) -> str:
+    return noun[:1].upper() + noun[1:]
+
+
 def describe(column: str) -> str:
     if column in COLUMNS:
         return COLUMNS[column]
@@ -135,6 +139,26 @@ LABELS = {  # column: (label, unit, topic)
     "thread_branchpoints_per_mm": ("Thread branching", "branch points per mm", "tau"),
     "thread_to_neuron_ratio_mm": ("Thread length per tau+ neuron", "mm per neuron", "tau"),
 }
+# the continuous type scores of stage 5 (`stainid.v2.scores`): per score its object, what 0 and 1 mean, its topic, bins
+TYPE_SCORES = {
+    "tau_maturity": ("tau+ neuron", "maturity", "pretangle (0) to mature tangle (1)", "tau", ("pretangle", "intermediate", "mature")),
+    "plaque_compactness": ("plaque", "compactness", "diffuse (0) to compact, dense-cored (1); plaques of at least 15 µm", "plaques",
+                           ("diffuse", "intermediate", "compact")),
+}
+for _prefix, (_noun, _name, _span, _topic, _bins) in TYPE_SCORES.items():
+    COLUMNS[f"{_prefix}_scored_count"] = f"{_sentence_noun(_noun)}s with a {_name} score and bin."
+    COLUMNS[f"{_prefix}_score_median"] = f"Median {_noun} {_name} score, {_span}."
+    COLUMNS[f"{_prefix}_score_iqr"] = f"Spread of the {_noun} {_name} scores (interquartile range)."
+    COLUMNS[f"{_prefix}_score_mean"] = f"Mean {_noun} {_name} score, {_span}."
+    LABELS[f"{_prefix}_scored_count"] = (f"{_sentence_noun(_noun)}s with a {_name} score", f"{_noun}s", _topic)
+    LABELS[f"{_prefix}_score_median"] = (f"{_sentence_noun(_noun)} {_name}, median", "score, 0–1", _topic)
+    LABELS[f"{_prefix}_score_iqr"] = (f"{_sentence_noun(_noun)} {_name}, spread", "interquartile range", _topic)
+    LABELS[f"{_prefix}_score_mean"] = (f"{_sentence_noun(_noun)} {_name}, mean", "score, 0–1", _topic)
+    for _bin in _bins:
+        COLUMNS[f"{_prefix}_{_bin}_fraction"] = f"Share of {_noun}s in the {_bin} bin of the {_name} score."
+        COLUMNS[f"{_prefix}_{_bin}_density_mm2"] = f"{_sentence_noun(_noun)}s in the {_bin} bin of the {_name} score per mm²."
+        LABELS[f"{_prefix}_{_bin}_fraction"] = (f"{_sentence_noun(_noun)}s, {_bin} ({_name} score)", FRACTION, _topic)
+        LABELS[f"{_prefix}_{_bin}_density_mm2"] = (f"{_sentence_noun(_noun)}s, {_bin} ({_name} score), density", f"{_noun}s per mm²", _topic)
 MASK_OBJECT = {"neun_soma": ("neuron", "neurons"), "tau_neuron": ("tau+ neuron", "tau"), "plaque": ("plaque", "plaques")}
 MASK_LABEL = {  # suffix: (label with {} for the object, unit)
     "mask_count": ("{} outlines drawn", "outlines"),

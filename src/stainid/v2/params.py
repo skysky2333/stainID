@@ -81,6 +81,10 @@ DEFAULTS: dict = {
     # (`s_` inputs, stainid.v2.scaled) instead of absolute OD. Off (absolute inputs, as the active models) until the
     # model comparison (absolute against scaled, leave-one-TMA-out) has been decided
     "training": {"NeuN": {"slide_scaled": False}, "6E10": {"slide_scaled": False}, "AT8": {"slide_scaled": False}},
+    # stage 5's continuous type scores (`stainid.v2.scores`): the two cut points of each score's three bins (AT8
+    # pretangle / intermediate / mature, 6E10 diffuse / intermediate / compact): where the study's typed labels give
+    # the two classes 2:1 odds either way. Changing them changes only the score columns of the measures
+    "scores": {"AT8": {"bins": [0.29, 0.62]}, "6E10": {"bins": [0.48, 0.79]}},
     "rules": {
         # edge_band: a candidate found only by the new sources lying mostly within 5 µm of a tissue edge or hole (brown rims)
         "NeuN": {"excluded_fraction": 0.5, "near_profile": True, "pale_nucleus": True, "profile_shape": True, "edge_band": 0.5,

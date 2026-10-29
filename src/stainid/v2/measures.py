@@ -11,6 +11,10 @@ Two families of tables, both under `<outputs.v2>/measures/`:
 
 Thread length leaves out the skeleton inside accepted tau+ neurons (`thread_*`; the length with them is
 `thread_length_with_somata_mm`). Per-tile tables: `tiles_<stain>.csv` (legacy-shaped inputs of both families).
+
+The continuous type scores (`stainid.v2.scores`: AT8 tau maturity, 6E10 plaque compactness) are written per accepted
+object (`type_scores_<stain>.csv`) and summarised as new columns of `results_<level>.csv` (`scores.readout_names`);
+they add columns only, every other column is as without them.
 """
 from __future__ import annotations
 
@@ -24,7 +28,7 @@ from stainid import candidates as store
 from stainid.analysis import aggregation, field_aggregation, mask_aggregation
 from stainid.analysis.aggregation import summarize_stain_group
 from stainid.tables import read_csv, write_records
-from stainid.v2 import manifest
+from stainid.v2 import manifest, scores
 from stainid.v2.classify import load_model
 from stainid.v2.params import STAINS
 
@@ -38,6 +42,7 @@ CANDIDATE_COLUMNS = ["candidate_id", "tile_id", "x_core", "y_core", "area_um2", 
                      "m_deposit_area_um2", "m_boundary_irregularity", "legacy_class", "source",
                      "outline_default", "sam_status", "sam_area_um2", "sam_solidity", "sam_circularity", "sam_elongation", "sam_normalized_mean_dab",
                      "sam_core_dab_q"]
+CANDIDATE_COLUMNS += [c for stain in scores.COLUMNS for c in scores.COLUMNS[stain] if c not in CANDIDATE_COLUMNS]  # the type scores' inputs
 
 
 def fraction_at_least(quantiles: str, level: float) -> float:
@@ -210,8 +215,10 @@ def _group(rows: list[dict], level: str) -> dict[str, list[dict]]:
     return out
 
 
-def results_tables(folder: Path, tile_rows: dict[str, list[dict]], objects: dict[str, list[dict]], masks: dict[str, list[dict]]) -> list[str]:
-    """The stainID results tables (`results_<level>.csv` and their parts) from the legacy-shaped rows."""
+def results_tables(folder: Path, tile_rows: dict[str, list[dict]], objects: dict[str, list[dict]], masks: dict[str, list[dict]],
+                   scored: dict[str, list[dict]] | None = None) -> list[str]:
+    """The stainID results tables (`results_<level>.csv` and their parts) from the legacy-shaped rows; `scored`: the
+    type scores' object rows per stain (`scores.object_rows`), summarised as their own columns."""
     lines = []
     for level, name in LEVELS.items():
         merged: dict[str, dict] = {}
@@ -232,6 +239,13 @@ def results_tables(folder: Path, tile_rows: dict[str, list[dict]], objects: dict
             for key in {row[level] for row in tile_rows[stain]}:
                 if by_key.get(key):
                     merged[key].update(mask_aggregation.summarize(stain, by_key[key], area[(key, stain)]))
+        for stain, rows_ in (scored or {}).items():  # the area of the stain's density columns (v2_tissue_area_mm2)
+            measured = defaultdict(float)
+            for row in tile_rows[stain]:
+                measured[row[level]] += float(row["v2_tissue_area_mm2"])
+            by_key = _group(rows_, level)
+            for key in measured:
+                merged[key].update(scores.readouts(stain, by_key.get(key, []), measured[key]))
         rows = [merged[k] for k in sorted(merged)]
         if level != "core_id":
             for row in rows:
@@ -242,9 +256,9 @@ def results_tables(folder: Path, tile_rows: dict[str, list[dict]], objects: dict
     return lines
 
 
-def write_measures(project) -> list[str]:
-    """Stage 5: every table, from the core images whose calls exist."""
-    folder = store.root(project) / "measures"
+def write_measures(project, folder: Path | None = None) -> list[str]:
+    """Stage 5: every table, from the core images whose calls exist (into `folder`, default `<outputs.v2>/measures`)."""
+    folder = Path(folder) if folder is not None else store.root(project) / "measures"
     folder.mkdir(parents=True, exist_ok=True)
     models = {stain: load_model(project, stain) for stain in STAINS}
     morphotype = float(models["6E10"].bundle["morphotype_threshold"])
@@ -253,6 +267,8 @@ def write_measures(project) -> list[str]:
     objects = {s: [] for s in STAINS}
     v1_objects = {s: [] for s in STAINS}
     masks = {s: [] for s in STAINS}
+    scored = {s: [] for s in scores.SCORES}
+    between = {s: scores.cuts(project, s) for s in scores.SCORES}
     images = core_images(project)
     lines = [f"stage 5 (measures): {', '.join(f'{len(v)} {s}' for s, v in images.items())} core images with calls"]
     for stain, cores in images.items():
@@ -279,15 +295,25 @@ def write_measures(project) -> list[str]:
             objects[stain] += o
             v1_objects[stain] += v1
             masks[stain] += mask_rows(found, tiles, stain, morphotype if stain == "6E10" else None)
+            if stain in scored:
+                meta = {tile["tile_id"]: {k: tile[k] for k in REGION_KEYS if k in tile} for tile in tiles.to_dict("records")}
+                scored[stain] += scores.object_rows(stain, found, models[stain].bundle, between[stain], meta)
     for stain in STAINS:
         _write(folder / f"tiles_{stain}.csv", tile_rows[stain])
         _write(folder / f"objects_{stain}.csv", objects[stain])
+    for stain, rows in scored.items():
+        _write(folder / f"type_scores_{stain}.csv", rows)
     # read back as text, as the aggregators expect (empty cell = missing)
     text_tiles = {s: read_csv(folder / f"tiles_{s}.csv") if tile_rows[s] else [] for s in STAINS}
     text_objects = {s: read_csv(folder / f"objects_{s}.csv") if objects[s] else [] for s in STAINS}
     _write(folder / "masks_objects.csv", [r | {"stain": s} for s in STAINS for r in masks[s]])
     text_masks = {s: [r for r in read_csv(folder / "masks_objects.csv") if r["stain"] == s] if any(masks.values()) else [] for s in STAINS}
-    lines += results_tables(folder, text_tiles, text_objects, text_masks)
+    lines += results_tables(folder, text_tiles, text_objects, text_masks, scored)
+    for stain, rows in scored.items():
+        named = scores.SCORES[stain]
+        counts = {b: sum(r[f"{named.column}_bin"] == b for r in rows) for b in named.bins}
+        lines.append(f"{named.column}: {len(rows)} accepted {stain} objects scored, {sum(counts.values())} binned (cuts {between[stain][0]:.2f}, "
+                     f"{between[stain][1]:.2f}): " + ", ".join(f"{b} {n}" for b, n in counts.items()))
     v1_tiles = [row for s in STAINS for row in text_tiles[s]]
     _write(folder / "cohort_morphology_v2_objects.csv", [r for s in STAINS for r in v1_objects[s]])
     _write(folder / "cohort_morphology_v2_tile_features.csv", v1_tiles)

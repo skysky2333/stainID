@@ -431,8 +431,8 @@ def run_outlines(project, stains=STAINS, cores: set[str] | None = None, device: 
 
 # ---------------------------------------------------------------- stage 5
 
-def run_measures(project) -> None:
+def run_measures(project, folder=None) -> None:
     from stainid.v2.measures import write_measures
 
-    for line in write_measures(project):
+    for line in write_measures(project, folder):
         print(line, flush=True)

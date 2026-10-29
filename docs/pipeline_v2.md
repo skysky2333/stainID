@@ -307,3 +307,96 @@ frozen v1 tables the R analyses read (same aggregation code: `stainid.analysis.a
 | outline (mask) features `*_mask_*` | accepted candidates with a kept Segment Anything outline | yes; `plaque_multicore_fraction` is empty (core counts are not saved) |
 
 To move the analyses over, point the R scripts' `data/analysis/<prefix>_*.csv` reads at `data/analysis/v2/measures/`.
+
+### Continuous type scores: tau maturity and plaque compactness
+
+Stage 4 types each accepted tau+ neuron as *mature tangle* or *pretangle* and each plaque of at least 15 µm as
+*compact* or *diffuse* by one cut on one feature. Both are gradients, so stage 5 also gives every accepted object a
+score from 0 to 1 and a bin of three (`stainid.v2.scores`). They come from the features stages 2–4 stored (no image is
+read, nothing is detected again), and the two-class `subtype` stays exactly as it was: the scores only add columns.
+
+**The formula.** `score = 1 / (1 + exp(-Σ weight × (feature - centre)))`, every weight positive, so the score rises
+with every feature:
+
+| Score | Feature | Weight (per unit) | Centre |
+|---|---|---|---|
+| tau maturity (AT8) | ln(soma DAB 90th percentile / the model's mature cut-off, `mature_p90_threshold`, 0.159 OD) | 3.70 | 0 |
+| | soma mean DAB minus its 2–10 µm ring's median, in slide thresholds (`m_normalized_contrast`) | 0.281 | 2.83 |
+| | the soma's DAB coefficient of variation: an uneven, fibrillar fill (`m_soma_dab_cv`) | 1.43 | 0.597 |
+| plaque compactness (6E10) | ln(inner mean DAB in slide thresholds / the model's morphotype cut-off, 1.53), the core's density | 0.749 | 0 |
+| | inner minus outer mean DAB of the radial profile, in slide thresholds (`s_radial_dab_contrast`), the core's contrast | 1.47 | 0.777 |
+| | share of the deposit at or above the morphotype cut-off (stored smoothed-DAB quantiles), the dense-core fraction | 5.18 | 0.197 |
+| | deposit mean DAB minus its surrounding ring's, in slide thresholds (`boundary_contrast`), the edge's sharpness | 1.39 | 0.717 |
+
+The first term of each is the feature stage 4's type rule cuts, as the log of its ratio to the active model's
+cut-off; it is 0 at the cut. The other features are centred on the study's accepted objects' medians. So an object with
+median other features scores exactly 0.5 at stage 4's cut, and a retrained model's cut moves the score with it. Score
+0.5 is where the score's two classes meet the existing ones: on the study 94.8 % of the 36,367 accepted tau+ neurons
+and 95.2 % of the 144,023 typed plaques fall on the same side of 0.5 as their type. A missing feature counts as its
+centre (31 plaques without a ring).
+
+The weights were fitted on the study's typed labels (label set "ai": 412 tau+ neurons, 240 mature tangles; 387 plaques
+of at least 15 µm, 160 compact): a logistic regression with non-negative weights on the features divided by their
+interquartile range over the accepted objects. Features the fit gave no weight were dropped: AT8 the soma's stained
+share (`m_positive_fraction`) and the share of it a nucleus covers (`nucleus_overlap_fraction`, the nearest stored
+measure of a hidden or displaced nucleus; no displacement is measured); 6E10 solidity. No fibrillar-texture measure
+other than the DAB coefficient of variation is stored. `python tools/type_scores.py --project <study>` refits and
+prints the terms and bin cuts (read-only); on the study it reproduces the table.
+
+**Bins** (`v2.scores.<stain>.bins`, two cut points): the scores at which the label set's own calibration (the fitted
+intercept added back: AT8 +0.20, 6E10 −0.61) gives the two labelled classes 2:1 odds either way, rounded to 0.01.
+
+| Score | Low bin | Intermediate | High bin |
+|---|---|---|---|
+| tau maturity | pretangle < 0.29 | 0.29–0.62 | mature ≥ 0.62 |
+| plaque compactness | diffuse < 0.48 | 0.48–0.79 | compact ≥ 0.79 |
+
+On the study (the October re-run's store): tau+ neurons 6,442 pretangle, 8,423 intermediate, 21,502 mature (stage 4:
+10,633 pretangles, 25,734 mature tangles; the intermediate bin holds 4,092 of the pretangles and 4,331 of the mature
+tangles); plaques 66,978 diffuse, 27,956 intermediate, 49,089 compact (stage 4: 67,923 diffuse, 76,100 compact; the
+intermediate bin holds 24,154 compact and 3,802 diffuse). Plaques under 15 µm (`small`, 9,508) get a score and no bin.
+In the intermediate bins the labelled classes are even, as the rule intends: 42 pretangles and 40 mature tangles, 40
+diffuse and 40 compact plaques. Of the labelled objects in the low bins 100 of 113 are pretangles and 169 of 190
+diffuse plaques; in the high bins 187 of 217 are mature tangles and 99 of 117 compact plaques.
+
+**The simple vocabulary's three amyloid steps.** The bins do not map onto *diffuse amyloid beta* / *diffuse plaque* /
+*plaque with cores* one to one, and the labels cannot test it: no 6E10 object has a simple label yet. Through the
+simple classes' training mapping (*plaque with cores* → compact, *diffuse plaque* → diffuse) the labelled compact
+plaques lie 99 compact, 40 intermediate, 21 diffuse and the diffuse ones 18 / 40 / 169: the high bin is *plaque with
+cores* and the low bin *diffuse plaque*. *Diffuse amyloid beta* (a haze with no edge) is a split at the diffuse end,
+below what the bins separate; the pale regions the coarse source proposes, the nearest thing to it, score low (median
+0.11; 41 of 55 accepted ones in the diffuse bin). The intermediate bin is a step the simple vocabulary does not have.
+
+**Readouts** (`results_core.csv`, `results_donor_region.csv`; per accepted object `type_scores_<stain>.csv` with the
+score, the bin and stage 4's type): `tau_maturity_*` and `plaque_compactness_*`, each `scored_count` (binned objects),
+`score_median`, `score_iqr`, `score_mean`, `<bin>_fraction` (given for at least 5 tau+ neurons / 10 plaques, as
+`tau_neuron_mature_fraction` and `compact_fraction_v2`) and `<bin>_density_mm2` (per mm² of the stain's analysed
+tissue, `v2_tissue_area_mm2`). Across the 365 study cores the score median follows the two-class fractions (Spearman
+0.97 with `compact_fraction_v2`, 0.84 with `tau_neuron_mature_fraction`). Run on the study's store, stage 5 with the
+scores left every column of every table identical (as text) and added these 20 columns and the two object tables.
+
+**Validation.** AUC of each score for the classes, on the study's labels and on the public datasets' stored stage
+outputs (the study's models, no refitting; marks matched to the accepted object inside each box, Plaquebox to the
+typed plaque within 25 µm of the crop's centre). *Within image* compares only objects of the same image or slide.
+
+| Set | Classes | n | Score AUC | Type feature alone | Stage 4 type | Within image / slide |
+|---|---|---|---|---|---|---|
+| Study, label set "ai" | mature tangle vs pretangle | 240 / 172 | 0.878 (leave-one-TMA-out 0.867) | 0.872 | 0.791 | – |
+| Study, label set "ai" | compact vs diffuse | 160 / 227 | 0.908 (leave-one-TMA-out 0.902) | 0.894 | 0.812 | – |
+| Wong 2022 (4G8, 5 experts) | consensus cored vs diffuse | 412 / 4,526 | 0.685 | 0.674 | 0.618 | 0.663 (slide) |
+| Keiser 2023 (4 antibodies) | consensus cored vs other plaques | 209 / 2,372 | 0.571 (4G8 0.70, 6E10 0.81, Aβ40 0.59, Aβ42 0.50) | 0.594 | 0.574 | 0.562 (image), 0.598 (slide) |
+| Plaquebox hold-out (Tang 2019) | cored vs diffuse crops | 72 / 6,457 | 0.545 | 0.562 | 0.534 | 0.622 (slide) |
+| Plaquebox training set | cored vs diffuse crops | 1,603 / 3,694 | 0.636 | 0.670 | 0.594 | 0.613 (slide) |
+| Emory (Vizcarra 2023), experts' majority | iNFT vs Pre-NFT | 483 / 135 | 0.397 | 0.364 | 0.494 | 0.784 (image) |
+| Emory, the authors' test consensus | iNFT vs Pre-NFT | 267 / 17 | 0.501 | 0.538 | 0.457 | 0.873 (image) |
+
+The scores carry the experts' gradient where several experts typed the same object. On Wong 2022 the score's median
+rises with the number of the five experts who called a plaque cored: 0.55 (none, 4,267), 0.74 (1), 0.77 (2), 0.81 (3),
+0.88 (4), 0.85 (5). On Emory it rises with the experts' share of iNFT votes: 0.29 (none of them), 0.28 (a quarter),
+0.52 (half), 0.53 (three quarters), 0.63 (all, 506). Within an Emory image the score ranks iNFT above Pre-NFT (0.78 and
+0.87); pooled over images it does not (0.40 and 0.50), because the soma's DAB level differs more between the Emory
+images and antibodies than between their two classes (PHF-1 Pre-NFTs median 0.69, iNFTs 0.65; AT8 0.08 and 0.46);
+scaling by the slide threshold does not change that (0.40), as the AT8 thresholds there are bounded. Raters box cored
+plaques narrowly (see the public scores), so the other plaques of Keiser and Plaquebox include many dense ones; the
+score separates cored plaques better within a slide than pooled. Montages along each score (low to high, ten bands):
+`/run/media/sky/wd6t/scores_check/montages/`.

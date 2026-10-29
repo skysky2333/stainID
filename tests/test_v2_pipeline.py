@@ -377,6 +377,12 @@ def test_measures_tables_from_the_store(v2_project):
     assert any("R tables" in line for line in lines)
     accepted = store.read_core(project, "NeuN", "LIP-1_B-2").decision.eq("accepted").sum()
     assert core.neun_positive_profile_count.iloc[0] == accepted
+    from stainid.v2 import scores  # the type scores: new columns per core, one row per accepted object
+
+    assert set(scores.readout_names("AT8") + scores.readout_names("6E10")) <= set(core.columns)
+    for stain in ("AT8", "6E10"):
+        accepted = store.read_core(project, stain, "LIP-1_B-2").decision.eq("accepted").sum()
+        assert len(pd.read_csv(folder / f"type_scores_{stain}.csv")) == accepted if accepted else (folder / f"type_scores_{stain}.csv").exists()
 
 
 def test_a_core_without_candidates_is_measured_with_zero_objects(v2_project):

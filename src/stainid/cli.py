@@ -129,6 +129,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="proposals with --processes 0: tiles of a core image worked on at once (threads sharing the decoded image; ~0.7 GB each)")
     p.add_argument("--device", default="", help="outlines: cuda, cuda:1 or cpu (default: a GPU when there is one)")
     p.add_argument("--redo", action="store_true", help="redo every core image, not only missing and outdated ones")
+    p.add_argument("--out", type=Path, default=None,
+                   help="measures: write the tables into this folder instead of <outputs.v2>/measures (to compare a change)")
     _shard(p)
 
     p = sub.add_parser("aggregate", help="core / donor-region feature tables for one kind of output")
@@ -406,7 +408,7 @@ def run_v2(args: argparse.Namespace, project) -> None:
     elif args.stage == "outlines":
         run.run_outlines(project, stains, cores, args.device or None, args.shard_index, args.shard_count, args.redo)
     else:
-        run.run_measures(project)
+        run.run_measures(project, args.out)
 
 
 def split_labels(args: argparse.Namespace) -> None:
