@@ -20,7 +20,8 @@ scoring and the model comparison (`drop_excluded`), and the object rounds draw t
 them.
 
 Codes (`CODES`): 0 counted, 1 fold or tissue damage, 2 artifact, 3 no tissue / empty, 4 out of focus or bad staining
-(people only), 5 AT8 edge guard, 6 not analysed (views only), `OUTSIDE` (255) outside every tile.
+(people only), 5 AT8 edge guard, 6 not analysed (views only), 7 white matter left out by stage 5 (views only, when
+`v2.white_matter.analysis` is "exclude"), `OUTSIDE` (255) outside every tile.
 
 Read API:
 - `automatic(...) -> Layer | None`, None before stage 2. `digest` is the stage-2 mask's content, for the manifests of
@@ -54,8 +55,10 @@ COUNTED, OUTSIDE = 0, 255
 CLEARED = 9  # `annotated`: a part people marked fine
 CODES = {1: "fold or tissue damage", 2: "artifact (scratch, bubble, debris, linear artifact)", 3: "no tissue / empty",
          4: "out of focus or bad staining", 5: "AT8 edge guard (brown rim along an edge)",
-         6: "not analysed: tissue in no analysed tile (an image QC calls empty, a square with too little tissue)"}
+         6: "not analysed: tissue in no analysed tile (an image QC calls empty, a square with too little tissue)",
+         7: "white matter (found by the algorithm; left out of the analysis)"}
 NOT_ANALYSED = 6  # only in the views' codes (`view`): the analysis counts nothing outside the tiles anyway
+WHITE_MATTER = 7  # only in the views' codes (`view`), when `v2.white_matter.analysis` is "exclude": stage 5 leaves it out
 EXCLUDED_AT = 0.5  # an object with at least this share of its outline in excluded areas is excluded
 REVIEWER = "AI reviewer"  # the source of the hand-drawn areas of the earlier AI-review rounds
 TASK, INCLUDE = "exclude", "include"  # labels.exclusions.TASK / INCLUDE
@@ -576,8 +579,9 @@ def _image_of(project, core_id: str, stain: str) -> tuple[str | None, bool]:
 class View:
     """What the views draw of one core image and stain as "Excluded from analysis": the automatic codes with tissue
     outside every tile as `NOT_ANALYSED`, the scale and a version (changes with the layer and the white matter), and
-    `white`: the white matter the algorithm found (`v2.white_matter`) on the same grid, None before its step ran. The
-    white matter is drawn over the codes, not in them: while `v2.white_matter.analysis` is off it is counted."""
+    `white`: the white matter the algorithm found (`v2.white_matter`) on the same grid, None before its step ran. While
+    `v2.white_matter.analysis` is off it is drawn over the codes and counted; with "exclude" its counted cells are
+    `WHITE_MATTER` (stage 5 leaves them out), so the counted cells stay what the measures divide by."""
     codes: np.ndarray
     scale: int
     version: str
@@ -597,12 +601,24 @@ def view(project, core_id: str, stain: str) -> View | None:
         if tissue is not None:
             codes[(codes == OUTSIDE) & tissue] = NOT_ANALYSED
         white, version = white_matter_of(project, core_id, stain, codes.shape)
+        if white is not None and _white_excluded(project):
+            codes[white & (codes == COUNTED)] = WHITE_MATTER
+            version += "-x"
         return View(codes, layer.scale, layer.digest + version, white)
     tissue = _tissue(project, image, None)
     if tissue is None:
         return None
     codes = np.where(tissue, NOT_ANALYSED, OUTSIDE).astype(np.uint8)
     return View(codes, SCALE, "untiled-" + hashlib.sha1(repr(cache.signature(project.root / image)).encode()).hexdigest()[:12])
+
+
+def _white_excluded(project) -> bool:
+    from stainid.v2 import white_matter  # noqa: PLC0415
+
+    try:
+        return white_matter.excluded(project)
+    except ValueError:  # an unknown setting: the step and stage 5 stop on it; the views draw it as counted
+        return False
 
 
 def white_matter_of(project, core_id: str, stain: str, shape: tuple[int, int]) -> tuple[np.ndarray | None, str]:

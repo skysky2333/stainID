@@ -109,23 +109,33 @@ neighbouring positions at a slide's edge (LIP-7 D-1, D-2, E-1, E-2; LIP-9 D-5, E
 F-2, F-4). The analysis counts them today with NeuN densities of 0-30 /mm²: they are a question for the NeuN analysis
 whatever is decided about white matter (`white_matter.csv`, status undetermined, lists them).
 
-## What the analysis could do with it (not switched on)
+## Leaving it out of the analysis: `v2.white_matter.analysis: exclude`
 
-`v2: white_matter: analysis` is `off` (the only value accepted now: anything else stops the step with a message, so a
-setting cannot be ignored silently). Two ways to switch it on at the planned full re-run:
+The setting is `off` by default (white matter counted as before); `exclude` makes stage 5 grey matter only. The mask
+needs NeuN's detection first (it is made from NeuN's calls), so it is applied at the analysis stage, never in detection:
 
-1. **Exclude**, like detection's other areas: stage 2 adds the white matter (in each stain's own space) to the excluded
-   planes of its tile masks, so every area, burden, density and object count leaves it out exactly as folds and
-   linear artifacts are left out (the counted cells, `exclusions.codes_of`, a new code 7). 6E10 and AT8 read the NeuN
-   area through the registration, so their stage 2 needs the NeuN white matter first: run NeuN's stages 2-4, the
-   white-matter step, then stage 2 of 6E10 and AT8. NeuN's own white matter cannot go into its stage 2 (it is made from
-   NeuN's calls); NeuN's measures leave it out at stage 5 instead (neurons in it dropped, its area subtracted per
-   tile: NeuN's measures are counts and areas only). The setting enters stage 2's parameters (as
-   `linear_artifact_contrast` did), so turning it on makes stage 2 of every core outdated: the re-run.
-2. **Report apart**: keep today's whole-core measures and add grey-matter-only ones (`grey_` columns at stage 5:
-   objects whose centre lies in the white matter, and its counted area, left out) and the white-matter share per core
-   and donor-region. Counts and densities can be made this way from the stored outputs without re-running detection;
-   area burdens (DAB-positive area fractions, thread length) need stage 2's pixels, so they would come with the re-run.
+1. `stainid v2 white-matter`: the areas (above).
+2. `stainid v2 grey-matter` (`v2.grey_matter`): the 6E10 and AT8 stained areas without the white matter. Stage 2 keeps
+   each tile's stained areas as totals, so this pass reads each 6E10 / AT8 core image with white matter once and works
+   out what stage 2 works out for every tile the white matter reaches (`proposals.tile_summary` with those cells
+   counted out: the same crops, slide thresholds, nuclei, linear-artifact and fold masks and levels; no proposals, no
+   scores, no outlines). Without leaving anything out it reproduces stage 2's tile values exactly (tested on the
+   study's LIP-7_B-5 and in `tests/test_white_matter_analysis.py`). Outputs `white_matter/grey_tiles/<stain>/<core>.csv`
+   and manifests; about 2-3 min per core image, `--workers` core images at once (about 2.5 GB each); CPU only.
+3. `stainid v2 measures` with `exclude`: objects whose centre lies in the white matter are dropped (every stain; AT8
+   thread pieces by their middle), its counted cells leave each tile's area (so every density and burden divides by grey
+   matter only; the NeuN density windows lose them too), and the 6E10 / AT8 burdens and nuclei are the pass's. Stage 5
+   stops when a core image's pass is missing or older than its white matter or its stage-2 outputs. The main columns
+   are grey matter only; every whole-core number is kept next to it as `<column>_whole_core` in `results_core`,
+   `results_donor_region` and the three `cohort_morphology_*` R tables, and the whole-core tables as before are written
+   under `measures/whole_core/`.
+4. The views shade the white matter as excluded (code 7, *white matter (found by the algorithm; left out of the
+   analysis)*), so what they draw as counted is still what the measures divide by.
+
+Flags, whenever the white-matter step has run and whatever the setting: `white_matter_status`, `white_matter_share`
+(per core: of its NeuN image's analysed tissue; per donor-region: of its NeuN cores' tissue together) and `neun_pale`
+(the core's NeuN stain too pale to read; per donor-region: any of its cores, with `neun_pale_cores`). Pale cores are
+flagged, never left out: they are grey matter whose NeuN failed.
 
 ### Expected effect (2026-10-29, counts and densities only)
 

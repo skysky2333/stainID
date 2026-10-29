@@ -142,8 +142,8 @@ def test_the_step_writes_its_own_masks_and_redoes_only_what_changed(wm_project):
     assert len(table) == 3 and table.white_share.between(0.2, 0.5).all()
     project.config.setdefault("v2", {})["white_matter"] = {"seed": 0.05}  # a setting changed: the core is redone
     assert [core for core, _, _ in wm.todo(project)] == ["LIP-1_B-2"]
-    project.config["v2"]["white_matter"] = {"analysis": "exclude"}  # not decided yet: refused, not ignored
-    with pytest.raises(ValueError, match="re-run"):
+    project.config["v2"]["white_matter"] = {"analysis": "drop"}  # an unknown choice: refused, not ignored
+    with pytest.raises(ValueError, match="analysis must be one of"):
         wm.settings(project)
 
 

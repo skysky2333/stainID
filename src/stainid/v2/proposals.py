@@ -125,9 +125,10 @@ def unproposed_regions(field: Field, stain: str, owner: np.ndarray, rule: dict |
     return out
 
 
-def tile_summary(field: Field, stain: str, kept: list[dict], unproposed: int) -> dict:
+def tile_summary(field: Field, stain: str, kept: list[dict], unproposed: int, leave_out: np.ndarray | None = None) -> dict:
     """The tile's measures. Areas are counts of the tile's cells on the excluded-areas grid (`counted_cells`), and every
-    stain or nucleus count is taken inside the counted cells (and outside the excluded pixels)."""
+    stain or nucleus count is taken inside the counted cells (and outside the excluded pixels). `leave_out`: cells of
+    the tile's grid counted out as well (the white matter, `v2.grey_matter`); None in detection."""
     from stainid import exclusions  # noqa: PLC0415
 
     ps = field.pixel_size_um
@@ -135,14 +136,14 @@ def tile_summary(field: Field, stain: str, kept: list[dict], unproposed: int) ->
     cell_mm2 = MASK_SCALE * MASK_SCALE * mm2
     inner = field.inner
     exclusion = field.neun_exclusion if stain == "NeuN" else field.exclusion
-    codes, counted = counted_cells(field, stain)
+    codes, counted = counted_cells(field, stain, leave_out)
     valid = field.tissue & ~exclusion
     valid[inner] &= counted
     valid[: inner[0].start] = False
     valid[inner[0].stop:] = False
     valid[:, : inner[1].start] = False
     valid[:, inner[1].stop:] = False
-    area = float((codes == exclusions.COUNTED).sum() * cell_mm2)
+    area = float(((codes == exclusions.COUNTED) & _cells_kept(codes.shape, leave_out)).sum() * cell_mm2)
     out = {k: field.tile.get(k, "") for k in TILE_KEYS}
     out |= {
         "threshold_dab_od": field.threshold, "glass_darkness": field.glass, "nuclei_available": field.raw_nuclei is not None,
@@ -190,7 +191,7 @@ def tile_summary(field: Field, stain: str, kept: list[dict], unproposed: int) ->
             "at8_noncompact_area_mm2": float((maps_["thread"][inner] & inner_valid).sum() * mm2),
             "at8_compact_profile_count": sum(o["source_kind"] == "compact_profile" and field.inside(o["centroid_x_px"], o["centroid_y_px"])
                                              for o in found["objects"]),
-            "at8_legacy_skeleton_px": int(maps_["thread_skeleton"][inner].sum()),
+            "at8_legacy_skeleton_px": int((maps_["thread_skeleton"][inner] & _pixels_kept(counted.shape, leave_out)).sum()),
             "thread_line_area_mm2": float((threads["line"][inner] & inner_valid).sum() * mm2),
             "thread_skeleton_px": int(skeleton.sum()),
             "thread_width_sum_um": float(threads["width_um"][inner][skeleton].sum()),
@@ -567,7 +568,28 @@ def mask_piece(field: Field, stain: str) -> np.ndarray:
     return bits
 
 
-def counted_cells(field: Field, stain: str) -> tuple[np.ndarray, np.ndarray]:
+def _cells_kept(shape: tuple[int, int], leave_out: np.ndarray | None) -> np.ndarray:
+    """The cells of a tile's grid not in `leave_out` (all of them without it)."""
+    kept = np.ones(shape, bool)
+    if leave_out is not None:
+        h, w = min(shape[0], leave_out.shape[0]), min(shape[1], leave_out.shape[1])
+        kept[:h, :w] = ~leave_out[:h, :w].astype(bool)
+    return kept
+
+
+def _pixels_kept(shape: tuple[int, int], leave_out: np.ndarray | None) -> np.ndarray:
+    """`_cells_kept` at the pixels of the tile's own area (`shape`); everything without `leave_out`."""
+    if leave_out is None:
+        return np.ones(shape, bool)
+    cells = ~leave_out.astype(bool)
+    up = np.repeat(np.repeat(cells, MASK_SCALE, axis=0), MASK_SCALE, axis=1)
+    pixels = np.ones(shape, bool)
+    h, w = min(shape[0], up.shape[0]), min(shape[1], up.shape[1])
+    pixels[:h, :w] = up[:h, :w]
+    return pixels
+
+
+def counted_cells(field: Field, stain: str, leave_out: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
     """The tile's counted cells (`stainid.exclusions.codes_of` of its mask piece: tissue, not excluded) and the same at
     the pixels of the tile's own area (cells past the last whole one are not counted, as the mask has none there). Every
     area of the tile is a count of these cells, and every stain or nucleus count is taken inside them, so each density
@@ -575,7 +597,7 @@ def counted_cells(field: Field, stain: str) -> tuple[np.ndarray, np.ndarray]:
     from stainid import exclusions  # noqa: PLC0415
 
     codes = exclusions.codes_of(mask_piece(field, stain), stain)
-    cells = codes == exclusions.COUNTED
+    cells = (codes == exclusions.COUNTED) & _cells_kept(codes.shape, leave_out)
     height, width = field.inner[0].stop - field.inner[0].start, field.inner[1].stop - field.inner[1].start
     pixels = np.zeros((height, width), bool)
     up = np.repeat(np.repeat(cells, MASK_SCALE, axis=0), MASK_SCALE, axis=1)

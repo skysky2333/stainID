@@ -199,10 +199,13 @@ EXCLUDED_KINDS = (  # the colours are the one palette's (stainid/palette.json "a
     ExcludedKind("edge_guard", 5, palette.area("edge_guard"), "-"),
     ExcludedKind("not_analysed", 6, palette.area("not_analysed"), "/"),
 )
-# the algorithm's white matter (`stainid.v2.white_matter`), drawn over the codes as a cross-hatch without a wash: it is
-# not one of the codes, as the analysis counts it while `v2.white_matter.analysis` is off
+# the algorithm's white matter (`stainid.v2.white_matter`), drawn as a cross-hatch: over the codes without a wash while
+# `v2.white_matter.analysis` is off (counted); with "exclude" its counted cells are `exclusions.WHITE_MATTER` and get a
+# wash as every excluded area
 WHITE_MATTER = {"id": "white_matter", "label": "white matter (found by the algorithm; still counted in the analysis)",
                 "color": palette.area("white_matter"), "hatch": "+", "type": "", "counted": True}
+WHITE_LEFT_OUT = excluded_areas.CODES[excluded_areas.WHITE_MATTER]
+WHITE_FILL = 70  # its wash when left out
 WHITE_LINE, WHITE_EDGE = 150, 235  # alpha of its hatching and of its edge
 EXCLUDED_SCALE = excluded_areas.SCALE  # core-image px per layer px
 HATCH_PX = 4  # layer px between hatching lines (32 core-image px)
@@ -224,13 +227,19 @@ def _shares(codes: np.ndarray, white: np.ndarray | None = None) -> list[dict]:
     return [kind_info(kind, round(float(counts[kind.code]) / analysed, 4)) for kind in EXCLUDED_KINDS] + [white_info(codes, white)]
 
 
+def _white_cells(codes: np.ndarray, white: np.ndarray) -> np.ndarray:
+    """The white matter on tissue the analysis would count: counted, or left out as white matter."""
+    return white & ((codes == excluded_areas.COUNTED) | (codes == excluded_areas.WHITE_MATTER))
+
+
 def white_info(codes: np.ndarray | None, white: np.ndarray | None) -> dict:
     share = None  # before the v2 proposals, as the other kinds; 0 before the white-matter step ran (the legends leave it out)
+    left_out = codes is not None and bool((codes == excluded_areas.WHITE_MATTER).any())
     if codes is not None:
-        share = 0.0 if white is None else round(float((white & (codes == excluded_areas.COUNTED)).sum())
-                                                / max(1, int((codes != excluded_areas.OUTSIDE).sum())), 4)
+        share = 0.0 if white is None else round(float(_white_cells(codes, white).sum()) / max(1, int((codes != excluded_areas.OUTSIDE).sum())), 4)
     r, g, b = WHITE_MATTER["color"]
-    return {**WHITE_MATTER, "color": "#%02x%02x%02x" % (r, g, b), "fraction": share}
+    extra = {"label": WHITE_LEFT_OUT, "counted": False} if left_out else {}
+    return {**WHITE_MATTER, "color": "#%02x%02x%02x" % (r, g, b), "fraction": share, **extra}
 
 
 def excluded_info(project, core_id: str, stain: str) -> dict:
@@ -267,8 +276,9 @@ def _rgba(codes: np.ndarray, rows: int = 0, columns: int = 0, white: np.ndarray 
         if kind.hatch:
             out[pixels & lines[kind.hatch]] = (b, g, r, kind.line)
     if white is not None and white.any():
-        on = white & (codes == excluded_areas.COUNTED)
+        on = _white_cells(codes, white)
         r, g, b = WHITE_MATTER["color"]
+        out[codes == excluded_areas.WHITE_MATTER] = (b, g, r, WHITE_FILL)  # left out of the analysis: a wash too
         cross = (xx % (2 * HATCH_PX) == 0) | (yy % (2 * HATCH_PX) == 0)
         out[on & cross] = (b, g, r, WHITE_LINE)
         edge = on & ~cv2.erode(on.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool)

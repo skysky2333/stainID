@@ -61,7 +61,11 @@ WHITE = 1  # the mask's value for white matter
 TISSUE_BIT, TILE_BIT = 1, 32  # `v2.proposals.BITS`
 STAINS = ("NeuN", "6E10", "AT8")
 SOURCE = "NeuN"  # the stain the neurons are counted on
-ANALYSIS_CHOICES = ("off",)  # `v2.white_matter.analysis`: what the analysis does with the area (only "off" so far)
+# `v2.white_matter.analysis`: what the analysis does with the area: "off" counts it as before; "exclude" leaves it out
+# of stage 5's measures (objects in it dropped, its area out of every denominator, the grey-matter burdens of
+# `v2.grey_matter`), with the whole-core values kept as `<column>_whole_core` columns (docs/white_matter.md)
+ANALYSIS_CHOICES = ("off", "exclude")
+PALE_REASON = "too few NeuN+ neurons"  # the start of the reason of a core whose NeuN stain is too pale to read
 STATUSES = ("white", "grey", "undetermined")
 COLUMNS = ["core_id", "stain", "status", "reason", "white_share", "white_mm2", "tissue_mm2", "reference_per_mm2", "neurons",
            "registration", "version"]
@@ -85,7 +89,7 @@ DEFAULTS = {
     # neurons (a pale NeuN stain, deep layer VI) has neither
     "min_cell_ratio": 1.0, "max_dab_ratio": 0.65,
     "grey_share": 0.5,  # the core's grey matter for that check: tissue at least this share of the reference density
-    "analysis": "off",  # what the analysis does with it: "off" (counted as before)
+    "analysis": "off",  # what the analysis does with it: "off" (counted as before) or "exclude" (ANALYSIS_CHOICES)
 }
 
 
@@ -97,8 +101,23 @@ def settings(project) -> dict:
     found = {**DEFAULTS, **(params(project).get("white_matter") or {})}
     if found["analysis"] not in ANALYSIS_CHOICES:
         raise ValueError(f"v2.white_matter.analysis must be one of {', '.join(ANALYSIS_CHOICES)}, not {found['analysis']!r} "
-                         "(leaving white matter out of the analysis is decided with the full re-run: docs/white_matter.md)")
+                         "(docs/white_matter.md)")
     return found
+
+
+def excluded(project) -> bool:
+    """Whether the analysis leaves the white matter out (`v2.white_matter.analysis: exclude`)."""
+    return settings(project)["analysis"] == "exclude"
+
+
+def neun_pale(project) -> set[str]:
+    """The cores whose NeuN stain is too pale to read (the step's NeuN status undetermined for that reason): flagged in
+    the results, never left out; empty before the step ran."""
+    table = summary(project)
+    if table.empty:
+        return set()
+    mine = table[(table.stain == SOURCE) & (table.status == "undetermined") & table.reason.fillna("").str.startswith(PALE_REASON)]
+    return set(mine.core_id.astype(str))
 
 
 def detection_settings(project) -> dict:
