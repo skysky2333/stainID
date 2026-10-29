@@ -512,7 +512,8 @@ def make(unit: Unit, stop) -> None:
 def _core_pictures(state, core_id: str, stains: list[str], stop) -> None:
     """A Grey / white matter core ready to open: each stain image's pyramid (one decode each, looked at between them),
     the carry of the white matter from the first stain to the others (`registration.cores`, kept in the cache when
-    computed) and detection's neurons for the guide (kept in memory, `routes.areas.object_rows`)."""
+    computed), detection's neurons for the guide (kept in memory, `routes.areas.object_rows`) and the algorithm's white
+    matter the NeuN brush starts from (`_white_matter`)."""
     from stainid.api import pyramid  # noqa: PLC0415
     from stainid.api.routes import areas as area_routes  # noqa: PLC0415
     from stainid.labels import matter  # noqa: PLC0415
@@ -531,6 +532,22 @@ def _core_pictures(state, core_id: str, stains: list[str], stop) -> None:
                 pass
     if source and not stop():
         area_routes.object_rows(state.project, core_id, source)
+    if source and not stop():
+        _white_matter(state.project, core_id)
+
+
+def _white_matter(project, core_id: str) -> None:
+    """The algorithm's white matter of the core (`v2.white_matter`, what the NeuN brush starts from), when it is missing
+    or outdated, once the step has run in the project (its folder is there: the step's first run switches this on)."""
+    from stainid.v2 import white_matter  # noqa: PLC0415
+
+    if not white_matter.root(project).is_dir():
+        return
+    try:
+        if white_matter.todo(project, cores={core_id}):
+            white_matter.run(project, cores={core_id}, log=lambda text: None)
+    except (OSError, KeyError, ValueError, RuntimeError):
+        pass  # the step itself reports what went wrong; here a core simply opens without a proposal
 
 
 def _warm_caches(state, stop) -> None:

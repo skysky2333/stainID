@@ -461,7 +461,10 @@ field's address keeps the order (`?order=confidence`), so a refresh keeps it too
 the cores by TMA, then core, in natural order, and *Next core* goes on in that order. On a core page **All grey
 matter → next core** saves every stain of the core at once with no white matter (each stain image's area empty, marked
 `all_grey`, with its `done` label: the core counts as done, not as "not done yet") and opens the next core; most cores
-have no white matter.
+have no white matter. On NeuN the brush starts from the algorithm's white matter (`stainid v2 white-matter`, docs/white_matter.md:
+"The algorithm's white matter …: paint what it missed, erase what is grey matter, or accept it as found"); a core it
+found none on, or whose NeuN it could not read, starts empty and says so. The save is people's area as before, with the
+algorithm's version they started from (`meta.proposal`); the admin's overview scores the algorithm against it.
 The scores come straight from the stage-4 candidate store, one read per core of only the probability and threshold
 columns, whether or not a field is prepared (scoring prepares nothing); they are worked out in the background when
 the session's page opens and kept until a core's store file changes (4,184 fields: under 2 s the first time, at

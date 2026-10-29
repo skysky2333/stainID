@@ -112,8 +112,9 @@ def build_parser() -> argparse.ArgumentParser:
     _fresh(p)
     _shard(p)
 
-    p = sub.add_parser("v2", help="v2 detection: proposals, calls, outlines and measures (outputs.v2); resumable, redoes what is outdated")
-    p.add_argument("stage", choices=("proposals", "calls", "outlines", "measures", "status"))
+    p = sub.add_parser("v2", help="v2 detection: proposals, calls, outlines and measures (outputs.v2); resumable, redoes what is outdated; "
+                       "white-matter: the algorithm's grey / white matter from the NeuN calls (changes no analysis output)")
+    p.add_argument("stage", choices=("proposals", "calls", "outlines", "measures", "white-matter", "status"))
     p.add_argument("--stain", action="append", choices=("NeuN", "6E10", "AT8"))
     p.add_argument("--core", action="append", help="only this core (repeat for several; a file with one core id per line works too)")
     p.add_argument("--workers", type=int, default=0,
@@ -407,6 +408,13 @@ def run_v2(args: argparse.Namespace, project) -> None:
         run.run_calls(project, stains, cores, args.workers or None, args.redo)
     elif args.stage == "outlines":
         run.run_outlines(project, stains, cores, args.device or None, args.shard_index, args.shard_count, args.redo)
+    elif args.stage == "white-matter":
+        from stainid.v2 import white_matter
+
+        found = white_matter.run(project, redo=args.redo, cores=cores, log=lambda text: print(text, flush=True))
+        neun = found[found.stain == white_matter.SOURCE]
+        print("white matter: " + ", ".join(f"{(neun.status == s).sum()} {s}" for s in white_matter.STATUSES) + f" NeuN core images -> "
+              f"{white_matter.summary_path(project)}", flush=True)
     else:
         run.run_measures(project, args.out)
 

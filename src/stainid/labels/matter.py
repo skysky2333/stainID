@@ -8,14 +8,18 @@ carried with one click.
   id. Unlike a bad-area edit, which adds to or takes from an area, a white-matter label is the whole area of its stain
   image as the person left it (no rings: no white matter): one label per person, session and stain image (id
   `matter:<core>:<stain>`, the latest save winning, the log keeping the history), with `meta` {carried_from: the stain
-  it was carried from or None, accepted: saved as carried, registration: the carry's status, all_grey: true when saved
-  with "All grey matter → next core" (every stain image of the core at once, no white matter)}.
+  it was carried from or None, accepted: saved as carried (on NeuN: the algorithm's area saved as proposed),
+  registration: the carry's status, all_grey: true when saved with "All grey matter → next core" (every stain image
+  of the core at once, no white matter; only ever the person's say, never set by a proposal), proposal: the
+  algorithm's area the person started from on NeuN (`v2.white_matter`)}.
+- On NeuN the brush starts from the algorithm's white matter (`v2.white_matter`, "proposed") when its step ran: people
+  correct it, and their saved area is the label it is trained and scored on (`v2.white_matter.agreement`).
 - The one say per stain image (`final`) is the latest saved label of anyone; the Cores view shows it.
 - Every stain image saved also gets a `done` label (value `DONE`, id `done:matter:<core>:<stain>`); a core is finished
   for a person when all its stain images are (`labels.areas.finished`, `next_core` and `progress` work on these sessions
   as on "Mark bad areas"). Each core is done by one person.
-- Like every human annotation these areas only train and evaluate models (a grey / white matter model); the analysis
-  never reads them.
+- Like every human annotation these areas only train and evaluate models (the grey / white matter algorithm); the
+  analysis never reads them.
 """
 from __future__ import annotations
 
@@ -131,14 +135,17 @@ def final(labels: pd.DataFrame, core_id: str, stain: str) -> Area | None:
 
 
 def records(core_id: str, stain: str, rings, holes, stamp: dict, carried_from: str | None, accepted: bool, registration: str | None,
-            all_grey: bool = False) -> list[dict]:
+            all_grey: bool = False, proposal: dict | None = None) -> list[dict]:
     """The labels of one save: the stain image's whole white-matter area and its `done` label (`all_grey`: saved with
-    "All grey matter → next core", no rings)."""
+    "All grey matter → next core", no rings). `proposal`: the algorithm's area the person started from
+    (`v2.white_matter.status_of`: status, version, share), to score it; it never sets `all_grey`."""
     from stainid.labels import exclusions as marks  # noqa: PLC0415
 
     meta = {"carried_from": carried_from, "accepted": accepted, "registration": registration}
     if all_grey:
         meta["all_grey"] = True
+    if proposal is not None:
+        meta["proposal"] = {k: proposal.get(k) for k in ("status", "version", "white_share")}
     return [{**stamp, "id": label_id(core_id, stain), "stain": stain, "task": TASK, "points": [list(map(list, r)) for r in rings],
              "value": marks.value_text(list(holes), [AREA] * len(rings)), "meta": meta},
             {**stamp, "id": done_id(core_id, stain), "stain": stain, "task": "done", "value": DONE}]

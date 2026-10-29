@@ -12,6 +12,7 @@ change to a model, a threshold or a rule re-runs only the cheap stages after it.
 | 4 Calls | `stainid v2 calls` | `proposals/`, the stain models, `v2.rules` | `calls/`, `candidates/` | minutes for the cohort, no image read |
 | 3 Outlines | `stainid v2 outlines` | `proposals/`, `calls/` (which to outline), core images, SAM | `outlines/`, `candidates/` | GPU, optional |
 | 5 Measures | `stainid v2 measures` | `candidates/`, `tiles/`, `threads/` | `measures/` | minutes, no image read |
+| White matter | `stainid v2 white-matter` | NeuN `candidates/`, `masks/` of the three stains, the NeuN images of cores to check, the registration | `white_matter/` | seconds per core; changes no analysis output (docs/white_matter.md) |
 
 Stage 3 runs after stage 4 because by default it outlines the candidates stage 4 accepted or scored at least 0.2
 (`v2.outlines.select`); candidates outlined before are kept when a later model selects more.

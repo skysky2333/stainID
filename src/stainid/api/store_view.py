@@ -199,6 +199,11 @@ EXCLUDED_KINDS = (  # the colours are the one palette's (stainid/palette.json "a
     ExcludedKind("edge_guard", 5, palette.area("edge_guard"), "-"),
     ExcludedKind("not_analysed", 6, palette.area("not_analysed"), "/"),
 )
+# the algorithm's white matter (`stainid.v2.white_matter`), drawn over the codes as a cross-hatch without a wash: it is
+# not one of the codes, as the analysis counts it while `v2.white_matter.analysis` is off
+WHITE_MATTER = {"id": "white_matter", "label": "white matter (found by the algorithm; still counted in the analysis)",
+                "color": palette.area("white_matter"), "hatch": "+", "type": "", "counted": True}
+WHITE_LINE, WHITE_EDGE = 150, 235  # alpha of its hatching and of its edge
 EXCLUDED_SCALE = excluded_areas.SCALE  # core-image px per layer px
 HATCH_PX = 4  # layer px between hatching lines (32 core-image px)
 
@@ -211,11 +216,21 @@ def kind_info(kind: ExcludedKind, fraction: float | None) -> dict:
     return {"id": kind.id, "label": kind.label, "color": "#%02x%02x%02x" % kind.color, "hatch": kind.hatch, "type": kind.type, "fraction": fraction}
 
 
-def _shares(codes: np.ndarray) -> list[dict]:
-    """Each type's share of the core's area (every cell but those outside the image's tissue and tiles)."""
+def _shares(codes: np.ndarray, white: np.ndarray | None = None) -> list[dict]:
+    """Each type's share of the core's area (every cell but those outside the image's tissue and tiles), and of the
+    algorithm's white matter on counted tissue (None before its step ran)."""
     analysed = max(1, int((codes != excluded_areas.OUTSIDE).sum()))
     counts = np.bincount(codes.ravel(), minlength=256)
-    return [kind_info(kind, round(float(counts[kind.code]) / analysed, 4)) for kind in EXCLUDED_KINDS]
+    return [kind_info(kind, round(float(counts[kind.code]) / analysed, 4)) for kind in EXCLUDED_KINDS] + [white_info(codes, white)]
+
+
+def white_info(codes: np.ndarray | None, white: np.ndarray | None) -> dict:
+    share = None  # before the v2 proposals, as the other kinds; 0 before the white-matter step ran (the legends leave it out)
+    if codes is not None:
+        share = 0.0 if white is None else round(float((white & (codes == excluded_areas.COUNTED)).sum())
+                                                / max(1, int((codes != excluded_areas.OUTSIDE).sum())), 4)
+    r, g, b = WHITE_MATTER["color"]
+    return {**WHITE_MATTER, "color": "#%02x%02x%02x" % (r, g, b), "fraction": share}
 
 
 def excluded_info(project, core_id: str, stain: str) -> dict:
@@ -225,16 +240,17 @@ def excluded_info(project, core_id: str, stain: str) -> dict:
     `version` (changes with the layer) and each type with its colour, hatching and share of the core's area."""
     layer = excluded_areas.view(project, core_id, stain)
     if layer is None:
-        return {"status": "not_made", "kinds": [kind_info(k, None) for k in EXCLUDED_KINDS]}
+        return {"status": "not_made", "kinds": [kind_info(k, None) for k in EXCLUDED_KINDS] + [white_info(None, None)]}
     height, width = layer.codes.shape
     return {"status": "done", "scale": layer.scale, "width": int(width), "height": int(height), "version": layer.version,
-            "kinds": _shares(layer.codes)}
+            "kinds": _shares(layer.codes, layer.white)}
 
 
-def _rgba(codes: np.ndarray, rows: int = 0, columns: int = 0) -> bytes:
+def _rgba(codes: np.ndarray, rows: int = 0, columns: int = 0, white: np.ndarray | None = None) -> bytes:
     """Codes of the layer as an RGBA PNG: each type a translucent wash in its colour with stronger hatching lines ("no
     tissue" lighter: a faint grey wash with fine dots), counted tissue transparent; (`rows`, `columns`) where `codes` start in the core's layer (so a field's
-    hatching lines up with its core's)."""
+    hatching lines up with its core's). `white`: the algorithm's white matter, a cross-hatch and an edge in its colour
+    over counted tissue (no wash: it is counted)."""
     import cv2  # noqa: PLC0415
 
     height, width = codes.shape
@@ -250,6 +266,13 @@ def _rgba(codes: np.ndarray, rows: int = 0, columns: int = 0) -> bytes:
         out[pixels] = (b, g, r, kind.fill)
         if kind.hatch:
             out[pixels & lines[kind.hatch]] = (b, g, r, kind.line)
+    if white is not None and white.any():
+        on = white & (codes == excluded_areas.COUNTED)
+        r, g, b = WHITE_MATTER["color"]
+        cross = (xx % (2 * HATCH_PX) == 0) | (yy % (2 * HATCH_PX) == 0)
+        out[on & cross] = (b, g, r, WHITE_LINE)
+        edge = on & ~cv2.erode(on.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool)
+        out[edge] = (b, g, r, WHITE_EDGE)
     ok, encoded = cv2.imencode(".png", out)
     if not ok:
         raise RuntimeError("could not encode the excluded areas")
@@ -265,7 +288,9 @@ def _picture(project, core_id: str, stain: str, layer, window: tuple[slice, slic
     found = _PICTURES.get(key)
     if found is None:
         codes = layer.codes if window is None else layer.codes[window]
-        found = _rgba(codes, *((0, 0) if window is None else (window[0].start, window[1].start)))
+        white = getattr(layer, "white", None)
+        white = white if white is None or window is None else white[window]
+        found = _rgba(codes, *((0, 0) if window is None else (window[0].start, window[1].start)), white=white)
         if len(_PICTURES) >= 512:
             _PICTURES.pop(next(iter(_PICTURES)))
         _PICTURES[key] = found
@@ -303,7 +328,7 @@ def field_excluded(project, tile: dict) -> tuple[dict, bytes | None]:
     scale = layer.scale
     info = {"status": "done", "scale": scale, "x": window[1].start * scale - x0, "y": window[0].start * scale - y0,
             "width": codes.shape[1] * scale, "height": codes.shape[0] * scale, "version": layer.version,
-            "kinds": [k for k in _shares(codes) if k["fraction"]]}
+            "kinds": [k for k in _shares(codes, None if layer.white is None else layer.white[window]) if k["fraction"]]}
     return info, _picture(project, core_id, stain, layer, window)
 
 

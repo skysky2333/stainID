@@ -22,6 +22,7 @@ from __future__ import annotations
 import secrets
 import time
 
+import numpy as np
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
@@ -33,6 +34,7 @@ from stainid.api.state import get_state
 from stainid.labels import areas, matter, picker, sessions, store
 from stainid.labels import exclusions as marks
 from stainid.registration import cores as registration
+from stainid.v2 import white_matter
 
 router = APIRouter(tags=["matter"])
 admin = [Depends(require_admin)]
@@ -320,8 +322,10 @@ def stain_area(name: str, core_id: str, stain: str, request: Request, look: bool
                person: str = Depends(annotator)) -> dict:
     """What the brush starts from on one stain image (the brush's form: a white-on-transparent PNG at 1/`scale`):
     `from` "saved" (this person's saved area; `look`: else anyone's in the session), "carried" (the source stain's
-    saved area carried over, with the registration's status), "new" (the source stain, nothing saved yet: no white
-    matter) or "waiting" (the source stain is not saved yet)."""
+    saved area carried over, with the registration's status), "proposed" (the source stain, nothing saved yet: the
+    algorithm's white matter, `v2.white_matter`, to correct), "new" (the source stain, nothing saved and no proposal:
+    no white matter) or "waiting" (the source stain is not saved yet). On the source stain `proposal` says what the
+    algorithm found (status white / grey / undetermined, why, its share), or None before its step ran."""
     meta = matter_meta(name, request)
     stains = _stain(meta, core_id, stain)
     labels = store.current(root()).iloc[:0] if meta.get("practice") else session_labels(meta)
@@ -333,13 +337,31 @@ def stain_area(name: str, core_id: str, stain: str, request: Request, look: bool
         return {**base, "kinds": {matter.AREA: matter.png(mine.rings, mine.holes, width, height, base["scale"])}, "from": "saved", "saved": mine.to_api()}
     source = matter.source_of(stains)
     if stain == source:
-        return {**base, "kinds": {}, "from": "new"}
+        proposal, white = _proposal(meta, core_id, stain)
+        if white is not None and white.any():
+            shape = (base["height"] // base["scale"], base["width"] // base["scale"])
+            return {**base, "kinds": {matter.AREA: white_matter.png(white, shape)}, "from": "proposed", "proposal": proposal}
+        return {**base, "kinds": {}, "from": "new", "proposal": proposal}
     found = _carried(meta, labels, core_id, stain, source, None if look else person)
     if found is None:
         return {**base, "kinds": {}, "from": "waiting", "carried_from": source}
     area, rings, carry = found
     return {**base, "kinds": {matter.AREA: matter.png(rings, area.holes, width, height)} if rings else {}, "from": "carried",
             "carried_from": source, "registration": carry.to_api()}
+
+
+def _proposal(meta: dict, core_id: str, stain: str) -> tuple[dict | None, "np.ndarray | None"]:
+    """The algorithm's say about a core image (`v2.white_matter.status_of`) and its white matter on the brush's grid;
+    (None, None) before its step ran, in the tutorial and on a whole slide."""
+    if meta.get("practice") or slide_units.slide_unit(core_id) is not None:
+        return None, None
+    project = get_state().project
+    found = white_matter.status_of(project, core_id, stain)
+    if found is None:
+        return None, None
+    white = white_matter.read(project, core_id, stain) if found.get("status") == "white" else None
+    keep = ("status", "reason", "white_share", "white_mm2", "reference_per_mm2", "version")
+    return {k: found.get(k) for k in keep}, white
 
 
 def _base(core_id: str, stain: str) -> tuple[int, int, dict]:
@@ -380,7 +402,8 @@ def carry_area(name: str, core_id: str, stain: str, body: Painted, request: Requ
 class MatterSave(BaseModel):
     png: str = ""  # the whole white-matter area as painted (a PNG at 1/`scale` of the core image); empty: none
     scale: float = matter.SCALE
-    accepted: bool = False  # "accept as carried": the source stain's area carried over, exactly (`png` is not read)
+    accepted: bool = False  # "accept as carried": the source stain's area carried over, exactly (`png` is not read); on the
+    # source stain: the algorithm's proposal saved as it is
     reset: bool = False  # after Reset this core: this person's earlier labels on the core (every stain) are deleted first
 
 
@@ -430,17 +453,24 @@ def save_stain(name: str, core_id: str, stain: str, body: MatterSave, request: R
             raise HTTPException(400, f"save the {source} image first: the other stains start from its white matter")
         area, carried, carry = found
         carried_from, status = source, carry.status
+    proposal = _proposal(meta, core_id, stain)[0] if stain == source else None
     if body.accepted:
         if stain == source:
-            raise HTTPException(400, f"{source} is where the white matter is painted first: there is nothing to accept")
-        rings, holes = carried, list(area.holes)
+            white = _proposal(meta, core_id, stain)[1]
+            if proposal is None:
+                raise HTTPException(400, f"{source} is where the white matter is painted first: there is nothing to accept")
+            width, height, base = _base(core_id, stain)
+            shape = (base["height"] // base["scale"], base["width"] // base["scale"])
+            rings, holes = marks.from_png(white_matter.png(white, shape), base["scale"]) if white is not None and white.any() else ([], [])
+        else:
+            rings, holes = carried, list(area.holes)
     else:
         try:
             rings, holes = marks.from_png(body.png, body.scale) if body.png else ([], [])
         except ValueError as error:
             raise HTTPException(400, str(error)) from error
     stamp = {"source": person, "session": meta["name"], "tile_id": core_id, "x": None, "y": None}
-    written = matter.records(core_id, stain, rings, holes, stamp, carried_from, body.accepted, status)
+    written = matter.records(core_id, stain, rings, holes, stamp, carried_from, body.accepted, status, proposal=proposal)
     keep = {r["id"] for r in written}
     saved = store.append(root(), [r for r in gone if r["id"] not in keep] + written)
     now = session_checked(meta)
@@ -502,7 +532,41 @@ def matter_overview() -> dict:
             entry["images"] += 1
             entry["saved"] += bool(found.get((core, stain)))
     return {"stains": [per_stain[s] for s in matter.ordered(per_stain)], "cores": len(stains_of),
-            "cores_done": sum(all(found.get((c, s)) for s in stains) for c, stains in stains_of.items())}
+            "cores_done": sum(all(found.get((c, s)) for s in stains) for c, stains in stains_of.items()),
+            "algorithm": algorithm_scores(labels)}
+
+
+def algorithm_scores(labels: pd.DataFrame) -> dict:
+    """The algorithm's white matter (`v2.white_matter`) against people's say (`matter.final`) on every stain image both
+    have: per stain the images compared, mean IoU, how many say white matter on each side, and the rows. People's areas
+    are the truth; nothing here changes the algorithm or the analysis."""
+    from stainid import exclusions  # noqa: PLC0415
+
+    project = get_state().project
+    found = matter.checked(labels)
+    rows = []
+    for core_id, stain in sorted(found):
+        said = white_matter.status_of(project, core_id, stain)
+        area = matter.final(labels, core_id, stain)
+        shape = exclusions._grid_shape(project, core_id, stain)
+        if said is None or area is None or shape is None or said.get("status") == "undetermined":
+            continue
+        bits = white_matter._bits(project, core_id, stain)
+        if bits is None:
+            continue
+        analysed = white_matter.analysed_of(bits)
+        algorithm = white_matter.read(project, core_id, stain)
+        if algorithm is None:
+            continue
+        people = area.mask(analysed.shape)
+        rows.append({"core_id": core_id, "stain": stain, "person": area.person,
+                     **white_matter.agreement(algorithm[: analysed.shape[0], : analysed.shape[1]], people, analysed)})
+    per = {}
+    for stain in matter.ordered({r["stain"] for r in rows}):
+        mine = [r for r in rows if r["stain"] == stain]
+        per[stain] = {"images": len(mine), "mean_iou": round(float(np.mean([r["iou"] for r in mine])), 3),
+                      "algorithm_white": sum(r["algorithm_share"] > 0 for r in mine), "people_white": sum(r["people_share"] > 0 for r in mine)}
+    return {"per_stain": per, "rows": rows}
 
 
 def core_matter(core_id: str, stain: str) -> dict | None:

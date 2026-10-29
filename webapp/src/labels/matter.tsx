@@ -177,6 +177,7 @@ export function MatterCorePage({ detail, core, onEvent, coach, onFinished }: {
   const area = image ? areaOf[image.stain] : undefined
   const mask = image ? masks.current.get(image.stain) : undefined
   const carried = area?.from === 'carried'
+  const proposed = area?.from === 'proposed'  // NeuN, nothing saved: the algorithm's white matter, to correct
   const dirty = !!mask?.dirty
   const lastOne = !!image && images.every((i) => i.saved_by_me || i.stain === image.stain)  // saving this stain finishes the core
 
@@ -232,7 +233,7 @@ export function MatterCorePage({ detail, core, onEvent, coach, onFinished }: {
     await nextCore()
   }
   const undo = () => { if (image && masks.current.get(image.stain)?.undo()) { setTick((t) => t + 1); tell('undo') } }
-  const enter = () => { if (!image || readOnly || locked(image.stain)) return; void save(carried && !dirty) }
+  const enter = () => { if (!image || readOnly || locked(image.stain)) return; void save((carried || proposed) && !dirty) }
   const latest = useRef({ go, at, undo, enter, hidden, brushSize })
   latest.current = { go, at, undo, enter, hidden, brushSize }
   useEffect(() => {
@@ -277,7 +278,10 @@ export function MatterCorePage({ detail, core, onEvent, coach, onFinished }: {
         {area.registration?.how === 'computed' ? ' (lined up here, not in the registration table)' : ''}. Adjust it, or accept it as carried.</>
         : area?.from === 'saved' ? <>Saved{area.saved?.person && area.saved.person !== detail.annotator ? ` by ${area.saved.person}` : ' by you'}
           {area.saved?.all_grey ? ': all grey matter (no white matter)' : area.saved?.carried_from ? (area.saved.accepted ? `, accepted as carried from ${area.saved.carried_from}` : `, adjusted from ${area.saved.carried_from}`) : ''}.</>
-          : image.stain === source ? <>Paint the white matter: the paler tissue with few neurons. Nothing painted means no white matter on this core.</> : null
+          : proposed ? <>The algorithm’s white matter{area.proposal?.white_share != null ? ` (${Math.round(area.proposal.white_share * 100)} % of the tissue)` : ''}: where the NeuN+ neurons stop.
+            {' '}Paint what it missed, erase what is grey matter, or accept it as found.</>
+            : image.stain === source ? <>Paint the white matter: the paler tissue with few neurons. Nothing painted means no white matter on this core.
+              {area?.proposal?.status === 'grey' ? ' The algorithm found none here.' : area?.proposal?.status === 'undetermined' ? ' The algorithm could not tell here (the NeuN stain is too pale to read).' : ''}</> : null
   return (
     <div className="annotate-page round-page fit-page areas-page matter-page">
       <Heading meta={meta} core={data.core} progress={practice ? null : progress} me={detail.annotator} />
@@ -340,7 +344,9 @@ export function MatterCorePage({ detail, core, onEvent, coach, onFinished }: {
             {!readOnly && image && !locked(image.stain) && area && area.from !== 'waiting' && <div className="row">
               {carried && <button className={`btn${dirty ? '' : ' primary'}`} disabled={saving} onClick={() => void save(true)}
                 title="Save the white matter carried from NeuN as it is (Enter when nothing is changed)">{lastOne ? 'Accept as carried and finish core' : 'Accept as carried'}</button>}
-              {(!carried || dirty) && <button className="btn primary" disabled={saving} onClick={() => void save(false)}
+              {proposed && <button className={`btn${dirty ? '' : ' primary'}`} disabled={saving} onClick={() => void save(true)}
+                title="Save the algorithm's white matter as it is (Enter when nothing is changed)">Accept as found</button>}
+              {(!(carried || proposed) || dirty) && <button className="btn primary" disabled={saving} onClick={() => void save(false)}
                 title="Save this stain's white matter as painted (Enter)">{saving ? 'Saving…' : lastOne ? 'Finish core' : savedHere && !dirty ? `Save ${image.stain} again` : `Save ${image.stain}`}</button>}
             </div>}
             {!readOnly && !practice && <div className="row matter-all-grey">

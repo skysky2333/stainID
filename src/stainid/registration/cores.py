@@ -110,10 +110,16 @@ def _native(state, core_id: str, stain: str) -> tuple[int, int]:
 
 def _computed(state, core_id: str, source: str, target: str) -> Carry:
     """Registered now from the two whole-core pictures (target the reference), kept in the cache."""
+    return _registered(state.root, core_id, source, target, lambda c, s: _picture(state, c, s), lambda c, s: _native(state, c, s))
+
+
+def _registered(project_root, core_id: str, source: str, target: str, picture, native) -> Carry:
+    """The pair registered from `picture(core, stain)` (RGB whole-core pictures, `PREVIEW_PX` across) and kept in the
+    project's `registration` cache, or what is kept there already (the app and `carry_project` share it)."""
     from stainid import disk_cache  # noqa: PLC0415
     from stainid.registration import rigid  # noqa: PLC0415
 
-    kept = state.cache_dir("registration") / f"{core_id}_{source}_to_{target}.json"
+    kept = disk_cache.folder(project_root, "registration") / f"{core_id}_{source}_to_{target}.json"
     if kept.exists():
         try:
             found = json.loads(kept.read_text())
@@ -121,9 +127,9 @@ def _computed(state, core_id: str, source: str, target: str) -> Carry:
             return Carry(_square(found["matrix"]), found["status"], "computed", found.get("dice"))
         except (ValueError, KeyError):
             pass
-    reference, moving = _picture(state, core_id, target), _picture(state, core_id, source)
+    reference, moving = picture(core_id, target), picture(core_id, source)
     result = rigid.register_previews(reference, moving)
-    matrix = rigid.native_matrix(result.matrix, reference.shape[:2], _native(state, core_id, target), _native(state, core_id, source))
+    matrix = rigid.native_matrix(result.matrix, reference.shape[:2], native(core_id, target), native(core_id, source))
     carry = Carry(_square(matrix), result.status, "computed", float(result.final_dice))
     from stainid.tables import write_text_atomic  # noqa: PLC0415
 
@@ -138,3 +144,52 @@ def carry(state, core_id: str, source: str, target: str) -> Carry:
         return Carry(np.eye(3), "same", "same", 1.0)
     found = _from_table(state.project, core_id, source, target)
     return found if found is not None else _computed(state, core_id, source, target)
+
+
+def _project_native(project):
+    from stainid.tables import read_csv  # noqa: PLC0415
+
+    path = project.input("core_images")
+    rows = {(str(r["core_id"]), str(r["stain"])): r for r in read_csv(path)} if path.exists() else {}
+
+    def native(core_id: str, stain: str) -> tuple[int, int]:
+        row = rows[(core_id, stain)]
+        return int(float(row["native_height_px"])), int(float(row["native_width_px"]))
+
+    return native, rows
+
+
+def project_picture(project):
+    """`picture(core, stain)` for `carry_project` without the app: the app's whole-core thumbnail base when it is kept,
+    else the core image read at 1/8, shrunk to `PREVIEW_PX` across (as the app's pictures are)."""
+    import cv2  # noqa: PLC0415
+
+    from stainid import disk_cache  # noqa: PLC0415
+    from stainid.imaging.core_images import read_bgr  # noqa: PLC0415
+    from stainid.imaging.thumbnails import base_path, shrink  # noqa: PLC0415
+
+    _, rows = _project_native(project)
+
+    def picture(core_id: str, stain: str) -> np.ndarray:
+        base = base_path(disk_cache.folder(project.root, "thumbs"), core_id, stain)
+        bgr = cv2.imread(str(base), cv2.IMREAD_COLOR) if base.exists() else None
+        if bgr is None:
+            bgr = read_bgr(project.root / rows[(core_id, stain)]["image_path"], cv2.IMREAD_REDUCED_COLOR_8)
+        if bgr is None:
+            raise FileNotFoundError(f"no picture of {core_id} {stain}")
+        return cv2.cvtColor(shrink(bgr, PREVIEW_PX), cv2.COLOR_BGR2RGB)
+
+    return picture
+
+
+def carry_project(project, core_id: str, source: str, target: str, picture=None) -> Carry:
+    """`carry` without the app (a pipeline step): the registration table, else the pair registered from the whole-core
+    pictures (`picture`, default `project_picture`) and kept in the same cache as the app's, so both carry with the
+    same matrix."""
+    if source == target:
+        return Carry(np.eye(3), "same", "same", 1.0)
+    found = _from_table(project, core_id, source, target)
+    if found is not None:
+        return found
+    native, _ = _project_native(project)
+    return _registered(project.root, core_id, source, target, picture or project_picture(project), native)

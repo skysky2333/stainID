@@ -575,10 +575,13 @@ def _image_of(project, core_id: str, stain: str) -> tuple[str | None, bool]:
 @dataclass
 class View:
     """What the views draw of one core image and stain as "Excluded from analysis": the automatic codes with tissue
-    outside every tile as `NOT_ANALYSED`, the scale and a version (changes with the layer)."""
+    outside every tile as `NOT_ANALYSED`, the scale and a version (changes with the layer and the white matter), and
+    `white`: the white matter the algorithm found (`v2.white_matter`) on the same grid, None before its step ran. The
+    white matter is drawn over the codes, not in them: while `v2.white_matter.analysis` is off it is counted."""
     codes: np.ndarray
     scale: int
     version: str
+    white: np.ndarray | None = None
 
 
 def view(project, core_id: str, stain: str) -> View | None:
@@ -593,12 +596,27 @@ def view(project, core_id: str, stain: str) -> View | None:
         tissue = _tissue(project, image, codes.shape) if image else None
         if tissue is not None:
             codes[(codes == OUTSIDE) & tissue] = NOT_ANALYSED
-        return View(codes, layer.scale, layer.digest)
+        white, version = white_matter_of(project, core_id, stain, codes.shape)
+        return View(codes, layer.scale, layer.digest + version, white)
     tissue = _tissue(project, image, None)
     if tissue is None:
         return None
     codes = np.where(tissue, NOT_ANALYSED, OUTSIDE).astype(np.uint8)
     return View(codes, SCALE, "untiled-" + hashlib.sha1(repr(cache.signature(project.root / image)).encode()).hexdigest()[:12])
+
+
+def white_matter_of(project, core_id: str, stain: str, shape: tuple[int, int]) -> tuple[np.ndarray | None, str]:
+    """The algorithm's white matter of a core image on a layer's grid (`v2.white_matter.read`, cut or padded to
+    `shape`) where the layer counts tissue, and a version text ("" before the step made it)."""
+    from stainid.v2 import white_matter  # noqa: PLC0415
+
+    found = white_matter.read(project, core_id, stain)
+    if found is None:
+        return None, ""
+    out = np.zeros(shape, bool)
+    h, w = min(shape[0], found.shape[0]), min(shape[1], found.shape[1])
+    out[:h, :w] = found[:h, :w]
+    return out, "-wm" + white_matter.digest(project, core_id, stain)
 
 
 def signature(project, stain: str | None = None) -> tuple:

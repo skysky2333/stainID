@@ -681,7 +681,10 @@ export interface MatterCore { core_id: string; tma: string; core: string; images
 /** How a core's two stain images line up (registration/cores.py): status pass / review / fail / same, from the table or computed. */
 export interface Registration { status: string; how: string; dice: number | null; matrix: number[][] }
 /** What the brush starts from on a stain image (`kinds.white`: the area as a PNG): saved, carried, new or waiting (the source not saved yet). */
-export interface MatterArea extends FieldAreas { from: 'saved' | 'carried' | 'new' | 'waiting'; carried_from?: string; registration?: Registration; saved?: MatterSaved }
+/** The algorithm's say about a NeuN core image (stainid.v2.white_matter): white (its area is `kinds.white`, `from`
+ *  "proposed"), grey (none found) or undetermined (`reason`: a NeuN stain too pale to read); null before its step ran. */
+export interface MatterProposal { status: 'white' | 'grey' | 'undetermined'; reason: string | null; white_share: number | null; white_mm2: number | null; reference_per_mm2: number | null; version: string }
+export interface MatterArea extends FieldAreas { from: 'saved' | 'carried' | 'proposed' | 'new' | 'waiting'; carried_from?: string; registration?: Registration; saved?: MatterSaved; proposal?: MatterProposal | null }
 export interface MatterOverview { stains: { stain: string; images: number; saved: number }[]; cores: number; cores_done: number }
 export interface BadAreaRow { stain: string; type: string; type_name: string; images: number; added_mm2: number; cleared_mm2: number; f1: number | null; tma?: string; donor_id?: string }
 /** The bad-area detector (today: detection's rules) against people's areas. */

@@ -65,14 +65,15 @@ def test_a_field_gets_its_part_of_the_excluded_areas(client, synthetic_project):
 def test_excluded_areas(client, synthetic_project):
     assert store_view.EXCLUDED_SCALE == MASK_SCALE
     missing = client.get(f"/api/cores/{CORE}/AT8/excluded").json()
-    assert missing["status"] == "not_made" and [k["id"] for k in missing["kinds"]] == [k.id for k in store_view.EXCLUDED_KINDS]
+    assert missing["status"] == "not_made" and [k["id"] for k in missing["kinds"]] == [k.id for k in store_view.EXCLUDED_KINDS] + ["white_matter"]
     assert client.get(f"/api/cores/{CORE}/AT8/excluded.png").status_code == 404
 
     write_mask(synthetic_project)
     info = client.get(f"/api/cores/{CORE}/AT8/excluded").json()
     assert info["status"] == "done" and (info["width"], info["height"], info["scale"]) == (20, 20, MASK_SCALE)
     share = {k["id"]: k["fraction"] for k in info["kinds"]}
-    assert set(share) == {"fold", "artifact", "no_tissue", "focus", "edge_guard", "not_analysed"}  # one entry per type, no history layers
+    assert set(share) == {"fold", "artifact", "no_tissue", "focus", "edge_guard", "not_analysed", "white_matter"}  # one entry per type, no history layers
+    assert share["white_matter"] == 0.0  # drawn, not excluded; none before the white-matter step ran
     core = 20 * 19  # analysed cells (the synthetic image has no tissue the tiling would find outside its tile)
     assert share["fold"] == round(4 * 19 / core, 4)  # the hand-drawn bit is not read: hand-drawn areas are edits now
     assert share["artifact"] == round(19 / core, 4)
