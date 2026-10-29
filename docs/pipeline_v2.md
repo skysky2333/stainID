@@ -49,6 +49,18 @@ people's marked and cleared areas (`stainid.exclusions`) never change the analys
 training and evaluation (`exclusions.drop_excluded`). Smoothing at a few pixels' scale can still carry stain across
 the border of an excluded area by those few pixels.
 
+**The linear-artifact mask is relative to the core's tissue** (`v2.proposals.linear_artifact_contrast`, 0.1). A band
+(fold edge, knife line, scratch) is at least 0.35 dark (1 − grey level, smoothed) and also 0.1 darker than the core
+image's own tissue (`tissue.core_tissue_darkness`: the median over the tissue outside brown stain, at 1/8 scale, once
+per core image; a field's own median would be the fold's in an edge field that is mostly fold). With the fixed 0.35
+alone, tissue that is itself nearly 0.35 dark became a band: on Tangle-Tracer a median 50 % of each region's tissue
+(36 % of its test tangles never proposed), on Keiser 37 % of the tissue, and on the study's darkest 6E10 cores (LIP-1
+D-3, E-3, E-4, D-4, F-4, E-5; LIP-6 D-5) a band of ordinary tissue tens of µm wide along the core edge, plaques in it.
+Only core images whose tissue is darker than 0.25 can change (9 of 349 6E10, 3 of 364 AT8 study cores; on the 7 darkest
+6E10 cores 17 plaques gained, 6 lost, nearly all of them plaques by the core edge); real folds and knife lines stay
+masked (597 study tiles where the old mask took over a quarter of the tissue: 12.6 % → 12.5 % of their tissue).
+`null` restores the fixed cut. Calibration and the viewer's excluded-areas overlay use the same mask.
+
 Per tile and stain, each tile detecting in a window that reaches `proposals.<stain>.context_px` beyond it: as far as
 the largest object reaches from its centre (accepted whole objects of the cohort reach at most NeuN 221 px, AT8 168 px,
 6E10 926 px = 253 µm; the windows are 256, 256 and 1024 px). So the tile that owns an object's centre sees all of it,
@@ -167,6 +179,18 @@ max(0.75 × threshold, tissue median + 0.25 × threshold), ≥ 100 µm², that n
 pale diffuse plaque that only specks of candidates touch is reported, which the old rule (DAB ≥ threshold, touching no
 candidate) never did.
 
+## The bound on a slide's threshold
+
+`stainid calibrate` sets a slide's DAB threshold from its own tissue (the larger of Otsu's split, median + 6 MAD and
+0.01 OD), so it follows the slide's DAB background: on every set it lies near the tissue's median + 6 MAD and 1.3–1.5 ×
+its 90th percentile. The models read absolute OD, and the AT8 one was trained on slides at 0.017–0.046 OD. Public AT8
+slides are browner throughout (median tissue DAB 2.4–6 × the study's), so their thresholds came out at 0.075 (Tangle-
+Tracer), 0.080 (Emory) and 0.170 (ADNP-15) OD, and the proposals there kept only the darkest part of each tau+ neuron
+and missed the pale ones. `v2.calibration.max_threshold_dab_od` bounds the threshold per stain (AT8 0.05, above every
+study slide, so the study's thresholds are unchanged; NeuN and 6E10 unbounded). `threshold_dab_od` is the bounded
+value every step uses and `calibrated_threshold_dab_od` the tissue's own. `stainid calibrate` without `--redo` applies
+a new bound to the kept slides without sampling them again; it only ever lowers a kept threshold.
+
 ## Retraining on slide-scaled inputs
 
 The current models take DAB intensities in absolute OD, and some measures are cut at absolute OD floors; slides differ
@@ -203,7 +227,7 @@ The stain model scores every candidate from `m_` columns (`stainid.candidates.mo
 |---|---|---|
 | NeuN | `rule:excluded` (≥ 50 % excluded, or a Cellpose cell in a hand-drawn exclusion), `rule:near_profile`, `rule:pale_nucleus` (legacy Cellpose filters), `rule:shape` (legacy profile size / shape filter); for the new sources only: `rule:edge` (≥ 50 % within 5 µm of an edge or hole), `rule:fold` (≥ 50 % on a fold band with a weak edge, DAB gradient < 1 threshold per px: patches of the band; neurons on a band keep a sharp edge — the legacy NeuN detection never masked folds), `rule:irregular` (solidity < 0.6) | — |
 | 6E10 | `rule:excluded`; `rule:artifact_shape` off by default (the legacy shape rule; the classifier now decides) | `rule:speck` (≤ 10 µm), `rule:vascular_or_edge` (outer boundary ≥ 25 % on a lumen or tissue edge); subtype compact / diffuse / small by the model's morphotype threshold |
-| AT8 | `rule:excluded` (also a centre outside valid tissue), `rule:low_contrast` (< 0.3, the legacy bar), `rule:small` (new-source bodies < 40 µm²), `rule:edge`, `rule:irregular` (new-source bodies less compact than legacy bodies: solidity < 0.7 or circularity < 0.35) | `rule:duplicate` (12 µm suppression, now over the whole core); subtype mature tangle / pretangle by the model's p90 threshold |
+| AT8 | `rule:excluded` (also a centre outside valid tissue), `rule:low_contrast` (< 0.3, the legacy bar), `rule:small` (new-source bodies < 40 µm²), `rule:edge`, `rule:irregular` (new-source bodies less compact than legacy bodies: solidity < 0.7 or circularity < 0.35; both off with `min_body_um2: 0`, `body_min_solidity: 0`, `body_min_circularity: 0`. Flame-shaped tangles fail them, so a project of such slides whose forest is refitted on its own labels may turn them off; on the study they stop few real cells, and without them the forest accepts about 7 % more objects, mostly dense thread swellings) | `rule:duplicate` (12 µm suppression, now over the whole core); subtype mature tangle / pretangle by the model's p90 threshold |
 
 `class` and `subtype` are label-vocabulary ids (`stainid.labels.vocabulary`); `threshold` is the cut-off the call used.
 
