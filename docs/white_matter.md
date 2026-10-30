@@ -181,6 +181,16 @@ needs NeuN's detection first (it is made from NeuN's calls), so it is applied at
    are grey matter only; every whole-core number is kept next to it as `<column>_whole_core` in `results_core`,
    `results_donor_region` and the three `cohort_morphology_*` R tables, and the whole-core tables as before are written
    under `measures/whole_core/`.
+   A core image left with less grey matter than `v2.white_matter.min_grey_mm2` (default 1 mm²) is not measured as
+   grey matter: its row stays, with every grey-matter measure missing (NA), its `_whole_core` columns and
+   `grey_too_small` 1 (per core: in any stain). A donor-region is measured from its other cores
+   (`grey_too_small_cores`: how many were left out) and is NA, `grey_too_small` 1, when it has none left, never 0. Why
+   1 mm²: in grey cores, the density of random compact windows against the whole core's is off by a median 98 % (AT8),
+   57 % (6E10) and 25 % (NeuN) at 0.1 mm², 43 / 43 / 20 % at 0.5 mm², 35 / 44 / 16 % at 1 mm² and 31 / 37 / 14 % at
+   2 mm², so the error stops falling steeply at about 1 mm² (`/run/media/sky/Untitled/alzh/work/wm_detect/floor/`).
+   With version 2 only the 6 cores that are white matter as a whole fall under it (0.03-0.13 mm² of grey matter
+   left: LIP-6_D-4, LIP-8_E-5, LIP-8_D-4, LIP-8_E-4, LIP-6_E-5, LIP-4_F-3); no core has between 0.13 and 1.5 mm². The
+   same setting tells the white-matter step when a core has too little grey matter of its own to compare with.
 4. The views shade the white matter as excluded (code 7, *white matter (found by the algorithm; left out of the
    analysis)*), so what they draw as counted is still what the measures divide by.
 

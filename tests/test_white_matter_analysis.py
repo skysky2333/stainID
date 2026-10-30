@@ -69,7 +69,7 @@ def test_stage_five_leaves_the_white_matter_out_and_keeps_the_whole_core_numbers
     project = detected
     _white(project)
     grey_matter.run(project, log=lambda text: None)
-    project.config.setdefault("v2", {})["white_matter"] = {"analysis": "exclude"}
+    project.config.setdefault("v2", {})["white_matter"] = {"analysis": "exclude", "min_grey_mm2": 0.001}  # the tiny core is measured
     lines = write_measures(project)
     folder = store.root(project) / "measures"
     assert any("white matter left out" in line for line in lines)
@@ -118,3 +118,27 @@ def test_off_counts_everything_and_a_pale_core_is_flagged_not_left_out(detected)
     pd.testing.assert_frame_equal(after[before.columns], before)
     region = pd.read_csv(store.root(project) / "measures" / "results_donor_region.csv").iloc[0]
     assert region.neun_pale == 1 and region.neun_pale_cores == 1
+
+
+def test_a_sliver_of_grey_matter_is_not_measured(detected):
+    """A core image left with less grey matter than v2.white_matter.min_grey_mm2 (here the whole tiny core, 0.03 mm² of
+    grey matter against the default 1 mm²) is NA in the grey-matter tables, flagged, its whole-core numbers kept; its
+    donor-region, with no other core, is NA too (not 0)."""
+    project = detected
+    _white(project)
+    grey_matter.run(project, log=lambda text: None)
+    project.config.setdefault("v2", {})["white_matter"] = {"analysis": "exclude"}
+    lines = write_measures(project)
+    folder = store.root(project) / "measures"
+    assert any("not measured (NA)" in line for line in lines)
+    core = pd.read_csv(folder / "results_core.csv")
+    whole = pd.read_csv(folder / "whole_core" / "results_core.csv")
+    assert len(core) == len(whole) == 1 and core.grey_too_small.iloc[0] == 1
+    assert np.isnan(core.neun_positive_profile_count.iloc[0]) and np.isnan(core.neun_tissue_area_mm2.iloc[0])
+    assert core.neun_positive_profile_count_whole_core.iloc[0] == whole.neun_positive_profile_count.iloc[0] > 0
+    assert core.disease_group.iloc[0] == whole.disease_group.iloc[0]
+    region = pd.read_csv(folder / "results_donor_region.csv")
+    assert len(region) == 1 and region.grey_too_small.iloc[0] == 1 and region.grey_too_small_cores.iloc[0] == 1
+    assert np.isnan(region.neun_profile_density_mm2.iloc[0]) and region.neun_profile_density_mm2_whole_core.iloc[0] > 0
+    features = pd.read_csv(folder / "cohort_morphology_core_features.csv")
+    assert set(features.grey_too_small) == {1} and features.tissue_area_mm2.isna().all()

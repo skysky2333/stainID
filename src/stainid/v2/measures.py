@@ -24,6 +24,12 @@ results and R tables also carry each whole-core number as `<column>_whole_core`.
 the results and R tables carry `white_matter_status`, `white_matter_share` (of the NeuN core image's analysed tissue;
 donor-region: of the NeuN cores' together) and the NeuN-pale flag `neun_pale` (the core's NeuN stain too pale to read;
 donor-region: any of its cores, `neun_pale_cores` how many), whatever the setting: pale cores are flagged, never left out.
+
+A core image left with less grey matter than `v2.white_matter.min_grey_mm2` (default 1 mm²: a core that is white matter
+as a whole keeps a sliver, and a density over a sliver is noise) is not measured as grey matter: its grey-matter row
+keeps its identity and whole-core columns with every measure missing (NA), `grey_too_small` 1; a donor-region whose
+cores are all like that is NA too (`grey_too_small` 1), otherwise it is measured from its other cores
+(`grey_too_small_cores`: how many were left out).
 """
 from __future__ import annotations
 
@@ -380,6 +386,8 @@ def write_measures(project, folder: Path | None = None) -> list[str]:
     images = core_images(project)
     lines = [f"stage 5 (measures): {', '.join(f'{len(v)} {s}' for s, v in images.items())} core images with calls"]
     left_out = 0
+    floor = float(white_matter.settings(project)["min_grey_mm2"]) if exclude else 0.0
+    too_small: set[tuple[str, str]] = set()
     for stain, cores in images.items():
         for core_id in cores:
             tiles = _tiles(project, stain, core_id)
@@ -398,6 +406,9 @@ def write_measures(project, folder: Path | None = None) -> list[str]:
                 changed = grey_inputs(project, stain, core_id, tiles, found, threads)
                 if changed is None:
                     _core_rows(project, stain, core_id, tiles, found, threads, models, morphotype, addition, between, grey)
+                elif float(pd.to_numeric(changed[0]["analysis_area_mm2"], errors="coerce").sum()) < floor:
+                    left_out += 1
+                    too_small.add((str(core_id), stain))  # a sliver of grey matter: not measured (NA), see the docstring
                 else:
                     left_out += 1
                     _core_rows(project, stain, core_id, *changed, models, morphotype, addition, between, grey)
@@ -409,6 +420,7 @@ def write_measures(project, folder: Path | None = None) -> list[str]:
         lines += _write_tables(folder / "whole_core", whole, between)
         lines += _write_tables(folder, grey, between)
         lines += _attach_whole(folder, folder / "whole_core")
+        lines += _attach_too_small(project, folder, too_small, floor)
     if white_matter.summary_path(project).exists():
         lines += _attach_flags(project, folder)
     return lines
@@ -428,12 +440,70 @@ def _attach_whole(folder: Path, whole: Path) -> list[str]:
         main_path, whole_path = folder / f"{name}.csv", whole / f"{name}.csv"
         if not main_path.exists() or not whole_path.exists():
             continue
-        main, other = pd.read_csv(main_path, low_memory=False), pd.read_csv(whole_path, low_memory=False)
+        main, other = _read_or_empty(main_path), pd.read_csv(whole_path, low_memory=False)
+        if main.empty and len(other):  # no core image had grey matter enough to measure: the whole-core rows, every measure NA
+            main = other.copy()
+            for column in main.columns:
+                if column not in TABLE_KEYS and column not in NOT_MEASURES and pd.api.types.is_numeric_dtype(main[column]):
+                    main[column] = np.nan
         keys = [k for k in TABLE_KEYS if k in main and k in other and not (k == "core_id" and "results_donor" in name)]
         numbers = [c for c in other.columns if c not in keys and c not in NOT_MEASURES and pd.api.types.is_numeric_dtype(other[c])]
         joined = main.merge(other[keys + numbers].rename(columns={c: c + WHOLE for c in numbers}), on=keys, how="left")
         joined.to_csv(main_path, index=False)
         lines.append(f"{name}: {len(numbers)} whole-core columns ({WHOLE})")
+    return lines
+
+
+def _read_or_empty(path: Path) -> pd.DataFrame:
+    try:
+        return pd.read_csv(path, low_memory=False)
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame()
+
+
+def _attach_too_small(project, folder: Path, too_small: set[tuple[str, str]], floor: float) -> list[str]:
+    """The core images left with too little grey matter (`too_small`: (core_id, stain)): their rows (and those of
+    donor-regions left with none) put back from the whole-core tables with every measure missing, and the flags
+    `grey_too_small` (core: in any stain; donor-region: all its cores) and `grey_too_small_cores` (donor-region)."""
+    cores = {c for c, _ in too_small}
+    region_of = _regions(project, folder / "whole_core")
+    small_in_region: dict[str, int] = defaultdict(int)
+    for core_id in cores:
+        if core_id in region_of:
+            small_in_region[region_of[core_id]] += 1
+    all_in_region: dict[str, int] = defaultdict(int)
+    for core_id, region in region_of.items():
+        all_in_region[region] += 1
+    lines = [f"grey matter under {floor:g} mm² (v2.white_matter.min_grey_mm2): {len(too_small)} core images of {len(cores)} cores "
+             f"not measured (NA)"]
+    for name in RESULT_TABLES:
+        main_path, whole_path = folder / f"{name}.csv", folder / "whole_core" / f"{name}.csv"
+        if not main_path.exists() or not whole_path.exists():
+            continue
+        main, whole = pd.read_csv(main_path, low_memory=False), pd.read_csv(whole_path, low_memory=False)
+        keys = [k for k in TABLE_KEYS if k in main and k in whole and not (k == "core_id" and "results_donor" in name)]
+        have = set(map(tuple, main[keys].astype(str).to_numpy()))
+        missing = whole[[tuple(r) not in have for r in whole[keys].astype(str).to_numpy()]].copy()
+        if len(missing):
+            numbers = [c for c in whole.columns if c not in keys and c not in NOT_MEASURES and pd.api.types.is_numeric_dtype(whole[c])]
+            for column in numbers:
+                if column + WHOLE in main:
+                    missing[column + WHOLE] = missing[column]
+                missing[column] = np.nan
+            main = pd.concat([main, missing[[c for c in missing.columns if c in main.columns]]], ignore_index=True)
+        per_core = "core_id" in main and "results_donor" not in name and "donor_region" not in name
+        if per_core:
+            if "stain" in main:
+                flagged = [(str(c), str(st)) in too_small for c, st in zip(main.core_id, main.stain)]
+            else:
+                flagged = [str(c) in cores for c in main.core_id]
+            main["grey_too_small"] = np.array(flagged, int)
+        elif "sample_region_id" in main:
+            ids = main.sample_region_id.astype(str)
+            main["grey_too_small_cores"] = ids.map(lambda r: small_in_region.get(r, 0)).to_numpy()
+            main["grey_too_small"] = ids.map(lambda r: int(small_in_region.get(r, 0) > 0 and small_in_region[r] >= all_in_region.get(r, 0))).to_numpy()
+        main.to_csv(main_path, index=False)
+        lines.append(f"{name}: {len(missing)} rows with too little grey matter put back as NA")
     return lines
 
 

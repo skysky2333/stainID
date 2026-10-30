@@ -107,7 +107,9 @@ DEFAULTS = {
     # `pale_large_ratio` x, or more cells
     "large_nucleus_um2": 45.0, "max_large_ratio": 0.3, "pale_large_ratio": 0.3,
     # a core with no grey matter of its own to compare with (its densest tissue under `min_reference_per_mm2`, or less
-    # than `min_grey_mm2` of grey matter outside the candidates) is compared with the cohort's grey matter instead:
+    # than `min_grey_mm2` of grey matter outside the candidates) is compared with the cohort's grey matter instead
+    # (with `analysis: exclude`, stage 5 does not measure a core image left with less grey matter than `min_grey_mm2`
+    # either: its grey-matter measures are missing, `stainid.v2.measures`):
     # `cohort_large_share` large nuclei (the grey matter of the study's cores: 0.26-0.31; white matter 0.04), and its
     # 6E10 / AT8 sections must not show grey-matter pathology (at most `max_tau_per_mm2` AT8+ neurons and
     # `max_plaques_per_mm2` plaques per mm² of their analysed tissue: an AD core with neurons lost is grey matter)
