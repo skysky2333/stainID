@@ -11,22 +11,36 @@ the cells.
 
 ## The algorithm
 
-Per NeuN core image, on a grid of 64 core px (17.5 µm):
+Per NeuN core image, on a grid of 64 core px (17.5 µm), one rule set for every core (version 2, 2026-10-29):
 
 1. NeuN+ neurons per mm² of analysed tissue (stage 2's mask: tissue in a tile), smoothed over 100 µm and divided by the
    smoothed tissue, so the core's edge and its holes do not lower it.
 2. The core's own grey-matter density, the *reference*: the 90th percentile over its tissue (typically 250-900 /mm²).
-   Below 80 /mm² the core's NeuN cannot be read and the core is **undetermined**: its NeuN stain is too pale or failed
-   (43 of 361 NeuN cores; see "NeuN-pale cores" below).
-3. Seeds: tissue below 10 % of the reference, opened with a disc of 150 µm (a thin sparse band is no seed); grown
-   through tissue below 25 % of the reference; parts under 0.25 mm² dropped; a part must reach 450 µm from the
-   tissue's edge (glass, tears, holes), so a band along an edge — layer I under the pia, leptomeninges, a sulcus, a
-   frayed core edge — is no white matter.
-4. Each part is checked on the NeuN image itself (read at 1/4, 1.1 µm/px): kept when it has at least as many cells per
-   mm² as the core's grey matter (tissue at ≥ 50 % of the reference), or at most 0.65 x its NeuN stain (mean DAB).
-   White matter has more cells (oligodendrocytes in rows: 1.4 x the grey matter's, median of the confirmed cores) and
-   no NeuN-stained neuropil; grey matter that is only poor in NeuN+ neurons (a pale or uneven NeuN stain, deep layer VI)
-   has neither.
+3. Candidates, two ways that are merged:
+   - *far below the reference*: seeds under 10 % of it, opened with a disc of 150 µm (a thin sparse band is no seed),
+     grown through tissue under 25 %;
+   - *the sharp drop*: tissue under 20 % of the densest tissue within 400 µm (a drop to a fifth across 400 µm is a step,
+     a fade is not), where that grey side has at least 25 % of the reference and 80 /mm²; each such seed's region
+     reaches the steepest part of the drop (a watershed of the density's gradient between these seeds and the grey
+     matter, tissue at ≥ 40 % of the reference). The drop is measured against the grey matter beside it, so very dense
+     grey matter elsewhere in the core no longer hides white matter (LIP-1_E-4).
+   A core whose densest tissue is under 80 /mm² (its NeuN stain pale or failed, or a core of white matter only) has no
+   grey matter to drop from and is a candidate as a whole.
+4. Each part (≥ 0.25 mm²) is kept when
+   - it is at least 180 µm thick and its density is at most 0.7 x the density just outside it (a real step);
+   - it reaches 450 µm from the tissue's outer edge (holes and tears inside the core are not edges any more), or its
+     step is clear (≤ 0.35) and its cells are white matter's: white matter at a core's edge is kept, layer I and the
+     pia mostly not;
+   - its cells are white matter's, against the core's grey matter (tissue at ≥ 50 % of the reference): few
+     neuron-sized nuclei (stage 1's Cellpose nuclei of the NeuN section ≥ 45 µm², at most 0.3 x the grey matter's
+     share), or at least as many cells per mm² (hematoxylin nuclei of the NeuN section and of the 6E10 and AT8 sections
+     carried onto it through the registration, averaged), or at most 0.65 x the NeuN stain (mean DAB). When the drop in
+     neurons comes with a drop in the background NeuN stain (the part's median DAB under 0.65 x the ring around it: a
+     staining gradient across the core, LIP-5_E-1) only the cells count: more cells, or few neuron-sized nuclei;
+   - a core with no grey matter of its own (point 3) is compared with the cohort's grey matter instead: at most 0.3 x
+     its share of neuron-sized nuclei (0.28; white matter has 0.03-0.07, cores whose neurons are only unstained
+     0.10-0.32), and no grey-matter pathology on its other sections (≤ 8 AT8+ neurons and ≤ 50 plaques per mm²: an AD
+     core whose NeuN failed is grey matter). A pale core that is not white stays **undetermined** (flagged, see below).
 5. Holes under 0.1 mm² filled; the area on the masks' grid (1/8 of the core image), its edge smoothed, inside the
    analysed tissue. It is carried to the core's 6E10 and AT8 images through the registration (`registration.cores`:
    the registration table, else the pair registered from the whole-core pictures and kept in the same cache the app
@@ -36,7 +50,7 @@ Per NeuN core image, on a grid of 64 core px (17.5 µm):
 All settings are under `v2: white_matter:` in stainid.yaml (`stainid.v2.white_matter.DEFAULTS`); a change redoes every
 core at the next run.
 
-**Which cue carries it.** The neuron density. Cells alone separate a core's white from its grey matter with a median
+**Which cue carries it.** The neuron density and the sharp drop in it; cells and their sizes confirm. Cells alone separate a core's white from its grey matter with a median
 within-core AUC of 0.91 on the NeuN section, 0.95 on 6E10 and 0.90 on AT8 (the white matter carried by the registration),
 but below 0.65 on a quarter of the cores; the NeuN stain (DAB) alone 0.96. So cells confirm the parts the neurons propose
 and veto grey matter that is merely sparse in NeuN+ neurons.
@@ -100,6 +114,29 @@ grey matter (LIP-6_F-5, LIP-10_F-4, LIP-6_B-4) and narrow white matter at a fray
 boundary itself follows the drop in neuron density within about one smoothing width (100 µm); it has not been scored
 against people's outlines (none yet beyond the trial).
 
+### Version 2 (2026-10-29): area-level recall
+
+People found misses quickly (LIP-1_E-4's lower right, LIP-4_B-2, LIP-3_E-2) and one over-claim (LIP-5_E-1), so the
+first version's core-level sensitivity (92 %) hid a recall problem in area. Version 2 keeps version 1 as its base and
+adds to the same rules: the sharp drop as a second way to a candidate, depth from the outer edge only, the cells of the
+other sections and the neuron-sized nuclei, the background-stain check and the cohort comparison for cores with no grey
+matter of their own. Scored against white matter outlined by eye (by the assistant, on whole-core NeuN pictures with a
+grid; 21 cores: 14 with white matter, 2 whole-core white, 5 grey, LIP-5_E-1 none; `labels_by_eye.json`):
+
+| | pixel recall | pixel precision |
+|---|---|---|
+| version 1 | 0.43 | 0.81 |
+| version 2 | 0.83 | 0.89 |
+
+Over all 361 NeuN cores: the 95 cores version 1 called white keep at least 80 % of their area except LIP-5_E-1 (pale
+stain, removed on purpose) and LIP-3_B-1 (4 %, a thin part); 61 grey cores and 7 pale cores become white (161 white,
+164 grey, 36 undetermined). A visual pass over the new ones finds most plausible (neuron-poor zones with glial nuclei:
+LIP-7_C-2, LIP-6_E-2, LIP-6_C-4, LIP-8_C-2, ...) and some false positives of three kinds: leptomeninges and frayed
+tissue (LIP-2_C-1, LIP-10_A-5, LIP-1_A-3), bands along the pia or a sulcus (LIP-5_F-1, LIP-5_F-4, LIP-12_A-4,
+LIP-6_F-4) and patchy neuron loss in AD cores with a low reference (LIP-12_D-4, LIP-10_F-3). LIP-3_E-2 stays grey: its
+upper right looks like white matter but its centre has dark pyramidal perikarya and the candidate parts keep 0.7 x the
+grey matter's neuron-sized nuclei. Per-core tables and montages: `/run/media/sky/Untitled/alzh/work/wm_detect/`.
+
 ### NeuN-pale cores
 
 43 NeuN cores (12 %) have almost no NeuN+ neurons anywhere (the densest part under 80 /mm², typically 0-40) while their
@@ -119,6 +156,10 @@ like grey matter (LIP-2_A-4, LIP-2_A-5, LIP-7_D-1, D-2, E-1, E-2, LIP-11_D-2, LI
 cores of donor 2152, occipital) look like pure white matter (small dark round nuclei in rows along parallel fibres, no
 neuron-sized nuclei on any section); LIP-11_C-2 (vacuolated, small nuclei only) probably white matter; LIP-6_E-5
 unclear. `scripts`: `/run/media/sky/wd6t/wm_detect/scripts/pale_check.py`, montages `pale_ct_*.jpg`.
+
+Version 2 decides these cores with the same rules (point 4, the cohort comparison): 7 of the 43 become white matter as a
+whole (LIP-8_D-4, LIP-8_E-4, LIP-11_C-2 (its upper fragment), LIP-6_E-5, LIP-6_D-4, LIP-8_E-5, LIP-4_F-3), the other 36
+stay undetermined and flagged.
 
 ## Leaving it out of the analysis: `v2.white_matter.analysis: exclude`
 

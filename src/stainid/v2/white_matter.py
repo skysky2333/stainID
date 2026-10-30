@@ -6,23 +6,27 @@ nuclei, on every section; neurons are only the NeuN+ ones) of the NeuN image to 
 neurons are; white matter is tissue with almost none and more cells than the grey matter, and the cortex ends in it at
 a sharp drop in neuron density (`docs/white_matter.md`).
 
-Per NeuN core image (`detect`), on a grid of `CELL` mask px (64 core px, 17.5 µm):
+Per NeuN core image (`detect`), on a grid of `CELL` mask px (64 core px, 17.5 µm), one rule set for every core:
 1. the NeuN+ neuron density over the analysed tissue (stage 2's mask: tissue in a tile), smoothed over `sigma_um`;
-2. the core's own grey-matter density, `reference`: the `reference_quantile` of that density over its tissue. A core
-   whose reference is under `min_reference_per_mm2` cannot be read (its NeuN stain is too pale or failed: the core
-   has hardly any NeuN+ neuron even where 6E10 and AT8 show grey-matter pathology) and is "undetermined";
-3. seeds: tissue below `seed` × the reference, opened with a disc of `open_um` (a thin sparse band, such as layer I
-   under the pia, goes); grown (region growing) through tissue below `grow` × the reference; parts under
-   `min_area_mm2` dropped;
-4. each part checked on the NeuN image itself (`look_at`, read at 1/4): kept when it has at least `min_cell_ratio` x
-   the cells per mm² of the core's grey matter (hematoxylin nuclei: white matter's rows of oligodendrocytes) or at most
-   `max_dab_ratio` x its NeuN stain (no stained neuropil). Grey matter that is only poor in NeuN+ neurons (a pale or
-   uneven NeuN stain, deep layer VI) has neither, and goes. Holes under `fill_holes_mm2` are filled;
+2. the core's own grey-matter density, `reference`: the `reference_quantile` of that density over its tissue;
+3. candidates: tissue far below the reference (seeds under `seed` x, opened with a disc of `open_um` so that a thin
+   sparse band such as layer I is no seed, grown through tissue under `grow` x), and the low side of every sharp drop:
+   tissue under `step` x the densest tissue within `near_um` (a drop to a fifth within 400 µm is a step, not a fade),
+   reaching the drop's steepest part (a watershed of the density's gradient). The drop is relative to the grey matter
+   next to it, so dense grey matter does not hide white matter beside it. A core whose densest tissue is under
+   `min_reference_per_mm2` has no grey matter to drop from: it is a candidate as a whole;
+4. each part checked: thick enough, a real step at its edge (`max_step`), deep in the tissue unless its step is clear
+   and its cells are white matter's (white matter at a core's edge is common; layer I, the pia and a frayed rim are
+   not), and its cells those of white matter: few neuron-sized nuclei (stage 1's nuclei of the NeuN section) against
+   the grey matter, or more cells (hematoxylin nuclei of the NeuN section and of the 6E10 / AT8 sections carried through
+   the registration) or less NeuN stain on an unchanged background. Fewer neurons on a paler background with as many
+   neuron-sized nuclei is a pale stain, not white matter. A core with no grey matter of its own is compared with the
+   cohort's grey matter (`cohort_large_share`) and must show no grey-matter pathology on its other sections; a pale core
+   that is not white stays "undetermined" (its NeuN stain too pale to read). Holes under `fill_holes_mm2` are filled;
 5. the area on the mask grid (1/8 of the core image), its edge smoothed, inside the analysed tissue.
 
-Which cue carries it: the neurons. Cells alone separate white from grey matter within a core with a median AUC of 0.9
-(NeuN, 6E10 and AT8 sections alike) but fail on a quarter of the cores; here they only confirm the parts the neurons
-propose.
+Which cue carries it: the neurons and the sharp drop in their density; the cells and their sizes confirm. Cells
+alone separate white from grey matter within a core with a median AUC of 0.9 but fail on a quarter of the cores.
 
 The NeuN area is carried to the core's 6E10 and AT8 images through the registration (`registration.cores`, the same
 matrices the "Grey / white matter" round carries people's areas with), inside each image's own analysed tissue.
@@ -54,7 +58,7 @@ from scipy import ndimage as ndi
 from stainid.tables import write_text_atomic
 
 STAGE = "white_matter"
-VERSION = 1  # bump when the code changes what it writes: every core is redone
+VERSION = 2  # bump when the code changes what it writes: every core is redone
 SCALE = 8  # core px per mask px (the stage-2 masks' grid, `exclusions.SCALE`)
 CELL = 8  # mask px per grid cell of the density (64 core px)
 WHITE = 1  # the mask's value for white matter
@@ -78,17 +82,40 @@ DEFAULTS = {
     "seed": 0.10,  # seeds: below this share of the reference
     "grow": 0.25,  # grown through tissue below this share of the reference
     "open_um": 150.0,  # seeds are opened with a disc of this radius: a thin sparse band (layer I) is no seed
+    # the sharp drop: tissue below `step` x the densest tissue within `near_um` (a drop to a fifth within 400 um: a step,
+    # not a fade) seeds too, where that grey side has at least `min_grey_share` x the reference (and 80/mm²); the
+    # region of each seed reaches the steepest part of the drop (a watershed of the density's gradient between the seeds
+    # and the grey matter: tissue at `grey_marker` x the reference or more)
+    "step": 0.2, "near_um": 400.0, "min_grey_share": 0.25, "grey_marker": 0.4,
     "min_area_mm2": 0.25,  # smaller parts are dropped
-    # a part must reach this far from the tissue's edge (glass, tears, holes): a band along an edge (layer I under the
-    # pia, the leptomeninges, a sulcus, a frayed core edge) is no white matter
-    "min_depth_um": 450.0,
+    "min_thick_um": 180.0,  # thinner parts (a band along an edge or a tear, layer I under the pia) are dropped
+    # a part must reach this far from the tissue's outer edge (holes and tears inside the core are no edge) unless its
+    # step is clear (`clear_step`) and its cells are those of white matter (`edge_cell_ratio`): white matter at a core's
+    # edge is common; layer I, the pia and a frayed rim have few cells
+    "min_depth_um": 450.0, "clear_step": 0.35, "edge_cell_ratio": 0.9,
+    "max_step": 0.7,  # the part's density over the density just outside it, at most: a gradual fade is no white matter
+    # the check on the cells (hematoxylin nuclei of the NeuN section and of the 6E10 / AT8 sections carried through the
+    # registration, averaged): white matter has at least `min_cell_ratio` x the grey matter's cells (oligodendrocytes in
+    # rows), or at most `max_dab_ratio` x its NeuN stain where the background stain is the grey matter's (no stained
+    # neuropil, not a paler stain: the part's median DAB at least `min_background_ratio` x the grey matter's around it).
+    # A drop in neurons together with a drop in the background stain is a pale stain, unless the cells say white matter
+    "min_cell_ratio": 1.0, "max_dab_ratio": 0.65, "min_background_ratio": 0.65, "ring_um": 200.0,
+    # the cells' sizes (stage 1's nuclei on the NeuN section): neurons have large nuclei (at least `large_nucleus_um2`),
+    # glia small ones. A part with at most `max_large_ratio` x the grey matter's share of large nuclei is confirmed by
+    # that alone (the share also varies between slides, so more large nuclei do not veto a part)
+    # On a paler background (a NeuN stain gradient) fewer neurons need clearly glial nuclei: at most
+    # `pale_large_ratio` x, or more cells
+    "large_nucleus_um2": 45.0, "max_large_ratio": 0.3, "pale_large_ratio": 0.3,
+    # a core with no grey matter of its own to compare with (its densest tissue under `min_reference_per_mm2`, or less
+    # than `min_grey_mm2` of grey matter outside the candidates) is compared with the cohort's grey matter instead:
+    # `cohort_large_share` large nuclei (the grey matter of the study's cores: 0.26-0.31; white matter 0.04), and its
+    # 6E10 / AT8 sections must not show grey-matter pathology (at most `max_tau_per_mm2` AT8+ neurons and
+    # `max_plaques_per_mm2` plaques per mm² of their analysed tissue: an AD core with neurons lost is grey matter)
+    # `max_cohort_large_ratio` x that (a core of white matter has hardly any: 0.03-0.07; the cores whose neurons are only
+    # unstained keep theirs: 0.10-0.32)
+    "min_grey_mm2": 1.0, "cohort_large_share": 0.28, "max_cohort_large_ratio": 0.3, "max_tau_per_mm2": 8.0, "max_plaques_per_mm2": 50.0,
     "fill_holes_mm2": 0.1,  # holes smaller than this inside white matter are filled
-    # the check on the NeuN image itself: a part is kept when it has at least `min_cell_ratio` x the cells (hematoxylin
-    # nuclei) per mm² of the core's grey matter, or at most `max_dab_ratio` x its NeuN stain (mean DAB). White matter has
-    # more cells (oligodendrocytes in rows) and no NeuN-stained neuropil; grey matter that is only sparse in NeuN+
-    # neurons (a pale NeuN stain, deep layer VI) has neither
-    "min_cell_ratio": 1.0, "max_dab_ratio": 0.65,
-    "grey_share": 0.5,  # the core's grey matter for that check: tissue at least this share of the reference density
+    "grey_share": 0.5,  # the core's grey matter for the cell check: tissue at least this share of the reference density
     "analysis": "off",  # what the analysis does with it: "off" (counted as before) or "exclude" (ANALYSIS_CHOICES)
 }
 
@@ -171,10 +198,10 @@ def density(neurons: np.ndarray, tissue: np.ndarray, cell_um: float, sigma_um: f
 
 def detect(tissue: np.ndarray, neurons: np.ndarray, cell_um: float, s: dict | None = None, look=None) -> tuple[np.ndarray, dict]:
     """The white matter of one NeuN core image on the density grid: `tissue` (share of each cell that is analysed
-    tissue), `neurons` (NeuN+ neurons per cell), `cell_um` (a cell's side); `look()`: (cells, DAB) grids of the NeuN image
-    (`look_at`), asked for only when there is a candidate part to check (None: parts are not checked). Returns the
-    grid's white matter and {status, reason, reference_per_mm2, white_share, parts}: each candidate part's area, cell
-    and DAB ratio and whether it was kept."""
+    tissue), `neurons` (NeuN+ neurons per cell), `cell_um` (a cell's side); `look()`: what the parts are checked with
+    (`Look`, or a (cells, DAB) pair of the NeuN image), asked for only when there is a candidate part (None: parts are
+    not checked). Returns the grid's white matter and {status, reason, reference_per_mm2, white_share, parts}: each
+    candidate part's area, step, depth, thickness, its cells, nuclei, stains and pathology, and whether it was kept."""
     s = {**DEFAULTS, **(s or {})}
     cell_mm2 = (cell_um / 1000.0) ** 2
     present = tissue > 0.5
@@ -184,53 +211,160 @@ def detect(tissue: np.ndarray, neurons: np.ndarray, cell_um: float, s: dict | No
     if values.size * cell_mm2 < s["min_tissue_mm2"]:
         return none, {"status": "undetermined", "reason": f"less than {s['min_tissue_mm2']:g} mm² of analysed tissue", "reference_per_mm2": np.nan, "white_share": np.nan}
     reference = float(np.percentile(values, s["reference_quantile"]))
-    if reference < s["min_reference_per_mm2"]:
-        return none, {"status": "undetermined", "reason": f"too few NeuN+ neurons to tell grey from white matter (the densest part "
-                      f"has {reference:.0f}/mm²: the NeuN stain is pale or failed)", "reference_per_mm2": reference, "white_share": np.nan}
-    level = np.nan_to_num(found, nan=np.inf)
-    seeds = present & (level < s["seed"] * reference)
-    room = present & (level < s["grow"] * reference)
-    seeds = ndi.binary_opening(seeds, _disc(s["open_um"] / cell_um))
-    white = ndi.binary_propagation(seeds, mask=room) if seeds.any() else none
-    white = _drop_small(white, s["min_area_mm2"] / cell_mm2)
-    white = _deep_enough(white, present, s["min_depth_um"] / cell_um)
+    level = np.where(present, np.nan_to_num(found, nan=0.0), 0.0).astype(np.float32)
+    pale = reference < s["min_reference_per_mm2"]
+    # a core whose densest tissue has hardly any NeuN+ neuron is a candidate as a whole: white matter, or grey matter
+    # whose NeuN stain is pale or failed, which its cells and its other sections tell apart
+    candidates = _drop_small(present, s["min_area_mm2"] / cell_mm2) if pale else _candidates(level, present, reference, cell_um, s)
     checked = []
-    if white.any() and look is not None:
-        grey = present & (level >= s["grey_share"] * reference) & ~white
-        white, checked = _confirm(white, grey, tissue, look(), s)
-    white &= present
+    white = none
+    if candidates.any():
+        grids = look() if look is not None else None
+        white, checked = _judge(candidates, level, present, tissue, reference, cell_um, grids, s)
     holes = ndi.binary_fill_holes(white) & ~white
     white |= holes & ~_drop_small(holes, s["fill_holes_mm2"] / cell_mm2) & present
-    white = _drop_small(white, s["min_area_mm2"] / cell_mm2)  # nor any piece a tissue gap cut off
+    white = _drop_small(white & present, s["min_area_mm2"] / cell_mm2)  # nor any piece a tissue gap cut off
+    if pale and not white.any():
+        return none, {"status": "undetermined", "reason": f"{PALE_REASON} to tell grey from white matter (the densest part has "
+                      f"{reference:.0f}/mm²: the NeuN stain is pale or failed)", "reference_per_mm2": reference, "white_share": np.nan,
+                      "parts": checked}
     share = float(white.sum() / max(1, present.sum()))
     return white, {"status": "white" if white.any() else "grey", "reason": "", "reference_per_mm2": reference, "white_share": share,
                    "parts": checked}
 
 
-def _confirm(white: np.ndarray, grey: np.ndarray, tissue: np.ndarray, grids: tuple[np.ndarray, np.ndarray], s: dict) -> tuple[np.ndarray, list[dict]]:
-    """Keep the candidate parts the NeuN image confirms (`min_cell_ratio`, `max_dab_ratio`), each against the core's
-    grey matter (`grey`)."""
-    cells, dab = grids
+def _candidates(level: np.ndarray, present: np.ndarray, reference: float, cell_um: float, s: dict) -> np.ndarray:
+    """The candidate white matter: tissue grown from seeds far below the core's grey matter (`seed`, `grow`), and the
+    low side of every sharp drop in density (`step`), reaching the drop's steepest part."""
+    from skimage.segmentation import watershed  # noqa: PLC0415
+
+    seeds = present & (level < s["seed"] * reference)
+    room = present & (level < s["grow"] * reference)
+    seeds = ndi.binary_opening(seeds, _disc(s["open_um"] / cell_um))
+    grown = ndi.binary_propagation(seeds, mask=room) if seeds.any() else np.zeros(present.shape, bool)
+    r = max(1, int(round(s["near_um"] / cell_um)))
+    grey_near = cv2.dilate(level, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
+    floor = max(s["min_reference_per_mm2"], s["min_grey_share"] * reference)
+    steps = present & (grey_near >= floor) & (level < s["step"] * grey_near)
+    steps = _drop_small(ndi.binary_opening(steps, _disc(1.5)), 0.01 / (cell_um / 1000.0) ** 2)
+    marks = steps | seeds
+    if marks.any():
+        grey = present & (level >= s["grey_marker"] * reference) & ~ndi.binary_dilation(marks, iterations=2)
+        smooth = cv2.GaussianBlur(np.log(level + 20.0).astype(np.float32), (0, 0), 1.0)
+        gy, gx = np.gradient(smooth)
+        markers = np.zeros(present.shape, np.int32)
+        markers[grey] = 1
+        markers[marks] = 2
+        grown |= (watershed(np.hypot(gx, gy), markers, mask=present) == 2) & present
+    return _drop_small(grown, s["min_area_mm2"] / (cell_um / 1000.0) ** 2)
+
+
+class Look:
+    """What the parts are checked with, on the density grid: the NeuN image's cells (hematoxylin blobs), mean DAB and
+    background DAB (the median of its tissue px); the cells of the other sections carried through the registration
+    ((cells, tissue) pairs); `nuclei()`: stage 1's nuclei of the NeuN section ((all, large) counts per grid cell);
+    `pathology()`: {"tau": AT8+ neurons per mm², "plaques": plaques per mm²} of the core's other sections. The two
+    callables are asked only when a part needs them."""
+
+    def __init__(self, cells, dab, background=None, others=(), nuclei=None, pathology=None):
+        self.cells, self.dab, self.background, self.others = cells, dab, background, list(others)
+        self._nuclei, self._pathology = nuclei, pathology
+        self._got = {}
+
+    def get(self, what):
+        if what not in self._got:
+            source = self._nuclei if what == "nuclei" else self._pathology
+            self._got[what] = source() if source is not None else None
+        return self._got[what]
+
+
+def _judge(candidates: np.ndarray, level: np.ndarray, present: np.ndarray, tissue: np.ndarray, reference: float, cell_um: float,
+           grids, s: dict) -> tuple[np.ndarray, list[dict]]:
+    """Each candidate part kept or not (`DEFAULTS`): thick enough, a step at its edge, deep enough unless its step is
+    clear and its cells are white matter's, and its cells those of white matter: few neuron-sized nuclei against the
+    grey matter (the core's own, or the cohort's when the core has none, with no grey-matter pathology on its other
+    sections), or more cells / less NeuN stain on an unchanged background."""
+    if grids is not None and not isinstance(grids, Look):
+        grids = Look(*grids)
+    cell_mm2 = (cell_um / 1000.0) ** 2
     weight = tissue.astype(np.float64)
+    solid = ndi.binary_fill_holes(present)
+    depth = ndi.distance_transform_edt(np.pad(solid, 1))[1:-1, 1:-1] * cell_um
+    grey = present & (level >= s["grey_share"] * max(reference, s["min_reference_per_mm2"])) & ~candidates
+    own_grey = grey.sum() * cell_mm2 >= s["min_grey_mm2"] and reference >= s["min_reference_per_mm2"]
+    ring_px = max(1, int(round(s["ring_um"] / cell_um)))
 
-    def per_tissue(values, where):
-        return float(values[where].sum() / max(1e-9, weight[where].sum()))
+    def per_tissue(values, where, w=weight):
+        return float(values[where].sum() / max(1e-9, w[where].sum()))
 
-    if weight[grey].sum() < 1:  # no grey matter to compare with: nothing to say against the parts
-        return white, []
-    grey_cells, grey_dab = per_tissue(cells, grey), per_tissue(dab, grey)
-    labels, n = ndi.label(white)
-    out = np.zeros(white.shape, bool)
+    def ratio(values, part, w=weight):
+        if not own_grey:
+            return np.nan
+        g = per_tissue(values, grey, w)
+        return per_tissue(values, part, w) / g if g > 0 else np.nan
+
+    labels, n = ndi.label(candidates)
+    out = np.zeros(present.shape, bool)
     parts = []
     for k in range(1, n + 1):
         part = labels == k
-        cell_ratio = per_tissue(cells, part) / max(grey_cells, 1e-9)
-        dab_ratio = per_tissue(dab, part) / max(grey_dab, 1e-9)
-        keep = cell_ratio >= s["min_cell_ratio"] or dab_ratio <= s["max_dab_ratio"]
-        parts.append({"cells": int(part.sum()), "cell_ratio": round(cell_ratio, 3), "dab_ratio": round(dab_ratio, 3), "kept": bool(keep)})
+        thick = float(ndi.distance_transform_edt(np.pad(part, 1))[1:-1, 1:-1].max()) * cell_um
+        around = ndi.binary_dilation(part, iterations=ring_px) & ~part & present
+        inner = part & ~ndi.binary_erosion(part, iterations=ring_px)
+        inner = inner if inner.any() else part
+        step = float(np.median(level[inner]) / max(1e-6, float(np.median(level[around])))) if around.any() and own_grey else np.nan
+        deep = float(depth[part].max())
+        row = {"cells": int(part.sum()), "mm2": round(float(part.sum() * cell_mm2), 3), "step": _round(step), "depth_um": round(deep),
+               "thick_um": round(thick), "own_grey": bool(own_grey)}
+        shaped = thick >= s["min_thick_um"] and not step > s["max_step"]
+        if grids is None:
+            keep = shaped and deep >= s["min_depth_um"] and own_grey
+        else:
+            sections = [ratio(grids.cells, part)] + [ratio(c, part, t.astype(np.float64)) for c, t in grids.others]
+            sections = [v for v in sections if np.isfinite(v)]
+            cells = float(np.mean(sections)) if sections else np.nan
+            dab = ratio(grids.dab, part)
+            if grids.background is not None and around.any() and own_grey:
+                background = float(np.nanmedian(grids.background[part]) / max(1e-6, float(np.nanmedian(grids.background[around]))))
+            else:
+                background = np.nan
+            large = np.nan
+            nuclei = grids.get("nuclei") if shaped else None
+            if nuclei is not None:
+                every, big = nuclei
+                share = float(big[part].sum() / max(1.0, every[part].sum()))
+                if own_grey:
+                    g = float(big[grey].sum() / max(1.0, every[grey].sum()))
+                    large = share / g if g > 0 else np.nan
+                else:
+                    large = share / s["cohort_large_share"]
+            sick = False
+            if not own_grey:
+                ill = grids.get("pathology") if shaped else None
+                ill = ill or {}
+                sick = bool(ill.get("tau", 0.0) > s["max_tau_per_mm2"] or ill.get("plaques", 0.0) > s["max_plaques_per_mm2"])
+                row |= {"tau_per_mm2": _round(ill.get("tau", np.nan)), "plaques_per_mm2": _round(ill.get("plaques", np.nan))}
+            stain_ok = not background < s["min_background_ratio"]  # a paler stain, not missing neurons
+            few_neurons = large <= s["max_large_ratio"]
+            if own_grey:
+                if stain_ok:
+                    confirmed = few_neurons or cells >= s["min_cell_ratio"] or dab <= s["max_dab_ratio"]
+                else:  # the drop in neurons comes with a drop in the background stain: a pale stain unless the cells say not
+                    confirmed = cells >= s["min_cell_ratio"] or large <= s["pale_large_ratio"]
+            else:
+                confirmed = bool(large <= s["max_cohort_large_ratio"] and not sick)
+            placed = deep >= s["min_depth_um"] or (step <= s["clear_step"] and (cells >= s["edge_cell_ratio"] or few_neurons))
+            keep = bool(shaped and placed and confirmed)
+            row |= {"cell_ratio": _round(cells), "dab_ratio": _round(dab), "background_ratio": _round(background), "large_ratio": _round(large)}
+        row["kept"] = bool(keep)
+        parts.append(row)
         if keep:
             out |= part
     return out, parts
+
+
+def _round(value: float) -> float | None:
+    return None if not np.isfinite(value) else round(float(value), 3)
 
 
 HED_FROM_RGB = np.array([[1.87798274, -1.00767869, -0.55611582], [-0.06590806, 1.13473037, -0.13552180],
@@ -258,16 +392,88 @@ def look_at(bgr: np.ndarray, um_per_px: float, shape: tuple[int, int], cell_px: 
     return cells, mean_dab
 
 
-def _deep_enough(area: np.ndarray, present: np.ndarray, cells: float) -> np.ndarray:
-    """The parts of `area` reaching at least `cells` from the edge of the tissue (`present`; outside the grid is no
-    tissue)."""
-    labels, n = ndi.label(area)
-    if not n:
-        return area
-    depth = ndi.distance_transform_edt(np.pad(present, 1))[1:-1, 1:-1]
-    reach = ndi.maximum(depth, labels, index=np.arange(1, n + 1))
-    keep = np.r_[False, np.asarray(reach) >= cells]
-    return keep[labels]
+def background_at(bgr: np.ndarray, shape: tuple[int, int], cell_px: int) -> np.ndarray:
+    """The background NeuN stain on the density grid: the median DAB optical density of each grid cell's tissue px (the
+    neuropil; the few neurons do not move a median), NaN without tissue."""
+    od = _OD[bgr[..., ::-1]]
+    dab = np.maximum(od @ HED_FROM_RGB[:, 2], 0)
+    tissue = od.sum(axis=2) > 0.15
+    h, w = min(shape[0], dab.shape[0] // cell_px), min(shape[1], dab.shape[1] // cell_px)
+    blocks = np.where(tissue, dab, np.nan)[: h * cell_px, : w * cell_px].reshape(h, cell_px, w, cell_px).transpose(0, 2, 1, 3)
+    out = np.full(shape, np.nan, np.float32)
+    with np.errstate(all="ignore"):
+        import warnings  # noqa: PLC0415
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            out[:h, :w] = np.nanmedian(blocks.reshape(h, w, -1), axis=2)
+    return out
+
+
+def nuclei_grid(project, core_id: str, shape: tuple[int, int], large_um2: float) -> tuple[np.ndarray, np.ndarray] | None:
+    """Stage 1's nuclei (Cellpose, on the hematoxylin) of the NeuN core image on the density grid: all nuclei and the
+    large ones (at least `large_um2`: neurons' nuclei) per grid cell, each nucleus once (its tile's own px); None
+    without them."""
+    from stainid import candidates  # noqa: PLC0415
+
+    try:
+        tiles = candidates.read_table(candidates.path(project, SOURCE, core_id, "tiles"))
+    except (FileNotFoundError, OSError, ValueError):
+        return None
+    if tiles is None or len(tiles) == 0:
+        return None
+    folder, ctx, ps = project.output("nuclei"), int(project.context_px), float(project.pixel_size_um)
+    size = SCALE * CELL
+    every, big = np.zeros(shape, np.float32), np.zeros(shape, np.float32)
+    seen = False
+    for t in tiles.to_dict("records"):
+        try:
+            with np.load(folder / f"{t['tile_id']}.npz") as z:
+                lab = z["masks"]
+        except (OSError, KeyError, ValueError):
+            continue
+        seen = True
+        n = int(lab.max())
+        if not n:
+            continue
+        flat = lab.ravel().astype(np.int64)
+        area = np.bincount(flat, minlength=n + 1).astype(np.float64)
+        yy, xx = np.divmod(np.arange(flat.size), lab.shape[1])
+        sx, sy = np.bincount(flat, xx, n + 1), np.bincount(flat, yy, n + 1)
+        ok = area > 0
+        ok[0] = False
+        x0, y0 = max(0, int(t["x_px"]) - ctx), max(0, int(t["y_px"]) - ctx)
+        x, y, a = sx[ok] / area[ok] + x0, sy[ok] / area[ok] + y0, area[ok] * ps * ps
+        own = (x >= t["x_px"]) & (x < t["x_px"] + t["width_px"]) & (y >= t["y_px"]) & (y < t["y_px"] + t["height_px"])
+        gx, gy = (x[own] // size).astype(int), (y[own] // size).astype(int)
+        inside = (gx < shape[1]) & (gy < shape[0])
+        np.add.at(every, (gy[inside], gx[inside]), 1)
+        np.add.at(big, (gy[inside], gx[inside]), (a[own][inside] >= large_um2).astype(np.float32))
+    return (every, big) if seen else None
+
+
+def pathology_of(project, core_id: str, stains: list[str]) -> dict:
+    """The core's grey-matter pathology on its other sections: accepted AT8 calls (tau+ neurons) and 6E10 calls
+    (plaques) per mm² of each image's analysed tissue."""
+    from stainid import candidates  # noqa: PLC0415
+
+    out = {}
+    mm2 = (float(project.pixel_size_um) * SCALE / 1000.0) ** 2
+    for stain, key in (("AT8", "tau"), ("6E10", "plaques")):
+        if stain not in stains:
+            continue
+        bits = _bits(project, core_id, stain)
+        if bits is None:
+            continue
+        analysed = analysed_of(bits)
+        frame = candidates.read_core(project, stain, core_id, ["x_core", "y_core", "decision"])
+        if not len(frame) or "decision" not in frame or not analysed.any():
+            continue
+        frame = frame[frame.decision.astype(str) == "accepted"]
+        x = np.clip((frame.x_core.to_numpy(float) // SCALE).astype(int), 0, analysed.shape[1] - 1)
+        y = np.clip((frame.y_core.to_numpy(float) // SCALE).astype(int), 0, analysed.shape[0] - 1)
+        out[key] = float(analysed[y, x].sum() / (analysed.sum() * mm2))
+    return out
 
 
 def _drop_small(area: np.ndarray, min_cells: float) -> np.ndarray:
@@ -398,7 +604,7 @@ def run_core(project, core_id: str, stains: list[str], picture=None) -> list[dic
     else:
         analysed = analysed_of(bits)
         tissue, grid, neurons = neuron_grid(project, core_id, analysed)
-        cells, info = detect(tissue, grid, cell_um, s, look=lambda: _look(project, core_id, tissue.shape))
+        cells, info = detect(tissue, grid, cell_um, s, look=lambda: _look(project, core_id, tissue.shape, stains, s, picture))
         source_white = on_mask_grid(cells, analysed)
     for stain in stains:
         target_bits = bits if stain == SOURCE else _bits(project, core_id, stain)
@@ -436,16 +642,53 @@ def run_core(project, core_id: str, stains: list[str], picture=None) -> list[dic
     return rows
 
 
-def _look(project, core_id: str, shape: tuple[int, int]) -> tuple[np.ndarray, np.ndarray]:
-    """`look_at` the NeuN core image, read at 1/4."""
+def _look(project, core_id: str, shape: tuple[int, int], stains: list[str], s: dict, picture=None) -> Look:
+    """What a NeuN core's candidate parts are checked with (`Look`): the NeuN image read at 1/4 (`look_at`,
+    `background_at`), the cells of its 6E10 and AT8 images carried onto the NeuN grid through the registration (a pair
+    that cannot be lined up is left out), stage 1's nuclei of the NeuN section and the other sections' pathology."""
     from stainid.imaging.core_images import read_bgr  # noqa: PLC0415
+    from stainid.registration import cores as registration  # noqa: PLC0415
     from stainid.registration.cores import _project_native  # noqa: PLC0415
 
     _, rows = _project_native(project)
-    bgr = read_bgr(project.root / rows[(core_id, SOURCE)]["image_path"], cv2.IMREAD_REDUCED_COLOR_4)
-    if bgr is None:
-        raise FileNotFoundError(f"cannot read the {SOURCE} image of {core_id}")
-    return look_at(bgr, float(project.pixel_size_um) * 4, shape, SCALE * CELL // 4)
+    um = float(project.pixel_size_um) * 4
+    px = SCALE * CELL // 4
+
+    def read(stain):
+        bgr = read_bgr(project.root / rows[(core_id, stain)]["image_path"], cv2.IMREAD_REDUCED_COLOR_4)
+        if bgr is None:
+            raise FileNotFoundError(f"cannot read the {stain} image of {core_id}")
+        return bgr
+
+    bgr = read(SOURCE)
+    cells, dab = look_at(bgr, um, shape, px)
+    background = background_at(bgr, shape, px)
+    others = []
+    for stain in stains:
+        if stain == SOURCE or (core_id, stain) not in rows:
+            continue
+        try:
+            moved = registration.carry_project(project, core_id, SOURCE, stain, picture)
+            bits = _bits(project, core_id, stain)
+            if moved is None or moved.status == "fail" or bits is None:
+                continue
+            analysed = analysed_of(bits)
+            own = (-(-analysed.shape[0] // CELL), -(-analysed.shape[1] // CELL))
+            their_cells, _ = look_at(read(stain), um, own, px)
+            their_tissue = (_cells(analysed.astype(np.float32), CELL) / (CELL * CELL))[: own[0], : own[1]]
+        except (KeyError, FileNotFoundError, ValueError, RuntimeError):
+            continue
+        m = np.array(moved.matrix, np.float64)[:2].copy()  # NeuN core px -> the other image's core px, on the grid
+        m[:, 2] /= SCALE * CELL
+        m[:, 2] += 0.5 * (m[:, 0] + m[:, 1]) - 0.5
+
+        def onto(values):
+            return cv2.warpAffine(values.astype(np.float32), m, (shape[1], shape[0]), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
+                                  borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+
+        others.append((onto(their_cells), onto(their_tissue)))
+    return Look(cells, dab, background, others, nuclei=lambda: nuclei_grid(project, core_id, shape, s["large_nucleus_um2"]),
+                pathology=lambda: pathology_of(project, core_id, stains))
 
 
 def todo(project, redo: bool = False, cores: set[str] | None = None) -> list[tuple[str, list[str], dict]]:

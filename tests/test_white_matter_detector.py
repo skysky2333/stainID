@@ -72,6 +72,83 @@ def test_the_neun_image_confirms_each_part_by_its_cells_and_stain():
     assert info["status"] == "white"
 
 
+def _nuclei(shape, big_share_white: float, rows: slice = slice(60, None)):
+    """Stage 1's nuclei per grid cell: 10 each, 3 of them neuron-sized in grey matter, `big_share_white` x 10 in `rows`."""
+    every = np.full(shape, 10.0, np.float32)
+    big = np.full(shape, 3.0, np.float32)
+    big[rows] = 10 * big_share_white
+    return every, big
+
+
+def test_a_pale_stain_is_no_white_matter():
+    """LIP-5_E-1: fewer NeuN+ neurons where the whole NeuN stain, background included, is paler, and the neurons are
+    still there (as many neuron-sized nuclei): no white matter, however sharp the drop."""
+    tissue, neurons = _grid()
+    ones = np.ones_like(tissue)
+    paler = ones.copy()
+    paler[60:] = 0.4  # NeuN stain and background both paler
+    cells = ones.copy()
+    cells[60:] = 0.9  # no more cells than the grey matter
+    look = wm.Look(cells, paler, paler, nuclei=lambda: _nuclei(tissue.shape, 0.28))
+    white, info = wm.detect(tissue, neurons, CELL_UM, look=lambda: look)
+    assert info["status"] == "grey" and not white.any() and info["parts"][0]["large_ratio"] > 0.5
+    look = wm.Look(cells, paler, paler, nuclei=lambda: _nuclei(tissue.shape, 0.03))  # glia only: white matter
+    white, info = wm.detect(tissue, neurons, CELL_UM, look=lambda: look)
+    assert info["status"] == "white" and info["parts"][0]["large_ratio"] < 0.5
+
+
+def test_a_sharp_drop_finds_white_matter_next_to_dense_grey_matter_and_at_the_edge():
+    """LIP-1_E-4: dense grey matter (its 90th percentile far above the white matter's neighbours) and white matter
+    reaching the core's edge: the low side of a sharp drop is white matter when its cells are glia."""
+    tissue, neurons = _grid(white_rows=0, neurons_per_cell=3.0)
+    neurons[:, :30] = np.random.default_rng(4).poisson(0.25, (100, 30))  # a drop to under a tenth, 525 µm wide, at the edge
+    look = wm.Look(np.ones_like(tissue), np.ones_like(tissue), np.ones_like(tissue),
+                   nuclei=lambda: _nuclei(tissue.shape, 0.03, (slice(None), slice(0, 30))))
+    white, info = wm.detect(tissue, neurons, CELL_UM, look=lambda: look)
+    assert info["status"] == "white" and white[:, :22].mean() > 0.8 and white[:, 40:].sum() == 0
+    fewer = np.ones_like(tissue)
+    fewer[:, :30] = 0.6
+    look = wm.Look(fewer, np.ones_like(tissue), np.ones_like(tissue), nuclei=lambda: _nuclei(tissue.shape, 0.3))
+    white, info = wm.detect(tissue, neurons, CELL_UM, look=lambda: look)  # layer I: neuron-sized nuclei, fewer cells
+    assert info["status"] == "grey"
+
+
+def test_a_core_of_white_matter_only_is_white_as_a_whole():
+    """LIP-8_D-4: hardly a NeuN+ neuron anywhere, so no grey matter of its own to compare with: compared with the
+    cohort's grey matter (neuron-sized nuclei) and its other sections' pathology. Glia only and no pathology: white
+    matter as a whole; an AD core whose neurons were lost (tau+ neurons on AT8) stays undetermined, flagged."""
+    tissue = np.ones((100, 100), np.float32)
+    neurons = np.zeros_like(tissue)
+    look = wm.Look(np.ones_like(tissue), np.ones_like(tissue), nuclei=lambda: _nuclei(tissue.shape, 0.03, slice(None)),
+                   pathology=lambda: {"tau": 0.1, "plaques": 0.1})
+    white, info = wm.detect(tissue, neurons, CELL_UM, look=lambda: look)
+    assert info["status"] == "white" and white.mean() > 0.95 and not info["parts"][0]["own_grey"]
+    look = wm.Look(np.ones_like(tissue), np.ones_like(tissue), nuclei=lambda: _nuclei(tissue.shape, 0.03, slice(None)),
+                   pathology=lambda: {"tau": 25.0, "plaques": 40.0})
+    white, info = wm.detect(tissue, neurons, CELL_UM, look=lambda: look)
+    assert info["status"] == "undetermined" and info["reason"].startswith(wm.PALE_REASON) and not white.any()
+
+
+def test_nuclei_and_their_sizes_are_read_on_the_grid(wm_project):
+    """Stage 1's nuclei of the NeuN tiles, each once, the neuron-sized ones counted apart."""
+    from stainid import candidates
+
+    project = wm_project
+    tiles = pd.DataFrame([{"tile_id": "LIP-1_B-2_NeuN_S01", "x_px": 0, "y_px": 0, "width_px": 600, "height_px": 600}])
+    path = candidates.path(project, "NeuN", "LIP-1_B-2", "tiles")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    candidates.write_table(path, tiles)
+    masks = np.zeros((600 + project.context_px, 600 + project.context_px), np.uint32)
+    side = int(round(np.sqrt(60.0) / project.pixel_size_um))  # a 60 µm² nucleus: neuron-sized
+    masks[10:10 + side, 10:10 + side] = 1
+    masks[100:104, 100:104] = 2  # a small one
+    folder = project.output("nuclei")
+    folder.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(folder / "LIP-1_B-2_NeuN_S01.npz", masks=masks)
+    every, big = wm.nuclei_grid(project, "LIP-1_B-2", (20, 20), 45.0)
+    assert every.sum() == 2 and big.sum() == 1
+
+
 def test_cells_are_counted_on_the_hematoxylin():
     bgr = np.full((256, 256, 3), 235, np.uint8)
     rng = np.random.default_rng(2)
@@ -118,10 +195,11 @@ def wm_project(synthetic_project, monkeypatch):
     pd.DataFrame([["LIP-1_B-2", "6E10", "NeuN", "pass", 0.95, 1, 0, 80, 0, 1, 0], ["LIP-1_B-2", "AT8", "NeuN", "pass", 0.9, 1, 0, 0, 0, 1, 0]],
                  columns=columns).to_csv(path, index=False)
     small = {"sigma_um": 20.0, "open_um": 15.0, "min_area_mm2": 0.001, "fill_holes_mm2": 0.0001, "min_depth_um": 15.0, "min_reference_per_mm2": 10.0,
+             "min_thick_um": 10.0, "near_um": 60.0, "ring_um": 20.0, "min_cell_ratio": 1.0, "min_grey_mm2": 0.01,
              "min_tissue_mm2": 0.01}
     for key, value in small.items():
         monkeypatch.setitem(wm.DEFAULTS, key, value)
-    monkeypatch.setattr(wm, "_look", lambda project, core_id, shape: (np.ones(shape, np.float32), np.ones(shape, np.float32) * 0.1))
+    monkeypatch.setattr(wm, "_look", lambda project, core_id, shape, *rest: (np.ones(shape, np.float32), np.ones(shape, np.float32) * 0.1))
     return project
 
 
