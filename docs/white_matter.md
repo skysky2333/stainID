@@ -109,6 +109,17 @@ neighbouring positions at a slide's edge (LIP-7 D-1, D-2, E-1, E-2; LIP-9 D-5, E
 F-2, F-4). The analysis counts them today with NeuN densities of 0-30 /mm²: they are a question for the NeuN analysis
 whatever is decided about white matter (`white_matter.csv`, status undetermined, lists them).
 
+The 12 control (CT) pale cores have no pathology to settle it, so their cells were compared with known grey and white
+matter (the GM and WM parts of 16 CT white-matter cores, 16 grey CT cores): stage-1 Cellpose nuclei on all three
+sections, per mm², their median area and the share of large, neuron-sized nuclei (≥ 45 µm²; neurons keep their large
+round nucleus when the NeuN stain fails). The large-nucleus share separates the reference GM and WM parts best (AUC
+0.93 on the NeuN section, 0.72 AT8, 0.65 6E10). On the pale cores the NeuN section reads low everywhere, also on AD pale
+cores that are grey matter by their plaques and tangles, so the 6E10 and AT8 sections decide. Eight CT pale cores look
+like grey matter (LIP-2_A-4, LIP-2_A-5, LIP-7_D-1, D-2, E-1, E-2, LIP-11_D-2, LIP-11_B-2); LIP-8_D-4 and LIP-8_E-4 (both
+cores of donor 2152, occipital) look like pure white matter (small dark round nuclei in rows along parallel fibres, no
+neuron-sized nuclei on any section); LIP-11_C-2 (vacuolated, small nuclei only) probably white matter; LIP-6_E-5
+unclear. `scripts`: `/run/media/sky/wd6t/wm_detect/scripts/pale_check.py`, montages `pale_ct_*.jpg`.
+
 ## Leaving it out of the analysis: `v2.white_matter.analysis: exclude`
 
 The setting is `off` by default (white matter counted as before); `exclude` makes stage 5 grey matter only. The mask
@@ -137,7 +148,19 @@ Flags, whenever the white-matter step has run and whatever the setting: `white_m
 (the core's NeuN stain too pale to read; per donor-region: any of its cores, with `neun_pale_cores`). Pale cores are
 flagged, never left out: they are grey matter whose NeuN failed.
 
-### Expected effect (2026-10-29, counts and densities only)
+### Effect on the study (2026-10-29, scratch run of stage 5 and the primary R model)
+
+Stage 5 with `exclude` from the live outputs into `/run/media/sky/wd6t/wm_detect/analysis/` (`measures/` grey matter,
+`measures/whole_core/`, `group_means.csv`, `group_ratios.csv`, `r_*.csv`): 284 core images lose white matter. Mean
+donor-region NeuN density rises 4-12 % in AD, 5-12 % in ASYMP and 7-22 % in CT (most in CT occipital, the region with
+the most white matter), so the AD/CT neuron ratio falls from 0.84 to 0.82 (frontal) and 0.71 to 0.65 (occipital).
+Plaque and tau densities and burdens rise 2-6 % in AD. The ASYMP-vs-AD contrasts keep their size and significance
+(frontal log NeuN density, burden-adjusted: -0.73, p 0.022 whole core; -0.75, p 0.019 grey matter). Replicate-core ICC
+of log NeuN density 0.81 to 0.82, of the NeuN+ share of candidates 0.73 to 0.81. The positive association of NeuN
+density with local amyloid in the two-region model shrinks (0.29, t 2.2, to 0.21, t 1.7): part of it was white matter
+(fewer neurons and fewer plaques in the same cores).
+
+### Expected effect (estimated before the pass, counts and densities only)
 
 From the stored outputs (stage-4 accepted objects, stage-2 counted area, the step's areas; objects by their centre;
 `/run/media/sky/wd6t/wm_detect/scripts/effects.py`, table `step_full/effects.csv`). Cores without white matter do not
