@@ -8,6 +8,8 @@ measure rests on). Every empty cell of `results_<level>.csv` has exactly one row
 | `no_image` | the core has no image of the measure's stain (a donor-region: none of its cores has) |
 | `no_grey_matter` | the stain's core images have too little grey matter to measure (`v2.white_matter.min_grey_mm2`) |
 | `too_few_objects` | fewer objects than the measure's minimum (`MEASURES`; `n_objects` says how many) |
+| `no_white_matter_boundary` | a depth or column measure (`stainid.v2.interactions`) on a core image without white matter to measure depth from |
+| `no_registration` | a measure on the three sections' joint grid (`stainid.v2.interactions`) of a core without a registration of both pairs |
 | `not_measured` | anything else: e.g. the white-matter share of a core whose white matter is undetermined |
 
 A count, a density or an area fraction is never missing because nothing was found: with the tissue measured it is 0, and
@@ -27,9 +29,10 @@ import numpy as np
 import pandas as pd
 
 from stainid.tables import read_csv
+from stainid.v2 import interactions
 from stainid.v2.params import STAINS
 
-REASONS = ("too_few_objects", "no_grey_matter", "no_image", "not_measured")
+REASONS = ("too_few_objects", "no_grey_matter", "no_image", *interactions.REASONS, "not_measured")
 IDS = ("core_id", "sample_region_id", "donor_id", "tma", "region", "disease_group")
 WHOLE = "_whole_core"
 COUNTS = "results_counts_{}.csv"  # per row of the results table: its tiles per stain and what the minimums count
@@ -126,7 +129,7 @@ def group_counts(tiles: dict[str, list[dict]], objects: dict[str, list[dict]], m
             "neun_candidates": round(sum(_number(r, "candidate_profile_count") for r in neurons)),
             "neun_windows": round(sum(_number(r, "neun_local_density_window_count") for r in neurons)),
             "neun_cells": round(sum(_number(r, "neun_positive_profile_count") + _number(r, "nonneuronal_cell_count") for r in neurons
-                                    if r.get("nonneuronal_cell_count", "") not in ("", None))),
+                                    if r.get("nonneuronal_cell_count", "") not in ("", None) and np.isfinite(_number(r, "nonneuronal_cell_count")))),
             "plaques": round(sum(_number(r, "v2_plaque_count") for r in plaques)),
             "plaques_ge15um": sum(_number(r, "equivalent_diameter_um") >= 15.0 for r in objects.get("6E10", [])),
             "plaques_with_nuclei": round(sum(_number(r, "v2_plaque_count") for r in plaques if r.get("nuclei_available", "true") == "true")),
@@ -160,6 +163,14 @@ def _reason(measure: str, row_id: str, measured: dict, whole: dict | None) -> tu
             return "not_measured", 0
         n_objects = round(counts.get(needs.count, 0))
         return ("too_few_objects" if n_objects < needs.minimum else "not_measured"), n_objects
+    if name in interactions.REQUIRE:  # several needs, each with its own reason; the counts are `ix_<key>`
+        checks = interactions.needs(name)
+        first = round(counts.get(f"ix_{checks[0][0]}", 0))
+        for key, minimum, reason in checks:
+            have = counts.get(f"ix_{key}", 0)
+            if have < minimum:
+                return reason, round(have) if reason == "too_few_objects" else first
+        return "not_measured", first
     needs = MEASURES.get(name)
     if needs is None:
         return "not_measured", 0

@@ -600,6 +600,8 @@ empty under its minimum count, with no pseudo-counts; tissue not measured at all
 | `no_image` | no image of the measure's stain for this core (donor-region: for any of its cores) |
 | `no_grey_matter` | the image has too little grey matter to measure (`v2.white_matter.min_grey_mm2`; donor-region: all its cores with an image) |
 | `too_few_objects` | under the measure's minimum (`missing.MEASURES`) |
+| `no_white_matter_boundary` | a depth or column measure of the spatial interactions on a core image without white matter to measure depth and the radial axis from |
+| `no_registration` | a spatial-interaction measure on the three sections' joint grid for a core without a stored registration of both pairs (or a failed one) |
 | `not_measured` | anything else: a white-matter share of a core whose white matter is undetermined, enough plaques but no far tissue for the periplaque background |
 
 `n_objects` is what the minimum counts: outlines for the outline measures (minimum 20 NeuN, 10 plaques, 5 tau+ neurons),
@@ -689,3 +691,96 @@ the boundary objects.
 The viewer does not show the flag: the outline layer reads the candidate store, and stage 5's flag is not in it. Showing
 it means carrying the flag into the store's view and a new legend entry in the web app, so `objects_AT8.csv` is its only
 place for now.
+
+### Spatial interactions
+
+New columns of `results_<level>.csv` from stored results, no image read (`stainid.v2.interactions`, after the other
+columns; the topic "Spatial interactions" of the Results page). They come from the literature review
+`/run/media/sky/Untitled/alzh/reports/Spatial interaction features for AD TMAs.md` (its ranked shortlist; items 6, the
+6E10 neuritic halo, and 10, vessels, are stage-2 features and not here) and the pilot
+`/run/media/sky/Untitled/alzh/work/feature_explore/PROPOSAL.md`. With `v2.white_matter.analysis: exclude` they are grey
+matter only (no `_whole_core` version); a core image left with too little grey matter is not measured. Every random
+placement or shift is seeded by the core id, so a re-run gives the same numbers. `interactions_<level>.csv` holds the
+columns with the counts behind them (`ix_<count>`, also in `results_counts_<level>.csv`); a donor-region sums its cores'
+counts (a correlation: the mean over its cores weighted by their bins or plaques).
+
+**Inputs.** The accepted calls and their shown outlines; stage 2's masks; the threads; the white matter (also on cores
+with `analysis: off`, for depth); the 6E10 compactness score stage 5 has just written; the counterstain nuclei: stage 2's
+per-nucleus table (`cells/`, its counted nuclei) where it exists, else stage 1's Cellpose nuclei (a nucleus of 10-200
+µm² centred in its tile's own area; shape from its pixels' second moments, as `regionprops`). Until the stage-2 re-run
+writes `cells/` for every core image, the 6E10 and AT8 nuclei therefore include the dense DAB objects Cellpose outlines
+(about 7 %, sitting exactly at plaques and tangles); after it they do not, and the same code reads the new table. The
+registered grid needs the registration table or the pair kept in the project's `registration` cache (read only; stage 5
+never registers).
+
+**Neuron-like nuclei** on the 6E10 and AT8 sections: a logistic regression on nuclear shape only (log area, eccentricity,
+major and minor axis, their ratio), trained at every run on the NeuN section's nuclei (3,000 per core image, seeded),
+where a nucleus whose centre lies in an accepted NeuN+ neuron's shown outline is a neuron's. Counts are soft (the sum of
+the probabilities). `interactions_nucleus_model.csv` has its leave-one-TMA-out AUC. No hematoxylin feature: on the NeuN
+section the brown neuronal nuclei hold less hematoxylin, which would not carry to the other stains.
+
+| Columns | Definition | Minimum (else empty) |
+|---|---|---|
+| `plaque_<ring>_neuron_share_ratio` (`contact` 0-10 µm, `ring10_30`, `ring30_60`) | 6E10: the neuron-like share of the nuclei in the ring around the nearest plaque of at least 20 µm (each nucleus and tissue cell goes to its nearest plaque edge, on the 2.2 µm mask grid), over the share in tissue at least 100 µm from any plaque; divided by the same ratio averaged over 99 placements of every plaque outline at random cells of the same tissue. Below 1: neurons missing next to plaques. The contact ring is descriptive (nuclei under dense DAB are missed) | 10 plaques ≥ 20 µm, 20 nuclei in the ring, 50 far |
+| `plaque_ring_neuron_share_slope` | 30-60 µm ratio minus 10-30 µm ratio | as above |
+| `plaque_ring10_30_neuronlike_density_ratio`, `_other_density_ratio` | the neuron-like and the other nuclei's densities (per mm² of ring tissue) over far tissue, against the random placements | as above |
+| `plaque_compact_` / `plaque_diffuse_ring10_30_neuron_share_ratio` | the 10-30 µm ratio for the nuclei whose nearest plaque is compact / diffuse | 10 plaques of the type |
+| `tangle_ring15_60_neuron_share_ratio`, `tau_pretangle_ring15_60_neuron_share_ratio`, `tangle_ring15_60_other_density_ratio` | AT8: the same 15-60 µm from mature tangles / pretangles, far = 100 µm from every accepted tau+ neuron | 10 bodies of the type, 20 ring nuclei, 50 far |
+| `tau_mature_no_nucleus_fraction`, `tau_pretangle_no_nucleus_fraction` | share of outlined mature tangles / pretangles with no nucleus centre inside (a "nucleus" covering over half the body is the body itself) | 10 |
+| `neun_no_nucleus_fraction` | share of NeuN+ neurons with no nucleus centre inside: how often the section misses an intact neuron's nucleus | 20 |
+| `tangle_ghost_excess` | mature tangles without a nucleus minus NeuN+ neurons without one | both |
+| `tau_satellites_per_neuron`, `tau_satellite_enrichment` | nuclei just outside a tau+ neuron (centre within its radius + 2 µm of the outline), per neuron and over what the nucleus density puts in that band | 10 outlined |
+| `neun_microcolumn_strength`, `amyloid_section_`, `tau_section_microcolumn_strength` | Buldyrev 2000's band: neuron pairs within 10 µm of the radial axis and 30-150 µm along it over the same turned by 90°, divided by that ratio for 19 random placements of as many points in the same tissue (with its axes). Radial axis: the gradient of the depth from the white matter (smoothed over 50 µm), within 2 mm of it. NeuN: accepted neurons; 6E10 / AT8: neuron-like nuclei (probability ≥ 0.5), two replicates within the core | white matter; 200 points, 100 pairs |
+| `amyloid_section_neuronlike_fraction`, `tau_section_neuronlike_fraction` | mean neuron-like probability of the section's nuclei | 100 nuclei |
+| `tangle_pretangle_mature_mix_50um`, `_100um` | pretangle-mature pairs within the radius over their exact expectation under random labelling of maturity among the same tau+ neurons | 10 of each, 20 pairs |
+| `tau_neuron_column_alignment` | the share of tau+ neuron pairs within 300 µm lying within 30° of the radial axis, over that share for 19 random placements | white matter; 10 neurons, 20 pairs |
+| `<object>_depth_excess_um` (`tau_neuron`, `tangle`, `tau_pretangle`, `thread`, `plaque`, `plaque_compact`, `plaque_diffuse`, `neun`, `neun_large_neuron`) | mean distance from the white matter of the objects (thread: length-weighted) minus that of the section's tissue, within 2 mm of the white matter | white matter; 10 objects (0.5 mm of thread) |
+| `tau_neuron_deep_upper_ratio`, `neun_deep_upper_ratio` | density within 1 mm of the white matter over density 1-2 mm from it | white matter; 10 / 20 objects, 0.25 mm² in each band |
+| `neun_large_neuron_peak_depth_um` | centre of the 250 µm depth band densest in NeuN+ neurons of at least 150 µm² (bands of 0.05 mm² or more) | white matter; 20 large neurons |
+| `tangle_plaque_depth_difference_um` | mature tangles' depth excess minus compact plaques' (each on its own section) | both |
+| `plaque_thread_coupling_rho` | Spearman rho of plaque area and thread length over the 100 µm squares of the NeuN frame that are at least 80 % grey matter on all three sections | registration; 30 squares |
+| `plaque_thread_coupling_excess`, `plaque_tangle_coupling_excess` | rho (thread; tau+ neuron density) minus its mean over 99 shifts of the AT8 map by 3-10 squares (overlapping squares only) | as above |
+| `plaque_thread_coupling_depth_adjusted` | the rank correlation within 250 µm depth bands (NeuN white matter) | white matter; 30 squares with a depth |
+| `plaque_thread_correlation_length_um` | lag (100 µm steps) at which rho of each square's plaque area with the mean thread of the squares k steps away falls to half rho; only where rho ≥ 0.1 and it falls within 800 µm | as above |
+| `plaque_compact_thread_coupling`, `plaque_diffuse_thread_coupling` | rho with compact / diffuse plaque area | as above |
+| `niche<100,200>_<niche>_fraction` (`amyloid_tau`, `amyloid_only`, `tau_only`, `quiet`, `amyloid_tau_neuron_poor`) | the same joint squares (100 and 200 µm), each typed by its percentile ranks within its TMA: plaque area, tau (mean rank of thread and tau+ neuron density) and NeuN+ neuron density; high = top third, neuron-poor = bottom third | registration; 20 squares |
+| `niche<size>_entropy` | evenness over the eight types (0-1) | as above |
+| `niche<size>_damage_quiet_contact_ratio`, `_amyloid_tau_cohesion` | side-sharing pairs of amyloid + tau with quiet squares, and of amyloid + tau squares with each other, over their expectation under random arrangement of the core's squares | expectation ≥ 2 |
+| `neun_other_to_neuron_clq`, `neun_neuron_to_other_clq` | co-location quotient on the NeuN section's nuclei (neuron: centre in an accepted neuron's outline): the share of one kind whose nearest nucleus is of the other, over the other's share | 20 of each |
+| `neun_satellite_fraction`, `neun_large_satellite_fraction`, `neun_satellite_enrichment` | NeuN+ neurons (all; ≥ 150 µm²) with an other nucleus just outside, and those nuclei over their expectation | 20 / 10 neurons |
+| `neun_gap_area_fraction` | share of the tissue whose empty circle among neurons lies inside the tissue and is wider than 95 % of the control cores' (computed at every run) | 20 neurons, 0.5 mm² |
+| `neun_neuron_share_cv_100um` | coefficient of variation of the neurons' share of nuclei over 100 µm windows (80 % tissue, 10 nuclei) | 10 windows |
+| `plaque_size_mark_correlation_50um`, `_100um` | Stoyan's mark correlation of plaque diameter: the mean product of the diameters of pairs within the radius over the squared mean | 20 plaques, 20 pairs |
+| `plaque_compact_in_diffuse_fraction`, `_enrichment` | compact plaques centred inside or within 20 µm of a diffuse plaque's outline; over the share of tissue there | 10 compact, 5 diffuse |
+| `plaque_compactness_diffuse_neighbourhood_rho` | Spearman rho of each plaque's compactness score (≥ 15 µm) with the diffuse plaque area within 100 µm of it | 20 plaques |
+
+Not built: the lateral periodicity and width of the microcolumns (noisy at these counts), a k-means niche model (the
+niches are typed by rule so their names stay the same from run to run), and per-plaque neuron shares by the compactness
+score (too few nuclei per plaque; the compact / diffuse split carries it).
+
+**On the study's current outputs** (stage 5 re-run in scratch, 2026-11-03, with the LIP-8-13 registrations filled in
+there; grey matter only; 13 TMAs, 365 core images). The neuron-like model's leave-one-TMA-out AUC is 0.88 (0.81-0.91).
+26 of the 73 columns reach a replicate-core ICC of 0.5; the full list is in `measure_reliability.csv`.
+- Reliable and distinct from the main densities: `tangle_ghost_excess` (ICC 0.70), `tau_mature_no_nucleus_fraction`
+  (0.67), `neun_no_nucleus_fraction` (0.63), `neun_satellite_enrichment` (0.70), `neun_gap_area_fraction` (0.70; AD
+  above ASYMAD by 1.0 SD, p 0.001), `neun_neuron_share_cv_100um` (0.69; AD above ASYMAD by 1.1 SD, p 4e-4),
+  `plaque_size_mark_correlation_50um` (0.60; AD below ASYMAD by 0.8 SD, p 0.003; higher in occipital),
+  `plaque_compact_in_diffuse_fraction` (0.56) and the 6E10 / AT8 neuron-like fractions (0.70, 0.60).
+- The niche fractions are the most reliable (ICC 0.61-0.86) and separate the groups most strongly (amyloid + tau
+  squares: AD above ASYMAD by 1.2-1.3 SD, p < 1e-9; amyloid-only squares lower in AD, -1.7 SD), but they are largely
+  the densities seen together (unique variance 0.09-0.41).
+- Below the gate on these outputs: the ring neuron shares around plaques and tangles (ICC ≤ 0.4; the median 10-30 µm
+  share is 0.96-0.97 of the random placements), the microcolumn strengths (replicates within a core agree poorly:
+  Spearman 0.17-0.30), most depth profiles (few cores with enough white matter: 7-36 pairs) and the plaque-thread
+  coupling (ICC 0.40, though it is clearly higher in AD than ASYMAD, 1.2 SD, p 4e-5). They stay in the tables.
+
+### Reliability of every measure: `measure_reliability.csv`
+
+Stage 5 also writes, beside the results tables, one row per numeric column of `results_core.csv`
+(`stainid.v2.reliability`): `icc`, the replicate-core intraclass correlation (one-way random effects ICC(1) over the
+donor-regions with two or more cores, all TMAs; densities and counts as log10(x + 1); at least 10 donor-regions),
+`n_pairs`, `unique_variance` (the share of the column's rank variance across donor-regions not explained by the ranks of
+plaque density, plaque area fraction, AT8 area fraction, tau+ neuron density, thread density and NeuN+ neuron density),
+`regions` and `reliable` (ICC ≥ 0.5, the study's gate for confirmatory use). Every measure keeps its column whatever its
+ICC: the Results page can filter on the table.
+

@@ -131,6 +131,8 @@ NOT_MEASURED = "not_measured"  # also the reason of an empty cell the table of r
 OBJECT_WORDS = {"neurons": "neurons", "plaques": "plaques", "tau": "tau objects"}  # by the measure's topic
 REASON_WORDS = {"no_grey_matter": ("no grey matter", "This tissue has no grey matter, so there is nothing to measure here."),
                 "no_image": ("no image", "There is no image of this stain here, so nothing could be measured."),
+                "no_white_matter_boundary": ("no white matter edge", "This core has no white matter to measure depth or the radial axis from."),
+                "no_registration": ("sections not lined up", "This core's three sections could not be lined up, so the measures across them are missing."),
                 NOT_MEASURED: ("not measured", "This was not measured here.")}
 
 

@@ -21,6 +21,12 @@ pathology inside the white matter (`_attach_white`) are new columns of `results_
 accepted tau+ neurons flagged at a tissue boundary and their density without the flagged ones
 (`organisation.mark_boundary`); the flag itself is per object in `objects_AT8.csv`, and nothing leaves any other count.
 
+The spatial interactions (`stainid.v2.interactions`: what surrounds plaques and tau+ neurons, depth from the white matter,
+microcolumns, multi-stain microdomains, the amyloid-tau coupling, the NeuN section's nuclear graph, plaque marks) are
+new columns of `results_<level>.csv` (grey matter only with `exclude`, no `_whole_core` version), with their counts in
+`interactions_<level>.csv`. `measure_reliability.csv` gives every results column's replicate-core ICC and its variance not
+explained by the primary densities (`stainid.v2.reliability`).
+
 `results_missing_<level>.csv` says why each empty cell of the results tables is empty (`stainid.v2.missing`). A count, a
 density or an area fraction is 0 when nothing was found in measured tissue; only fractions and shape measures under their
 minimum count, and tissue not measured at all, are missing.
@@ -52,7 +58,7 @@ from stainid import candidates as store
 from stainid.analysis import aggregation, field_aggregation, mask_aggregation
 from stainid.analysis.aggregation import summarize_stain_group
 from stainid.tables import read_csv, write_records
-from stainid.v2 import biology_measures, cells, grey_matter, manifest, missing, organisation, scores, white_matter
+from stainid.v2 import biology_measures, cells, grey_matter, interactions, manifest, missing, organisation, reliability, scores, white_matter
 from stainid.v2.classify import load_model
 from stainid.v2.params import STAINS
 
@@ -648,9 +654,11 @@ def write_measures(project, folder: Path | None = None) -> list[str]:
         lines += _attach_white(folder, white_rows, _measured_rows(whole), floor)
     if white_matter.summary_path(project).exists():
         lines += _attach_flags(project, folder)
+    lines += interactions.attach(project, folder, exclude, too_small)  # the spatial interactions (`stainid.v2.interactions`)
     lines += missing.write(folder, folder / "whole_core" if grey is not None else None)
     if grey is not None:
         lines += missing.write(folder / "whole_core")
+    lines += reliability.write(folder)
     return lines
 
 
