@@ -76,24 +76,29 @@ def layout(tma: str) -> list[dict]:
     return records(frame[frame.tma.astype(str) == tma])
 
 
-def _detection(state: ProjectState, tiles: pd.DataFrame, stain: str) -> tuple[str, int, int]:
-    """Whether detection has run on these tiles of one core: ('done' | 'partial' | 'not_run', tiles done, tiles)."""
+def _detection(state: ProjectState, core_id: str, stain: str, tiles: pd.DataFrame) -> tuple[str, int, int]:
+    """Whether detection has run on one core image: ('done' | 'partial' | 'not_run', tiles done, tiles). The store the
+    core's page shows (`store_view.available`) answers first; only a core it does not have looks at the older outputs."""
+    if store_view.available(state.project, core_id, stain):
+        return "done", int(len(tiles)), int(len(tiles))
     if tiles.empty:
         return "not_run", 0, 0
     if stain == "NeuN":
         folder = state.project.output("neun") / "tiles"
         done = sum((folder / f"{t}_objects.csv").exists() for t in tiles.tile_id)
     else:
-        done = len(tiles) if (state.project.output("fields") / "parts" / f"{tiles.core_id.iloc[0]}_{stain}_objects.csv").exists() else 0
+        done = len(tiles) if (state.project.output("fields") / "parts" / f"{core_id}_{stain}_objects.csv").exists() else 0
     return ("done" if done == len(tiles) else "partial" if done else "not_run"), int(done), int(len(tiles))
 
 
-def _quick_detection(state: ProjectState, tiles: pd.DataFrame, stain: str) -> str:
-    """The same, from at most two file checks per core (for whole grids)."""
+def _quick_detection(state: ProjectState, core_id: str, stain: str, tiles: pd.DataFrame) -> str:
+    """The same state, from at most three file checks per core (for whole grids)."""
+    if store_view.available(state.project, core_id, stain):
+        return "done"
     if tiles.empty:
         return "not_run"
     if stain != "NeuN":
-        return _detection(state, tiles, stain)[0]
+        return _detection(state, core_id, stain, tiles)[0]
     folder = state.project.output("neun") / "tiles"
     first, last = ((folder / f"{t}_objects.csv").exists() for t in (tiles.tile_id.iloc[0], tiles.tile_id.iloc[-1]))
     return "done" if first and last else "partial" if first or last else "not_run"
@@ -134,7 +139,7 @@ def grid(tma: str, stain: str, prepare: bool = True) -> dict:
                 stand_ins = placeholders.for_tma(state.project, tma, stain)
             cell.update({k: _text(core.get(k, place.get(k))) for k in ("core_id", "donor_id", "region", "disease_group", "technical_replicate")},
                         thumb=thumb in ("ready", "quick"), placeholder=(stand_ins or {}).get(label) if thumb != "ready" else None,
-                        detection=_quick_detection(state, tiles_by_core.get(core_id, pd.DataFrame()), stain))
+                        detection=_quick_detection(state, core_id, stain, tiles_by_core.get(core_id, pd.DataFrame())))
         cells.append(cell)
     columns = sorted({_position(c["core_label"])[1] for c in cells}, key=lambda c: (len(c), c))
     rows = sorted({_position(c["core_label"])[0] for c in cells})
@@ -216,7 +221,7 @@ def core_objects(core_id: str, stain: str) -> dict:
         return {"status": "done", "tiles_done": len(tiles), "tiles_total": len(tiles), "columns": V2_OBJECT_COLUMNS, "rows": rows, "tiles": boxes,
                 "outlines": True, "threads": saved["measured"] if saved else None, "source": "v2",
                 "unproposed": store_view.unproposed_count(state.project, core_id, stain), "outline_default": _default_outline(state, stain)}
-    status, done, total = _detection(state, tiles, stain)
+    status, done, total = _detection(state, core_id, stain, tiles)
     found = _found(state, tiles, stain) if done else pd.DataFrame()
     rows = [list(r.values()) for r in records(found[OBJECT_COLUMNS])] if not found.empty else []
     return {"status": status, "tiles_done": done, "tiles_total": total, "columns": OBJECT_COLUMNS, "rows": rows, "tiles": boxes,
