@@ -225,3 +225,19 @@ def test_register_keeps_every_pair_the_table_has_no_row_for(synthetic_project, m
     again = registration.register_missing(project)
     assert [r["how"] for r in again] == ["kept", "kept"] and len(calls) == 2
     assert registration.carry_project(project, "LIP-1_B-2", "NeuN", "6E10").status == "review" and len(calls) == 2
+
+
+def test_grid_distances_do_not_depend_on_memory_alignment():
+    import cv2
+    from scipy import ndimage
+
+    rng = np.random.default_rng(0)
+    canvas = np.full((300, 400), 255, np.uint8)
+    for x, y in rng.integers(0, 400, (120, 2)):
+        cv2.circle(canvas, (int(x), int(y) % 300), int(rng.integers(2, 12)), 0, -1)
+    reference = ix._edt(canvas)
+    for offset in range(1, 16):
+        shifted = np.empty(canvas.size + offset, np.uint8)[offset:].reshape(canvas.shape)
+        shifted[:] = canvas
+        assert np.array_equal(ix._edt(shifted), reference)
+    assert np.allclose(reference, ndimage.distance_transform_edt(canvas > 0), atol=1e-5)

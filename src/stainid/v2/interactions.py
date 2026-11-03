@@ -37,7 +37,7 @@ from stainid import candidates as store
 from stainid.v2 import cells, organisation, white_matter
 
 SCALE = 8  # core px per mask px (the stage-2 masks' grid)
-RING_NULLS = 99  # random placements of the plaques / tau+ neurons for the ring features
+RING_NULLS = 49  # random placements of the plaques / tau+ neurons for the ring features (Monte Carlo SD of a ring ratio ~5 % of its between-core SD)
 NULL_TISSUE_SAMPLE = 200_000  # tissue cells whose rings the random placements count (scaled to the tissue)
 CSR_NULLS = 19  # random placements of the points for the column features
 SHIFT_NULLS = 99  # random shifts of the thread field for the coupling
@@ -191,7 +191,7 @@ def depth_field(white: np.ndarray | None, counted: np.ndarray, grid_um: float):
     None without white matter. Only tissue outside the white matter within `DEPTH_MAX_UM` with a clear axis is used."""
     if white is None or not white.any():
         return None
-    depth = cv2.distanceTransform((~white).astype(np.uint8), cv2.DIST_L2, cv2.DIST_MASK_PRECISE).astype(np.float32) * grid_um
+    depth = _edt((~white).astype(np.uint8)) * grid_um
     smooth = ndimage.gaussian_filter(depth, 50.0 / grid_um)
     gy, gx = np.gradient(smooth)
     norm = np.hypot(gx, gy)
@@ -374,6 +374,14 @@ def _contours(frame: pd.DataFrame) -> list[np.ndarray]:
     return [np.rint(r / SCALE).astype(np.int32).reshape(-1, 1, 2) for r in frame.ring]
 
 
+def _edt(canvas: np.ndarray) -> np.ndarray:
+    """Exact Euclidean grid distance from every nonzero cell to the nearest zero cell. OpenCV's exact transform differs
+    by about 1e-6 with the buffer's alignment in memory, enough to move a cell lying exactly on a ring edge from run to
+    run; the squared distance is a whole number, so it is rounded to one before the root (the same on every run)."""
+    d = cv2.distanceTransform(canvas, cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
+    return np.sqrt(np.rint(d * d)).astype(np.float32)
+
+
 def _distance(shape, contours: list[np.ndarray]) -> np.ndarray:
     """µm-free grid distance from every cell to the nearest cell of these filled outlines (inf without any)."""
     if not contours:
@@ -382,7 +390,7 @@ def _distance(shape, contours: list[np.ndarray]) -> np.ndarray:
     cv2.fillPoly(canvas, contours, 0)
     if canvas.all():
         return np.full(shape, np.inf, np.float32)
-    return cv2.distanceTransform(canvas, cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
+    return _edt(canvas)
 
 
 def _moved(contours: list[np.ndarray], centres: np.ndarray, places: np.ndarray) -> list[np.ndarray]:
@@ -432,19 +440,20 @@ def ring_stats(prefix: str, shape, counted: np.ndarray, groups: dict[str, pd.Dat
     def tally(placed: dict[str, list], placed_rest: list, cells: tuple[np.ndarray, np.ndarray, float]) -> dict:
         out = {}
         dist = [_distance(shape, placed[g]) for g in names]
-        nearest = dist[0]
-        owner = np.zeros(shape, np.int64)
-        for k in range(1, len(dist)):
-            closer = dist[k] < nearest
-            owner[closer] = k
-            nearest = np.where(closer, dist[k], nearest)
-        union = nearest if not placed_rest else np.minimum(nearest, _distance(shape, placed_rest))
+        rest_dist = _distance(shape, placed_rest) if placed_rest else None
+
+        def at(y, x):  # nearest grouped object's distance, its group (the first on a tie) and the distance to any object
+            values = np.stack([d[y, x] for d in dist])
+            nearest = values.min(axis=0)
+            return nearest, values.argmin(axis=0), nearest if rest_dist is None else np.minimum(nearest, rest_dist[y, x])
+
         sy, sx, weight = cells
-        union_t = union[sy, sx]
-        code_n = ring_code(nearest[cy, cx], union[cy, cx], owner[cy, cx])
-        code_t = ring_code(nearest[sy, sx], union_t, owner[sy, sx])
+        nearest_n, owner_n, union_n = at(cy, cx)
+        nearest_t, owner_t, union_t = at(sy, sx)
+        code_n = ring_code(nearest_n, union_n, owner_n)
+        code_t = ring_code(nearest_t, union_t, owner_t)
         cell_area_ = cell_area * weight
-        far_n, far_t = union[cy, cx] >= far, union_t >= far
+        far_n, far_t = union_n >= far, union_t >= far
         out["far_nl"], out["far_cells"], out["far_mm2"] = float(p[far_n].sum()), float(far_n.sum()), float(far_t.sum() * cell_area_)
         nl = np.bincount(code_n, weights=p, minlength=slots + 1)
         count = np.bincount(code_n, minlength=slots + 1)
@@ -715,8 +724,8 @@ def gap_stats(neuron_xy: np.ndarray, counted: np.ndarray, grid_um: float) -> dic
     out = {"gap_neurons": float(ok.sum())}
     if not ok.any():
         return out
-    to_neuron = cv2.distanceTransform(canvas, cv2.DIST_L2, cv2.DIST_MASK_PRECISE) * grid_um
-    to_edge = cv2.distanceTransform(counted.astype(np.uint8), cv2.DIST_L2, cv2.DIST_MASK_PRECISE) * grid_um
+    to_neuron = _edt(canvas) * grid_um
+    to_edge = _edt(counted.astype(np.uint8)) * grid_um
     interior = counted & (to_edge > to_neuron)
     values = to_neuron[interior]
     out["gap_interior_mm2"] = float(interior.sum() * grid_um ** 2 / 1e6)

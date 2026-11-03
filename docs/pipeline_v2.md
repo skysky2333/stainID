@@ -700,7 +700,8 @@ columns; the topic "Spatial interactions" of the Results page). They come from t
 6E10 neuritic halo, and 10, vessels, are stage-2 features and not here) and the pilot
 `/run/media/sky/Untitled/alzh/work/feature_explore/PROPOSAL.md`. With `v2.white_matter.analysis: exclude` they are grey
 matter only (no `_whole_core` version); a core image left with too little grey matter is not measured. Every random
-placement or shift is seeded by the core id, so a re-run gives the same numbers. `interactions_<level>.csv` holds the
+placement or shift is seeded by the core id and the grid distances are made exact (OpenCV's differ by 1e-6 with
+memory alignment), so a re-run gives the same numbers. `interactions_<level>.csv` holds the
 columns with the counts behind them (`ix_<count>`, also in `results_counts_<level>.csv`); a donor-region sums its cores'
 counts (a correlation: the mean over its cores weighted by their bins or plaques).
 
@@ -724,7 +725,7 @@ section the brown neuronal nuclei hold less hematoxylin, which would not carry t
 
 | Columns | Definition | Minimum (else empty) |
 |---|---|---|
-| `plaque_<ring>_neuron_share_ratio` (`contact` 0-10 µm, `ring10_30`, `ring30_60`) | 6E10: the neuron-like share of the nuclei in the ring around the nearest plaque of at least 20 µm (each nucleus and tissue cell goes to its nearest plaque edge, on the 2.2 µm mask grid), over the share in tissue at least 100 µm from any plaque; divided by the same ratio averaged over 99 placements of every plaque outline at random cells of the same tissue. Below 1: neurons missing next to plaques. The contact ring is descriptive (nuclei under dense DAB are missed) | 10 plaques ≥ 20 µm, 20 nuclei in the ring, 50 far |
+| `plaque_<ring>_neuron_share_ratio` (`contact` 0-10 µm, `ring10_30`, `ring30_60`) | 6E10: the neuron-like share of the nuclei in the ring around the nearest plaque of at least 20 µm (each nucleus and tissue cell goes to its nearest plaque edge, on the 2.2 µm mask grid), over the share in tissue at least 100 µm from any plaque; divided by the same ratio averaged over 49 placements of every plaque outline at random cells of the same tissue (their Monte Carlo SD is about 5 % of the ratio's spread between cores; 99 halve that and double the time). Below 1: neurons missing next to plaques. The contact ring is descriptive (nuclei under dense DAB are missed) | 10 plaques ≥ 20 µm, 20 nuclei in the ring, 50 far |
 | `plaque_ring_neuron_share_slope` | 30-60 µm ratio minus 10-30 µm ratio | as above |
 | `plaque_ring10_30_neuronlike_density_ratio`, `_other_density_ratio` | the neuron-like and the other nuclei's densities (per mm² of ring tissue) over far tissue, against the random placements | as above |
 | `plaque_compact_` / `plaque_diffuse_ring10_30_neuron_share_ratio` | the 10-30 µm ratio for the nuclei whose nearest plaque is compact / diffuse | 10 plaques of the type |
