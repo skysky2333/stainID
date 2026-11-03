@@ -181,3 +181,47 @@ def test_attach_keeps_every_existing_cell_as_written(tmp_path):
     assert results[ix.COLUMNS[0]].tolist() == ["0.5", ""] and set(ix.COLUMNS) <= set(results.columns)
     counts = pd.read_csv(tmp_path / "results_counts_core.csv", dtype=str, keep_default_na=False)
     assert counts["thread_mm"].tolist() == ["0.06105740", "0"] and counts["ix_rings_plaques"].tolist() == ["12.0", "0.0"]
+
+
+def test_a_coupling_without_plaque_squares_is_too_few_objects_not_unmeasured():
+    from stainid.v2 import missing
+
+    ixs, iys = np.meshgrid(np.arange(8), np.arange(8))
+    bins = pd.DataFrame({"ix": ixs.ravel(), "iy": iys.ravel(), "tissue_mm2": 0.01, "plaque_um2": 0.0, "compact_um2": 0.0,
+                         "diffuse_um2": 0.0, "thread_mm": np.linspace(0.1, 1, 64), "tau": 1.0})
+    s = ix.coupling_stats(bins, "LIP-1_A-1") | {"registered": 1.0}
+    assert s["cp_bins"] == 64 and s["cp_plaque_bins"] == 0 and s["cp_thread_bins"] == 64
+    assert np.isnan(ix.columns(s, 40.0)["plaque_thread_coupling_rho"])
+    counts = {"tiles_NeuN": 1, "tiles_6E10": 1, "tiles_AT8": 1, **{f"ix_{k}": v for k, v in ix._counts(s).items()}}
+    for column in ("plaque_thread_coupling_rho", "plaque_thread_coupling_excess", "plaque_tangle_coupling_excess",
+                   "plaque_compact_thread_coupling", "plaque_thread_correlation_length_um"):
+        assert missing._reason(column, "c", {"c": counts}, None) == ("too_few_objects", 0)
+    bins["plaque_um2"] = np.r_[np.linspace(10, 100, 10), np.zeros(54)]  # plaques in 10 squares: measured
+    s = ix.coupling_stats(bins, "LIP-1_A-1") | {"registered": 1.0}
+    assert s["cp_plaque_bins"] == 10 and np.isfinite(ix.columns(s, 40.0)["plaque_thread_coupling_rho"])
+
+
+def test_register_keeps_every_pair_the_table_has_no_row_for(synthetic_project, monkeypatch):
+    from types import SimpleNamespace
+
+    from stainid.project import load_project
+    from stainid.registration import cores as registration
+    from stainid.registration import rigid
+
+    calls = []
+
+    def fake(reference, moving):
+        calls.append(1)
+        return SimpleNamespace(matrix=np.array([[1.0, 0, 5], [0, 1.0, 0]]), status="review", final_dice=0.8)
+
+    monkeypatch.setattr(rigid, "register_previews", fake)
+    project = load_project(synthetic_project)
+    rows = registration.register_missing(project)
+    assert [(r["core_id"], r["target"], r["how"], r["status"]) for r in rows] == [
+        ("LIP-1_B-2", "6E10", "computed", "review"), ("LIP-1_B-2", "AT8", "computed", "review")]
+    for target in ("6E10", "AT8"):  # where carry_project and stage 5 read it
+        assert registration.kept_path(project.root, "LIP-1_B-2", "NeuN", target).exists()
+        assert ix.to_stain(project, "LIP-1_B-2", target) is not None
+    again = registration.register_missing(project)
+    assert [r["how"] for r in again] == ["kept", "kept"] and len(calls) == 2
+    assert registration.carry_project(project, "LIP-1_B-2", "NeuN", "6E10").status == "review" and len(calls) == 2

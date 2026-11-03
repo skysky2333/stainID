@@ -711,7 +711,10 @@ per-nucleus table (`cells/`, its counted nuclei) where it exists, else stage 1's
 writes `cells/` for every core image, the 6E10 and AT8 nuclei therefore include the dense DAB objects Cellpose outlines
 (about 7 %, sitting exactly at plaques and tangles); after it they do not, and the same code reads the new table. The
 registered grid needs the registration table or the pair kept in the project's `registration` cache (read only; stage 5
-never registers).
+never registers). `stainid --project P v2 register` registers every NeuN -> 6E10 / AT8 pair the table has no row for
+(as the white-matter carry does, `registration.cores.carry_project`) and keeps it there; run it before measures (the
+study's LIP-8-13 cores have no table rows). It prints every pair that is not a pass; stage 5's log names the cores whose
+three sections are not lined up.
 
 **Neuron-like nuclei** on the 6E10 and AT8 sections: a logistic regression on nuclear shape only (log area, eccentricity,
 major and minor axis, their ratio), trained at every run on the NeuN section's nuclei (3,000 per core image, seeded),
@@ -738,7 +741,7 @@ section the brown neuronal nuclei hold less hematoxylin, which would not carry t
 | `tau_neuron_deep_upper_ratio`, `neun_deep_upper_ratio` | density within 1 mm of the white matter over density 1-2 mm from it | white matter; 10 / 20 objects, 0.25 mm² in each band |
 | `neun_large_neuron_peak_depth_um` | centre of the 250 µm depth band densest in NeuN+ neurons of at least 150 µm² (bands of 0.05 mm² or more) | white matter; 20 large neurons |
 | `tangle_plaque_depth_difference_um` | mature tangles' depth excess minus compact plaques' (each on its own section) | both |
-| `plaque_thread_coupling_rho` | Spearman rho of plaque area and thread length over the 100 µm squares of the NeuN frame that are at least 80 % grey matter on all three sections | registration; 30 squares |
+| `plaque_thread_coupling_rho` | Spearman rho of plaque area and thread length over the 100 µm squares of the NeuN frame that are at least 80 % grey matter on all three sections | registration; 30 squares, 3 holding plaque and 3 holding thread (compact / diffuse: that plaque type; tangle: tau+ neurons) |
 | `plaque_thread_coupling_excess`, `plaque_tangle_coupling_excess` | rho (thread; tau+ neuron density) minus its mean over 99 shifts of the AT8 map by 3-10 squares (overlapping squares only) | as above |
 | `plaque_thread_coupling_depth_adjusted` | the rank correlation within 250 µm depth bands (NeuN white matter) | white matter; 30 squares with a depth |
 | `plaque_thread_correlation_length_um` | lag (100 µm steps) at which rho of each square's plaque area with the mean thread of the squares k steps away falls to half rho; only where rho ≥ 0.1 and it falls within 800 µm | as above |

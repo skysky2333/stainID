@@ -113,13 +113,20 @@ def _computed(state, core_id: str, source: str, target: str) -> Carry:
     return _registered(state.root, core_id, source, target, lambda c, s: _picture(state, c, s), lambda c, s: _native(state, c, s))
 
 
+def kept_path(project_root, core_id: str, source: str, target: str) -> Path:
+    """Where a pair registered without the table is kept: the project's `registration` cache."""
+    from stainid import disk_cache  # noqa: PLC0415
+
+    return disk_cache.folder(project_root, "registration") / f"{core_id}_{source}_to_{target}.json"
+
+
 def _registered(project_root, core_id: str, source: str, target: str, picture, native) -> Carry:
     """The pair registered from `picture(core, stain)` (RGB whole-core pictures, `PREVIEW_PX` across) and kept in the
     project's `registration` cache, or what is kept there already (the app and `carry_project` share it)."""
     from stainid import disk_cache  # noqa: PLC0415
     from stainid.registration import rigid  # noqa: PLC0415
 
-    kept = disk_cache.folder(project_root, "registration") / f"{core_id}_{source}_to_{target}.json"
+    kept = kept_path(project_root, core_id, source, target)
     if kept.exists():
         try:
             found = json.loads(kept.read_text())
@@ -193,3 +200,35 @@ def carry_project(project, core_id: str, source: str, target: str, picture=None)
         return found
     native, _ = _project_native(project)
     return _registered(project.root, core_id, source, target, picture or project_picture(project), native)
+
+
+def register_missing(project, cores: set[str] | None = None, source: str = "NeuN", targets: tuple[str, ...] = ("6E10", "AT8"),
+                     log=lambda text: None) -> list[dict]:
+    """`stainid v2 register`: every `source` -> target pair of the project's core images (input `core_images`) that the
+    registration table has no row for, registered from the whole-core pictures (`carry_project`) and kept in the
+    project's `registration` cache, where `carry_project`, the app and stage 5's spatial interactions read it. A pair
+    kept there already is left as it is. One row per pair: core_id, target, how ("table", "kept", "computed" or
+    "no picture"), status ("pass", "review", "fail"; "" without a picture), dice and the error."""
+    native, rows = _project_native(project)
+    picture = project_picture(project)
+    out = []
+    for core_id in sorted({c for c, s in rows if s == source and (cores is None or c in cores)}):
+        for target in targets:
+            if (core_id, target) not in rows:
+                continue
+            row = {"core_id": core_id, "target": target, "how": "", "status": "", "dice": None, "error": ""}
+            found = _from_table(project, core_id, source, target)
+            if found is not None:
+                row |= {"how": "table", "status": found.status, "dice": found.dice}
+            else:
+                kept = kept_path(project.root, core_id, source, target).exists()
+                try:
+                    carried = _registered(project.root, core_id, source, target, picture, native)
+                    row |= {"how": "kept" if kept else "computed", "status": carried.status, "dice": carried.dice}
+                except (KeyError, FileNotFoundError, ValueError, RuntimeError) as error:
+                    row |= {"how": "no picture", "error": str(error)}
+                if row["how"] != "kept":
+                    dice = "" if row["dice"] is None else f" dice {row['dice']:.3f}"
+                    log(f"{core_id} {source} -> {target}: {row['how']} {row['status']}{dice} {row['error']}".rstrip())
+            out.append(row)
+    return out

@@ -41,6 +41,7 @@ RING_NULLS = 99  # random placements of the plaques / tau+ neurons for the ring 
 NULL_TISSUE_SAMPLE = 200_000  # tissue cells whose rings the random placements count (scaled to the tissue)
 CSR_NULLS = 19  # random placements of the points for the column features
 SHIFT_NULLS = 99  # random shifts of the thread field for the coupling
+MIN_FILLED_BINS = 3  # squares holding plaque (thread, tau+ neurons) for a coupling; else empty, too_few_objects
 MODEL_SAMPLE = 3000  # NeuN nuclei per core image for the neuron-like model
 MIN_PLAQUE_UM = 20.0  # plaques that get rings
 FAR_UM = 100.0  # the reference: nuclei at least this far from any plaque / tau+ neuron
@@ -67,7 +68,6 @@ SHAPE = ("log_area", "eccentricity", "major_um", "minor_um", "aspect")
 OUTLINE_COLUMNS = [*organisation.OUTLINE_COLUMNS, "x_core", "y_core", "equivalent_diameter_um", "area_um2", "sam_area_um2"]
 NUCLEUS_COLUMNS = ["x_core", "y_core", "area_um2", "eccentricity", "major_um", "minor_um", "counted"]
 NUCLEI_CACHE_ENV = "STAINID_NUCLEI_TABLE_CACHE"  # a folder for stage 1's nuclei as tables (test runs only)
-REGISTRATION_ENV = "STAINID_REGISTRATION_EXTRA"  # more folders of registered pairs (test runs only)
 
 
 # ---------------------------------------------------------------- what each column needs
@@ -120,11 +120,18 @@ REQUIRE["neun_deep_upper_ratio"] = _needs(("wm_NeuN", 1, "no_white_matter_bounda
                                           _n("dep_NeuN_deep_mm2", 0.25), _n("dep_NeuN_upper_mm2", 0.25))
 REQUIRE["neun_large_neuron_peak_depth_um"] = _needs(("wm_NeuN", 1, "no_white_matter_boundary"), _n("dep_NeuN_large_n", 20))
 REQUIRE["tangle_plaque_depth_difference_um"] = REQUIRE["tangle_depth_excess_um"] + REQUIRE["plaque_compact_depth_excess_um"]
-for _name in ("plaque_thread_coupling_rho", "plaque_thread_coupling_excess", "plaque_compact_thread_coupling", "plaque_diffuse_thread_coupling",
-              "plaque_tangle_coupling_excess"):
-    REQUIRE[_name] = _needs(REG, _n("cp_bins", 30))
-REQUIRE["plaque_thread_coupling_depth_adjusted"] = _needs(REG, ("wm_NeuN", 1, "no_white_matter_boundary"), _n("cp_depth_bins", 30))
-REQUIRE["plaque_thread_correlation_length_um"] = _needs(REG, _n("cp_bins", 30), _n("cp_length_n", 1, "not_measured"))
+# a rank correlation needs squares holding each side: plaque area / thread / tau+ neurons in at least MIN_FILLED_BINS
+_FILLED = {"plaque": _n("cp_plaque_bins", MIN_FILLED_BINS), "thread": _n("cp_thread_bins", MIN_FILLED_BINS),
+           "tau": _n("cp_tau_bins", MIN_FILLED_BINS), "compact": _n("cp_compact_bins", MIN_FILLED_BINS),
+           "diffuse": _n("cp_diffuse_bins", MIN_FILLED_BINS)}
+for _name, _sides in (("plaque_thread_coupling_rho", ("plaque", "thread")), ("plaque_thread_coupling_excess", ("plaque", "thread")),
+                      ("plaque_compact_thread_coupling", ("compact", "thread")), ("plaque_diffuse_thread_coupling", ("diffuse", "thread")),
+                      ("plaque_tangle_coupling_excess", ("plaque", "tau"))):
+    REQUIRE[_name] = _needs(REG, _n("cp_bins", 30), *(_FILLED[k] for k in _sides))
+REQUIRE["plaque_thread_coupling_depth_adjusted"] = _needs(REG, ("wm_NeuN", 1, "no_white_matter_boundary"), _n("cp_depth_bins", 30),
+                                                          _FILLED["plaque"], _FILLED["thread"])
+REQUIRE["plaque_thread_correlation_length_um"] = _needs(REG, _n("cp_bins", 30), _FILLED["plaque"], _FILLED["thread"],
+                                                        _n("cp_length_n", 1, "not_measured"))
 for _size in BIN_SIZES:
     _p = f"niche{_size:.0f}"
     for _niche in (*NICHES, "amyloid_tau_neuron_poor"):
@@ -294,26 +301,24 @@ def accepted(project, stain: str, core_id: str) -> pd.DataFrame:
 
 def to_stain(project, core_id: str, stain: str) -> np.ndarray | None:
     """The matrix from the NeuN image's core px to a stain image's: the registration table, else the pair kept in the
-    project's `registration` cache (read only); None without one or when it failed."""
+    project's `registration` cache (`stainid v2 register` keeps every pair there; read only here, and marked as used so
+    the cache's cleanup keeps it); None without one or when it failed."""
     from stainid import disk_cache  # noqa: PLC0415
     from stainid.registration import cores as registration  # noqa: PLC0415
 
     found = registration._from_table(project, core_id, "NeuN", stain)
     if found is not None:
         return None if found.status == "fail" else found.matrix
-    folders = [disk_cache.cache_root(project.root) / "registration"]
-    folders += [Path(p) for p in os.environ.get(REGISTRATION_ENV, "").split(os.pathsep) if p]
-    for folder in folders:
-        path = folder / f"{core_id}_NeuN_to_{stain}.json"
-        if path.exists():
-            try:
-                kept = json.loads(path.read_text())
-            except ValueError:
-                continue
-            if kept.get("status") == "fail":
-                return None
-            return np.vstack([np.asarray(kept["matrix"], np.float64).reshape(2, 3), [0.0, 0.0, 1.0]])
-    return None
+    path = registration.kept_path(project.root, core_id, "NeuN", stain)
+    if not path.exists():
+        return None
+    try:
+        kept = json.loads(path.read_text())
+        matrix = np.vstack([np.asarray(kept["matrix"], np.float64).reshape(2, 3), [0.0, 0.0, 1.0]])
+    except (ValueError, KeyError):
+        return None
+    disk_cache.used(path)
+    return None if kept.get("status") == "fail" else matrix
 
 
 def _seed(core_id: str, what: str) -> np.random.Generator:
@@ -838,6 +843,9 @@ def coupling_stats(bins: pd.DataFrame, core_id: str) -> dict:
     depth partialled out; the correlation length (the lag where rho of the plaque bin with the mean thread `k` bins away
     falls to half its lag-0 value); compact and diffuse plaque area separately; tangles against plaque area."""
     out = {"cp_bins": float(len(bins))}
+    for name, key in (("plaque_um2", "cp_plaque_bins"), ("thread_mm", "cp_thread_bins"), ("tau", "cp_tau_bins"),
+                      ("compact_um2", "cp_compact_bins"), ("diffuse_um2", "cp_diffuse_bins")):
+        out[key] = float((bins[name].to_numpy(float) > 0).sum()) if len(bins) else 0.0
     if len(bins) < 3:
         return out
     density = lambda name: bins[name].to_numpy(float) / bins.tissue_mm2.to_numpy(float)  # noqa: E731
@@ -1400,6 +1408,10 @@ def compute(project, folder: Path, exclude: bool, skip: set[tuple[str, str]] | N
     auc = f"leave-one-TMA-out AUC {check.auc.median():.3f} (median of {len(check)} TMAs)" if len(check) else "no leave-one-TMA-out check"
     lines = [f"interactions: {len(cores)} cores ({processes} processes); neuron-like nucleus model {auc}",
              f"interactions: control neuron-gap distance ({GAP_QUANTILE:.0%} of the control cores' interior tissue) {gap_um:.0f} µm"]
+    unlined = [c for c in cores if not second[c]["stats"].get("registered") and all(_has(project, s, c) for s in ("NeuN", "6E10", "AT8"))]
+    if unlined:
+        lines.append(f"interactions: {len(unlined)} cores with all three sections not lined up (no registration, or it failed; "
+                     f"`stainid v2 register` registers the pairs the table has no row for), e.g. {', '.join(unlined[:5])}")
     return pd.DataFrame(core_rows), pd.DataFrame(region_rows), lines
 
 
