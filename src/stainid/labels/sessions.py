@@ -9,7 +9,7 @@ A session is `sessions/<name>/meta.json`; its labels go into the shared label st
   different objects. The rule is applied anew on every ask, so the queue follows new data and new labels.
 - `outline`: outline every object of whole fields, to measure segmentation (`labels.outline`); no longer made, kept readable and scored.
 
-A field is one square tile of a core (about 560 µm, 2048 pixels), shown to people as one picture.
+A field is one tile of a core (about 560 µm, 2048 pixels; less at a core's right and bottom edge), shown to people as one picture.
 
 Every label belongs to a session. Labels with no session (the label sets imported from before labelling sessions
 existed, `source` "import: <set>") form one read-only pseudo-session, `REFERENCE`. Models can be trained on any

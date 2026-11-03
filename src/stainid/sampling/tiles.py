@@ -20,7 +20,7 @@ import pandas as pd
 from stainid import cache
 from stainid.project import LEGACY_INPUTS, Project
 
-LABEL_TISSUE = 0.10  # a labelling field is a full-size whole-core tile with at least this share of tissue
+LABEL_TISSUE = 0.10  # a labelling field holds tissue over at least this share of a full tile's area
 MASK_TISSUE = 1  # the tissue bit of detection's per-core mask (stainid.v2.proposals.BITS; 32 = inside a tile, 16 = AT8 edge guard)
 MASK_TILE = 32
 
@@ -154,25 +154,26 @@ def tissue_fractions(project: Project, tiles: pd.DataFrame) -> pd.Series:
 
 
 def labelling_tiles(project: Project) -> pd.DataFrame:
-    """The whole-core tiles new labelling fields are drawn from: full-size squares with at least `LABEL_TISSUE` tissue
-    (rim tiles are labelled too, nearly empty ones are not), so every field shows the same area; the cut-off tiles at a
-    core's right and bottom edge stay out. In an image set every image with that much tissue (the images are the size
-    the lab chose). The share of tissue is that of detection's tissue mask (`tissue_fractions`)."""
+    """The whole-core tiles new labelling fields are drawn from: those whose tissue covers at least `LABEL_TISSUE` of a
+    full tile's area (the largest tile of the project). Rim tiles and the cut-off tiles at a core's right and bottom edge
+    are labelled too when they hold that much, so a field need not be square; nearly empty ones and tiny slivers are not.
+    In an image set a tile is measured against its own area: the images are the size the lab chose, so no size is the
+    full one. The tissue is that of detection's tissue mask (`tissue_fractions`)."""
     path = project.analysis_tiles()
-    whole_squares = project.is_tma
+    against_full = project.kind != "images"
 
     def make() -> pd.DataFrame:
         tiles = table(path)
         if tiles.empty:
             return tiles
-        tissue = tissue_fractions(project, tiles)
-        size = tiles.width_px.max()
-        full = (tiles.width_px == size) & (tiles.height_px == size) if whole_squares else True
-        return tiles[full & (tissue >= LABEL_TISSUE)].reset_index(drop=True)
+        share = tissue_fractions(project, tiles)
+        if against_full:
+            share = share * (tiles.width_px * tiles.height_px) / (tiles.width_px.max() * tiles.height_px.max())
+        return tiles[share >= LABEL_TISSUE].reset_index(drop=True)
 
     from stainid import exclusions  # noqa: PLC0415
 
     listed = table(path)
     stains = sorted({str(v) for v in listed.stain.dropna()}) if "stain" in listed else []
     masks = [exclusions.masks_folder(project, stain) for stain in stains]  # a core's mask (re)written: its tissue again
-    return cache.memo(("labelling tiles", str(path), whole_squares), [path, *masks], make, folders=True)
+    return cache.memo(("labelling tiles", str(path), against_full), [path, *masks], make, folders=True)

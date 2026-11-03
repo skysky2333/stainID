@@ -40,10 +40,12 @@ the squares that were sampled fields keep their names (`…_S01`) in the tile gr
 read only so that earlier labels, labelling sessions and training sets still find their fields
 (`stainid.sampling.tiles`). An older `analysis.tiles: sampled_fields` setting is ignored.
 
-**Labelling fields.** A field shown to people for labelling is one full-size tile with at least 10 %
-tissue (its preview's tissue fraction, `sampling.tiles.LABEL_TISSUE`): tiles at the rim are labelled
-too, nearly empty ones are not; the cut-off tiles at a core's right and bottom edge stay out, so every
-field shows the same area. New sessions draw fields only from cores that are ready (core picture exported, slide
+**Labelling fields.** A field shown to people for labelling is one tile whose tissue (by detection's
+tissue mask, else its preview's estimate) covers at least 10 % of a full tile's area
+(`sampling.tiles.LABEL_TISSUE`): tiles at the rim are labelled too, and so are the cut-off tiles at a
+core's right and bottom edge that hold that much, so a field need not be square; nearly empty tiles and
+tiny slivers are not. In an image set a tile is measured against its own area (the images are the size
+the lab chose). Sessions keep the fields they drew. New sessions draw fields only from cores that are ready (core picture exported, slide
 calibrated, detection run on the core, the stain's model chosen; see `stainid.labels.readiness`);
 the Labels page shows any other core with what is missing and the step that makes it.
 
