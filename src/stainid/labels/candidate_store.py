@@ -203,22 +203,27 @@ _WHOLE_LIMIT = 8  # a whole NeuN or AT8 core with its outlines and three masks p
 _WHOLE_LOCK = threading.Lock()
 
 
-def read_core(project: Project, stain: str, core_id: str, columns: list[str] | None = None) -> pd.DataFrame | None:
+def read_core(project: Project, stain: str, core_id: str, columns: list[str] | None = None, kind: str = "candidates") -> pd.DataFrame | None:
     """Every candidate of one core image (None when it has none). Whole tables are kept for the last few cores read
     (until their file changes); with `columns` (e.g. `POSITIONS`, `CALLS`) only those are read and parsed, for passes over
-    many cores. Callers must not change it."""
-    target = path(project, stain, core_id)
+    many cores. `kind` "proposals": stage 2's table (training between stages 2 and 4, `training_kind`). Callers must not
+    change it."""
+    target = path(project, stain, core_id) if kind == "candidates" else v2.stored(project, stain, core_id, kind)
     if target is None:
         return None
+
+    def raw(wanted):
+        return v2.read_core(project, stain, core_id, wanted) if kind == "candidates" else v2.read_table(target, wanted)
+
     if columns is not None:
-        return _displayed(project, stain, _normalised(v2.read_core(project, stain, core_id, list(columns)), stain, core_id))
+        return _displayed(project, stain, _normalised(raw(list(columns)), stain, core_id))
     stamp = cache.signature(target)
     with _WHOLE_LOCK:
         kept = _WHOLE.get(str(target))
         if kept is not None and kept[0] == stamp:
             _WHOLE.move_to_end(str(target))
             return kept[1]
-    found = _displayed(project, stain, _normalised(v2.read_core(project, stain, core_id), stain, core_id))
+    found = _displayed(project, stain, _normalised(raw(None), stain, core_id))
     with _WHOLE_LOCK:
         _WHOLE[str(target)] = (stamp, found)
         _WHOLE.move_to_end(str(target))
@@ -542,14 +547,15 @@ def save_index(project: Project, stain: str) -> None:
         pass
 
 
-def _light(project: Project, stain: str, core_id: str) -> dict | None:
+def _light(project: Project, stain: str, core_id: str, kind: str = "candidates") -> dict | None:
     """One core's candidates as matching needs them, compactly: ids (bytes), positions (float32) and the call of each
     as a code into the core's few (decision, class, subtype, reason) combinations. Kept until the store file changes (also on
-    disk between restarts: `save_index`)."""
-    target = path(project, stain, core_id)
+    disk between restarts: `save_index`). `kind` "proposals": of stage 2's table (no calls; kept in memory only)."""
+    target = path(project, stain, core_id) if kind == "candidates" else v2.stored(project, stain, core_id, kind)
     if target is None:
         return None
-    _load_index(project, stain)
+    if kind == "candidates":
+        _load_index(project, stain)
     stamp = cache.signature(target)
     with _WHOLE_LOCK:
         kept = _LIGHT.get(str(target))
@@ -557,7 +563,8 @@ def _light(project: Project, stain: str, core_id: str) -> dict | None:
             _LIGHT.move_to_end(str(target))
             return kept[1]
     _READ[0] += 1
-    frame = v2.read_core(project, stain, core_id, CALLS)  # the raw columns only: nothing parsed
+    # the raw columns only: nothing parsed
+    frame = v2.read_core(project, stain, core_id, CALLS) if kind == "candidates" else v2.read_table(target, CALLS)
     if not frame.empty and "candidate_id" not in frame:
         frame = frame.assign(candidate_id=[candidate_id(stain, core_id, a, b) for a, b in zip(frame.x_core, frame.y_core)])
     for column in ("decision", "class", "subtype", "reason"):
@@ -609,13 +616,44 @@ def _lights(project: Project, stain: str, core_ids) -> dict[str, dict | None]:
     return out
 
 
-def _nearest(project: Project, stain: str, labels: pd.DataFrame, tiles: pd.DataFrame):
+def training_kind(project: Project, stain: str, core_id: str) -> str | None:
+    """Which table of a core image training reads its candidates from: the assembled store (stage 4) when it was
+    assembled from the stage-2 proposals now on disk, else the proposals (stage 2 re-run and stage 4 not yet: the store
+    still holds the earlier proposals' candidates and features, or there is none); None when there is neither. A store
+    without manifests (one made from the pool) is read as before."""
+    from stainid.v2 import manifest  # noqa: PLC0415
+
+    stored = path(project, stain, core_id) is not None
+    proposed = v2.stored(project, stain, core_id, "proposals") is not None
+    if not proposed:
+        return "candidates" if stored else None
+    if not stored:
+        return "proposals"
+    made, current = manifest.read(project, "candidates", stain, core_id), manifest.read(project, "proposals", stain, core_id)
+    if made is None or current is None:
+        return "candidates"
+    return "candidates" if (made.get("inputs") or {}).get("proposals") == current.get("digest") else "proposals"
+
+
+def _tables(project: Project, stain: str, core_ids, current: bool) -> dict[str, dict | None]:
+    """`_lights` of these cores; `current`: of the table training reads (`training_kind`) instead of the store."""
+    if not current:
+        return _lights(project, stain, core_ids)
+    kinds = {c: training_kind(project, stain, c) for c in core_ids}
+    out = _lights(project, stain, [c for c, k in kinds.items() if k == "candidates"])
+    out.update({c: _light(project, stain, c, "proposals") for c, k in kinds.items() if k == "proposals"})
+    out.update({c: None for c, k in kinds.items() if k is None})
+    return out
+
+
+def _nearest(project: Project, stain: str, labels: pd.DataFrame, tiles: pd.DataFrame, current: bool = False):
     """For each core with labels: (the core's compact candidates, the labels' index, the candidate row of each label or
-    -1) — the nearest candidate within `MATCH_UM` of each label (tile_id, x, y in its field picture, `labels.frames`)."""
+    -1) — the nearest candidate within `MATCH_UM` of each label (tile_id, x, y in its field picture, `labels.frames`).
+    `current`: the candidates of the table training reads (`training_kind`), not of the store."""
     if labels.empty:
         return
     boxes = tiles.drop_duplicates("tile_id").set_index("tile_id") if not tiles.empty else pd.DataFrame(columns=["core_id"])
-    have = cores(project, stain)
+    have = cores(project, stain) | (v2.cores(project, stain, "proposals") if current else frozenset())
     if not have or "core_id" not in boxes:  # no store, or fields that do not say their core: nothing to match onto
         return
     placed = labels[labels.x.notna() & (labels.tile_id.isin(set(boxes.index)) | labels.tile_id.isin(have))]  # a field, or a whole core
@@ -624,7 +662,7 @@ def _nearest(project: Project, stain: str, labels: pd.DataFrame, tiles: pd.DataF
     radius = match_px(stain, project.pixel_size_um)
     core_of = boxes.core_id.astype(str).to_dict()
     groups = [(c, g) for c, g in placed.groupby(placed.tile_id.map(lambda t: core_of.get(t, t))) if c in have]
-    light = _lights(project, stain, [c for c, _ in groups])
+    light = _tables(project, stain, [c for c, _ in groups], current)
     origins: dict[str, tuple] = {}
     for core_id, group in groups:
         found = light[core_id]
@@ -657,13 +695,41 @@ def core_calls(project: Project, stain: str, core_ids) -> pd.DataFrame:
     return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=columns)
 
 
-def match(project: Project, stain: str, labels: pd.DataFrame, tiles: pd.DataFrame) -> pd.Series:
+def match(project: Project, stain: str, labels: pd.DataFrame, tiles: pd.DataFrame, current: bool = False) -> pd.Series:
     """The candidate each label (tile_id, x, y in its field picture, `labels.frames`) is about: the nearest candidate of
-    the store within `MATCH_UM`, else None. Labels made before candidate ids existed are matched this way."""
+    the store within `MATCH_UM`, else None. Labels made before candidate ids existed are matched this way, and so are
+    labels naming a candidate the store no longer has (`known`). `current`: of the table training reads."""
     out = pd.Series(None, index=labels.index, dtype=object)
-    for found, index, rows in _nearest(project, stain, labels, tiles):
+    for found, index, rows in _nearest(project, stain, labels, tiles, current):
         hit = rows >= 0
         out.loc[index[hit]] = [v.decode() for v in found["ids"][rows[hit]]]
+    return out
+
+
+def _core_of(candidate: str) -> str:
+    try:
+        return v2.parse_id(candidate)[1]
+    except (ValueError, IndexError):
+        return ""
+
+
+def known(project: Project, stain: str, candidates: pd.Series, current: bool = False) -> pd.Series:
+    """Whether each named candidate id is a candidate of its core image now: of the store, or with `current` of the table
+    training reads (`training_kind`). A re-run of stage 2 can drop or move an object, and its id with it; a label naming
+    such an id is about the object at its position (`match`). True for an empty name and for a core image with no table
+    (there is nothing else to match it onto)."""
+    names = candidates.fillna("").astype(str)
+    out = pd.Series(True, index=candidates.index, dtype=bool)
+    named = names[names != ""]
+    if named.empty:
+        return out
+    by_core = named.map(_core_of)
+    tables = _tables(project, stain, sorted(set(by_core) - {""}), current)
+    for core_id, group in named.groupby(by_core):
+        found = tables.get(core_id)
+        if found is None:
+            continue
+        out.loc[group.index] = np.isin(group.to_numpy().astype("S"), found["ids"]) if len(found["ids"]) else False
     return out
 
 
@@ -759,23 +825,28 @@ def model_inputs(frame: pd.DataFrame) -> list[str]:
 
 
 def training_rows(project: Project, stain: str, objects: pd.DataFrame, tiles: pd.DataFrame,
-                  names: list[str] | None) -> tuple[dict, list[str] | None]:
+                  names: list[str] | None, current: bool = True) -> tuple[dict, list[str] | None]:
     """The features of the candidates these labelled objects (tile_id, x, y in field pictures) are about, for training:
     {row index: {feature: value, …, x, y, tma, candidate_id}}, and the feature names (`names`, else the store's own model
-    inputs). Candidates whose table lacks one of the names are left out."""
+    inputs). Candidates whose table lacks one of the names are left out. `current` (default): from the table stage 4
+    would score (`training_kind`: the stage-2 proposals while the store is older than them), so a retrain between
+    stages 2 and 4 matches every label onto the new candidates; a named candidate that table no longer has is matched
+    by position."""
     if objects.empty:
         return {}, names
-    matched = match(project, stain, objects, tiles)
-    if "candidate" in objects:  # the consensus's own key (`store.object_keys`): the candidate, matched by position only where unnamed
+    matched = match(project, stain, objects, tiles, current)
+    if "candidate" in objects:  # the consensus's own key (`store.object_keys`): the candidate, matched by position only where unnamed or gone
         named = objects.candidate.fillna("").astype(str)
-        matched = named.where(named != "", matched)
+        matched = named.where((named != "") & known(project, stain, named, current), matched)
     matched = matched.dropna()
+    matched = matched[matched.astype(str) != ""]
     if matched.empty:
         return {}, names
     tma = tiles.drop_duplicates("tile_id").set_index("tile_id").tma.astype(str)
     out = {}
-    for core_id, group in matched.groupby(matched.map(lambda c: ":".join(str(c).split(":")[1:-2]))):
-        found = read_core(project, stain, core_id)
+    for core_id, group in matched.groupby(matched.map(_core_of)):
+        kind = training_kind(project, stain, core_id) if current else "candidates"
+        found = read_core(project, stain, core_id, kind=kind) if kind else None
         if found is None or found.empty:
             continue
         names = names or model_inputs(found)
@@ -784,6 +855,8 @@ def training_rows(project: Project, stain: str, objects: pd.DataFrame, tiles: pd
             continue
         rows = found.drop_duplicates("candidate_id").set_index("candidate_id")
         for index, cid in group.items():
+            if cid not in rows.index:
+                continue
             row = rows.loc[cid]
             scaled = {k: row[k] for k in row.index if str(k).startswith("s_") and k not in columns}  # slide-scaled 6E10 inputs
             out[index] = {**{n: row[c] for n, c in columns.items()}, **{k: row[k] for k in EXTRA if k in row and k not in columns}, **scaled,

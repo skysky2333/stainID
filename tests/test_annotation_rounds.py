@@ -583,3 +583,42 @@ def test_removing_fields_takes_them_out_of_the_scope_too(rounds_project):
     assert set(ann.get(f"/api/annotate/{name}/confidence").json()) == {TILE}  # the scores follow the fields
     back = admin.post(f"/api/labels/sessions/{name}/fields", json={"tile_ids": [OTHER]}).json()
     assert sorted(back["fields"]) == sorted(back["scope"]) == sorted([TILE, OTHER])
+
+
+def test_training_reads_the_proposals_a_stage_2_rerun_wrote_and_a_gone_id_by_position(rounds_project):
+    """Between a re-run of stage 2 and stage 4 the store still holds the earlier candidates: training reads the new
+    proposals (`training_kind`), and a label naming a candidate those no longer have (the object moved, so its id
+    changed) is matched by position. The store's readers (the rounds, the Labels page) key such a label by position too."""
+    from stainid import candidates as v2
+    from stainid.labels import frames, store
+    from stainid.sampling.tiles import known_tiles
+    from stainid.v2 import manifest
+
+    _, _, rows = rounds_project
+    project = state.get_state().project
+    tiles = known_tiles(project)
+    core = "LIP-1_B-2"
+    old_id = rows[1]["candidate_id"]  # at (460, 400)
+    moved = [dict(r) for r in rows]
+    moved[1] |= {"x_core": 463.0, "candidate_id": candidate_store.candidate_id("6E10", core, 463.0, 400.0), "m_context_dab_mean": 0.9}
+    proposals = pd.DataFrame(moved).drop(columns=["probability", "model_id", "decision", "reason", "class", "subtype"])
+    v2.write_table(v2.root(project) / "proposals" / "6E10" / f"{core}.csv.gz", proposals)
+    label = {"stain": "6E10", "task": "class", "session": "", "source": "Ann", "tile_id": TILE, "value": "plaque", "subtype": "diffuse"}
+    store.append(project.output("reviews"), [{**label, "id": "class:moved", "x": 460 - 172, "y": 400 - 172, "candidate": old_id, "time": 1.0}])
+    labels = frames.in_field_frame(store.current(project.output("reviews")), tiles, project.context_px)
+    assert candidate_store.training_kind(project, "6E10", core) == "candidates"  # no manifests (a store made by hand or from the pool): as before
+    manifest.write(project, "proposals", "6E10", core, {"digest": "new"})
+    manifest.write(project, "candidates", "6E10", core, {"digest": "store", "inputs": {"proposals": "old"}})
+    assert candidate_store.training_kind(project, "6E10", core) == "proposals"  # the store was assembled from other proposals
+    truth = decisions.consensus(project, "6E10", labels, tiles)
+    assert truth.candidate.tolist() == [old_id]  # the store still has the id: the rounds and the Labels page keep it
+    features, _ = candidate_store.training_rows(project, "6E10", truth, tiles, ["context_dab_mean"])
+    assert features[truth.index[0]]["candidate_id"] == moved[1]["candidate_id"] and features[truth.index[0]]["context_dab_mean"] == pytest.approx(0.9)
+    manifest.write(project, "candidates", "6E10", core, {"digest": "store", "inputs": {"proposals": "new"}})
+    assert candidate_store.training_kind(project, "6E10", core) == "candidates"  # stage 4 ran: the store again
+    candidate_store.write_core(project, "6E10", core, pd.DataFrame(moved))  # the new store: the old id is gone
+    decisions.forget()
+    assert not candidate_store.known(project, "6E10", pd.Series([old_id])).iloc[0]
+    truth = decisions.consensus(project, "6E10", labels, tiles)
+    assert truth.candidate.tolist() == [moved[1]["candidate_id"]]  # matched by position onto the moved object, not orphaned
+    assert decisions.state(project, "6E10", tiles).by(moved[1]["candidate_id"]) == ["Ann"]

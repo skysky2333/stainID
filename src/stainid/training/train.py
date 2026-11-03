@@ -1,8 +1,9 @@
 """Train a stain model on the human labels in the label store and compare it with the current model on the same labels.
 
 Each labelled object's class is the majority of the people who labelled it; its features are those of the matching
-candidate in the pool, or, for objects of the annotation rounds, of the v2 candidate store (`labels.candidate_store`:
-the decisions people made there are class labels on its candidates). An object people added where the detection step proposed nothing is measured at the clicked
+candidate of the v2 candidate store (`labels.candidate_store`: the decisions people made there are class labels on its
+candidates; between a stage-2 re-run and stage 4 the new proposals, `candidate_store.training_kind`), else of the
+legacy candidate pool. An object people added where the detection step proposed nothing is measured at the clicked
 position first (`labels.added`) and trains the model like a candidate; the report counts these person-added objects and
 those that could not be measured (their labels stay, but cannot train). Labels on positions with no candidate on fields
 that are not prepared are skipped.
@@ -67,18 +68,20 @@ def labelled(project: Project, stain: str, sessions: list[str] | None = None, ma
     stored, names = candidate_store.training_rows(project, stain, truth, tiles, names)
     rows, unmeasured = [], 0
     for tile_id, group in truth.groupby("tile_id"):
-        objects = pool.load_field(project, stain, tile_id)
-        extra = added.load_field(project, stain, tile_id)
+        objects = extra = None
         for r in group.itertuples():
+            label = {"tile_id": tile_id, "label": r.value, "subtype": r.subtype, "positive": bool(r.positive), "sources": r.sources}
+            if r.Index in stored:  # the candidate store's (stage 2's) features first: what stage 4 scores
+                rows.append({**stored[r.Index], **label, "added_by_person": False})
+                continue
+            if objects is None:
+                objects, extra = pool.load_field(project, stain, tile_id), added.load_field(project, stain, tile_id)
             i = pool.nearest(objects, r.x, r.y)
             hit = added.resolve(extra, r.x, r.y) if i is None else None
             if hit is not None and pd.notna(hit.get("candidate_x")):  # the click was off the centre of a candidate
                 i, hit = pool.nearest(objects, float(hit.candidate_x), float(hit.candidate_y)), None
-            label = {"tile_id": tile_id, "label": r.value, "subtype": r.subtype, "positive": bool(r.positive), "sources": r.sources}
             if i is not None:
                 rows.append({**objects.iloc[i].to_dict(), **label, "added_by_person": False})
-            elif r.Index in stored:
-                rows.append({**stored[r.Index], **label, "added_by_person": False})
             elif hit is not None and added.is_true(hit.measured):
                 rows.append({**hit.to_dict(), **label, "added_by_person": True})
             elif hit is not None:

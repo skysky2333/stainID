@@ -8,7 +8,7 @@ change to a model, a threshold or a rule re-runs only the cheap stages after it.
 | Stage | Command | Reads | Writes | Cost |
 |---|---|---|---|---|
 | 1 Nuclei | `stainid nuclei` (unchanged) | core images | `tile_nuclei/<tile>.npz` | GPU, run once |
-| 2 Proposals | `stainid v2 proposals` | core images, nuclei, slide thresholds, exclusions | `proposals/`, `tiles/`, `threads/`, `unproposed/`, `masks/` | CPU, the expensive stage |
+| 2 Proposals | `stainid v2 proposals` | core images, nuclei, slide thresholds, exclusions | `proposals/`, `tiles/`, `threads/`, `unproposed/`, `masks/`, `cells/` | CPU, the expensive stage |
 | 4 Calls | `stainid v2 calls` | `proposals/`, the stain models, `v2.rules` | `calls/`, `candidates/` | minutes for the cohort, no image read |
 | 3 Outlines | `stainid v2 outlines` | `proposals/`, `calls/` (which to outline), core images, SAM | `outlines/`, `candidates/` | GPU, optional |
 | 5 Measures | `stainid v2 measures` | `candidates/`, `tiles/`, `threads/` | `measures/` | minutes, no image read |
@@ -63,7 +63,8 @@ D-3, E-3, E-4, D-4, F-4, E-5; LIP-6 D-5) a band of ordinary tissue tens of µm w
 Only core images whose tissue is darker than 0.25 can change (9 of 349 6E10, 3 of 364 AT8 study cores; on the 7 darkest
 6E10 cores 17 plaques gained, 6 lost, nearly all of them plaques by the core edge); real folds and knife lines stay
 masked (597 study tiles where the old mask took over a quarter of the tissue: 12.6 % → 12.5 % of their tissue).
-`null` restores the fixed cut. Calibration and the viewer's excluded-areas overlay use the same mask.
+`null` restores the fixed cut (the study and JOG pinned it until the v2c re-run, which removes the pin). Calibration and
+the viewer's excluded-areas overlay use the same mask.
 
 Per tile and stain, each tile detecting in a window that reaches `proposals.<stain>.context_px` beyond it: as far as
 the largest object reaches from its centre (accepted whole objects of the cohort reach at most NeuN 221 px, AT8 168 px,
@@ -177,6 +178,26 @@ of machine time; 8 tile processes take 393 s and leave three quarters of the pro
 alone now finishes in about half the time (LIP-1 F-3 NeuN: 161 s -> 81 s with 8 processes). More throughput needs
 less memory traffic per tile (float64 temporaries, whole-field pictures made for a few crops), not more processes.
 
+**Pure black is no tissue.** Scan padding and the slide's edge are pure black (RGB 0, 0, 0); the fixed tissue cut-off took
+them for tissue, and at the fixed threshold they read as stained. `field_tissue_mask` (so the tissue of detection, the
+areas, the calibration and the viewer) leaves them out before its opening and closing, so a stray black pixel inside
+tissue is closed over, and `stainid calibrate` also leaves every pure-black pixel out of the slide's sample
+(`workflows.calibrate.sample_core`). Tested on 333 slides (`/run/media/sky/Untitled/alzh/work/calibration_guard/`): two
+Plaquebox training slides move (0.43 → 0.048 and 0.35 → 0.055 OD); the study's thresholds move by at most 6e-6 OD.
+
+**Cells: the per-nucleus table** (`cells/<stain>/<core_id>.parquet`, `stainid.v2.cells`). Every Cellpose nucleus of the
+tile's own area (enough hematoxylin, 10–200 µm², centre in the counted tissue) with its position (core px), area,
+eccentricity, solidity, major and minor axis and mean hematoxylin and DAB, and `counted`: on 6E10 and AT8 a nucleus must
+also hold at least as much hematoxylin as DAB. Cellpose outlines dense DAB objects there too (plaque cores, tangles,
+thread swellings, about 7 % of its "nuclei"), and they are no cells. Every nucleus count of stage 2 takes the counted
+cells: the tile's `nucleus_count` (the nucleus density, the periplaque background) and the 6E10 `nuclei_inside`,
+`nuclei_ring15`, `nuclei_ring45`. The AT8 rings around nuclei, the thread network's nuclei and the AT8 model's own
+inputs (`nucleus_count`, `nucleus_overlap_fraction` of a candidate) are unchanged. On NeuN (whose neuronal nuclei are
+brown) only the hematoxylin and size rules apply; stage 5 reads that table (below). A new per-tile measure that needs
+the image belongs in this per-tile step too (`tile_summary` stores the field's table, `process_tile` returns it,
+`write_core` writes it), so it costs no second read of the core image. Proposals version 6 (the tissue mask, the counted
+nuclei, the table).
+
 Stained regions no candidate proposes (`unproposed/`, per stain `proposals.<stain>.unproposed`): NeuN and AT8 as
 before (smoothed DAB ≥ the threshold, ≥ 15 / 20 µm², touching no candidate); 6E10 the DAB smoothed over 4 µm at
 max(0.75 × threshold, tissue median + 0.25 × threshold), ≥ 100 µm², that no single candidate covers a quarter of — a
@@ -222,6 +243,22 @@ version is replaced by it, and the bundle records `slide_scaled: true` and the `
 store like any other input. Labels on candidates without `s_` columns (the old pool) get their intensities from the
 OD over their TMA's threshold and leave the core measures to the model's imputer. Without the setting, models train
 on the legacy inputs.
+
+## Training between stages 2 and 4
+
+Training reads each labelled object's features from the candidate store (stage 2's measurements, what stage 4 scores),
+and from the legacy candidate pool only for an object the store does not have. A core image's store counts only when it
+was assembled from the stage-2 proposals now on disk (its `candidates` manifest names the current `proposals` digest);
+otherwise, after a re-run of stage 2 and before stage 4, training reads the new proposals
+(`labels.candidate_store.training_kind`). Before, training matched labels only to the store: a retrain between stages 2
+and 4 found no store after the outputs were moved aside (6E10: 961 of 1,267 labels dropped in v2b) or the earlier
+proposals' features in a store left in place, and it took the pool's features before the store's.
+
+A label names its candidate (`candidate_id`: stain, core image and the rounded centre). A re-run that moves an object
+(a new mask, threshold or rule) changes its id. A label naming an id the table no longer has is matched by position
+instead, like the labels made before ids existed: the nearest candidate within `candidates.MATCH_RADIUS_UM` (NeuN and AT8
+4 µm, 6E10 6 µm), in training (`candidate_store.known`) and in every reader of the decisions (`labels.decisions._renamed`:
+the rounds, the Labels page). Only a label with no candidate there any more is left on its own (its position).
 
 ## Stage 4: calls
 
@@ -311,6 +348,24 @@ frozen v1 tables the R analyses read (same aggregation code: `stainid.analysis.a
 | outline (mask) features `*_mask_*` | accepted candidates with a kept Segment Anything outline; none in measured tissue is a count, density and area fraction of 0 | yes; `plaque_multicore_fraction` is not written (the v2 store keeps no count of dense cores) |
 
 To move the analyses over, point the R scripts' `data/analysis/<prefix>_*.csv` reads at `data/analysis/v2/measures/`.
+
+### Cells on the NeuN section
+
+From the NeuN per-nucleus table (stage 2, `cells`) and the accepted neurons' own outlines (the one the views draw), over
+the analysed tissue of the NeuN tiles with nuclei (with `exclude` the cells in the white matter are left out as the
+neurons are):
+
+| Column | Definition |
+|---|---|
+| `neun_nonneuronal_cell_density_mm2` | counterstain nuclei whose centre lies in no accepted neuron, per mm² |
+| `neun_cell_density_mm2` | all cells: accepted neurons plus those other nuclei, per mm² |
+| `neun_neuron_fraction_of_cells` | accepted neurons / all cells (missing under 20 cells, `too_few_objects`) |
+
+A neuron counts once whatever the nuclei inside it, so the share does not depend on whether Cellpose found the neuron's
+nucleus. The tile rows carry `cell_count` (all counted nuclei) and `nonneuronal_cell_count`; a core image whose stage 2
+predates the table has them missing. Proposed in `/run/media/sky/Untitled/alzh/work/feature_explore/PROPOSAL.md` (pilot:
+NeuN+ share CT 0.24, ASYMAD 0.19, AD 0.17; non-neuronal cells 550, 605, 840 per mm²; a shape-only neuron-versus-other
+nucleus model from this table reached leave-one-TMA-out AUC 0.87).
 
 ### Continuous type scores: tau maturity and plaque compactness
 
