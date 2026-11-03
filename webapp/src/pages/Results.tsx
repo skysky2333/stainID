@@ -37,8 +37,12 @@ function ResultsPage() {
           <li>Counts and areas are pooled over all fields and replicate cores before dividing, so every <Term>density</Term> is per mm² of usable tissue.</li>
           <li>The plots show raw values, for looking at the data. Below each plot are the tests of the differences between groups, with what
             they were adjusted for: the study's own analysis where the project has it, otherwise a quick test.</li>
-          <li><b>ICC</b> next to a measure says how well two cores of the same donor and region agree (good from 0.75, weak below 0.5).
-            “Significant only” and “Reproducible only” above the list narrow it to the measures that differ between two groups or that are reproducible.</li>
+          <li><b>Replicate agreement (ICC)</b> next to a measure: many donors have two cores from the same brain region, and this says how close the
+            measure's values on those two cores are (1 = the same, 0 = no closer than two different donors; good from 0.75, weak below 0.5). A weak
+            measure is still shown: one core says less about its donor-region, so read its group differences with care. “not measured” means there were
+            too few pairs of cores to tell.</li>
+          <li>Every measure is listed. “Significant only” and “Only show reliable measures” above the list narrow it, only while they are switched on,
+            to the measures that differ between two groups or whose two cores agree well enough (the level is under Test options).</li>
         </ul>
       </HelpBox>
       <Waiting state={tables} label="Looking for results tables…">

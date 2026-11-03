@@ -295,6 +295,16 @@ def _one_extent(frame: pd.DataFrame, extent: str | None = None) -> pd.DataFrame:
     return frame[frame.sampling_extent == keep]
 
 
+def _reliability_table(path: Path, biology: Path, since: float) -> Path | None:
+    """Stage 5's measure_reliability.csv: beside the shown table (written in the same run, so taken as it is), else a
+    copy in the study's biology folder made from the current results."""
+    beside = path.with_name(ms.RELIABILITY_TABLE)
+    if beside.exists():
+        return beside
+    other = biology / ms.RELIABILITY_TABLE
+    return other if _fresh(other, since) else None
+
+
 def _fresh(path: Path, since: float) -> bool:
     """A study table made from the current results (not written before the table on screen)."""
     return path.exists() and path.stat().st_mtime >= since
@@ -317,9 +327,10 @@ def table_stats(name: str) -> dict:
     primary = biology / "cohort_morphology" / tiles / "replicate_reliability.csv"  # the study's main reliability table
     icc_files = [primary] + [p for p in _folder(biology)[0] if p.name.endswith("_replicate_icc.csv")]
     icc_files = [p for p in icc_files if _fresh(p, shown_time)]
+    given = _reliability_table(path, biology, shown_time)  # stage 5's own, made with these results: it wins
     specs = [s for s in ms.STUDY_CONTRASTS if _fresh(base / s.file, shown_time)]
     inputs = sorted({base / i for s in specs for i in s.inputs if (base / i).exists()})
-    files = [p for p in [path, donor_region, core, *icc_files, *(base / s.file for s in specs), *inputs] if p is not None]
+    files = [p for p in [path, donor_region, core, *([given] if given else []), *icc_files, *(base / s.file for s in specs), *inputs] if p is not None]
     stamp = (tuple((str(p), _stamp(p)) for p in files), repr(project.config.get("groups")), tiles)
     with _lock:
         known = _stats.get(name)
@@ -329,7 +340,8 @@ def table_stats(name: str) -> dict:
     frame = _one_extent(read_table(path), tiles)
     measures = measure_columns(frame)
     core_frame = _one_extent(read_table(core), tiles) if core is not None else None
-    icc = ms.reliability(measures, core_frame, ms.study_icc(icc_files, project.relative, primary))
+    icc = ms.reliability(measures, core_frame, ms.study_icc(icc_files, project.relative, primary),
+                         ms.results_icc(given, project.relative) if given else None)
     comparisons = []
     if donor_region is not None:
         shown = _one_extent(read_table(donor_region), tiles)
@@ -343,7 +355,7 @@ def table_stats(name: str) -> dict:
             tested = [m for m in measures if m in shown]
             for first, second in ms.comparisons(present, kinds):
                 comparisons.append(_comparison(shown, tested, (first, second), kinds, specs, inputs_read))
-    result = {"icc": icc, "comparisons": comparisons, "icc_files": [project.relative(p) for p in icc_files],
+    result = {"icc": icc, "comparisons": comparisons, "icc_files": [project.relative(p) for p in [*([given] if given else []), *icc_files]],
               "contrast_files": [project.relative(base / s.file) for s in specs]}
     with _lock:
         _stats[name] = (stamp, result)

@@ -11,7 +11,7 @@ import type { Measure, TableColumns } from './data'
 import { ID_LABELS, downloadCsv, formatNumber, measureTitle, reasonCounts, tableUrl, useShared } from './data'
 import { Choice, NoValue, Pager, Waiting } from './parts'
 import type { MeasureFilter, TableStats } from './stats'
-import { GroupDifferences, IccChip, TestLine } from './StatsParts'
+import { GroupDifferences, IccChip, IccMeaning, TestLine } from './StatsParts'
 
 type Facet = 'region' | 'tma' | ''
 const FACET_TEXT: Record<Facet, string> = { region: 'Brain region', tma: 'TMA', '': 'Nothing' }
@@ -35,9 +35,10 @@ export function MeasureView({ table, info, measure, stats, filter }: {
       <div className="measure-head">
         <h2>{measure.label}</h2>
         {measure.unit && <span className="badge">{measure.unit}</span>}
-        {stats ? <IccChip icc={stats.icc[measure.column]} long /> : <span className="muted small">Loading ICC…</span>}
+        {stats ? <IccChip icc={stats.icc[measure.column]} long /> : <span className="muted small">Loading replicate agreement…</span>}
       </div>
       {measure.description && <p className="secondary measure-meaning">{measure.description}</p>}
+      {stats && <IccMeaning icc={stats.icc[measure.column]} />}
       {stats && <TestLine stats={stats} filter={filter} column={measure.column} />}
       <div className="row chart-controls">
         <span className="small secondary">Side by side by</span>

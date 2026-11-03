@@ -1,7 +1,7 @@
 /* How reproducible each measure is (replicate-core ICC) and how it differs between diagnosis groups, as the server
    gives them (GET /api/tables/<table>/stats, stainid/analysis/measure_stats.py), and the filters of the measure list. */
 
-export interface Icc { icc: number; pairs: number; source: 'study' | 'computed'; scale: 'log' | 'raw' | null; file?: string }
+export interface Icc { icc: number; pairs: number; source: 'results' | 'study' | 'computed'; scale: 'log' | 'raw' | null; file?: string; unique_variance?: number }
 export interface GroupTest {
   effect: number; p: number; fdr: number; n: number | null; n_first: number | null; n_second: number | null; terms: string[]; file?: string
 }
@@ -13,7 +13,8 @@ export interface TableStats { icc: Record<string, Icc>; comparisons: Comparison[
 
 export const QUICK = 'quick'
 
-/** What the measure list shows: everything, or only measures that differ between two groups and/or are reproducible. */
+/** What the measure list shows: everything (the default), or only measures that differ between two groups and/or whose
+ *  replicate cores agree well enough. A measure with no agreement measured is never hidden by the second. */
 export interface MeasureFilter {
   significant: boolean
   comparison: string  // Comparison.key; '' = the first one
@@ -21,21 +22,32 @@ export interface MeasureFilter {
   level: number
   model: string  // TestModel.key; '' = the comparison's default
   quick: boolean  // use a quick test where the study has none
-  reproducible: boolean
+  reliable: boolean  // a new name, so the switch starts off for everyone (the stored `reproducible` of before is ignored)
   minIcc: number
 }
 export const DEFAULT_FILTER: MeasureFilter = {
-  significant: false, comparison: '', basis: 'fdr', level: 0.05, model: '', quick: true, reproducible: false, minIcc: 0.5,
+  significant: false, comparison: '', basis: 'fdr', level: 0.05, model: '', quick: true, reliable: false, minIcc: 0.5,
 }
 
-export const ICC_HELP = 'Replicate-core ICC: how well two cores of the same donor and region agree (1 = they always agree, 0 = no better than chance). '
+export const ICC_HELP = 'Replicate agreement (ICC): many donors have two cores from the same brain region. If the measure gives about the same value '
+  + 'on both cores, the measure is reliable. 1 = the two cores always agree, 0 = they agree no better than two cores from different donors. '
   + 'Good from 0.75, fair 0.5–0.75, weak below 0.5.'
+export const NO_ICC_HELP = 'Replicate agreement was not measured for this measure (too few donor-regions with two cores that both have a value). '
+  + 'It is never hidden by “Only show reliable measures”.'
+/** What a level means for someone reading the plot. */
+export const ICC_MEANING: Record<'good' | 'fair' | 'weak', string> = {
+  good: 'Two cores of the same donor and region give close values: differences between groups are not just which core was cut.',
+  fair: 'Two cores of the same donor and region give fairly similar values.',
+  weak: 'Two cores of the same donor and region often give quite different values, so one core says little about the donor-region: read differences between groups with care.',
+}
 
 export const iccLevel = (icc: number) => (icc >= 0.75 ? 'good' : icc >= 0.5 ? 'fair' : 'weak')
 
 export function iccHover(icc: Icc) {
-  const from = icc.source === 'study' ? `From the study's reliability table (${icc.file}).` : 'Computed from the core table.'
-  return `${ICC_HELP}\n${icc.pairs} donor-regions with two cores${icc.scale === 'log' ? ', on the log scale' : ''}. ${from}`
+  const from = icc.source === 'results' ? `From the results' reliability table (${icc.file}).`
+    : icc.source === 'study' ? `From the study's reliability table (${icc.file}).` : 'Computed from the core table.'
+  const unique = icc.unique_variance != null ? ` Unique variance ${icc.unique_variance}.` : ''
+  return `${ICC_HELP}\n${icc.pairs ? `${icc.pairs} donor-regions with two cores` : 'Donor-regions with two cores'}${icc.scale === 'log' ? ', on the log scale' : ''}.${unique} ${from}`
 }
 
 export function chosenComparison(stats: TableStats | null, filter: MeasureFilter): Comparison | undefined {

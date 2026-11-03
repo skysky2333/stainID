@@ -116,11 +116,38 @@ def study_icc(paths: list[Path], relative: Callable[[Path], str], primary: Path 
     return found
 
 
-def reliability(columns: list[str], core: pd.DataFrame | None, tables: dict[str, list[dict]]) -> dict[str, dict]:
-    """The ICC of every column: the study's value when one of its tables has the column and (when the core values are at
-    hand) agrees with the column's own replicate cores, otherwise the ICC computed from those cores."""
+RELIABILITY_TABLE = "measure_reliability.csv"  # stage 5's replicate agreement of every measure: measure, icc, n_pairs, unique_variance
+
+
+def results_icc(path: Path, relative: Callable[[Path], str]) -> dict[str, dict]:
+    """The replicate-core ICC of each measure from stage 5's reliability table, made from the same results ({} without it)."""
+    try:
+        table = pd.read_csv(path)
+    except (OSError, pd.errors.ParserError, pd.errors.EmptyDataError):
+        return {}
+    if not {"measure", "icc"} <= set(table.columns):
+        return {}
+    out = {}
+    for row in table.itertuples():
+        icc = pd.to_numeric(row.icc, errors="coerce")
+        if not np.isfinite(icc):
+            continue  # not measured: no ICC rather than a made-up one
+        pairs = pd.to_numeric(getattr(row, "n_pairs", None), errors="coerce")
+        unique = pd.to_numeric(getattr(row, "unique_variance", None), errors="coerce")
+        out[str(row.measure)] = {"icc": round(float(icc), 3), "pairs": int(pairs) if np.isfinite(pairs) else 0, "source": "results", "file": relative(path),
+                                 "scale": None, **({"unique_variance": round(float(unique), 3)} if np.isfinite(unique) else {})}
+    return out
+
+
+def reliability(columns: list[str], core: pd.DataFrame | None, tables: dict[str, list[dict]], given: dict[str, dict] | None = None) -> dict[str, dict]:
+    """The ICC of every column: stage 5's own value (`given`, `results_icc`) where it has one; else the study's value
+    when one of its tables has the column and (when the core values are at hand) agrees with the column's own replicate
+    cores; otherwise the ICC computed from those cores. A column none of these covers has none."""
     out = {}
     for column in columns:
+        if given and column in given:
+            out[column] = given[column]
+            continue
         own = computed_icc(core, column) if core is not None else None
         candidates = tables.get(column, [])
         if own:
@@ -273,6 +300,6 @@ def model_info(key: str, terms: list[str], source: str, default: bool) -> dict:
 
 
 __all__ = [
-    "STUDY_CONTRASTS", "QUICK", "StudyContrasts", "adjustment", "comparisons", "computed_icc", "fdr", "model_info",
-    "model_terms", "quick_test", "quick_tests", "reliability", "same_values", "study_icc", "study_tests", "within_tmas",
+    "RELIABILITY_TABLE", "STUDY_CONTRASTS", "QUICK", "StudyContrasts", "adjustment", "comparisons", "computed_icc", "fdr", "model_info",
+    "model_terms", "quick_test", "quick_tests", "reliability", "results_icc", "same_values", "study_icc", "study_tests", "within_tmas",
 ]

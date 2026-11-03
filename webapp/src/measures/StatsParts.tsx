@@ -1,13 +1,19 @@
 import { useProject } from '../project'
 import { Advanced } from '../setup/parts'
 import type { Comparison, Icc, MeasureFilter, TableStats } from './stats'
-import { ICC_HELP, QUICK, chosenComparison, chosenModel, formatEffect, formatP, iccHover, iccLevel, isSignificant, testOf, testSource } from './stats'
+import { ICC_HELP, ICC_MEANING, NO_ICC_HELP, QUICK, chosenComparison, chosenModel, formatEffect, formatP, iccHover, iccLevel, isSignificant, testOf, testSource } from './stats'
 
-/** "ICC 0.74", coloured good / fair / weak, with what it means on hover. */
+/** "ICC 0.74", coloured good / fair / weak, with what it means on hover; "not measured" without one. */
 export function IccChip({ icc, long = false }: { icc: Icc | undefined; long?: boolean }) {
-  if (!icc) return long ? <span className="icc-chip icc-none" title={ICC_HELP}>ICC not available</span> : null
+  if (!icc) return <span className="icc-chip icc-none" title={NO_ICC_HELP}>{long ? 'Replicate agreement not measured' : 'ICC not measured'}</span>
   const level = iccLevel(icc.icc)
-  return <span className={`icc-chip icc-${level}`} title={iccHover(icc)}>ICC {icc.icc.toFixed(2)}{long && ` · ${level}`}</span>
+  return <span className={`icc-chip icc-${level}`} title={iccHover(icc)}>{long ? 'Replicate agreement (ICC) ' : 'ICC '}{icc.icc.toFixed(2)}{long && ` · ${level}`}</span>
+}
+
+/** One plain sentence on what the measure's replicate agreement means (under the measure's title). */
+export function IccMeaning({ icc }: { icc: Icc | undefined }) {
+  if (!icc) return null
+  return <p className="small secondary icc-meaning">{ICC_MEANING[iccLevel(icc.icc)]}</p>
 }
 
 export function useComparisonName() {
@@ -73,7 +79,7 @@ export function GroupDifferences({ stats, filter, column }: { stats: TableStats;
 /** The "Significant only" and "Reproducible only" switches above the measure list, their options under Advanced. */
 export function MeasureFilters({ state, filter, onChange, counts }: {
   state: { data: TableStats | null; error: string | null; retry: () => void }; filter: MeasureFilter; onChange: (f: MeasureFilter) => void
-  counts: { shown: number; total: number; noTest: number; noIcc: number }
+  counts: { shown: number; total: number; noTest: number; noIcc: number; weak: number }
 }) {
   const name = useComparisonName()
   const stats = state.data
@@ -82,7 +88,7 @@ export function MeasureFilters({ state, filter, onChange, counts }: {
   const model = chosenModel(comparison, filter)
   const studyModels = comparison?.models.filter((m) => m.source === 'study') ?? []
   const hasQuick = comparison?.models.some((m) => m.key === QUICK)
-  const active = filter.significant || filter.reproducible
+  const active = filter.significant || filter.reliable
   return (
     <div className="measure-filters">
       <div className="measure-filter-row">
@@ -93,17 +99,18 @@ export function MeasureFilters({ state, filter, onChange, counts }: {
           </select>
         )}
       </div>
-      <label className="layer-toggle" title={ICC_HELP}><input type="checkbox" checked={filter.reproducible} disabled={!stats} onChange={() => set({ reproducible: !filter.reproducible })} />
-        Reproducible only (ICC &gt; {filter.minIcc})</label>
+      <label className="layer-toggle" title={ICC_HELP}><input type="checkbox" checked={filter.reliable} disabled={!stats} onChange={() => set({ reliable: !filter.reliable })} />
+        Only show reliable measures (replicate agreement ≥ {filter.minIcc})</label>
       {!stats && !state.error && <span className="muted small"><span className="spinner" aria-hidden="true" /> Loading ICC and group tests…</span>}
       {state.error && <span className="small">Could not load ICC and group tests. <button className="link-btn small" onClick={state.retry}>Try again</button></span>}
       {stats && active && (
         <p className="muted small filter-note">
           {counts.shown} of {counts.total} measures
           {filter.significant && comparison && <>: {name(comparison)}, {filter.basis === 'p' ? 'p' : 'FDR'} &lt; {filter.level}, {model?.source === 'quick' ? 'quick test' : `adjusted for ${model?.adjusted}`}{filter.quick && hasQuick && model?.source !== 'quick' ? ' (quick test where the study has none)' : ''}</>}
-          {filter.reproducible && <>{filter.significant ? '; ' : ': '}ICC &gt; {filter.minIcc}</>}.
+          {filter.reliable && <>{filter.significant ? '; ' : ': '}replicate agreement ≥ {filter.minIcc}</>}.
           {filter.significant && counts.noTest > 0 && <> {counts.noTest} hidden for having no test ({filter.quick || !hasQuick ? 'too few values in a group' : 'quick tests are off'}).</>}
-          {filter.reproducible && counts.noIcc > 0 && <> {counts.noIcc} hidden for having no ICC.</>}
+          {filter.reliable && counts.weak > 0 && <> {counts.weak} hidden for weaker agreement.</>}
+          {filter.reliable && counts.noIcc > 0 && <> {counts.noIcc} with no agreement measured stay in the list.</>}
         </p>
       )}
       {stats && (
@@ -127,12 +134,15 @@ export function MeasureFilters({ state, filter, onChange, counts }: {
             <label className="layer-toggle"><input type="checkbox" checked={filter.quick} onChange={() => set({ quick: !filter.quick })} />
               Quick test for measures the study did not test</label>
           )}
-          <label className="inline-field">Reproducible when ICC &gt;
-            <input type="number" min={0} max={0.99} step={0.05} value={filter.minIcc} aria-label="ICC threshold"
+          <label className="inline-field">Reliable when replicate agreement (ICC) ≥
+            <input type="number" min={0} max={0.99} step={0.05} value={filter.minIcc} aria-label="Replicate agreement threshold"
               onChange={(e) => { const v = Number(e.target.value); if (v >= 0 && v < 1) set({ minIcc: v }) }} />
           </label>
           <p className="small secondary" style={{ margin: 0 }}>Quick test: a linear model of the measure (densities on a log scale) with brain region and TMA,
             on the TMAs that hold both groups, donors counted once (clustered errors). It is a first look, not the study's main analysis.</p>
+          <p className="small secondary" style={{ margin: 0 }}>Replicate agreement (ICC): many donors have two cores from the same brain region. It says how
+            close the measure's values on those two cores are, from 0 (no closer than two different donors) to 1 (the same). Every measure is listed
+            whatever its agreement; the switch above hides the weaker ones only while it is on.</p>
           {(stats.icc_files.length > 0 || stats.contrast_files.length > 0) && (
             <details className="small secondary source-files">
               <summary>Study tables used ({stats.contrast_files.length + stats.icc_files.length})</summary>

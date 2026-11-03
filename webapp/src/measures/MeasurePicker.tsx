@@ -21,27 +21,29 @@ function sections(measures: Measure[], topics: Record<string, string>, search: s
   return out
 }
 
-/** The measures that pass the "Significant only" and "Reproducible only" filters, and how many each one hid. */
+/** The measures that pass the "Significant only" and "Only show reliable measures" filters, and how many each one hid
+ *  (`noIcc`: measures with no agreement measured, which the second never hides). */
 function filtered(measures: Measure[], stats: TableStats | null, filter: MeasureFilter) {
-  if (!stats || !(filter.significant || filter.reproducible)) return { shown: measures, noTest: 0, noIcc: 0 }
+  if (!stats || !(filter.significant || filter.reliable)) return { shown: measures, noTest: 0, noIcc: 0, weak: 0 }
   const comparison = chosenComparison(stats, filter)
   const model = chosenModel(comparison, filter)
   let noTest = 0
   let noIcc = 0
+  let weak = 0
   const shown = measures.filter((m) => {
     if (filter.significant) {
       const found = testOf(comparison, model, m.column, filter)
       if (!found) { noTest += 1; return false }
       if (!isSignificant(found.test, filter)) return false
     }
-    if (filter.reproducible) {
+    if (filter.reliable) {
       const icc = stats.icc[m.column]
-      if (!icc) { noIcc += 1; return false }
-      if (!(icc.icc > filter.minIcc)) return false
+      if (!icc) { noIcc += 1; return true }
+      if (!(icc.icc >= filter.minIcc)) { weak += 1; return false }
     }
     return true
   })
-  return { shown, noTest, noIcc }
+  return { shown, noTest, noIcc, weak }
 }
 
 export function MeasurePicker({ measures, topics, value, onChange, stats, filter, onFilter }: {
@@ -68,7 +70,7 @@ export function MeasurePicker({ measures, topics, value, onChange, stats, filter
   return (
     <div className="measure-picker">
       <MeasureFilters state={stats} filter={filter} onChange={onFilter}
-        counts={{ shown: result.shown.length, total: measures.length, noTest: result.noTest, noIcc: result.noIcc }} />
+        counts={{ shown: result.shown.length, total: measures.length, noTest: result.noTest, noIcc: result.noIcc, weak: result.weak }} />
       <input type="search" placeholder="Find a measure, e.g. plaque size" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Find a measure" />
       <nav className="measure-list" aria-label="Measures">
         {list.map((s) => (

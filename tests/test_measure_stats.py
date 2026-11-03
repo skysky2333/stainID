@@ -141,3 +141,16 @@ def test_stats_endpoint_uses_study_tables_that_hold_the_same_numbers(client, res
     assert set(first["tests"]["noise_um2"]) == {"quick"}  # the study measured other numbers under this name
     assert all(set(c["tests"]["tau_neuron_density_mm2"]) == {"quick"} for c in stats["comparisons"][1:])  # the study tested AD vs ASYMAD only
     assert client.get("/api/tables/results_donor_region.csv/stats").json() == stats  # kept until a file changes
+
+
+def test_stage_5_s_reliability_table_beside_the_results_wins_and_an_empty_icc_stays_not_measured(client, results):
+    analysis, _ = results
+    (analysis / "biology" / "cohort_v3_replicate_icc.csv").write_text("feature,pairs,icc\ntau_neuron_density_mm2,108,0.9\n")
+    (analysis / "measure_reliability.csv").write_text("measure,icc,n_pairs,unique_variance\n"
+                                                      "tau_neuron_density_mm2,0.31,70,0.42\nnoise_um2,,0,\n")
+    stats = client.get("/api/tables/results_donor_region.csv/stats").json()
+    assert stats["icc"]["tau_neuron_density_mm2"] == {"icc": 0.31, "pairs": 70, "source": "results", "scale": None,
+                                                       "file": "data/analysis/measure_reliability.csv", "unique_variance": 0.42}
+    assert stats["icc"]["noise_um2"]["source"] == "computed"  # stage 5 could not measure it: the next source answers
+    assert stats["icc_files"][0] == "data/analysis/measure_reliability.csv"
+    assert ms.results_icc(analysis / "measure_reliability.csv", lambda p: p.name).keys() == {"tau_neuron_density_mm2"}
