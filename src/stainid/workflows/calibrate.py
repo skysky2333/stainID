@@ -103,15 +103,19 @@ def calibrate_slides(project: Project, stains: list[str] | None = None, redo: bo
                      output: Path | None = None, cores: set[str] | None = None, workers: int = 1) -> Path:
     """Pool tissue DAB from every whole-core tile of a slide, outside the excluded areas (linear artifacts, folds; the
     masks stage 2 uses, `excluded_of`), and apply `calibrate_threshold` (Otsu / median + 6 MAD / 0.01 floor). Slides that
-    already have a threshold keep it unless `redo`. With `cores`, only the slides of these core
-    images are calibrated, from these core images' tiles (all of a slide's for the same threshold as without). Each
-    threshold is held to the stain's bound (`bounded`), the kept ones too."""
+    already have a threshold keep it unless `redo`. With `cores`, only the slides of these core images are calibrated
+    (with `redo` too: every other slide keeps its threshold), from these core images' tiles (all of a slide's for the
+    same threshold as without). Each threshold is held to the stain's bound (`bounded`), the kept ones too."""
     output = output or project.input("calibration")
     wanted = lambda stain: stains is None or stain in stains  # noqa: E731
-    kept = [r for r in (read_csv(output) if output.exists() else []) if not (redo and wanted(r["stain"]))]
+    tiles = read_csv(project.analysis_tiles())
+    # with `cores`, `redo` calibrates only these core images' slides again; every other slide keeps its threshold
+    asked = None if cores is None else {(t["tma"], t["stain"]) for t in tiles if t["core_id"] in cores}
+    again = lambda r: redo and wanted(r["stain"]) and (asked is None or (r["tma"], r["stain"]) in asked)  # noqa: E731
+    kept = [r for r in (read_csv(output) if output.exists() else []) if not again(r)]
     have = {(r["tma"], r["stain"]) for r in kept}
     groups = defaultdict(list)
-    for tile in read_csv(project.analysis_tiles()):
+    for tile in tiles:
         if wanted(tile["stain"]) and (tile["tma"], tile["stain"]) not in have and (cores is None or tile["core_id"] in cores):
             groups[(tile["tma"], tile["stain"])].append(tile)
     if not groups and not have:

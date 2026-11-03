@@ -95,6 +95,11 @@ def test_calibration_and_nuclei_can_be_limited_to_some_core_images(tmp_path):
         calibrate_slides(project, stride=1, cores={"elsewhere"})
     calibrate_slides(project, stride=1, cores={"LIP-1_B-2"})
     assert [r["tma"] for r in read_csv(project.input("calibration"))] == ["1"]
+    table = project.input("calibration")
+    other = {**read_csv(table)[0], "tma": "9", "threshold_dab_od": 0.2}
+    write_csv(table, [*read_csv(table), other], list(other))
+    calibrate_slides(project, stride=1, cores={"LIP-1_B-2"}, redo=True)  # a redo of some slides keeps the others
+    assert sorted(r["tma"] for r in read_csv(table)) == ["1", "9"]
     args = build_parser().parse_args(["nuclei", "--stain", "NeuN", "--core", "LIP-1_B-2", "--core", "LIP-1_B-3"])
     assert args.core == ["LIP-1_B-2", "LIP-1_B-3"]
     assert build_parser().parse_args(["calibrate", "--core", "cores.txt"]).core == ["cores.txt"]
