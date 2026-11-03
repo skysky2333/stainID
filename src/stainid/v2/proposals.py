@@ -25,7 +25,7 @@ from stainid.imaging import shared_arrays
 from stainid.imaging.core_images import glass_darkness, open_image
 from stainid.imaging.shared import shared_pictures
 from stainid.imaging.tissue import core_tissue_darkness
-from stainid.v2 import amyloid, cells, manifest, neun, tau
+from stainid.v2 import amyloid, biology, cells, manifest, neun, tau
 from stainid.v2.context import context_features_many
 from stainid.v2.field import Field
 from stainid.v2.geometry import Region, components, disk, outline
@@ -214,9 +214,10 @@ def candidate_rows(field: Field, stain: str, regions: list[Region]) -> list[tupl
     rows = []
     inputs = _model_inputs(stain, field, kept)
     extras = _extras(stain, field, kept)
+    added = biology.candidate_columns(stain, field, kept)  # additions only: no model input or rule reads them
     ox, oy = field.origin
     tx, ty = int(field.tile["x_px"]), int(field.tile["y_px"])
-    for region, model_values, extra in zip(kept, inputs, extras):
+    for region, model_values, extra, more in zip(kept, inputs, extras, added):
         cx, cy = _centroid(region)
         generic = generic_features(field, region)
         rows.append({
@@ -228,7 +229,7 @@ def candidate_rows(field: Field, stain: str, regions: list[Region]) -> list[tupl
             "bbox": f"{region.x0 + ox} {region.y0 + oy} {region.x0 + region.mask.shape[1] + ox} {region.y0 + region.mask.shape[0] + oy}",
             "outline": store.encode_points(outline(region, field.origin)),
             "excluded_fraction": float(exclusion[region.box][region.mask].mean()),
-            **generic, **_legacy_columns(stain, region), **extra, **model_values,
+            **generic, **_legacy_columns(stain, region), **extra, **model_values, **more,
             "_own": field.inside(cx, cy), "_area_px": region.area_px,
         })
     return list(zip(kept, rows))
@@ -286,7 +287,7 @@ def process_tile(field: Field, stain: str, settings: dict, shared: dict, whole=N
                                 "points": store.encode_points(segment["points"] + np.array([ox, oy]))})
     summary = tile_summary(field, stain, rows, len(unproposed))
     return {"rows": rows, "summary": summary, "unproposed": unproposed, "threads": thread_rows,
-            "cells": field.memo.pop("cell_rows", None)}
+            "cells": field.memo.pop("cell_rows", None), "vessels": biology.vessels(field, stain)}
 
 
 def unproposed_rule(settings: dict, shared: dict, stain: str) -> dict:
@@ -865,13 +866,14 @@ def propose_core(project, stain: str, core_id: str, tiles: list[dict], threshold
     finally:
         work = automatic = image = None
         shared_arrays.remove(*(f for f in (files.get("image"), files.get("linear"), files.get("fold")) if f))
-    rows, summaries, unproposed, thread_rows, local_counts, cell_parts = [], [], [], [], {}, []
+    rows, summaries, unproposed, thread_rows, local_counts, cell_parts, vessel_rows = [], [], [], [], {}, [], []
     mask = np.zeros(((size[0] + MASK_SCALE - 1) // MASK_SCALE, (size[1] + MASK_SCALE - 1) // MASK_SCALE), np.uint8)
     for tile, (result, piece, counts) in zip(tiles, done):
         rows += result["rows"]
         summaries.append(result["summary"])
         unproposed += result["unproposed"]
         thread_rows += result["threads"]
+        vessel_rows += result.get("vessels", [])
         if result.get("cells") is not None and len(result["cells"]):
             cell_parts.append(result["cells"])
         for key, value in counts.items():
@@ -884,15 +886,17 @@ def propose_core(project, stain: str, core_id: str, tiles: list[dict], threshold
     for summary in summaries:
         summary["candidate_count"] = int(counts.get(summary["tile_id"], 0))
     cell_table = pd.concat(cell_parts, ignore_index=True) if cell_parts else pd.DataFrame(columns=cells.COLUMNS)
-    write_core(project, stain, core_id, tiles, rows, summaries, unproposed, thread_rows, mask, cell_table)
+    write_core(project, stain, core_id, tiles, rows, summaries, unproposed, thread_rows, mask, cell_table, vessel_rows)
     manifest.write(project, "proposals", stain, core_id, expected(project, stain, core_id, tiles, threshold, nuclei_names),
                    candidates=len(rows), unproposed=len(unproposed), seconds=round(time.time() - started, 1), tiles=len(tiles))
     return {"candidates": len(rows), "unproposed": len(unproposed), "seconds": time.time() - started, "whole_objects": local_counts}
 
 
 def write_core(project, stain: str, core_id: str, tiles: list[dict], rows: list[dict], summaries: list[dict], unproposed: list[dict],
-               thread_rows: list[dict], mask: np.ndarray, cell_table: pd.DataFrame | None = None) -> None:
+               thread_rows: list[dict], mask: np.ndarray, cell_table: pd.DataFrame | None = None, vessel_rows: list[dict] | None = None) -> None:
     root = store.root(project)
+    if vessel_rows is not None:  # the lumen candidates and vessel calls (`biology.vessels`), and the vessel mask drawn from them
+        biology.write_vessels(root, stain, core_id, vessel_rows, mask.shape, MASK_SCALE)
     if cell_table is not None:  # the per-nucleus table (`cells`)
         store.write_table(root / "cells" / stain / f"{core_id}.csv.gz", cell_table.astype({"counted": bool}))
     frame = pd.DataFrame(rows)

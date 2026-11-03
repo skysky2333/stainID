@@ -2,7 +2,10 @@
 to put in the module (and `v2.scores.<stain>.bins`). Reads only: the label log, the candidate store and the active
 models; no cache or table of the project is written.
 
-    python tools/type_scores.py [--project .] [--labels ai|all]
+    python tools/type_scores.py [--project .] [--labels ai|all] [--extra]
+
+`--extra` offers stage 2's biology measurements (`scores.EXTRA`: the tangle's nucleus, the plaque's radial profile) to
+the fit as well, to see what they add before a score adopts them.
 
 The fit: the labelled tau+ neurons typed mature tangle or pretangle, and the labelled plaques of at least 15 µm typed
 compact or diffuse, joined to their candidates; each feature of `scores.features` divided by its interquartile range
@@ -63,6 +66,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--project", default=".")
     parser.add_argument("--labels", choices=("ai", "all"), default="ai", help="the AI-made labels only (default) or every label")
+    parser.add_argument("--extra", action="store_true", help="also offer stage 2's biology measurements (`scores.EXTRA`) to the fit")
     args = parser.parse_args()
     from sklearn.metrics import roc_auc_score
 
@@ -74,8 +78,9 @@ def main() -> None:
     project = load_project(args.project)
     for stain, score in scores.SCORES.items():
         bundle = load_model(project, stain).bundle
-        names = [t.name for t in score.terms]
+        names = [t.name for t in score.terms] + (list(scores.EXTRA[stain]) if args.extra else [])
         columns = ["candidate_id", "core_id", "decision", "subtype", "equivalent_diameter_um", *scores.COLUMNS[stain]]
+        columns += [c for c, _, _ in scores.EXTRA[stain].values()] if args.extra else []
         found = pd.concat([store.read_core(project, stain, c, columns) for c in sorted(store.cores(project, stain))], ignore_index=True)
         accepted = found[(found.decision == "accepted") & found.subtype.isin(TYPES[stain])].reset_index(drop=True)
         truth = labelled(project, stain, args.labels)
@@ -84,11 +89,12 @@ def main() -> None:
             rows = rows[pd.to_numeric(rows.equivalent_diameter_um, errors="coerce") >= 15.0]
         rows = rows.reset_index(drop=True)
         y = (rows.label == POSITIVE[stain]).to_numpy(float)
-        reference = scores.features(stain, accepted, bundle)
+        both = lambda frame: pd.concat([scores.features(stain, frame, bundle), scores.extra_features(stain, frame)], axis=1)  # noqa: E731
+        reference = both(accepted)
         centre = reference.median()
         centre[names[0]] = 0.0
         spread = reference.quantile(0.75) - reference.quantile(0.25)
-        x = ((scores.features(stain, rows, bundle)[names] - centre[names]) / spread[names]).fillna(0.0).to_numpy()
+        x = ((both(rows)[names] - centre[names]) / spread[names].where(spread[names] > 0, 1.0)).fillna(0.0).to_numpy()
         tma = rows.core_id.astype(str).str.split("_").str[0].to_numpy()
         held = np.zeros(len(y))
         for group in np.unique(tma):
@@ -96,7 +102,7 @@ def main() -> None:
             p = fit(x[train], y[train])
             held[~train] = p[0] + x[~train] @ p[1:]
         p = fit(x, y)
-        weights = p[1:] / spread[names].to_numpy()
+        weights = p[1:] / spread[names].where(spread[names] > 0, 1.0).to_numpy()
         logit = ((reference[names] - centre[names]).fillna(0.0).to_numpy() @ weights)
         agree = ((logit >= 0) == (accepted.subtype == POSITIVE[stain]).to_numpy()).mean()
         odds = np.log(2.0)

@@ -52,7 +52,7 @@ from stainid import candidates as store
 from stainid.analysis import aggregation, field_aggregation, mask_aggregation
 from stainid.analysis.aggregation import summarize_stain_group
 from stainid.tables import read_csv, write_records
-from stainid.v2 import cells, grey_matter, manifest, missing, organisation, scores, white_matter
+from stainid.v2 import biology_measures, cells, grey_matter, manifest, missing, organisation, scores, white_matter
 from stainid.v2.classify import load_model
 from stainid.v2.params import STAINS
 
@@ -66,6 +66,7 @@ CANDIDATE_COLUMNS = ["candidate_id", "tile_id", "x_core", "y_core", "area_um2", 
                      "m_deposit_area_um2", "m_boundary_irregularity", "legacy_class", "source",
                      "outline_default", "sam_status", "sam_area_um2", "sam_solidity", "sam_circularity", "sam_elongation", "sam_normalized_mean_dab",
                      "sam_core_dab_q", "edge_band_fraction", "excluded_fraction"]
+CANDIDATE_COLUMNS += [c for c in biology_measures.CANDIDATE_COLUMNS if c not in CANDIDATE_COLUMNS]  # stage 2's biology (`biology`)
 CANDIDATE_COLUMNS += [c for stain in scores.COLUMNS for c in scores.COLUMNS[stain] if c not in CANDIDATE_COLUMNS]  # the type scores' inputs
 
 
@@ -273,6 +274,7 @@ def results_tables(folder: Path, tile_rows: dict[str, list[dict]], objects: dict
     type scores' object rows per stain (`scores.object_rows`), summarised as their own columns; `organised`:
     `_Rows.organised`, the columns of `stainid.v2.organisation`."""
     organised = organised or {"tallies": {s: [] for s in STAINS}, "cores": [], "neurons": []}
+    organised.setdefault("bio", {s: [] for s in STAINS})
     lines = []
     for level, name in LEVELS.items():
         merged: dict[str, dict] = {}
@@ -307,6 +309,12 @@ def results_tables(folder: Path, tile_rows: dict[str, list[dict]], objects: dict
         tau_cores, tau_neurons, tau_tiles = _group(organised["cores"], level), _group(organised["neurons"], level), _group(tile_rows["AT8"], level)
         tau_tallies = _group(organised["tallies"]["AT8"], level)
         extra_counts = {key: organisation.counts(tau_cores.get(key, []), tau_neurons.get(key, [])) for key in tau_tiles}
+        bio = {stain: _group(organised["bio"][stain], level) for stain in STAINS}
+        for stain in STAINS:  # stage 2's biology measurements (`biology_measures`)
+            for key in {row[level] for row in tile_rows[stain]}:
+                merged[key].update(biology_measures.columns(stain, bio[stain].get(key, [])))
+        for key in merged:
+            extra_counts[key] = extra_counts.get(key, {}) | biology_measures.counts({s: bio[s].get(key, []) for s in STAINS})
         for key, group in tau_tiles.items():
             merged[key].update(organisation.summarize(tau_cores.get(key, []), tau_neurons.get(key, []),
                                                       sum(float(r["thread_ridge_length_mm"]) for r in group),
@@ -406,11 +414,13 @@ class _Rows:
         self.v1_objects = {s: [] for s in STAINS}
         self.masks = {s: [] for s in STAINS}
         self.scored = {s: [] for s in scores.SCORES}
-        self.organised = {"tallies": {s: [] for s in STAINS}, "cores": [], "neurons": []}
+        self.organised = {"tallies": {s: [] for s in STAINS}, "cores": [], "neurons": [], "bio": {s: [] for s in STAINS}}
 
     def add(self, stain: str, organised: dict) -> None:
         """What `_organised` measured on one core image."""
         self.organised["tallies"][stain].append(organised["tally"])
+        if "bio" in organised:
+            self.organised["bio"][stain].append(organised["bio"])
         if "core" in organised:
             self.organised["cores"].append(organised["core"])
             self.organised["neurons"] += organised["neurons"]
@@ -436,12 +446,14 @@ def _core_rows(project, stain: str, core_id: str, tiles: pd.DataFrame, found: pd
 
 
 def _organised(project, stain: str, core_id: str, tiles: pd.DataFrame, found: pd.DataFrame, threads, bodies: pd.DataFrame | None,
-               white: np.ndarray | None) -> dict:
+               white: np.ndarray | None, neun_cells: tuple | None = None) -> dict:
     """One core image's `stainid.v2.organisation` measures on these tiles, objects and threads; `white`: left out of the
     tissue the tangles are placed in."""
     first = tiles.iloc[0]
     meta = {k: str(first[k]) for k in LEVELS if k in tiles}
     out = {"tally": {**meta, **organisation.edge_tally(found)}}
+    threshold = float(pd.to_numeric(tiles.threshold_dab_od, errors="coerce").median()) if "threshold_dab_od" in tiles else None
+    out["bio"] = {**meta, **biology_measures.core_tally(project, stain, core_id, found, white, threads, neun_cells, threshold)}
     if stain == "AT8":
         out["tally"] |= organisation.boundary_tally(found)
         pixel_um = project.pixel_size_um
@@ -605,7 +617,8 @@ def write_measures(project, folder: Path | None = None) -> list[str]:
             before = len(whole.tiles[stain])
             _core_rows(project, stain, core_id, tiles, found, threads, models, morphotype, addition, between, whole)
             bodies = _bodies(project, stain, core_id, found)
-            as_whole = _organised(project, stain, core_id, tiles, found, threads, bodies, None)
+            neun_cells = (cell_table, neuronal) if stain == "NeuN" else None
+            as_whole = _organised(project, stain, core_id, tiles, found, threads, bodies, None, neun_cells)
             whole.add(stain, as_whole)
             if grey is not None:
                 changed = grey_inputs(project, stain, core_id, tiles, found, threads)
@@ -622,7 +635,7 @@ def write_measures(project, folder: Path | None = None) -> list[str]:
                         too_small.add((str(core_id), stain))  # a sliver of grey matter: not measured (NA), see the docstring
                     else:
                         _core_rows(project, stain, core_id, *changed, models, morphotype, addition, between, grey)
-                        grey.add(stain, _organised(project, stain, core_id, *changed, bodies, white_matter.read(project, core_id, stain)))
+                        grey.add(stain, _organised(project, stain, core_id, *changed, bodies, white_matter.read(project, core_id, stain), neun_cells))
     if grey is None:
         lines += _write_tables(folder, whole, between)
     else:

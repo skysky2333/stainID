@@ -9,7 +9,8 @@ the tile's `nucleus_count` and the 6E10 nuclei inside and around each plaque. Th
 candidate overlaps) and the Cellpose rings AT8 proposes from are unchanged.
 
 The table keeps every cell of the tile's own area (counted or not) with its shape and stain: position (core px), area,
-eccentricity, solidity, major and minor axis, mean hematoxylin and DAB (optical density). Stage 5 reads the NeuN one for the
+eccentricity, solidity, major and minor axis, mean hematoxylin and DAB (optical density) and their spread within the nucleus (`hematoxylin_sd`, `dab_sd`: chromatin
+texture, to tell neuron-like nuclei from others later). Stage 5 reads the NeuN one for the
 neuron share of all cells on the NeuN section and the density of the other cells (`neun_cells`).
 """
 from __future__ import annotations
@@ -21,7 +22,7 @@ from scipy import ndimage
 MIN_UM2, MAX_UM2 = 10.0, 200.0  # the size of a cell's nucleus (`nucleus_centroids`' rule)
 DENSE_DAB_STAINS = ("6E10", "AT8")  # where a nucleus with more DAB than hematoxylin is a stained object, not a cell
 COLUMNS = ["tile_id", "x_core", "y_core", "area_um2", "eccentricity", "solidity", "major_um", "minor_um", "hematoxylin_mean", "dab_mean",
-           "counted"]
+           "counted", "hematoxylin_sd", "dab_sd"]
 
 
 def _all(field) -> pd.DataFrame:
@@ -40,11 +41,19 @@ def _all(field) -> pd.DataFrame:
         if not MIN_UM2 <= area * um2 <= MAX_UM2:
             continue
         ys, xs = np.nonzero(local)
-        found.append((label, int(bounds[1].start + xs.mean()), int(bounds[0].start + ys.mean()), area,
-                      float(field.hematoxylin[bounds][local].mean()), float(field.dab[bounds][local].mean())))
-    frame = pd.DataFrame(found, columns=["label", "x", "y", "area_px", "hematoxylin_mean", "dab_mean"])
+        hematoxylin, dab = field.hematoxylin[bounds][local], field.dab[bounds][local]
+        h_mean, d_mean = float(hematoxylin.mean()), float(dab.mean())
+        found.append((label, int(bounds[1].start + xs.mean()), int(bounds[0].start + ys.mean()), area, h_mean, d_mean,
+                      _spread(hematoxylin, h_mean), _spread(dab, d_mean)))
+    # the spread within the nucleus (`hematoxylin_sd`, `dab_sd`): chromatin texture, to tell neuron-like nuclei later
+    frame = pd.DataFrame(found, columns=["label", "x", "y", "area_px", "hematoxylin_mean", "dab_mean", "hematoxylin_sd", "dab_sd"])
     field.memo["cells_all"] = frame
     return frame
+
+
+def _spread(values: np.ndarray, mean: float) -> float:
+    """The standard deviation from the mean already taken (one dot product: half the time of `std`)."""
+    return float(np.sqrt(max(float(values.dot(values)) / len(values) - mean * mean, 0.0)))
 
 
 def _counted(frame: pd.DataFrame, stain: str) -> np.ndarray:
@@ -101,7 +110,8 @@ def tile_cells(field, valid: np.ndarray, stain: str) -> pd.DataFrame:
         "area_um2": (frame.area_px.to_numpy() * ps * ps).astype(np.float32), "eccentricity": shape[:, 0].astype(np.float32),
         "solidity": shape[:, 1].astype(np.float32), "major_um": (shape[:, 2] * ps).astype(np.float32),
         "minor_um": (shape[:, 3] * ps).astype(np.float32), "hematoxylin_mean": frame.hematoxylin_mean.to_numpy(np.float32),
-        "dab_mean": frame.dab_mean.to_numpy(np.float32), "counted": _counted(frame, stain)}, columns=COLUMNS)
+        "dab_mean": frame.dab_mean.to_numpy(np.float32), "counted": _counted(frame, stain),
+        "hematoxylin_sd": frame.hematoxylin_sd.to_numpy(np.float32), "dab_sd": frame.dab_sd.to_numpy(np.float32)}, columns=COLUMNS)
 
 
 # ---------------------------------------------------------------- stage 5: the NeuN section's cells

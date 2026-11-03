@@ -187,7 +187,9 @@ Plaquebox training slides move (0.43 → 0.048 and 0.35 → 0.055 OD); the study
 
 **Cells: the per-nucleus table** (`cells/<stain>/<core_id>.parquet`, `stainid.v2.cells`). Every Cellpose nucleus of the
 tile's own area (enough hematoxylin, 10–200 µm², centre in the counted tissue) with its position (core px), area,
-eccentricity, solidity, major and minor axis and mean hematoxylin and DAB, and `counted`: on 6E10 and AT8 a nucleus must
+eccentricity, solidity, major and minor axis, mean hematoxylin and DAB and their spread within the nucleus
+(`hematoxylin_sd`, `dab_sd`: chromatin texture, so nuclei can later be told neuron-like or other on 6E10 and AT8 from
+size, shape, stain and texture), and `counted`: on 6E10 and AT8 a nucleus must
 also hold at least as much hematoxylin as DAB. Cellpose outlines dense DAB objects there too (plaque cores, tangles,
 thread swellings, about 7 % of its "nuclei"), and they are no cells. Every nucleus count of stage 2 takes the counted
 cells: the tile's `nucleus_count` (the nucleus density, the periplaque background) and the 6E10 `nuclei_inside`,
@@ -197,6 +199,41 @@ brown) only the hematoxylin and size rules apply; stage 5 reads that table (belo
 the image belongs in this per-tile step too (`tile_summary` stores the field's table, `process_tile` returns it,
 `write_core` writes it), so it costs no second read of the core image. Proposals version 6 (the tissue mask, the counted
 nuclei, the table).
+
+**Biology measurements** (`stainid.v2.biology`; proposals version 7). Additions only: no model input, rule, type or
+existing column reads them, and the ablation sample (21 core images, `rerun_v2c/scripts/ablation_arm.sh bio`) gives the
+same labels metrics and the same 784 per-core measures as the code before them.
+
+- *The tangle's nucleus* (AT8 and NeuN candidates, `soma_nucleus`): of the field's cells (the per-nucleus table's
+  nuclei) the one with the most area inside the candidate, if at least half of it is. `soma_nucleus_visible` 1 when it
+  holds at least as much hematoxylin as DAB (a blue nucleus seen through the stain; the rule by which 6E10 and AT8 count
+  a cell), 0 when there is none or the stain hides it; `soma_nucleus_offset` its centre's distance from the soma's
+  centroid in soma radii (sqrt(area / π)); `soma_nucleus_area_um2`, `soma_nucleus_hematoxylin_od`, `soma_nucleus_dab_od`;
+  `soma_hematoxylin_share` the share of the soma's pixels with at least as much hematoxylin as DAB (no Cellpose needed).
+  NaN when the field has no nuclei. On NeuN the nucleus is the neuron's own, stained brown: its area is what stage 5
+  uses.
+- *The plaque's radial profile* (6E10 candidates of at least 10 µm, `radial_profile`): from the deposit's peak (its DAB
+  smoothed over 1 µm), the mean DAB of the valid tissue in 2 µm rings out to 46 µm (`radial_dab_um`, OD), and in slide
+  thresholds over fixed bins: `profile_core_dab` (0–4 µm), `profile_inner_halo_dab` (4–10), `profile_outer_halo_dab`
+  (10–20), `profile_background_dab` (25–40); `profile_core_contrast` (core minus inner halo), `profile_core_to_halo`
+  (core over the mean of both halo bins), `profile_core_radius_um` (the first ring below halfway between the core and
+  one threshold), `profile_extent_radius_um` (the first ring below one threshold) and `profile_halo_width_um` (their
+  difference). A cored plaque with a halo: a strong core and a halo of several µm; a bare ("burnt-out") core: a strong
+  core and a width near 0; a diffuse plaque: little core contrast.
+- *Vessels* (every stain, on the counterstain, `vessels`): lumen candidates are the enclosed empty spaces at the core's
+  glass level (holes not filled, as the tissue mask fills them), 50–20,000 µm², not touching the crop, centre in the
+  tile; per lumen its shape (area, diameter, elongation, solidity, perimeter), its lining (cells centred within 4 µm
+  outside it, how many are elongated, ratio ≥ 1.8, and lie along the wall), the nuclei of tissue it surrounds (a vessel
+  in its perivascular space), the rim's hematoxylin, and on 6E10 the share of its 4 µm wall band above the threshold and
+  the share of 16 sectors with at least 10 % of it positive (`wall_coverage`, a CAA-like ring). A lumen is a vessel when
+  it is no tear (solidity ≥ 0.55), at least 8 µm across and lined along the wall by enough elongated cells (2, or one
+  per 60 µm of perimeter; 1 for a lumen elongated 2.5-fold), or round and smooth and at least 15 µm across (solidity ≥
+  0.85), or around at least 30 µm² of tissue. Per core image `vessels/<stain>/<core>.parquet` (every lumen with its
+  call and outline, core px) and `vessels/<stain>/<core>.png` on the masks' grid (bits 1 vessel lumen, 2 its 4 µm
+  wall band, 4 any other lumen).
+
+Seconds per tile (median of 12 tiles per stain, 2 core images each, one processor, after stage 2's own pictures are
+made): see "Biology measurements: pilots" under stage 5. Pilots and scripts: `/run/media/sky/Untitled/alzh/work/bio_features/`.
 
 Stained regions no candidate proposes (`unproposed/`, per stain `proposals.<stain>.unproposed`): NeuN and AT8 as
 before (smoothed DAB ≥ the threshold, ≥ 15 / 20 µm², touching no candidate); 6E10 the DAB smoothed over 4 µm at
@@ -459,6 +496,84 @@ scaling by the slide threshold does not change that (0.40), as the AT8 threshold
 plaques narrowly (see the public scores), so the other plaques of Keiser and Plaquebox include many dense ones; the
 score separates cored plaques better within a slide than pooled. Montages along each score (low to high, ten bands):
 `/run/media/sky/wd6t/scores_check/montages/`.
+
+### Biology readouts (`stainid.v2.biology_measures`)
+
+From stage 2's biology measurements (stage 2, "Biology measurements"), per core image and summed per donor-region
+like the other columns; no image is read. Each needs its minimum count, else it is missing (`too_few_objects`); every
+one is `not_measured` for a core image whose stage 2 predates them (`bio_measured_<stain>`, `vessels_measured_<stain>`
+in `results_counts_<level>.csv`).
+
+| Column | Definition |
+|---|---|
+| `tau_neuron_nucleus_visible_fraction` (`_mature`, `_pretangle`) | accepted tau+ neurons (of that subtype) with a visible nucleus; 5 neurons |
+| `tau_neuron_nucleus_offset_median` | of those with a nucleus found, its offset in soma radii (median); 5 |
+| `plaque_profile_core_contrast_median`, `_core_to_halo_median`, `_halo_width_um_median` | accepted plaques of at least 15 µm with a profile; 10 plaques |
+| `plaque_bare_core_fraction` | of those, a core of at least 2 slide thresholds with a halo under 2 µm (a "burnt-out" core) |
+| `plaque_haloed_core_fraction` | such a core with a halo of at least 4 µm |
+| `neun_` / `amyloid_` / `at8_vessel_density_mm2`, `_vessel_area_fraction` | vessels of the stain's own section over its measured tissue |
+| `caa_vessel_fraction`, `caa_vessel_density_mm2` | 6E10 vessels whose wall band is positive in at least half its sectors; 5 vessels |
+| `plaque_vessel_touch_fraction`, `plaque_vessel_near_fraction` | plaques whose edge lies within 2 / 10 µm of a vessel lumen (masks' grid); 10 plaques |
+| `tau_neuron_vessel_near_density_mm2`, `_far_`, `tau_neuron_vessel_enrichment` | AT8 tau+ neurons within 20 µm of a vessel lumen and elsewhere, per mm², and their ratio |
+| `thread_vessel_near_density_mm_per_mm2`, `_far_`, `thread_vessel_enrichment` | the same for free thread (0.5 mm of thread) |
+| `neun_neuron_nucleus_area_median_um2` | the nucleus inside accepted NeuN neurons (median); 20 |
+| `neun_large_nucleus_density_mm2` | neuron-sized nuclei (at least 50 µm², the per-nucleus table) per mm² of the tiles with nuclei |
+| `neun_large_nucleus_in_neuron_fraction` | of those, inside an accepted neuron; 20 nuclei |
+| `neun_large_nucleus_weak_fraction`, `_unstained_fraction` | of those, in none and with DAB 0.5–1 slide threshold (weak) or under 0.5 (none): antigen loss rather than neuron loss |
+
+#### Biology measurements: pilots (2026-11-03)
+
+Scripts and outputs: `/run/media/sky/Untitled/alzh/work/bio_features/` (`scripts/pilot_features.py` measures stored
+candidates on their cores with this code; `analyse_*.py`).
+
+- **The tangle's nucleus.** Of 1,155 accepted tau+ neurons sampled from the study, a nucleus is visible in 6.6 % of the
+  mature tangles and 33.5 % of the pretangles; on the 412 labelled ones a hidden nucleus picks the mature tangles with
+  AUC 0.64, the soma's hematoxylin share 0.56, the offset 0.60 (mature tangles have the smaller offset: where a nucleus
+  is found in one, it is often central). Offered to the maturity score (`tools/type_scores.py --extra`, held out by
+  TMA): AUC 0.867 without, 0.870 with the hidden nucleus (weight 0.63 per unit), 0.869 with the offset as well, so the
+  score keeps its three terms. On the Emory iNFT / Pre-NFT crops (618) the nucleus is visible in 5.2 % of both (AUC
+  0.50): no signal there. Kept as a readout (the per-core visible fraction is the biology: on the ablation cores 3–10 %
+  of mature tangles against 16–54 % of pretangles).
+- **The plaque's radial profile.** Compact against diffuse (387 labelled plaques of at least 15 µm): the core's density
+  `profile_core_dab` AUC 0.80, core radius 0.76, halo width 0.71, core contrast 0.61; core over halo 0.42 (diffuse
+  plaques have the faint halo). Wong 2022 cored (1,571 plaques): 0.70, 0.67, 0.67; Keiser 2023 consensus cored (2,581):
+  0.64, 0.68, 0.71. Offered to the compactness score the profile adds nothing held out on the study (AUC 0.902 →
+  0.899), but on the public sets the stored score with the core density and halo width added rises from 0.67 to 0.72
+  (Wong) and from 0.57 to 0.68 (Keiser): the profile is the more portable description of a core. Kept.
+- **A neuritic halo from 6E10 alone** (small dark DAB puncta, 0.8–20 µm², in the 10–30 µm ring against the 30–46 µm
+  ring, as APP in dystrophic neurites): dropped. Against cored labels the puncta go the wrong way (Keiser AUC 0.29: the
+  puncta are the granular texture of diffuse amyloid, not neurites), and on 40 registered cores spanning the AT8
+  neuritic-crown fraction (`feature_explore`, `neuritic_fraction_2x`) no per-core puncta measure follows it (Spearman
+  −0.24 to +0.22, all p > 0.13). It was the costliest part of the 6E10 pass (a whole-field top-hat, 0.4–0.8 s a tile).
+- **Vessels**, graded by eye (40 called vessels, all stains): 13 clearly vessels, 11 plausible, 16 not (pericellular
+  spaces with a satellite nucleus, out-of-focus NeuN fields, tears): precision 33–60 %. Called vessels 8–14 µm across are
+  mostly wrong (1 of 9 clear), those of at least 14 µm 12 of 31 clear and 21 plausible. Recall is low: only open lumens
+  are found, and most capillaries in the sections are collapsed; densities on the ablation cores are 0.5–42 per mm²,
+  far under the hundreds per mm² of cortical capillaries. The rejected lumens are mostly right (pericellular halos). The
+  vessel readouts are therefore of large open vessels only and noisy; use them as exploratory.
+- **NeuN stain against loss.** The per-nucleus table of 3 tiles each of 36 of the 43 NeuN-pale cores and 36 others
+  (`white_matter.neun_pale`; 40,625 nuclei, the stored accepted neurons' outlines): neuron-sized nuclei (≥ 50 µm²) are
+  about as many on the pale cores (median 87 per mm² against 113, Mann-Whitney p 0.24; all nuclei 829 against 703),
+  but 3 % of them lie in an accepted neuron (others 84 %, p 1e-10) and 94 % carry no NeuN (DAB under half a slide
+  threshold; others 8 %). Of the 28 pale cores with at least 20 such nuclei, 19 have them at half the others' density
+  or more and mostly unstained (antigen loss: the neurons are there, the stain is not), 7 under half the density
+  (neuron loss, or little grey matter). The weak band (0.5–1 threshold) is rare everywhere (0.6 % and 1.7 %): the
+  loss is all or nothing. The nucleus inside accepted neurons is 57 µm² (median; pale cores 66).
+
+Seconds per tile (median of 12 tiles per stain, 2 core images, one processor, after stage 2's own pictures are made;
+`scripts/time_bio.py`):
+
+| | 6E10 | AT8 | NeuN |
+|---|---|---|---|
+| per-candidate columns (profile; nucleus) | 0.11 (61 candidates) | 0.003 (8) | 0.17 (426) |
+| vessels | 0.19 | 0.28 | 0.30 |
+| per-nucleus table (`cells._all`, shared by every count; the spread adds about 0.01) | 0.33 | 0.31 | 0.37 |
+
+The first pilot cost 3.6 s a tile on 6E10 (a ring template per plaque, the puncta top-hat) and 0.6–0.75 s of vessels:
+the ring template is made once, deposits under 10 µm get no profile, the puncta are gone, the empty-space test runs on
+the 8-bit values and lining nuclei are measured only near a lumen. Together the additions cost about 0.3 s (6E10, AT8)
+and 0.5 s (NeuN) a tile, about 5 processor-hours over the study's ~52,000 tiles (under an hour of the re-run's 8
+processes); the vessels are two thirds of it.
 
 ### Missing values: `results_missing_core.csv` and `results_missing_donor_region.csv`
 

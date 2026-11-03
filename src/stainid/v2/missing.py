@@ -72,6 +72,27 @@ MEASURES: dict[str, Needs] = {
     **_family(("plaque_edge_touch_fraction", "plaque_edge_mostly_fraction"), Needs("plaques", 10)),
     **_family(("tau_neuron_edge_touch_fraction", "tau_neuron_edge_mostly_fraction", "tau_neuron_boundary_fraction"), Needs("tau_neurons", 5)),
 }
+# stage 2's biology readouts (`stainid.v2.biology_measures`): missing as not measured where stage 2 ran before them
+BIOLOGY: dict[str, tuple[str, Needs | None]] = {
+    "tau_neuron_nucleus_visible_fraction": ("bio", Needs("nucleus_known", 5)),
+    "tau_neuron_nucleus_visible_fraction_mature": ("bio", Needs("nucleus_known_mature", 5)),
+    "tau_neuron_nucleus_visible_fraction_pretangle": ("bio", Needs("nucleus_known_pretangle", 5)),
+    "tau_neuron_nucleus_offset_median": ("bio", Needs("nucleus_found", 5)),
+    **{f"plaque_{c}_median": ("bio", Needs("profiled_plaques", 10)) for c in ("profile_core_contrast", "profile_core_to_halo", "profile_halo_width_um")},
+    **dict.fromkeys(("plaque_bare_core_fraction", "plaque_haloed_core_fraction"), ("bio", Needs("profiled_plaques", 10))),
+    "neun_neuron_nucleus_area_median_um2": ("bio", Needs("neun_nuclei_known", 20)),
+    "neun_large_nucleus_density_mm2": ("bio", None),
+    **dict.fromkeys(("neun_large_nucleus_in_neuron_fraction", "neun_large_nucleus_weak_fraction", "neun_large_nucleus_unstained_fraction"),
+                    ("bio", Needs("neun_large", 20))),
+    **dict.fromkeys(tuple(f"{p}_vessel_{c}" for p in ("neun", "amyloid", "at8") for c in ("density_mm2", "area_fraction")) + ("caa_vessel_density_mm2",),
+                    ("vessels", None)),
+    "caa_vessel_fraction": ("vessels", Needs("vessels_6e10", 5)),
+    **dict.fromkeys(("plaque_vessel_touch_fraction", "plaque_vessel_near_fraction"), ("vessels", Needs("plaques_vessel_known", 10))),
+    **dict.fromkeys(("tau_neuron_vessel_near_density_mm2", "tau_neuron_vessel_far_density_mm2", "thread_vessel_near_density_mm_per_mm2",
+                     "thread_vessel_far_density_mm_per_mm2"), ("vessels", None)),
+    "tau_neuron_vessel_enrichment": ("vessels", Needs("near_vessel_neurons", 5)),
+    "thread_vessel_enrichment": ("vessels", None),
+}
 WHITE_MATTER_MEASURES = ("plaque_density_white_mm2", "plaque_area_fraction_white", "amyloid_positive_area_fraction_white", "tau_neuron_density_white_mm2",
                          "thread_density_white_mm_per_mm2", "at8_positive_area_fraction_white", "plaque_white_area_mm2", "tau_white_area_mm2")
 for _prefix, _count, _minimum in (("tau_maturity", "tau_scored", 5), ("plaque_compactness", "plaque_scored", 10)):
@@ -79,7 +100,7 @@ for _prefix, _count, _minimum in (("tau_maturity", "tau_scored", 5), ("plaque_co
     MEASURES |= _family(tuple(f"{_prefix}_score_{s}" for s in ("median", "iqr", "mean")) + tuple(f"{_prefix}_{b}_fraction" for b in _bins),
                         Needs(_count, _minimum))
 STAIN_PREFIX = (("neun_", "NeuN"), ("white_matter_", "NeuN"), ("tau_", "AT8"), ("tangle_", "AT8"), ("thread_", "AT8"), ("at8_", "AT8"), ("plaque_", "6E10"),
-                ("amyloid_", "6E10"), ("v2_plaque", "6E10"), ("compact_fraction", "6E10"), ("periplaque_", "6E10"), ("nuclei_per_plaque", "6E10"),
+                ("amyloid_", "6E10"), ("v2_plaque", "6E10"), ("compact_fraction", "6E10"), ("periplaque_", "6E10"), ("caa_", "6E10"), ("nuclei_per_plaque", "6E10"),
                 ("vascular_or_edge_", "6E10"))
 
 
@@ -131,6 +152,14 @@ def _reason(measure: str, row_id: str, measured: dict, whole: dict | None) -> tu
             return "not_measured", 0
         if not counts.get(f"tiles_{stain}", 0):
             return "no_grey_matter", 0
+    if name in BIOLOGY:  # stage 2 ran before the measurement, or (vessels) no vessel near enough tissue
+        kind, needs = BIOLOGY[name]
+        if not counts.get(f"{kind}_measured_{stain}", 0):
+            return "not_measured", 0
+        if needs is None:
+            return "not_measured", 0
+        n_objects = round(counts.get(needs.count, 0))
+        return ("too_few_objects" if n_objects < needs.minimum else "not_measured"), n_objects
     needs = MEASURES.get(name)
     if needs is None:
         return "not_measured", 0

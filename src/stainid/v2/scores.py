@@ -86,6 +86,21 @@ def core_fractions(quantiles, level: float) -> np.ndarray:
     return np.array([fraction_at_least(q, level) for q in quantiles], float)
 
 
+# Stage 2's biology measurements (`stainid.v2.biology`) a refit may add (`tools/type_scores.py --extra`), signed so
+# that more means the score's high end: a hidden nucleus, a brown soma and an off-centre nucleus for maturity; the
+# profile's core density, core radius, halo width and core contrast for compactness. Not in the fitted scores: on the
+# study's labels they add nothing held out (docs/pipeline_v2.md, "Biology measurements").
+EXTRA = {"AT8": {"nucleus_hidden": ("soma_nucleus_visible", -1.0, 1.0), "soma_brown": ("soma_hematoxylin_share", -1.0, 1.0),
+                 "nucleus_offset": ("soma_nucleus_offset", 1.0, 0.0)},
+         "6E10": {"profile_core": ("profile_core_dab", 1.0, 0.0), "core_radius": ("profile_core_radius_um", 1.0, 0.0),
+                  "halo_width": ("profile_halo_width_um", 1.0, 0.0), "profile_contrast": ("profile_core_contrast", 1.0, 0.0)}}
+
+
+def extra_features(stain: str, frame: pd.DataFrame) -> pd.DataFrame:
+    """`EXTRA`'s features of each object: sign × column + offset (NaN where not stored)."""
+    return pd.DataFrame({name: sign * _number(frame, column) + offset for name, (column, sign, offset) in EXTRA[stain].items()}, index=frame.index)
+
+
 def features(stain: str, frame: pd.DataFrame, bundle: dict) -> pd.DataFrame:
     """The score's features of each object (NaN where not stored)."""
     if stain == "AT8":
