@@ -431,6 +431,8 @@ def test_zeros_are_zeros_and_every_empty_cell_says_why(v2_project):
         said = gone.set_index("measure")
         assert said.loc["tau_neuron_area_median_um2", "reason"] == "too_few_objects" and said.loc["tau_neuron_area_median_um2", "n_objects"] == 0
         assert said.loc["compact_fraction_v2", "reason"] == "too_few_objects"
+        assert said.loc["tangle_nn_median_um", "reason"] == "too_few_objects" and said.loc["tau_processes_per_neuron", "reason"] == "too_few_objects"
+        assert row.thread_attached_density_mm_per_mm2 == 0
 
 
 def test_missing_reasons_on_a_small_table(tmp_path):
@@ -458,6 +460,76 @@ def test_missing_reasons_on_a_small_table(tmp_path):
     assert said[("c", "compact_fraction_v2")] == ("too_few_objects", 3)
     assert said[("c", "compact_fraction_v2_whole_core")] == ("too_few_objects", 3)
     assert said[("d", "compact_fraction_v2")] == ("not_measured", 12)  # above its minimum: not a count's doing
+
+
+def test_tangle_spacing_is_seeded_and_tells_clusters_from_random():
+    from stainid.v2 import organisation
+
+    mask = np.ones((1000, 1000), bool)
+    rng = np.random.default_rng(1)
+    scattered = rng.random((60, 2)) * 8000
+    gathered = np.vstack([c + rng.normal(0, 60, (20, 2)) for c in ((1500, 1500), (6000, 2000), (3000, 6500))])
+    near = organisation.l_excess(gathered, mask, 0.25, "core")
+    assert near == organisation.l_excess(gathered, mask, 0.25, "core")  # the same every run
+    assert near > 100 > abs(organisation.l_excess(scattered, mask, 0.25, "core"))
+    few = pd.DataFrame({"decision": "accepted", "subtype": organisation.MATURE, "x_core": scattered[:9, 0], "y_core": scattered[:9, 1]})
+    out = organisation.spacing(few, mask, 0.25, "core")
+    assert out["tangles"] == 9 and len(out["nn_um"]) == 9 and np.isnan(out["l_excess"])
+    row = organisation.summarize([{**out, "attached_mm": 0.0}], [], 0.0, 1.0)
+    assert np.isnan(row["tangle_nn_median_um"]) and np.isnan(row["tangle_l200_excess_um"]) and np.isnan(row["tau_processes_per_neuron"])
+    assert row["thread_attached_density_mm_per_mm2"] == 0 and row["thread_unattached_density_mm_per_mm2"] == 0 and np.isnan(row["thread_attached_share"])
+    more = pd.DataFrame({"decision": "accepted", "subtype": organisation.MATURE, "x_core": scattered[:, 0], "y_core": scattered[:, 1]})
+    out = organisation.spacing(more, mask, 0.25, "core")
+    assert out["tangles"] == 60 and np.isfinite(out["l_excess"])
+    pooled = organisation.summarize([{**out, "attached_mm": 0.0}, {"tangles": 1, "nn_um": np.zeros(0), "l_excess": float("nan"), "attached_mm": 0.0}], [], 0.0, 1.0)
+    assert pooled["tangle_l200_excess_um"] == pytest.approx(out["l_excess"])  # only cores that reach the minimum
+
+
+def test_thread_ownership_rules():
+    """Touching within 2 µm makes a process; a stretch two neurons reach is split equally; attached + free is all thread."""
+    from stainid.v2 import organisation
+
+    square = lambda x, y: f"{x} {y} {x + 40} {y} {x + 40} {y + 40} {x} {y + 40}"  # noqa: E731
+    bodies = pd.DataFrame({"candidate_id": ["a", "b", "c"], "subtype": [organisation.MATURE, organisation.PRETANGLE, organisation.MATURE],
+                           "outline": [square(1000, 1000), square(1200, 1000), square(3000, 3000)], "outline_default": "stain", "sam_outline": "",
+                           "sam_status": "", "sam_default": np.nan, "sam_masks": ""})
+    threads = pd.DataFrame({"candidate_id": ["", "", "", "", "a"], "kind": "piece", "n_px": [10, 40, 20, 100, 5],
+                            "points": ["1000 1043 1000 1053",  # 3 px off a's outline at 0.5 µm per px: a's own
+                                       "1040 1020 1200 1020",  # from a to b: shared
+                                       "1080 1200 1080 1220",  # not near either
+                                       "6000 6000 6100 6000",  # far away
+                                       "1010 1010 1020 1010"]})  # inside a: not free
+    rows, attached_mm = organisation.ownership(bodies, threads, 0.5)
+    by = {r["candidate_id"]: r for r in rows}
+    assert by["a"]["processes"] == 2 and by["b"]["processes"] == 1 and by["c"]["processes"] == 0
+    assert by["a"]["attached_thread_um"] == pytest.approx(5 + 10) and by["b"]["attached_thread_um"] == pytest.approx(10)
+    assert attached_mm == pytest.approx(25 / 1000)
+    row = organisation.summarize([{"tangles": 0, "nn_um": np.zeros(0), "l_excess": float("nan"), "attached_mm": attached_mm}], rows, (10 + 40 + 20 + 100) * 0.5 / 1000, 2.0)
+    assert (row["thread_attached_density_mm_per_mm2"] + row["thread_unattached_density_mm_per_mm2"]) * 2.0 == pytest.approx((10 + 40 + 20 + 100) * 0.5 / 1000)
+
+
+def test_white_matter_columns_and_edge_share(tmp_path):
+    from stainid.v2 import measures, missing, organisation
+
+    table = pd.DataFrame({"core_id": ["a", "b", "c"], "sample_region_id": ["r", "r", "s"]})
+    table.to_csv(tmp_path / "results_core.csv", index=False)
+    table.drop(columns="core_id").drop_duplicates().to_csv(tmp_path / "results_donor_region.csv", index=False)
+    rows = [{"core_id": "a", "sample_region_id": "r", "stain": "6E10", "area": 2.0, "plaques": 4.0, "plaque_um2": 2e5, "amyloid_mm2": 0.2},
+            {"core_id": "c", "sample_region_id": "s", "stain": "6E10", "area": 0.2, "plaques": 9.0, "plaque_um2": 1.0, "amyloid_mm2": 0.1},
+            {"core_id": "a", "sample_region_id": "r", "stain": "AT8", "area": 2.0, "tau_neurons": 0.0, "thread_mm": 1.0, "at8_mm2": 0.0}]
+    seen = {s: {"core_id": {"a", "b", "c"}, "sample_region_id": {"r", "s"}} for s in ("6E10", "AT8")}
+    measures._attach_white(tmp_path, rows, seen, 1.0)
+    core = pd.read_csv(tmp_path / "results_core.csv").set_index("core_id")
+    assert core.loc["a", "plaque_density_white_mm2"] == 2 and core.loc["a", "plaque_area_fraction_white"] == pytest.approx(0.1)
+    assert core.loc["a", "tau_neuron_density_white_mm2"] == 0 and core.loc["a", "thread_density_white_mm_per_mm2"] == 0.5
+    assert np.isnan(core.loc["b", "plaque_density_white_mm2"]) and core.loc["b", "plaque_white_area_mm2"] == 0  # no white matter
+    assert np.isnan(core.loc["c", "plaque_density_white_mm2"]) and core.loc["c", "plaque_white_area_mm2"] == pytest.approx(0.2)  # too little
+    assert missing._reason("plaque_density_white_mm2", "b", {"b": {"tiles_6E10": 0}}, {"b": {"tiles_6E10": 1}}) == ("not_measured", 0)
+    found = pd.DataFrame({"decision": ["accepted"] * 4 + ["rejected"], "edge_band_fraction": [0, 0.2, 0.6, 0, 1], "excluded_fraction": [0, 0, 0, 0.1, 1]})
+    tally = organisation.edge_tally(found)
+    assert tally == {"accepted": 4, "touching": 3, "mostly": 1}
+    assert organisation.edge_columns("AT8", [tally])["tau_neuron_edge_touch_fraction"] == pytest.approx(np.nan, nan_ok=True)  # under 5
+    assert organisation.edge_columns("AT8", [tally, tally])["tau_neuron_edge_touch_fraction"] == 0.75
 
 
 def test_outlines_keep_all_three_sam_outputs(v2_project, monkeypatch):

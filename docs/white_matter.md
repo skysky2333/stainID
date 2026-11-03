@@ -161,6 +161,12 @@ Version 2 decides these cores with the same rules (point 4, the cohort compariso
 whole (LIP-8_D-4, LIP-8_E-4, LIP-11_C-2 (its upper fragment), LIP-6_E-5, LIP-6_D-4, LIP-8_E-5, LIP-4_F-3), the other 36
 stay undetermined and flagged.
 
+## Pathology inside the white matter
+
+With `exclude`, `results_<level>.csv` also carries plaques, tau+ neurons, thread and stained area inside the mask (columns
+ending `_white`, docs/pipeline_v2.md): whole-core less grey-matter numbers over the white matter's area, missing under
+`v2.white_matter.min_grey_mm2` of white matter, 0 when nothing was found in it.
+
 ## Leaving it out of the analysis: `v2.white_matter.analysis: exclude`
 
 The setting is `off` by default (white matter counted as before); `exclude` makes stage 5 grey matter only. The mask

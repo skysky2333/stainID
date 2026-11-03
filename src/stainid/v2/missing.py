@@ -15,7 +15,8 @@ a fraction or a shape measure under its minimum stays missing (no pseudo-counts)
 
 `n_objects` is what the minimum counts: outlines for the outline measures, scored objects for the type scores, plaques of
 at least 15 µm for the compact fraction, density windows for the patchiness, thread pieces for the thread measures (their
-minimum is 0.5 mm of thread); 0 for `no_image` and `no_grey_matter`, where nothing was counted.
+minimum is 0.5 mm of thread), mature tangles for the tangle spacing; 0 for `no_image` and `no_grey_matter`, where nothing
+was counted. A measure inside the white matter is `not_measured` where the core has under the minimum of white matter.
 """
 from __future__ import annotations
 
@@ -60,13 +61,23 @@ MEASURES: dict[str, Needs] = {
     **_family(("compact_fraction_v2", "plaque_median_dense_core_fraction", "plaque_circularity_median"), Needs("plaques_ge15um", 10)),
     **_family(("periplaque_nucleus_enrichment", "nuclei_per_plaque"), Needs("plaques_with_nuclei", 10)),
     **_family(("tau_neuron_mature_fraction", "tau_neuron_median_soma_um2", "thread_to_neuron_ratio_mm"), Needs("tau_neurons", 5)),
-    **_family(("thread_mean_width_um", "thread_branchpoints_per_mm"), Needs("thread_pieces", 0.5, "thread_mm")),
+    **_family(("thread_mean_width_um", "thread_branchpoints_per_mm", "thread_attached_share"), Needs("thread_pieces", 0.5, "thread_mm")),
+    "tangle_nn_median_um": Needs("tangles_with_neighbour", 10),
+    "tangle_l200_excess_um": Needs("tangles", 10, "tangles_largest_core"),
+    **_family(("tau_processes_per_neuron", "tau_attached_thread_um_per_neuron", "tau_neurons_with_process_fraction"), Needs("owned_neurons", 5)),
+    **_family(("tau_processes_per_neuron_mature", "tau_attached_thread_um_per_neuron_mature"), Needs("owned_mature", 5)),
+    **_family(("tau_processes_per_neuron_pretangle", "tau_attached_thread_um_per_neuron_pretangle"), Needs("owned_pretangle", 5)),
+    **_family(("neun_edge_touch_fraction", "neun_edge_mostly_fraction"), Needs("neun_neurons", 20)),
+    **_family(("plaque_edge_touch_fraction", "plaque_edge_mostly_fraction"), Needs("plaques", 10)),
+    **_family(("tau_neuron_edge_touch_fraction", "tau_neuron_edge_mostly_fraction"), Needs("tau_neurons", 5)),
 }
+WHITE_MATTER_MEASURES = ("plaque_density_white_mm2", "plaque_area_fraction_white", "amyloid_positive_area_fraction_white", "tau_neuron_density_white_mm2",
+                         "thread_density_white_mm_per_mm2", "at8_positive_area_fraction_white", "plaque_white_area_mm2", "tau_white_area_mm2")
 for _prefix, _count, _minimum in (("tau_maturity", "tau_scored", 5), ("plaque_compactness", "plaque_scored", 10)):
     _bins = {"tau_maturity": ("pretangle", "intermediate", "mature"), "plaque_compactness": ("diffuse", "intermediate", "compact")}[_prefix]
     MEASURES |= _family(tuple(f"{_prefix}_score_{s}" for s in ("median", "iqr", "mean")) + tuple(f"{_prefix}_{b}_fraction" for b in _bins),
                         Needs(_count, _minimum))
-STAIN_PREFIX = (("neun_", "NeuN"), ("white_matter_", "NeuN"), ("tau_", "AT8"), ("thread_", "AT8"), ("at8_", "AT8"), ("plaque_", "6E10"),
+STAIN_PREFIX = (("neun_", "NeuN"), ("white_matter_", "NeuN"), ("tau_", "AT8"), ("tangle_", "AT8"), ("thread_", "AT8"), ("at8_", "AT8"), ("plaque_", "6E10"),
                 ("amyloid_", "6E10"), ("v2_plaque", "6E10"), ("compact_fraction", "6E10"), ("periplaque_", "6E10"), ("nuclei_per_plaque", "6E10"),
                 ("vascular_or_edge_", "6E10"))
 
@@ -113,6 +124,8 @@ def _reason(measure: str, row_id: str, measured: dict, whole: dict | None) -> tu
         known = whole if whole is not None else measured
         if not known.get(row_id, {}).get(f"tiles_{stain}", 0):
             return "no_image", 0
+        if name in WHITE_MATTER_MEASURES:
+            return "not_measured", 0
         if not counts.get(f"tiles_{stain}", 0):
             return "no_grey_matter", 0
     needs = MEASURES.get(name)

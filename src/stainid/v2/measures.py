@@ -16,6 +16,9 @@ The continuous type scores (`stainid.v2.scores`: AT8 tau maturity, 6E10 plaque c
 object (`type_scores_<stain>.csv`) and summarised as new columns of `results_<level>.csv` (`scores.readout_names`);
 they add columns only, every other column is as without them.
 
+The tangle spacing, the thread ownership and the share of objects at an edge (`stainid.v2.organisation`) and the
+pathology inside the white matter (`_attach_white`) are new columns of `results_<level>.csv` too.
+
 `results_missing_<level>.csv` says why each empty cell of the results tables is empty (`stainid.v2.missing`). A count, a
 density or an area fraction is 0 when nothing was found in measured tissue; only fractions and shape measures under their
 minimum count, and tissue not measured at all, are missing.
@@ -47,7 +50,7 @@ from stainid import candidates as store
 from stainid.analysis import aggregation, field_aggregation, mask_aggregation
 from stainid.analysis.aggregation import summarize_stain_group
 from stainid.tables import read_csv, write_records
-from stainid.v2 import grey_matter, manifest, missing, scores, white_matter
+from stainid.v2 import grey_matter, manifest, missing, organisation, scores, white_matter
 from stainid.v2.classify import load_model
 from stainid.v2.params import STAINS
 
@@ -60,7 +63,7 @@ CANDIDATE_COLUMNS = ["candidate_id", "tile_id", "x_core", "y_core", "area_um2", 
                      "m_soma_solidity", "m_soma_circularity", "m_soma_elongation", "m_soma_dab_mean", "m_normalized_contrast",
                      "m_deposit_area_um2", "m_boundary_irregularity", "legacy_class", "source",
                      "outline_default", "sam_status", "sam_area_um2", "sam_solidity", "sam_circularity", "sam_elongation", "sam_normalized_mean_dab",
-                     "sam_core_dab_q"]
+                     "sam_core_dab_q", "edge_band_fraction", "excluded_fraction"]
 CANDIDATE_COLUMNS += [c for stain in scores.COLUMNS for c in scores.COLUMNS[stain] if c not in CANDIDATE_COLUMNS]  # the type scores' inputs
 
 
@@ -236,9 +239,11 @@ def _group(rows: list[dict], level: str) -> dict[str, list[dict]]:
 
 
 def results_tables(folder: Path, tile_rows: dict[str, list[dict]], objects: dict[str, list[dict]], masks: dict[str, list[dict]],
-                   scored: dict[str, list[dict]] | None = None) -> list[str]:
+                   scored: dict[str, list[dict]] | None = None, organised: dict | None = None) -> list[str]:
     """The stainID results tables (`results_<level>.csv` and their parts) from the legacy-shaped rows; `scored`: the
-    type scores' object rows per stain (`scores.object_rows`), summarised as their own columns."""
+    type scores' object rows per stain (`scores.object_rows`), summarised as their own columns; `organised`:
+    `_Rows.organised`, the columns of `stainid.v2.organisation`."""
+    organised = organised or {"tallies": {s: [] for s in STAINS}, "cores": [], "neurons": []}
     lines = []
     for level, name in LEVELS.items():
         merged: dict[str, dict] = {}
@@ -265,6 +270,16 @@ def results_tables(folder: Path, tile_rows: dict[str, list[dict]], objects: dict
             by_key = _group(rows_, level)
             for key in measured:
                 merged[key].update(scores.readouts(stain, by_key.get(key, []), measured[key]))
+        for stain in STAINS:
+            tallies = _group(organised["tallies"][stain], level)
+            for key in {row[level] for row in tile_rows[stain]}:
+                merged[key].update(organisation.edge_columns(stain, tallies.get(key, [])))
+        tau_cores, tau_neurons, tau_tiles = _group(organised["cores"], level), _group(organised["neurons"], level), _group(tile_rows["AT8"], level)
+        extra_counts = {key: organisation.counts(tau_cores.get(key, []), tau_neurons.get(key, [])) for key in tau_tiles}
+        for key, group in tau_tiles.items():
+            merged[key].update(organisation.summarize(tau_cores.get(key, []), tau_neurons.get(key, []),
+                                                      sum(float(r["thread_ridge_length_mm"]) for r in group),
+                                                      sum(float(r["v2_tissue_area_mm2"]) for r in group)))
         rows = [merged[k] for k in sorted(merged)]
         if level != "core_id":
             for row in rows:
@@ -273,8 +288,8 @@ def results_tables(folder: Path, tile_rows: dict[str, list[dict]], objects: dict
         write_records(target, rows)
         tiled, objected, masked, scored_ = ({s: _group(rows_[s], level) for s in rows_} for rows_ in (tile_rows, objects, masks, scored or {}))
         write_records(folder / missing.COUNTS.format(name),
-                      [{level: k, **missing.group_counts(*({s: by[s].get(k, []) for s in by} for by in (tiled, objected, masked, scored_)))}
-                       for k in sorted(merged)])
+                      [{level: k, **missing.group_counts(*({s: by[s].get(k, []) for s in by} for by in (tiled, objected, masked, scored_))),
+                        **extra_counts.get(k, {})} for k in sorted(merged)])
         lines.append(f"{len(rows)} {name} rows -> {target}")
     return lines
 
@@ -359,6 +374,14 @@ class _Rows:
         self.v1_objects = {s: [] for s in STAINS}
         self.masks = {s: [] for s in STAINS}
         self.scored = {s: [] for s in scores.SCORES}
+        self.organised = {"tallies": {s: [] for s in STAINS}, "cores": [], "neurons": []}
+
+    def add(self, stain: str, organised: dict) -> None:
+        """What `_organised` measured on one core image."""
+        self.organised["tallies"][stain].append(organised["tally"])
+        if "core" in organised:
+            self.organised["cores"].append(organised["core"])
+            self.organised["neurons"] += organised["neurons"]
 
 
 def _core_rows(project, stain: str, core_id: str, tiles: pd.DataFrame, found: pd.DataFrame, threads, models: dict, morphotype: float,
@@ -380,6 +403,100 @@ def _core_rows(project, stain: str, core_id: str, tiles: pd.DataFrame, found: pd
         into.scored[stain] += scores.object_rows(stain, found, models[stain].bundle, between[stain], meta)
 
 
+def _organised(project, stain: str, core_id: str, tiles: pd.DataFrame, found: pd.DataFrame, threads, bodies: pd.DataFrame | None,
+               white: np.ndarray | None) -> dict:
+    """One core image's `stainid.v2.organisation` measures on these tiles, objects and threads; `white`: left out of the
+    tissue the tangles are placed in."""
+    first = tiles.iloc[0]
+    meta = {k: str(first[k]) for k in LEVELS if k in tiles}
+    out = {"tally": {**meta, **organisation.edge_tally(found)}}
+    if stain == "AT8":
+        pixel_um = project.pixel_size_um
+        kept = found.candidate_id[found.decision == "accepted"] if len(found) else []
+        mine = bodies[bodies.candidate_id.isin(kept)] if bodies is not None and len(bodies) else pd.DataFrame(columns=organisation.OUTLINE_COLUMNS)
+        neurons, attached_mm = organisation.ownership(mine, threads, pixel_um)
+        out["core"] = {**meta, **organisation.spacing(found, organisation.valid_tissue(project, core_id, stain, white), pixel_um, core_id),
+                       "attached_mm": attached_mm}
+        out["neurons"] = [{**meta, **row} for row in neurons]
+    return out
+
+
+def _bodies(project, stain: str, core_id: str, found: pd.DataFrame) -> pd.DataFrame | None:
+    """The accepted tau+ neurons' outlines, read only here (they are long and only thread ownership needs them)."""
+    if stain != "AT8" or found.empty or not (found.decision == "accepted").any():
+        return None
+    frame = store.read_core(project, stain, core_id, organisation.OUTLINE_COLUMNS)
+    frame = frame[frame.decision == "accepted"].copy()
+    for column in organisation.OUTLINE_COLUMNS:
+        if column not in frame:
+            frame[column] = "" if column in store.TEXT_COLUMNS else np.nan
+    for column in store.TEXT_COLUMNS:
+        if column in frame:
+            frame[column] = frame[column].fillna("")
+    return frame
+
+
+def _totals(stain: str, tile_rows: list[dict]) -> dict:
+    """What the white-matter columns need of a core image's tile rows, summed."""
+    def total(column: str) -> float:
+        return float(sum(float(row[column]) for row in tile_rows))
+    if stain == "6E10":
+        return {"area": total("tissue_area_mm2"), "plaques": total("v2_plaque_count"), "plaque_um2": total("v2_plaque_area_sum_um2"),
+                "amyloid_mm2": total("amyloid_extent_area_mm2")}
+    return {"area": total("tissue_area_mm2"), "tau_neurons": total("tau_neuron_count"), "thread_mm": total("thread_ridge_length_mm"),
+            "at8_mm2": total("at8_positive_area_mm2")}
+
+
+def _white_row(project, stain: str, tiles: pd.DataFrame, whole_rows: list[dict], grey_tiles: pd.DataFrame, grey_found: pd.DataFrame, threads,
+               morphotype: float) -> dict:
+    """One core image's white matter: its whole-core tile rows less its grey-matter ones, each never below 0."""
+    if stain == "6E10":
+        grey_rows = amyloid_rows(grey_tiles, grey_found, morphotype, {})[0]
+    else:
+        grey_rows = tau_rows(project, grey_tiles, grey_found, threads)[0]
+    whole_total, grey_total = _totals(stain, whole_rows), _totals(stain, grey_rows)
+    first = tiles.iloc[0]
+    return {**{k: str(first[k]) for k in LEVELS if k in tiles}, "stain": stain,
+            **{k: max(0.0, whole_total[k] - grey_total[k]) for k in whole_total}}
+
+
+WHITE_COLUMNS = {"6E10": {"plaque_white_area_mm2": None, "plaque_density_white_mm2": ("plaques", 1.0), "plaque_area_fraction_white": ("plaque_um2", 1e-6),
+                          "amyloid_positive_area_fraction_white": ("amyloid_mm2", 1.0)},
+                 "AT8": {"tau_white_area_mm2": None, "tau_neuron_density_white_mm2": ("tau_neurons", 1.0),
+                         "thread_density_white_mm_per_mm2": ("thread_mm", 1.0), "at8_positive_area_fraction_white": ("at8_mm2", 1.0)}}
+
+
+def _measured_rows(whole: _Rows) -> dict[str, dict[str, set]]:
+    """Per stain, the core images and donor-regions with tiles in the whole-core tables."""
+    return {stain: {key: {str(row[key]) for row in whole.tiles[stain]} for key in LEVELS} for stain in WHITE_COLUMNS}
+
+
+def _attach_white(folder: Path, white_rows: list[dict], measured: dict[str, set], floor: float) -> list[str]:
+    """Pathology inside the white matter, next to the grey-matter columns: plaques, tau+ neurons, thread and stained area
+    of each row's core images in their white matter over its area. Missing without at least `floor` mm² of white matter;
+    0 when nothing was found in it. `<stain>_white_area_mm2`: that area, 0 for a core image without white matter."""
+    lines = []
+    for level, key in (("core", "core_id"), ("donor_region", "sample_region_id")):
+        path = folder / f"results_{level}.csv"
+        if not path.exists():
+            continue
+        table = pd.read_csv(path, low_memory=False, dtype={"donor_id": str})
+        ids = table[key].astype(str)
+        for stain, columns in WHITE_COLUMNS.items():
+            rows = pd.DataFrame([r for r in white_rows if r["stain"] == stain])
+            summed = rows.groupby(key).sum(numeric_only=True) if len(rows) else pd.DataFrame(columns=["area"])
+            area = ids.map(summed["area"]).astype(float)
+            seen = ids.isin(measured[stain][key])
+            for column, part in columns.items():
+                if part is None:
+                    table[column] = area.fillna(0.0).where(seen)
+                else:
+                    table[column] = (ids.map(summed[part[0]]).astype(float) * part[1] / area).where(area >= floor) if len(rows) else np.nan
+        table.to_csv(path, index=False)
+        lines.append(f"results_{level}: pathology inside the white matter ({sum(len(c) for c in WHITE_COLUMNS.values())} columns)")
+    return lines
+
+
 def write_measures(project, folder: Path | None = None) -> list[str]:
     """Stage 5: every table, from the core images whose calls exist (into `folder`, default `<outputs.v2>/measures`);
     grey matter only with `v2.white_matter.analysis: exclude` (the whole-core tables under `whole_core/`)."""
@@ -396,6 +513,7 @@ def write_measures(project, folder: Path | None = None) -> list[str]:
     left_out = 0
     floor = float(white_matter.settings(project)["min_grey_mm2"]) if exclude else 0.0
     too_small: set[tuple[str, str]] = set()
+    white_rows: list[dict] = []
     for stain, cores in images.items():
         for core_id in cores:
             tiles = _tiles(project, stain, core_id)
@@ -409,17 +527,25 @@ def write_measures(project, folder: Path | None = None) -> list[str]:
                     found[column] = np.nan
             found["area_um2"] = store.shown_area_um2(found)  # each object as the views draw it (the stain's default outline)
             threads = store.threads(project, core_id) if stain == "AT8" else None
+            before = len(whole.tiles[stain])
             _core_rows(project, stain, core_id, tiles, found, threads, models, morphotype, addition, between, whole)
+            bodies = _bodies(project, stain, core_id, found)
+            as_whole = _organised(project, stain, core_id, tiles, found, threads, bodies, None)
+            whole.add(stain, as_whole)
             if grey is not None:
                 changed = grey_inputs(project, stain, core_id, tiles, found, threads)
                 if changed is None:
                     _core_rows(project, stain, core_id, tiles, found, threads, models, morphotype, addition, between, grey)
-                elif float(pd.to_numeric(changed[0]["analysis_area_mm2"], errors="coerce").sum()) < floor:
-                    left_out += 1
-                    too_small.add((str(core_id), stain))  # a sliver of grey matter: not measured (NA), see the docstring
+                    grey.add(stain, as_whole)
                 else:
                     left_out += 1
-                    _core_rows(project, stain, core_id, *changed, models, morphotype, addition, between, grey)
+                    if stain in WHITE_COLUMNS:
+                        white_rows.append(_white_row(project, stain, tiles, whole.tiles[stain][before:], changed[0], changed[1], changed[2], morphotype))
+                    if float(pd.to_numeric(changed[0]["analysis_area_mm2"], errors="coerce").sum()) < floor:
+                        too_small.add((str(core_id), stain))  # a sliver of grey matter: not measured (NA), see the docstring
+                    else:
+                        _core_rows(project, stain, core_id, *changed, models, morphotype, addition, between, grey)
+                        grey.add(stain, _organised(project, stain, core_id, *changed, bodies, white_matter.read(project, core_id, stain)))
     if grey is None:
         lines += _write_tables(folder, whole, between)
     else:
@@ -429,6 +555,7 @@ def write_measures(project, folder: Path | None = None) -> list[str]:
         lines += _write_tables(folder, grey, between)
         lines += _attach_whole(folder, folder / "whole_core")
         lines += _attach_too_small(project, folder, too_small, floor)
+        lines += _attach_white(folder, white_rows, _measured_rows(whole), floor)
     if white_matter.summary_path(project).exists():
         lines += _attach_flags(project, folder)
     lines += missing.write(folder, folder / "whole_core" if grey is not None else None)
@@ -564,6 +691,12 @@ def _regions(project, folder: Path) -> dict[str, str]:
     return {str(r["core_id"]): str(r["sample_region_id"]) for r in read_csv(table)} if table.exists() else {}
 
 
+def _write_neurons(folder: Path, neurons: list[dict]) -> None:
+    """Thread ownership per accepted tau+ neuron (`stainid.v2.organisation.ownership`)."""
+    columns = ["core_id", "sample_region_id", "candidate_id", "subtype", "processes", "attached_thread_um"]
+    pd.DataFrame(neurons, columns=columns).to_csv(folder / "tau_neuron_threads.csv", index=False)
+
+
 def _write_tables(folder: Path, collected: _Rows, between: dict) -> list[str]:
     """Every table of stage 5 from the collected rows, into `folder`."""
     folder.mkdir(parents=True, exist_ok=True)
@@ -580,7 +713,8 @@ def _write_tables(folder: Path, collected: _Rows, between: dict) -> list[str]:
     text_objects = {s: read_csv(folder / f"objects_{s}.csv") if objects[s] else [] for s in STAINS}
     _write(folder / "masks_objects.csv", [r | {"stain": s} for s in STAINS for r in masks[s]])
     text_masks = {s: [r for r in read_csv(folder / "masks_objects.csv") if r["stain"] == s] if any(masks.values()) else [] for s in STAINS}
-    lines += results_tables(folder, text_tiles, text_objects, text_masks, scored)
+    lines += results_tables(folder, text_tiles, text_objects, text_masks, scored, collected.organised)
+    _write_neurons(folder, collected.organised["neurons"])
     for stain, rows in scored.items():
         named = scores.SCORES[stain]
         counts = {b: sum(r[f"{named.column}_bin"] == b for r in rows) for b in named.bins}

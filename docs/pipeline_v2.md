@@ -423,3 +423,56 @@ scored and binned objects for the type scores (10 plaques, 5 tau+ neurons), plaq
 fraction (10), tau+ neurons for the mature fraction (5), density windows for the patchiness (4), thread pieces for the
 thread width and branching (whose minimum is 0.5 mm of thread); 0 for `no_image` and `no_grey_matter`. `results_counts_<level>.csv`
 holds these counts per row. Under `measures/whole_core/` the same tables describe the whole-core results.
+
+### Tangle spacing, thread ownership, pathology in white matter
+
+New columns of `results_<level>.csv`, from stored results with no image read (`stainid.v2.organisation`, `_attach_white`
+in `measures.py`). In the grey-matter tables they are grey matter only; the spacing and ownership columns also have their
+`_whole_core` version.
+
+| Column | Definition | Minimum (else empty) |
+|---|---|---|
+| `tangle_nn_median_um` | median distance from a mature tangle to the nearest other mature tangle of the same core image; a donor-region pools its cores' distances | 10 tangles with a neighbour |
+| `tangle_l200_excess_um` | Ripley's L at 200 µm less its mean over 39 random placements of as many points in the same valid tissue (counted tissue of the analysed tiles, without white matter in grey-matter tables), so the core's shape and holes cancel; above 0 the tangles gather, below 0 they keep apart. Seeded by the core id, so a re-run gives the same numbers. A donor-region: the count-weighted mean of its cores that reach the minimum | 10 tangles in a core |
+| `tau_processes_per_neuron` (`_mature`, `_pretangle`) | connected stretches of free thread, within 50 µm of the outline, that come within 2 µm of it, per accepted tau+ neuron | 5 neurons (of the subtype) |
+| `tau_neurons_with_process_fraction` | share of tau+ neurons with at least one | 5 neurons |
+| `tau_attached_thread_um_per_neuron` (`_mature`, `_pretangle`) | length of those stretches per neuron; a thread piece reached by k neurons gives each 1/k; a piece counts whole also when it runs past the 50 µm | 5 neurons (of the subtype) |
+| `thread_attached_density_mm_per_mm2`, `thread_unattached_density_mm_per_mm2` | attached and other free thread over the AT8 area: they add up to `thread_length_density_mm_per_mm2` | none: 0 when nothing was found |
+| `thread_attached_share` | attached thread / all free thread | 0.5 mm of thread |
+| `plaque_density_white_mm2`, `plaque_area_fraction_white`, `amyloid_positive_area_fraction_white` | 6E10 plaques, their area and the amyloid-stained area inside the core image's white-matter mask, over its area | 1 mm² of white matter (`v2.white_matter.min_grey_mm2`) |
+| `tau_neuron_density_white_mm2`, `thread_density_white_mm_per_mm2`, `at8_positive_area_fraction_white` | the same on AT8 | 1 mm² of white matter |
+| `plaque_white_area_mm2`, `tau_white_area_mm2` | the white matter measured on that stain's image; 0 without white matter | none |
+| `<neun,plaque,tau_neuron>_edge_touch_fraction`, `_edge_mostly_fraction` | QC: the share of accepted objects whose outline touches the 5 µm band along a tissue edge or hole or an excluded area, and of those mostly (≥ 0.5) in the band | 20 neurons, 10 plaques, 5 tau+ neurons |
+
+The white-matter columns are the whole-core numbers less the grey-matter ones; their grey-matter counterparts are the main
+columns of the same row. An empty one is `not_measured` in `results_missing_<level>.csv`. `tau_neuron_threads.csv` keeps
+ownership per neuron (`processes`, `attached_thread_um`). Neither these columns nor their inputs read the edge band or
+`rule:edge`, except through which candidates the calls accepted: see the check below.
+
+### Check of the AT8 edge band (2026-11-02)
+
+Why do so many accepted tau+ neurons touch the 5 µm band along a tissue edge or hole? Measured on the whole store and on
+287 crops graded by eye (`/run/media/sky/Untitled/alzh/work/feature_explore/edge/`: `grades.csv`, the pages, the scripts in
+`../scripts/edge_*.py`). No detection was changed.
+
+- Cohort: 28.0 % of accepted tau+ neurons touch the band (NeuN 15.1 %, plaques 10.9 %), 2.7 % lie mostly in it (NeuN
+  4.4 %, plaques 0.05 %). It depends on the slide (LIP-6 2.6 % to LIP-11 49 %), and falls as the glass level rises
+  (per core Spearman -0.47): `field.tissue` uses the fixed `TISSUE_DARKNESS` 0.10 while the slides' glass lies at 0.084–0.116,
+  so pale holes are nearly invisible on some slides. The band is not comparable between slides.
+- Cause (91 graded touching neurons): a separate vacuole or hole nearby 46 %, a tissue boundary or tear 18 %, only tiny
+  pale specks 16 %, a halo around the soma 15 %, a vessel or large lumen 4 %. So the halo is read as a hole, but only
+  in about one in seven; the usual cause is the spongy tissue around the neuron.
+- Are they real? Touching: 66 % real, 25 % doubtful, 9 % not a cell body; not touching (39): 56 %, 41 %, 3 %. Every halo
+  case is real. Of the 18 not-a-body among the 129 graded accepted, 17 are at a tissue boundary (a stained rim or a
+  detached fragment). Touching the band is no sign of a false tangle; lying at a tissue boundary is.
+- `rule:edge` drops 35,098 AT8 candidates (new sources only: the legacy `ring` and `dense` are exempt), against 36,367
+  accepted. The model would have rejected 99.3 % of them anyway (1 of 65 graded is real). Of the 253 it would have accepted
+  (0.7 % of accepted), 43 % of 54 graded are real, 37 % not a cell body: at most about 110 real neurons lost, 0.3 %.
+- The model's own `edge_fraction` input has importance 0.008 (26th of 28).
+
+What a fix would cost, none of it needed for the study's current numbers: dropping `rule:edge` (stage 4 and 5, minutes) adds
+about as many false objects as real ones. A band at each core's glass level makes the QC comparable between slides, but
+re-measures AT8 and NeuN candidates from the images (stage 2 on: the full re-run). A tissue-boundary rule from the stored
+mask (no image read, stage 4 and 5: largest non-tissue area of at least 10,000 µm² within 15 µm) flags 6.3 % of accepted
+tau+ neurons (LIP-1 2.8 %, LIP-3 12 %, LIP-12 12 %), catches 15 of the 18 not-a-body and costs 5 of the 76 real. With it
+the tangle spacing moves little (176 cores: median change L excess 3 µm, nearest neighbour 1 µm; Spearman 0.985, 0.975).
