@@ -401,6 +401,65 @@ def test_a_core_without_candidates_is_measured_with_zero_objects(v2_project):
     assert np.isfinite(core.at8_positive_area_fraction.iloc[0])
 
 
+def test_zeros_are_zeros_and_every_empty_cell_says_why(v2_project):
+    """Nothing found in measured tissue: counts, densities and area fractions are 0; fractions and shape measures stay empty,
+    each with one row in results_missing_<level>.csv; `plaque_multicore_fraction` is gone (v2 stores no core counts)."""
+    project = load_project(v2_project)
+    _proposals(project)
+    run_calls_inline(project)
+    from stainid.v2 import missing
+    from stainid.v2.measures import write_measures
+
+    pd.DataFrame().to_parquet(store.path(project, "AT8", "LIP-1_B-2", "candidates"))
+    pd.DataFrame().to_parquet(store.path(project, "6E10", "LIP-1_B-2", "candidates"))
+    write_measures(project)
+    folder = store.root(project) / "measures"
+    for level, key in (("core", "core_id"), ("donor_region", "sample_region_id")):
+        table = pd.read_csv(folder / f"results_{level}.csv")
+        row = table.iloc[0]
+        for column in ("tau_neuron_mask_count", "tau_neuron_mask_density_mm2", "plaque_mask_count", "plaque_mask_density_mm2",
+                       "plaque_mask_area_fraction", "v2_plaque_density_mm2", "tau_neuron_density_mm2"):
+            assert row[column] == 0, column
+        assert np.isnan(row.tau_neuron_area_median_um2) and np.isnan(row.compact_fraction_v2)
+        assert "plaque_multicore_fraction" not in table
+        gone = pd.read_csv(folder / f"results_missing_{level}.csv")
+        ids = [c for c in missing.IDS if c in table]
+        assert list(gone.columns) == [*ids, "measure", "reason", "n_objects"]
+        cells = {(str(i), c) for c in table.columns if c not in ids for i in table.loc[table[c].isna(), key]}
+        assert set(zip(gone[key].astype(str), gone.measure)) == cells and len(gone) == len(cells)
+        assert set(gone.reason) <= set(missing.REASONS)
+        said = gone.set_index("measure")
+        assert said.loc["tau_neuron_area_median_um2", "reason"] == "too_few_objects" and said.loc["tau_neuron_area_median_um2", "n_objects"] == 0
+        assert said.loc["compact_fraction_v2", "reason"] == "too_few_objects"
+
+
+def test_missing_reasons_on_a_small_table(tmp_path):
+    from stainid.v2 import missing
+
+    whole, grey = tmp_path / "whole_core", tmp_path
+    whole.mkdir()
+    table = pd.DataFrame({"core_id": ["a", "b", "c", "d"], "sample_region_id": ["r1", "r2", "r3", "r4"],
+                          "neun_profile_density_mm2": [np.nan, np.nan, 5.0, 5.0], "compact_fraction_v2": [0.5, 0.5, np.nan, np.nan],
+                          "compact_fraction_v2_whole_core": [0.5, 0.5, np.nan, 0.5], "white_matter_share": [0.1, np.nan, 0.1, 0.1],
+                          "neun_soma_area_cv": [1.0, np.nan, 1.0, 1.0]})
+    table.to_csv(grey / "results_core.csv", index=False)
+    base = {"tiles_NeuN": 1, "tiles_6E10": 1, "tiles_AT8": 1, "neun_masks": 30, "plaques_ge15um": 12}
+    write = lambda folder, rows: pd.DataFrame(rows).to_csv(folder / missing.COUNTS.format("core"), index=False)  # noqa: E731
+    write(whole, [{"core_id": "a", **base, "tiles_NeuN": 0}, {"core_id": "b", **base}, {"core_id": "c", **base, "plaques_ge15um": 3},
+                  {"core_id": "d", **base}])
+    write(grey, [{"core_id": "a", **base, "tiles_NeuN": 0}, {"core_id": "b", **base, "tiles_NeuN": 0}, {"core_id": "c", **base, "plaques_ge15um": 3},
+                 {"core_id": "d", **base}])
+    missing.write(grey, whole)
+    gone = pd.read_csv(grey / "results_missing_core.csv")
+    said = {(r.core_id, r.measure): (r.reason, r.n_objects) for r in gone.itertuples()}
+    assert said[("a", "neun_profile_density_mm2")] == ("no_image", 0)
+    assert said[("b", "neun_profile_density_mm2")] == ("no_grey_matter", 0)
+    assert said[("b", "white_matter_share")] == ("no_grey_matter", 0)
+    assert said[("c", "compact_fraction_v2")] == ("too_few_objects", 3)
+    assert said[("c", "compact_fraction_v2_whole_core")] == ("too_few_objects", 3)
+    assert said[("d", "compact_fraction_v2")] == ("not_measured", 12)  # above its minimum: not a count's doing
+
+
 def test_outlines_keep_all_three_sam_outputs(v2_project, monkeypatch):
     torch = pytest.importorskip("torch")
     pytest.importorskip("segment_anything")

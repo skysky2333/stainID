@@ -34,8 +34,9 @@ def summarize(stain: str, objects: list[dict[str, str]], tissue_mm2: float) -> d
             "plaque_mask_area_fraction": float(area.sum() / 1e6 / tissue_mm2) if tissue_mm2 else float("nan"),
             "plaque_dense_core_fraction_median": med("dense_core_fraction"),
             "plaque_cored_fraction": float((core >= 0.25).mean()) if enough else float("nan"),
-            "plaque_multicore_fraction": float((values(objects, "dense_core_count") >= 2).mean()) if enough else float("nan"),
         }
+        if objects and "dense_core_count" in objects[0]:  # the legacy outline step counts the cores; v2 stores no such count
+            out["plaque_multicore_fraction"] = float((values(objects, "dense_core_count") >= 2).mean()) if enough else float("nan")
     if stain == "AT8":
         mature = [r.get("seed_mature", "").lower() == "true" for r in objects]
         out["tau_neuron_mask_mature_fraction"] = float(np.mean(mature)) if enough else float("nan")

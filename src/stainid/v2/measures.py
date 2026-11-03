@@ -16,6 +16,10 @@ The continuous type scores (`stainid.v2.scores`: AT8 tau maturity, 6E10 plaque c
 object (`type_scores_<stain>.csv`) and summarised as new columns of `results_<level>.csv` (`scores.readout_names`);
 they add columns only, every other column is as without them.
 
+`results_missing_<level>.csv` says why each empty cell of the results tables is empty (`stainid.v2.missing`). A count, a
+density or an area fraction is 0 when nothing was found in measured tissue; only fractions and shape measures under their
+minimum count, and tissue not measured at all, are missing.
+
 White matter (`stainid.v2.white_matter`, docs/white_matter.md). With `v2.white_matter.analysis: exclude` every table is
 grey matter only: objects whose centre lies in the core image's white matter (and AT8 thread pieces whose middle does)
 are dropped, its counted cells leave every tile's area, and the 6E10 / AT8 stained areas are the grey-matter pass's
@@ -43,7 +47,7 @@ from stainid import candidates as store
 from stainid.analysis import aggregation, field_aggregation, mask_aggregation
 from stainid.analysis.aggregation import summarize_stain_group
 from stainid.tables import read_csv, write_records
-from stainid.v2 import grey_matter, manifest, scores, white_matter
+from stainid.v2 import grey_matter, manifest, missing, scores, white_matter
 from stainid.v2.classify import load_model
 from stainid.v2.params import STAINS
 
@@ -191,6 +195,7 @@ def tau_rows(project, tiles: pd.DataFrame, found: pd.DataFrame, threads: pd.Data
             "total_artifact_exclusion_area_fraction": tile["exclusion_fraction"],
             "tau_neuron_count": len(neurons), "tau_neuron_mature_count": int((neurons.subtype == "mature tangle").sum()),
             "thread_ridge_length_mm": length_mm, "thread_ridge_skeleton_px": skeleton_px,
+            "thread_piece_count": int((free.kind == "piece").sum()) if not free.empty and "kind" in free else 0,
             "thread_ridge_width_sum_um": float(free.width_sum_um.sum()) if not free.empty else 0.0,
             "thread_length_with_somata_mm": float(tile["thread_skeleton_px"]) * ps / 1000,
             "thread_branchpoint_count": tile["thread_branchpoint_count"], "thread_endpoint_count": tile["thread_endpoint_count"],
@@ -251,9 +256,8 @@ def results_tables(folder: Path, tile_rows: dict[str, list[dict]], objects: dict
             for row in tile_rows[stain]:
                 area[(row[level], stain)] += float(row["tissue_area_mm2"])
             by_key = _group(masks[stain], level)
-            for key in {row[level] for row in tile_rows[stain]}:
-                if by_key.get(key):
-                    merged[key].update(mask_aggregation.summarize(stain, by_key[key], area[(key, stain)]))
+            for key in {row[level] for row in tile_rows[stain]}:  # no outline in measured tissue is 0, not missing
+                merged[key].update(mask_aggregation.summarize(stain, by_key.get(key, []), area[(key, stain)]))
         for stain, rows_ in (scored or {}).items():  # the area of the stain's density columns (v2_tissue_area_mm2)
             measured = defaultdict(float)
             for row in tile_rows[stain]:
@@ -267,6 +271,10 @@ def results_tables(folder: Path, tile_rows: dict[str, list[dict]], objects: dict
                 row.pop("core_id", None)
         target = folder / f"results_{name}.csv"
         write_records(target, rows)
+        tiled, objected, masked, scored_ = ({s: _group(rows_[s], level) for s in rows_} for rows_ in (tile_rows, objects, masks, scored or {}))
+        write_records(folder / missing.COUNTS.format(name),
+                      [{level: k, **missing.group_counts(*({s: by[s].get(k, []) for s in by} for by in (tiled, objected, masked, scored_)))}
+                       for k in sorted(merged)])
         lines.append(f"{len(rows)} {name} rows -> {target}")
     return lines
 
@@ -423,6 +431,9 @@ def write_measures(project, folder: Path | None = None) -> list[str]:
         lines += _attach_too_small(project, folder, too_small, floor)
     if white_matter.summary_path(project).exists():
         lines += _attach_flags(project, folder)
+    lines += missing.write(folder, folder / "whole_core" if grey is not None else None)
+    if grey is not None:
+        lines += missing.write(folder / "whole_core")
     return lines
 
 

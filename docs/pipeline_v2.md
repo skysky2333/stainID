@@ -306,7 +306,7 @@ frozen v1 tables the R analyses read (same aggregation code: `stainid.analysis.a
 | `thread_length_density_mm_per_mm2`, `thread_mean_width_um`, `thread_to_neuron_ratio_mm` | saved skeleton segments **outside accepted tau+ neurons** | changed: the old tracing ran through tau+ somata; the old length is `thread_length_with_somata_mm` in `tiles_AT8.csv` |
 | `thread_branchpoints_per_mm` | per-tile branch points (whole skeleton) / length outside neurons | approximately |
 | v1 `at8_noncompact_*`, `at8_compact_profile_*`, `at8_thread_length_*`, `edge_guard_field_count` | the v1 AT8 network measures, saved per tile | yes (`at8_compact_profile_median_area_um2` is empty: per-profile areas are not saved) |
-| outline (mask) features `*_mask_*` | accepted candidates with a kept Segment Anything outline | yes; `plaque_multicore_fraction` is empty (core counts are not saved) |
+| outline (mask) features `*_mask_*` | accepted candidates with a kept Segment Anything outline; none in measured tissue is a count, density and area fraction of 0 | yes; `plaque_multicore_fraction` is not written (the v2 store keeps no count of dense cores) |
 
 To move the analyses over, point the R scripts' `data/analysis/<prefix>_*.csv` reads at `data/analysis/v2/measures/`.
 
@@ -402,3 +402,24 @@ scaling by the slide threshold does not change that (0.40), as the AT8 threshold
 plaques narrowly (see the public scores), so the other plaques of Keiser and Plaquebox include many dense ones; the
 score separates cored plaques better within a slide than pooled. Montages along each score (low to high, ten bands):
 `/run/media/sky/wd6t/scores_check/montages/`.
+
+### Missing values: `results_missing_core.csv` and `results_missing_donor_region.csv`
+
+A count, a density or an area fraction is 0 when nothing was found in measured tissue. A fraction or a shape measure stays
+empty under its minimum count, with no pseudo-counts; tissue not measured at all stays empty. Every empty cell of
+`results_<level>.csv` (also the `_whole_core` columns and the white-matter flags) has exactly one row in
+`results_missing_<level>.csv` (`stainid.v2.missing`), long format: the id columns of the results table, then `measure`
+(the column), `reason`, `n_objects`.
+
+| `reason` | Meaning |
+|---|---|
+| `no_image` | no image of the measure's stain for this core (donor-region: for any of its cores) |
+| `no_grey_matter` | the image has too little grey matter to measure (`v2.white_matter.min_grey_mm2`; donor-region: all its cores with an image) |
+| `too_few_objects` | under the measure's minimum (`missing.MEASURES`) |
+| `not_measured` | anything else: a white-matter share of a core whose white matter is undetermined, enough plaques but no far tissue for the periplaque background |
+
+`n_objects` is what the minimum counts: outlines for the outline measures (minimum 20 NeuN, 10 plaques, 5 tau+ neurons),
+scored and binned objects for the type scores (10 plaques, 5 tau+ neurons), plaques of at least 15 µm for the compact
+fraction (10), tau+ neurons for the mature fraction (5), density windows for the patchiness (4), thread pieces for the
+thread width and branching (whose minimum is 0.5 mm of thread); 0 for `no_image` and `no_grey_matter`. `results_counts_<level>.csv`
+holds these counts per row. Under `measures/whole_core/` the same tables describe the whole-core results.
