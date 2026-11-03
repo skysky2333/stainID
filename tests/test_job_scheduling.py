@@ -130,6 +130,24 @@ def test_an_array_finishes_when_its_chunks_have_and_the_next_stage_waits_for_all
     assert proposals.status == "finished" and all(c.status == "running" for c in later)
 
 
+def test_the_tables_wait_for_the_white_matter_only_when_they_read_it(tmp_path, started):
+    exclude = _project(tmp_path / "exclude", v2={"white_matter": {"analysis": "exclude"}})
+    off = _project(tmp_path / "off")
+    scheduler = queue.Scheduler(tmp_path / "q", budget=queue.Budget(64, 0, 256))
+    waits = scheduler.submit_step(exclude, "v2_white_matter", {})
+    burdens = scheduler.submit_step(exclude, "v2_grey_matter", {"workers": 4})
+    tables = scheduler.submit_step(exclude, "v2_measures", {})
+    free = scheduler.submit_step(off, "v2_white_matter", {})
+    other = scheduler.submit_step(off, "v2_measures", {})
+    assert queue.job_needs(burdens)["cpus"] == 4 and queue.job_needs(burdens)["ram_gb"] == 11
+    scheduler.tick()
+    assert waits.status == "running" and burdens.status == "queued" and tables.status == "queued" and "Find white matter" in tables.waiting
+    assert free.status == "running" and other.status == "running"  # off: the tables do not read it
+    scheduler._ended(waits, 1)  # the white matter failed: what reads it is not started; the other project is left alone
+    scheduler.tick()
+    assert burdens.status == "skipped" and tables.status == "skipped" and other.status == "running"
+
+
 def test_a_restart_of_the_app_leaves_a_running_array_and_the_steps_after_it_waiting(tmp_path, started, monkeypatch):
     import os
 

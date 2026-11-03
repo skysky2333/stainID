@@ -566,10 +566,14 @@ def _digest(value) -> str:
 
 
 def _write_png(path: Path, white: np.ndarray) -> None:
+    """An area, left alone when it is the same as before: its digest stays, so the grey-matter pass is not redone for
+    nothing when a core's inputs changed but its white matter did not."""
     path.parent.mkdir(parents=True, exist_ok=True)
     ok, encoded = cv2.imencode(".png", white.astype(np.uint8) * WHITE)
     if not ok:
         raise RuntimeError(f"could not encode {path}")
+    if path.exists() and path.read_bytes() == encoded.tobytes():
+        return
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_bytes(encoded.tobytes())
     tmp.replace(path)
@@ -693,6 +697,17 @@ def _look(project, core_id: str, shape: tuple[int, int], stains: list[str], s: d
                 pathology=lambda: pathology_of(project, core_id, stains))
 
 
+def _standing(project, core_id: str, stains: list[str], inputs: dict) -> str:
+    """Where a core stands: "done", "outdated" (made from other inputs) or "missing"."""
+    try:
+        recorded = json.loads(manifest_path(project, core_id).read_text())
+    except (OSError, ValueError):
+        return "missing"
+    if recorded.get("digest") != _digest(inputs):
+        return "outdated"
+    return "done" if all(mask_path(project, core_id, s).exists() for s in stains) else "missing"
+
+
 def todo(project, redo: bool = False, cores: set[str] | None = None) -> list[tuple[str, list[str], dict]]:
     """(core, its stain images, the inputs) of every core whose areas are missing or outdated."""
     out = []
@@ -700,37 +715,75 @@ def todo(project, redo: bool = False, cores: set[str] | None = None) -> list[tup
         if cores is not None and core_id not in cores:
             continue
         inputs = _inputs(project, core_id, stains)
-        if not redo:
-            try:
-                recorded = json.loads(manifest_path(project, core_id).read_text())
-            except (OSError, ValueError):
-                recorded = None
-            if recorded and recorded.get("digest") == _digest(inputs) and all(mask_path(project, core_id, s).exists() for s in stains):
-                continue
-        out.append((core_id, stains, inputs))
+        if redo or _standing(project, core_id, stains, inputs) != "done":
+            out.append((core_id, stains, inputs))
     return out
 
 
+def progress(project) -> dict:
+    """How far the step has got, for the Run page: cores up to date (`done`), made from other inputs (`outdated`), in
+    all (`total`), and when the summary table was last written (`written`, 0: never)."""
+    found = core_stains(project)
+    if not any(SOURCE in stains for stains in found.values()):
+        found = {}  # nothing to do without NeuN images (`run`)
+    standing = [_standing(project, core_id, stains, _inputs(project, core_id, stains)) for core_id, stains in found.items()]
+    summary_file = summary_path(project)
+    return {"done": standing.count("done"), "outdated": standing.count("outdated"), "total": len(standing),
+            "written": summary_file.stat().st_mtime if summary_file.exists() else 0.0}
+
+
+def cached_progress(project) -> dict:
+    """`progress`, made once while its inputs stay the same (the page asks every few seconds; a project has a manifest per
+    core). Never people's labels: they do not change the areas."""
+    from stainid import cache, disk_cache, exclusions  # noqa: PLC0415
+    from stainid.v2 import manifest  # noqa: PLC0415
+
+    upstream = manifest.root(project) / "manifests"
+    inputs = [root(project) / "manifests", summary_path(project), project.config_file, project.input("registration"),
+              upstream / "candidates" / SOURCE, upstream / "calls" / SOURCE, *(exclusions.masks_folder(project, s) for s in STAINS)]
+    return cache.memo(("white matter progress", str(project.root)), inputs, lambda: progress(project), every=10.0, folders=True,
+                      persist=disk_cache.answer_file(project.root, "v2-white-matter.pkl"), background=True)
+
+
 def run(project, redo: bool = False, cores: set[str] | None = None, picture=None, log=print) -> pd.DataFrame:
-    """The step: every core whose areas are missing or outdated, then the summary table of all of them."""
+    """The step: every core whose areas are missing or outdated, then the summary table of all of them. A project without
+    any NeuN image (white matter is found from the NeuN+ neurons) has nothing to do: nothing is written, and its images
+    are measured as they are. Stops between two cores when the queue asks; a core that fails does not stop the others,
+    and the run ends with an error naming how many failed."""
+    from stainid.jobs import units  # noqa: PLC0415
+
+    if not any(SOURCE in stains for stains in core_stains(project).values()):
+        log(f"white matter: no {SOURCE} images in this project, so nothing to do")
+        return summary(project)
     jobs = todo(project, redo, cores)
-    log(f"white matter: {len(jobs)} core(s) to do")
-    kept = {}
-    for n, (core_id, stains, inputs) in enumerate(jobs, 1):
-        rows = run_core(project, core_id, stains, picture)
-        target = manifest_path(project, core_id)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        write_text_atomic(target, json.dumps({"stage": STAGE, "inputs": inputs, "digest": _digest(inputs), "rows": rows,
-                                              "written": time.strftime("%Y-%m-%d %H:%M:%S")}, indent=1, default=str))
-        kept[core_id] = rows
-        found = next((r for r in rows if r["stain"] == SOURCE), rows[0] if rows else None)
-        if found:
-            log(f"{n}/{len(jobs)} {core_id}: {found['status']}" + (f" {100 * found['white_share']:.0f} %" if found["status"] == "white" else ""))
-    return write_summary(project)
+    log(f"[0/{len(jobs)}] white matter: {len(jobs)} core(s) to do")
+    failed = 0
+    try:
+        for n, (core_id, stains, inputs) in enumerate(jobs, 1):
+            units.boundary(f"{n - 1} cores done")
+            try:
+                rows = run_core(project, core_id, stains, picture)
+            except Exception as error:  # noqa: BLE001 - one bad core must not stop the others
+                failed += 1
+                log(f"[{n}/{len(jobs)}] {core_id}: failed: {type(error).__name__}: {error}")
+                continue
+            target = manifest_path(project, core_id)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            write_text_atomic(target, json.dumps({"stage": STAGE, "inputs": inputs, "digest": _digest(inputs), "rows": rows,
+                                                  "written": time.strftime("%Y-%m-%d %H:%M:%S")}, indent=1, default=str))
+            found = next((r for r in rows if r["stain"] == SOURCE), rows[0] if rows else None)
+            if found:
+                log(f"[{n}/{len(jobs)}] {core_id}: {found['status']}" + (f" {100 * found['white_share']:.0f} %" if found["status"] == "white" else ""))
+    finally:
+        table = write_summary(project)
+    if failed:
+        raise RuntimeError(f"white matter: {failed} of {len(jobs)} cores failed; see the lines above")
+    return table
 
 
 def write_summary(project) -> pd.DataFrame:
-    """`white_matter.csv` from every core's manifest."""
+    """`white_matter.csv` from every core's manifest; left alone when nothing changed, so its date says when the white
+    matter last changed (`stainid.workflows.steps`: results older than it are out of date)."""
     rows = []
     folder = root(project) / "manifests"
     for path in sorted(folder.glob("*.json")) if folder.is_dir() else []:
@@ -741,7 +794,9 @@ def write_summary(project) -> pd.DataFrame:
     frame = pd.DataFrame(rows, columns=COLUMNS)
     target = summary_path(project)
     target.parent.mkdir(parents=True, exist_ok=True)
-    write_text_atomic(target, frame.to_csv(index=False))
+    text = frame.to_csv(index=False)
+    if not target.exists() or target.read_text() != text:
+        write_text_atomic(target, text)
     return frame
 
 

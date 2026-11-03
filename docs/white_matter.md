@@ -3,7 +3,8 @@
 The cohort's cores are 4.5 mm across and the cortex is 2-3 mm thick, so many cores reach into the white matter. The
 algorithm (`stainid.v2.white_matter`, `stainid v2 white-matter`) finds it on every core from detection's stored
 outputs; people correct it in the *Grey / white matter* round, and their corrections only train and score it. The
-analysis counts white matter as before until the project's setting says otherwise (below).
+analysis counts white matter as before until the project's setting says otherwise (below). On the Run page it is the step
+*Find white matter*, between *Outline objects* and *Make results tables*.
 
 **Cells and neurons.** Cells are the hematoxylin nuclei: every section has them, every stain. Neurons are only the
 NeuN+ cells on the NeuN section (stage 4's accepted NeuN calls). The algorithm is carried by the neurons and checked by
@@ -69,7 +70,31 @@ Under `<outputs.v2>/white_matter/` (default `data/analysis/v2/white_matter/`), n
 re-runs nothing of detection; `--core` limits it, `--redo` redoes every core. About 5-10 s per core with white matter
 to check (one reduced read of its NeuN image), a fraction of a second for the others. Once its folder exists the app
 also makes a missing or outdated core's areas in idle time, when a *Grey / white matter* core is prepared
-(`api.ahead._core_pictures`).
+(`api.ahead._core_pictures`). An area or a summary that comes out the same is not written again, so a repeat keeps the
+grey-matter pass and the results up to date.
+
+### As pipeline steps
+
+*Find white matter* (`v2_white_matter`) and *Measure grey-matter burdens* (`v2_grey_matter`) are steps of the workflow
+(`stainid.workflows.steps`), in the Results stage, in this order: outlines and calls, white matter, burdens, results tables.
+They are queued as pipeline work (2 processors and 6 GB; 1 processor and 2.5 GB per core image at once, 4 by default). Both
+stop between two core images when the queue pauses them, and a core image that fails does not stop the others: the run ends
+with an error naming how many, and what reads it is not started. `tools/v2_run.sh all` and `decide` run them too, with
+`exclude` only.
+
+| The project | *Find white matter*, *Measure grey-matter burdens* | *Make results tables* |
+|---|---|---|
+| `exclude`, with NeuN images | how many cores and core images are done and out of date; *Run what's left* runs what is left | uses both: waits for them, is not started if they fail, and is out of date when they are, or changed after it |
+| `off` (the default) | *Not needed*: count as done and are never run by *Run what's left*; by hand they still make the views' area and the flags | as before, whatever they do |
+| no NeuN image at all (JOG, most public AT8 and 6E10 sets) | *Not needed* whatever the setting; run by hand they say so and write nothing, so the tables gain no empty flag columns | every image measured as it is |
+
+Non-TMA projects follow the same rule: an image set or a whole-slide project with NeuN and `exclude` runs them on its images
+or regions. A region with no NeuN image of the same id (`core_id`) is `undetermined` with no white matter: whole-slide
+regions of different sections do not share ids, so there the setting only reaches NeuN regions.
+
+**People's labels do not reach the results.** The steps read the NeuN calls, detection's masks and the registration table
+only; a *Grey / white matter* save changes none of their digests, and the admin `/labels/matter` overview uses it only to
+score agreement.
 
 ## Where it shows
 
@@ -172,8 +197,8 @@ ending `_white`, docs/pipeline_v2.md): whole-core less grey-matter numbers over 
 The setting is `off` by default (white matter counted as before); `exclude` makes stage 5 grey matter only. The mask
 needs NeuN's detection first (it is made from NeuN's calls), so it is applied at the analysis stage, never in detection:
 
-1. `stainid v2 white-matter`: the areas (above).
-2. `stainid v2 grey-matter` (`v2.grey_matter`): the 6E10 and AT8 stained areas without the white matter. Stage 2 keeps
+1. *Find white matter*, `stainid v2 white-matter`: the areas (above).
+2. *Measure grey-matter burdens*, `stainid v2 grey-matter` (`v2.grey_matter`): the 6E10 and AT8 stained areas without the white matter. Stage 2 keeps
    each tile's stained areas as totals, so this pass reads each 6E10 / AT8 core image with white matter once and works
    out what stage 2 works out for every tile the white matter reaches (`proposals.tile_summary` with those cells
    counted out: the same crops, slide thresholds, nuclei, linear-artifact and fold masks and levels; no proposals, no

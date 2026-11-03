@@ -19,7 +19,8 @@ def slide_slug(path: Path) -> str:
 
 # seconds per unit of work, roughly (the step cards give the same figures in words)
 SECONDS = {"dearray": 60, "export": 90, "qc": 3, "tiles": 3, "images": 3, "calibrate": 60, "neun": 5, "fields": 60, "summarize": 60,
-           "v2_proposals": 120, "v2_calls": 2, "v2_outlines": 60, "v2_measures": 180}  # v2: per core image (several at once), measures in all
+           "v2_proposals": 120, "v2_calls": 2, "v2_outlines": 60, "v2_measures": 180,  # v2: per core image (several at once), measures in all
+           "v2_white_matter": 4, "v2_grey_matter": 40}  # per core: about half have white matter to check; grey matter 2 images, 2-3 min each, 4 at once
 NUCLEI_SECONDS = {"cuda": 4, "mps": 90, "cpu": 400}  # Cellpose-SAM per ~560 µm tile
 TILE_UM = 560
 
@@ -154,7 +155,8 @@ def estimate(project: Project, remaining: list[str]) -> dict:
     device = best_device()
     units = {"dearray": slides, "export": slides, "qc": biological, "tiles": biological, "images": biological, "calibrate": slides,
              "neun": tiles / 3, "fields": biological * 2 / 3, "summarize": 1,
-             "v2_proposals": biological, "v2_calls": biological, "v2_outlines": biological, "v2_measures": 1}
+             "v2_proposals": biological, "v2_calls": biological, "v2_outlines": biological, "v2_measures": 1,
+             "v2_white_matter": biological, "v2_grey_matter": biological}
     steps = []
     for step in remaining:
         if step == "nuclei":
@@ -162,7 +164,7 @@ def estimate(project: Project, remaining: list[str]) -> dict:
         elif step in measured:  # what is left, at this project's measured pace, as many at once as the step runs
             seconds = measured[step] / parallel(step)
         elif step in SECONDS:
-            per_core = step in ("qc", "tiles", "images", "fields", "v2_proposals", "v2_calls", "v2_outlines")
+            per_core = step in ("qc", "tiles", "images", "fields", "v2_proposals", "v2_calls", "v2_outlines", "v2_white_matter", "v2_grey_matter")
             seconds = units.get(step, 0) * SECONDS[step] * (core_scale if per_core else tile_scale if step == "neun" else 1.0)
             if step in MEASURED:  # per core image and process: the step runs several at once
                 seconds /= parallel(step)

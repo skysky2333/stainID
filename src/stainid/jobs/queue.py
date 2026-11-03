@@ -87,6 +87,7 @@ STEP_NEEDS = {
     "nuclei": {"cpus": 4, "gpus": 1, "ram_gb": 8}, "neun": {"cpus": 8, "ram_gb": 8}, "fields": {"cpus": 4, "gpus": 1, "ram_gb": 8},
     "masks": {"cpus": 2, "gpus": 1, "ram_gb": 8}, "v2_proposals": {"cpus": 8, "ram_gb": 16}, "v2_calls": {"cpus": 4, "ram_gb": 6},
     "v2_outlines": {"cpus": 2, "gpus": 1, "ram_gb": 8}, "v2_measures": {"cpus": 2, "ram_gb": 8},
+    "v2_white_matter": {"cpus": 2, "ram_gb": 6}, "v2_grey_matter": {"cpus": 4, "ram_gb": 11},
     "download_models": {"cpus": 0, "ram_gb": 1, "network": True}, "prepare_labels": {"cpus": 2, "ram_gb": 4},
     "train": {"cpus": 4, "ram_gb": 6}, "score_segmentation": {"cpus": 2, "ram_gb": 4},
 }
@@ -176,7 +177,8 @@ def needs_of(workflow: str, options: dict | None = None) -> dict:
     with `processes` tile processes, `threads` processors and 1.3 GB each plus 1.4 GB per core image in flight
     (`workers`, default 3); with a number of core images at once and no `processes`, 2 processors per core image
     (the tile processes the job then starts: `default_processes`); with `processes` 0 (the older layout, one process
-    per core image), 2 processors and 2.5 GB per core image."""
+    per core image), 2 processors and 2.5 GB per core image. Grey-matter burdens: 1 processor and 2.5 GB per core image
+    at once (`workers`)."""
     from stainid.workflows.steps import BY_ID
 
     options = options or {}
@@ -193,6 +195,8 @@ def needs_of(workflow: str, options: dict | None = None) -> dict:
             need["cpus"], need["ram_gb"] = 2 * workers, round(2.5 * workers + 1, 1)
         elif workers > 0:
             need["cpus"], need["ram_gb"] = 2 * workers, round(1.3 * 2 * workers + 1.4 * workers + 1, 1)
+    if workflow == "v2_grey_matter" and int(options.get("workers") or 0) > 0:
+        need["cpus"], need["ram_gb"] = int(options["workers"]), round(2.5 * int(options["workers"]) + 1, 1)
     return {"cpus": 0, "gpus": 0, "ram_gb": 0, "network": False, **need}
 
 
@@ -1431,6 +1435,8 @@ class Scheduler:
         """Why a waiting job cannot start whatever the room: a job it was queued after, a step it needs the outputs of,
         or a writer of the same outputs that runs or was queued before it (waits only ever point at running or earlier
         jobs, so they cannot go round in a circle)."""
+        from stainid.workflows.steps import for_project_at
+
         for before in job.after or []:  # the jobs it was queued after
             other = self.jobs.get(before)
             if other is None or other.status == "finished":
@@ -1448,9 +1454,9 @@ class Scheduler:
             if not earlier:
                 continue
             if step is not None and other.project == job.project and other.workflow in steps and not other.command and other.workflow != job.workflow:
-                key = (other.workflow, job.workflow, other.source == COMMAND_LINE)  # the same for every pair of these steps
+                key = (other.workflow, job.workflow, other.source == COMMAND_LINE, job.project)  # the same for every pair of these steps in a project
                 if key not in cache:
-                    cache[key] = wait_reason(steps[other.workflow], step, "command line" if other.source == COMMAND_LINE else "")
+                    cache[key] = wait_reason(steps[other.workflow], for_project_at(step, job.project), "command line" if other.source == COMMAND_LINE else "")
                 if cache[key]:
                     return cache[key]
             writing = other.status == "running" or (other.status == "queued" and other.created < job.created)  # a paused job lets go
@@ -1531,7 +1537,7 @@ class Scheduler:
 
     def _skip_dependents(self, job: Job, what: str) -> None:
         """Queued jobs of the same project waiting for this one cannot do anything useful: skip them (and what waits for them)."""
-        from stainid.workflows.steps import BY_ID, wait_reason
+        from stainid.workflows.steps import BY_ID, for_project_at, wait_reason
 
         for other in list(self.jobs.values()):
             if other.status in ("queued", "paused") and job.id in (other.after or []):
@@ -1540,7 +1546,7 @@ class Scheduler:
             return
         for other in sorted(self.jobs.values(), key=lambda j: j.created):
             if (other.status in ("queued", "paused") and other.project == job.project and other.workflow in BY_ID and not other.command
-                    and other.workflow != job.workflow and (other.created > job.created or job.source == COMMAND_LINE) and wait_reason(BY_ID[job.workflow], BY_ID[other.workflow])):
+                    and other.workflow != job.workflow and (other.created > job.created or job.source == COMMAND_LINE) and wait_reason(BY_ID[job.workflow], for_project_at(BY_ID[other.workflow], other.project))):
                 self._skip(other, f"Not started because “{BY_ID[job.workflow].title}” {what}")
 
     def environment(self, job: Job) -> dict[str, str]:

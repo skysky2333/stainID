@@ -17,6 +17,7 @@ is redone when its white matter or its stage-2 outputs change. `stainid v2 grey-
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -91,26 +92,62 @@ def current(project, stain: str, core_id: str) -> pd.DataFrame | None:
     return pd.read_csv(table_path(project, stain, core_id))
 
 
-def todo(project, cores: set[str] | None = None, redo: bool = False) -> list[tuple[str, str]]:
-    """(core_id, stain) of every 6E10 / AT8 core image with white matter whose grey-matter burdens are missing or out
-    of date."""
+def _images(project) -> list[tuple[str, str]]:
+    """(core_id, stain) of every 6E10 / AT8 core image the white-matter step found white matter on."""
     from stainid.v2 import white_matter  # noqa: PLC0415
 
     table = white_matter.summary(project)
+    return [(row.core_id, row.stain) for row in table[(table.status == "white") & table.stain.isin(STAINS)].itertuples()]
+
+
+def _standing(project, stain: str, core_id: str) -> str:
+    """Where a core image stands: "done", "outdated" (made from other inputs), "missing", or "" (nothing to do)."""
+    wanted = expected(project, stain, core_id)
+    if wanted is None:
+        return ""
+    try:
+        recorded = json.loads(manifest_path(project, stain, core_id).read_text())
+    except (OSError, ValueError):
+        return "missing"
+    return "done" if recorded.get("inputs") == wanted else "outdated"
+
+
+def todo(project, cores: set[str] | None = None, redo: bool = False) -> list[tuple[str, str]]:
+    """(core_id, stain) of every 6E10 / AT8 core image with white matter whose grey-matter burdens are missing or out
+    of date."""
     out = []
-    for row in table[(table.status == "white") & table.stain.isin(STAINS)].itertuples():
-        if cores and row.core_id not in cores:
+    for core_id, stain in _images(project):
+        if cores and core_id not in cores:
             continue
-        wanted = expected(project, row.stain, row.core_id)
-        if wanted is None:
-            continue
-        try:
-            recorded = json.loads(manifest_path(project, row.stain, row.core_id).read_text()).get("inputs")
-        except (OSError, ValueError):
-            recorded = None
-        if redo or recorded != wanted:
-            out.append((row.core_id, row.stain))
+        standing = _standing(project, stain, core_id)
+        if standing and (redo or standing != "done"):
+            out.append((core_id, stain))
     return out
+
+
+def progress(project) -> dict:
+    """How far the pass has got, for the Run page: core images up to date (`done`), made from other inputs (`outdated`),
+    in all (`total`), and when one was last made (`written`, 0: never)."""
+    standing = [s for s in (_standing(project, stain, core_id) for core_id, stain in _images(project)) if s]
+    written = 0.0
+    for stain in STAINS:
+        folder = root(project) / "manifests" / stain
+        if folder.is_dir():
+            with os.scandir(folder) as entries:
+                written = max(written, *(entry.stat().st_mtime for entry in entries), 0.0)
+    return {"done": standing.count("done"), "outdated": standing.count("outdated"), "total": len(standing), "written": written}
+
+
+def cached_progress(project) -> dict:
+    """`progress`, made once while its inputs stay the same."""
+    from stainid import cache, disk_cache  # noqa: PLC0415
+    from stainid.v2 import manifest, white_matter  # noqa: PLC0415
+
+    upstream = manifest.root(project) / "manifests" / "proposals"
+    inputs = [white_matter.summary_path(project), *(root(project) / "manifests" / s for s in STAINS), *(upstream / s for s in STAINS),
+              *(white_matter.mask_path(project, "", s).parent for s in STAINS)]
+    return cache.memo(("grey matter progress", str(project.root)), inputs, lambda: progress(project), every=10.0, folders=True,
+                      persist=disk_cache.answer_file(project.root, "v2-grey-matter.pkl"), background=True)
 
 
 def _fields(project, stain: str, core_id: str, tiles: list[dict], wanted: set[str]):
@@ -234,22 +271,41 @@ def _worker(root: str, core_id: str, stain: str) -> dict:
 
 def run(project, cores: set[str] | None = None, redo: bool = False, workers: int = 1, log=print) -> list[dict]:
     """The pass on every core image that needs it (`todo`), `workers` core images at once (about 2.5 GB each); returns
-    one row per core image."""
+    one row per core image. Stops between two core images when the queue asks; a core image that fails does not stop the
+    others, and the run ends with an error naming how many failed."""
+    from stainid.jobs import units  # noqa: PLC0415
+
     jobs = todo(project, cores, redo)
-    log(f"grey-matter burdens: {len(jobs)} 6E10 / AT8 core images with white matter to (re)do, {workers} at once")
-    done = []
+    log(f"[0/{len(jobs)}] grey-matter burdens: {len(jobs)} 6E10 / AT8 core images with white matter to (re)do, {workers} at once")
+    done, failed = [], 0
+
+    def report(core_id: str, stain: str, get) -> None:
+        nonlocal failed
+        try:
+            row = get()
+        except Exception as error:  # noqa: BLE001 - one bad core image must not stop the others
+            failed += 1
+            log(f"[{len(done) + failed}/{len(jobs)}] {stain} {core_id}: failed: {type(error).__name__}: {error}")
+            return
+        done.append(row)
+        log(f"[{len(done) + failed}/{len(jobs)}] {stain} {core_id}: {row['tiles']} tiles in {row['seconds']:.0f} s")
+
     if workers <= 1:
         for core_id, stain in jobs:
-            done.append(run_core(project, core_id, stain))
-            log(f"{len(done)}/{len(jobs)} {stain} {core_id}: {done[-1]['tiles']} tiles in {done[-1]['seconds']:.0f} s")
-        return done
-    from concurrent.futures import ProcessPoolExecutor, as_completed  # noqa: PLC0415
-    from multiprocessing import get_context  # noqa: PLC0415
+            units.boundary(f"{len(done)} core images done")
+            report(core_id, stain, lambda c=core_id, s=stain: run_core(project, c, s))
+    elif jobs:
+        from concurrent.futures import ProcessPoolExecutor, as_completed  # noqa: PLC0415
+        from multiprocessing import get_context  # noqa: PLC0415
 
-    with ProcessPoolExecutor(workers, mp_context=get_context("spawn")) as pool:
-        futures = {pool.submit(_worker, str(project.root), core_id, stain): (core_id, stain) for core_id, stain in jobs}
-        for future in as_completed(futures):
-            core_id, stain = futures[future]
-            done.append(future.result())
-            log(f"{len(done)}/{len(jobs)} {stain} {core_id}: {done[-1]['tiles']} tiles in {done[-1]['seconds']:.0f} s")
+        with ProcessPoolExecutor(workers, mp_context=get_context("spawn")) as pool:
+            futures = {pool.submit(_worker, str(project.root), core_id, stain): (core_id, stain) for core_id, stain in jobs}
+            for future in as_completed(futures):
+                core_id, stain = futures[future]
+                units.drain(futures)  # asked to stop: the core images not started yet wait for the next run
+                if not future.cancelled():
+                    report(core_id, stain, future.result)
+        units.boundary(f"{len(done)} core images done")
+    if failed:
+        raise RuntimeError(f"grey-matter burdens: {failed} of {len(jobs)} core images failed; see the lines above")
     return done

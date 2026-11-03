@@ -402,6 +402,11 @@ def run_v2(args: argparse.Namespace, project) -> None:
     if args.stage == "status":
         for stage, per in run.status(project).items():
             print(f"{stage:<11} " + "  ".join(f"{s}: {v['done']}/{v['total']} done, {v['outdated']} outdated" for s, v in per.items()))
+        from stainid.v2 import grey_matter, white_matter
+
+        for name, found in (("white matter", white_matter.progress(project)), ("grey matter", grey_matter.progress(project))):
+            print(f"{name:<12} {found['done']}/{found['total']} done, {found['outdated']} outdated"
+                  f" (results: {white_matter.settings(project)['analysis']})")
     elif args.stage == "proposals":
         run.run_proposals(project, stains, cores, args.workers or None, args.shard_index, args.shard_count, args.redo, args.threads or None,
                           max(1, args.tiles_at_once), None if args.processes < 0 else args.processes)

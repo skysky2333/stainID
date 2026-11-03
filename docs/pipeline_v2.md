@@ -12,7 +12,7 @@ change to a model, a threshold or a rule re-runs only the cheap stages after it.
 | 4 Calls | `stainid v2 calls` | `proposals/`, the stain models, `v2.rules` | `calls/`, `candidates/` | minutes for the cohort, no image read |
 | 3 Outlines | `stainid v2 outlines` | `proposals/`, `calls/` (which to outline), core images, SAM | `outlines/`, `candidates/` | GPU, optional |
 | 5 Measures | `stainid v2 measures` | `candidates/`, `tiles/`, `threads/` | `measures/` | minutes, no image read |
-| White matter | `stainid v2 white-matter` | NeuN `candidates/`, `masks/` of the three stains, the NeuN images of cores to check, the registration | `white_matter/` | seconds per core; changes no analysis output (docs/white_matter.md) |
+| White matter | `stainid v2 white-matter` | NeuN `candidates/`, `masks/` of the three stains, the NeuN images of cores to check, the registration | `white_matter/` | seconds per core; read by stage 5 (with `exclude`, also what it counts; docs/white_matter.md) |
 | Grey-matter burdens | `stainid v2 grey-matter` | `white_matter/`, the 6E10 / AT8 images with white matter, nuclei, slide thresholds | `white_matter/grey_tiles/` | 2-3 min per core image with white matter; read by stage 5 only with `v2.white_matter.analysis: exclude` (docs/white_matter.md) |
 
 Stage 3 runs after stage 4 because by default it outlines the candidates stage 4 accepted or scored at least 0.2
@@ -21,11 +21,13 @@ Stage 3 runs after stage 4 because by default it outlines the candidates stage 4
 ## Running
 
 `tools/v2_run.sh all` runs every stage (stage 2 with `WORKERS` core images at once, stage 3 with one process per GPU)
-and `tools/v2_run.sh decide` only stages 4 and 5 (after a new model, cut-off or rule). Both are resumable: a core image is
+and `tools/v2_run.sh decide` only stages 4 and 5 (after a new model, cut-off or rule); with `v2.white_matter.analysis:
+exclude` both also run the white-matter step and the grey-matter burdens before stage 5. All are resumable: a core image is
 done once its manifest is written, and every run redoes the core images that are missing or out of date. `stainid v2
 status` shows, per stage and stain, how many core images are done, out of date and in all; the Run page shows the same
-for the Detect steps *Find candidates*, *Decide*, *Outline objects* and the Results step *Make results tables*
-(*Run what's left* runs them; the first detection's steps are under *Legacy detection (v1)*). Stage 2 decodes each core
+for the Detect steps *Find candidates*, *Decide*, *Outline objects* and the Results steps *Find white matter*, *Measure
+grey-matter burdens* and *Make results tables* (*Run what's left* runs them; the first detection's steps are under *Legacy
+detection (v1)*; docs/white_matter.md says when the two white-matter steps are not needed). Stage 2 decodes each core
 image once into shared memory (about 0.8 GB, plus 0.5 GB of core-wide masks) and works on its tiles in a pool of
 single-threaded tile processes (about 1.3 GB each, up to 2.3 GB on a 6E10 tile) shared by three core images in flight
 (`--workers`); `--processes` sets the pool (default: a quarter of the processors, bounded by the job's or the free

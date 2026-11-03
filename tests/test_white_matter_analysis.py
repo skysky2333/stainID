@@ -142,3 +142,62 @@ def test_a_sliver_of_grey_matter_is_not_measured(detected):
     assert np.isnan(region.neun_profile_density_mm2.iloc[0]) and region.neun_profile_density_mm2_whole_core.iloc[0] > 0
     features = pd.read_csv(folder / "cohort_morphology_core_features.csv")
     assert set(features.grey_too_small) == {1} and features.tissue_area_mm2.isna().all()
+
+
+def test_the_steps_run_their_outputs_track_what_they_are_made_from_and_people_change_nothing(detected, monkeypatch):
+    """`white_matter.run` / `grey_matter.run` as the Run page runs them: done once, nothing to redo; a repeat leaves the
+    areas and the summary alone, so the costly pass stays current; people's labels change no input of either."""
+    project = detected
+    assert white_matter.progress(project)["done"] == 0 and white_matter.progress(project)["total"] == 1
+    white_matter.run(project, log=lambda text: None)
+    assert white_matter.todo(project) == [] and white_matter.progress(project)["done"] == 1
+    mask, table = white_matter.mask_path(project, CORE, "NeuN"), white_matter.summary_path(project)
+    stamps = mask.stat().st_mtime_ns, table.stat().st_mtime_ns
+    digest = white_matter.digest(project, CORE, "AT8")
+    white_matter.run(project, redo=True, log=lambda text: None)
+    assert (mask.stat().st_mtime_ns, table.stat().st_mtime_ns) == stamps and white_matter.digest(project, CORE, "AT8") == digest
+
+    _white(project)  # a core with white matter, for the pass
+    assert [s for _, s in grey_matter.todo(project)] == ["6E10", "AT8"]
+    assert grey_matter.progress(project) == {"done": 0, "outdated": 0, "total": 2, "written": 0.0}
+    grey_matter.run(project, log=lambda text: None)
+    found = grey_matter.progress(project)
+    assert (found["done"], found["outdated"], found["total"]) == (2, 0, 2) and found["written"] > 0
+
+    inputs = white_matter._inputs(project, CORE, ["NeuN", "6E10", "AT8"])
+    from stainid.labels import matter, store as labels
+
+    stamp = {"source": "a", "session": "s", "tile_id": CORE, "x": None, "y": None}
+    labels.append(project.output("reviews"), matter.records(CORE, "NeuN", [[[0, 0], [99, 0], [99, 99]]], [], stamp, None, False, None))
+    assert white_matter._inputs(project, CORE, ["NeuN", "6E10", "AT8"]) == inputs
+    assert grey_matter.todo(project) == []
+
+
+def test_a_failed_core_does_not_stop_the_step_and_the_run_says_so(detected, monkeypatch):
+    project = detected
+    monkeypatch.setattr(white_matter, "run_core", lambda *a, **k: (_ for _ in ()).throw(ValueError("unreadable")))
+    said = []
+    with pytest.raises(RuntimeError, match="1 of 1 cores failed"):
+        white_matter.run(project, log=said.append)
+    assert any("failed: ValueError" in line for line in said) and white_matter.summary_path(project).exists()
+
+
+def test_a_paused_job_stops_between_two_cores(detected, monkeypatch, tmp_path):
+    from stainid.jobs import units
+
+    control = tmp_path / "control"
+    control.write_text("pause")
+    monkeypatch.setenv(units.CONTROL_ENV, str(control))
+    units.forget()
+    with pytest.raises(units.Paused):
+        white_matter.run(detected, log=lambda text: None)
+    assert not white_matter.manifest_path(detected, CORE).exists()
+
+
+def test_a_project_without_neun_images_has_nothing_to_do(detected):
+    project = detected
+    stored = exclusions.masks_folder(project, "NeuN")
+    stored.rename(stored.with_name("NeuN_gone"))
+    found = white_matter.run(project, log=lambda text: None)
+    assert found.empty and not white_matter.root(project).exists()  # nothing written: no flags, no empty columns in the tables
+    assert white_matter.progress(project)["total"] == 0 and grey_matter.todo(project) == [] and grey_matter.run(project, log=lambda text: None) == []

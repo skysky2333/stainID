@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import yaml
+
 from stainid.project import DEFAULTS, load_project, save_project, write_default_config
 from stainid.workflows.steps import to_argv
 
@@ -105,3 +107,97 @@ def test_project_models_never_go_to_a_shell_wide_hugging_face_cache(tmp_path, mo
     project.apply_environment()
     import os
     assert os.environ["HF_HUB_CACHE"].startswith(str(project.model("huggingface_home"))) and os.environ["HF_HOME"] == str(project.model("huggingface_home"))
+
+
+def _steps_project(tmp_path, analysis=None, tile_stains=("NeuN", "AT8")):
+    v2 = {"v2": {"white_matter": {"analysis": analysis}}} if analysis else {}
+    (tmp_path / "stainid.yaml").write_text(yaml.safe_dump({"name": "x", **v2}))
+    project = load_project(tmp_path)
+    tiles = project.analysis_tiles()
+    tiles.parent.mkdir(parents=True, exist_ok=True)
+    tiles.write_text("tile_id,core_id,tma,stain,selection_order\n" + "".join(f"t{i},c,1,{s},{i}\n" for i, s in enumerate(tile_stains)))
+    return project
+
+
+def test_white_matter_runs_between_the_outlines_and_the_tables():
+    from stainid.workflows.steps import STEPS, depends_on, BY_ID
+
+    order = [s.id for s in STEPS]
+    assert order.index("v2_calls") < order.index("v2_outlines") < order.index("v2_white_matter") < order.index("v2_grey_matter") < order.index("v2_measures")
+    assert depends_on(BY_ID["v2_white_matter"]) == ["v2_proposals", "v2_calls", "v2_outlines"]
+    assert "v2_white_matter" in depends_on(BY_ID["v2_grey_matter"])
+    assert to_argv("v2_grey_matter", {"workers": 6, "redo": False}) == ["v2", "grey-matter", "--workers", "6"]
+    assert to_argv("v2_white_matter", {"redo": True}) == ["v2", "white-matter", "--redo"]
+
+
+def test_the_tables_use_the_white_matter_steps_only_when_the_results_leave_it_out(tmp_path):
+    from stainid.workflows.steps import BY_ID, depends_on, for_project_at, steps_for, wait_reason
+
+    def measures(project):
+        steps = steps_for(project)
+        return next(s for s in steps if s.id == "v2_measures"), steps
+
+    (tmp_path / "off").mkdir()
+    (tmp_path / "exclude").mkdir()
+    off, exclude = _steps_project(tmp_path / "off"), _steps_project(tmp_path / "exclude", "exclude")
+    step, steps = measures(off)
+    assert step == BY_ID["v2_measures"] and depends_on(step, steps) == ["v2_calls", "v2_outlines"]  # exactly as without the steps
+    step, steps = measures(exclude)
+    assert {"v2_white_matter", "v2_grey_matter"} <= set(step.uses) and {"v2_white_matter", "v2_grey_matter"} <= set(depends_on(step, steps))
+    for earlier in ("v2_white_matter", "v2_grey_matter"):
+        assert wait_reason(BY_ID[earlier], for_project_at(BY_ID["v2_measures"], str(exclude.root)))
+        assert not wait_reason(BY_ID[earlier], for_project_at(BY_ID["v2_measures"], str(off.root)))
+    assert for_project_at(BY_ID["v2_measures"], str(tmp_path / "gone")) == BY_ID["v2_measures"]
+
+
+def test_the_white_matter_steps_say_when_they_are_not_needed_and_then_block_nothing(tmp_path):
+    from stainid import cache
+    from stainid.workflows.steps import BY_ID, _measures_status, describe, steps_for
+
+    cache.forget()
+    for folder, analysis, stains, word in (("off", None, ("NeuN", "AT8"), "off"), ("jog", "exclude", ("6E10", "AT8"), "no NeuN"), ("jog_off", None, ("AT8",), "no NeuN")):
+        (tmp_path / folder).mkdir()
+        project = _steps_project(tmp_path / folder, analysis, stains)
+        for step in ("v2_white_matter", "v2_grey_matter"):
+            found = BY_ID[step].status(project)
+            assert found["state"] == "done" and not found["outdated"] and found["total"] == 0 and word in found["note"]
+        assert _measures_status(project)["state"] == "todo"  # only the tables are left
+    (tmp_path / "exclude").mkdir()
+    project = _steps_project(tmp_path / "exclude", "exclude")
+    assert BY_ID["v2_white_matter"].status(project)["state"] == "todo" and BY_ID["v2_grey_matter"].status(project)["state"] == "todo"
+    shown = {s["id"]: s for s in describe(project)}
+    assert "uses_when" not in shown["v2_measures"] and [u["id"] for u in shown["v2_measures"]["uses"]] == ["v2_outlines", "v2_white_matter", "v2_grey_matter"]
+    assert shown["v2_white_matter"]["needs"][1]["id"] == "v2_calls" and shown["v2_grey_matter"]["needs"][0]["made_by"]["id"] == "v2_white_matter"
+    assert [s.id for s in steps_for(project)].count("v2_grey_matter") == 1
+
+
+def test_the_tables_go_out_of_date_with_the_white_matter_when_they_depend_on_it(tmp_path, monkeypatch):
+    import os
+
+    from stainid import cache
+    from stainid.v2 import grey_matter, white_matter
+    from stainid.workflows.steps import _grey_matter_status, _measures_status, _white_matter_status
+
+    cache.forget()
+    project = _steps_project(tmp_path, "exclude")
+    table = project.output("v2") / "measures" / "results_donor_region.csv"
+    table.parent.mkdir(parents=True)
+    table.write_text("x\n1\n")
+    os.utime(table, (1000, 1000))
+    summary = white_matter.summary_path(project)
+    summary.parent.mkdir(parents=True)
+    summary.write_text("core_id\n")
+
+    def progress(white, grey):
+        monkeypatch.setattr(white_matter, "cached_progress", lambda p: white)
+        monkeypatch.setattr(grey_matter, "cached_progress", lambda p: grey)
+
+    fine = {"done": 2, "outdated": 0, "total": 2, "written": 500.0}
+    progress(fine, fine)
+    assert not _measures_status(project)["outdated"] and _white_matter_status(project)["state"] == "done"
+    progress(fine, {**fine, "written": 2000.0})  # the burdens were made after the tables
+    assert _measures_status(project)["outdated"]
+    progress({"done": 1, "outdated": 1, "total": 2, "written": 500.0}, fine)  # NeuN changed: the white matter has to be made again
+    assert _white_matter_status(project)["outdated"] and _grey_matter_status(project)["outdated"] and _measures_status(project)["outdated"]
+    progress(fine, {"done": 0, "outdated": 0, "total": 0, "written": 0.0})  # no core has white matter
+    assert _grey_matter_status(project)["state"] == "done" and not _measures_status(project)["outdated"]

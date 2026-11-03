@@ -138,7 +138,9 @@ project without saved maps uses the rule under *Map → Advanced* (`sample_regio
   - options, with advanced ones hidden, and *Run with these options*;
   - *Show log*.
 - **Detect** is the staged detection (*Find nuclei*, then *Find candidates*, *Decide*, *Outline objects*; see
-  [pipeline_v2.md](pipeline_v2.md)) and **Results** its *Make results tables*. Each v2 step says how many cores are
+  [pipeline_v2.md](pipeline_v2.md)) and **Results** *Find white matter*, *Measure grey-matter burdens* and *Make results
+  tables* ([white_matter.md](white_matter.md)). The two white-matter steps say *Not needed* and count as done where the
+  results do not read them (`v2.white_matter.analysis: off`, or no NeuN images); they can still be run by hand. Each v2 step says how many cores are
   done and how many are **out of date**: something they were made from changed since (a setting, a model, a
   hand-drawn exclusion or an earlier stage). Running the step again redoes only those cores. *Outline objects →
   Advanced → Outline shown for each stain* sets which outline each stain shows first, its stain outline or Segment

@@ -22,10 +22,10 @@ from pathlib import Path
 
 INF = math.inf
 SMALL = {"cpus": 4, "gpus": 0, "ram_gb": 8, "seconds": 15 * 60}
-IO_HEAVY = {"dearray", "export", "qc", "tiles", "images", "calibrate", "nuclei", "neun", "fields", "masks", "v2_proposals", "v2_outlines"}
+IO_HEAVY = {"dearray", "export", "qc", "tiles", "images", "calibrate", "nuclei", "neun", "fields", "masks", "v2_proposals", "v2_outlines", "v2_grey_matter"}
 # wall seconds per unit of a whole job, until earlier runs say better: tiles for nuclei, core images × stains for v2
 UNIT_SECONDS = {"nuclei": 5.0, "v2_proposals": 45.0, "v2_calls": 2.0, "v2_outlines": 40.0}
-STEP_SECONDS = {"slides": 10, "layout": 10, "summarize": 120, "v2_measures": 300, "train": 60, "download_models": 600,
+STEP_SECONDS = {"slides": 10, "layout": 10, "summarize": 120, "v2_measures": 300, "v2_white_matter": 1200, "v2_grey_matter": 3 * 3600, "train": 60, "download_models": 600,
                 "prepare_labels": 300, "score_segmentation": 300, "calibrate": 1800, "tiles": 600, "images": 1800}
 IO_PER_DISK = 2
 

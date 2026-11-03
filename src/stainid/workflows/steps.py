@@ -9,12 +9,12 @@ import os
 import platform
 import shutil
 import sys
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
 from stainid import cache
-from stainid.project import Project
+from stainid.project import Project, load_project
 
 STAINS = ["NeuN", "6E10", "AT8"]
 
@@ -72,6 +72,7 @@ class Step:
     writes: tuple[str, ...] = ()
     waits_for_uses: bool = True  # False: start while a step that makes a `uses` input runs (takes what is there already)
     kinds: tuple[str, ...] = ("tma", "images", "slides")  # the project kinds the step belongs to (`stainid.project.KINDS`)
+    uses_when: Callable[[Project], tuple[str, ...]] = field(default=lambda project: (), repr=False)  # more `uses`, by the project's settings
 
     def reads(self) -> set[str]:
         return set(self.needs) | set(self.uses)
@@ -265,6 +266,78 @@ def _v2_status(project: Project, stage: str) -> dict:
     return _state(done, total, "core images", f"{outdated:,} core images are out of date." if outdated else "", outdated=bool(outdated))
 
 
+def _excludes_white(project: Project) -> bool:
+    """Whether the results leave the white matter out (`v2.white_matter.analysis: exclude`). A wrong word is stage 5's to
+    refuse (`stainid.v2.white_matter.settings`); this only reads the setting, so it stays cheap for the queue."""
+    return ((project.config.get("v2") or {}).get("white_matter") or {}).get("analysis") == "exclude"
+
+
+def _white_matter_inputs(project: Project) -> tuple[str, ...]:
+    return ("v2_white_matter", "v2_grey_matter") if _excludes_white(project) else ()
+
+
+def _not_needed(unit: str, note: str) -> dict:
+    """A step with nothing to do in this project: it is not left to run and blocks nothing; it can still be run by hand."""
+    return {"state": "done", "done": 0, "total": 0, "unit": unit, "note": note, "outdated": False}
+
+
+def _white_not_needed(project: Project, unit: str) -> dict | None:
+    """Why this project's results do not need the white-matter steps (None: they do)."""
+    if project.analysis_tiles().exists() and not _tiles(project, {"NeuN"}):
+        return _not_needed(unit, "Not needed: this project has no NeuN images, and white matter is found from the NeuN+ neurons. "
+                                 "Its images are measured as they are.")
+    if not _excludes_white(project):
+        return _not_needed(unit, "Not needed for the results: this project counts white matter as tissue (v2.white_matter.analysis: off). "
+                                 "Run it to see the algorithm's white matter on the core views and its flags in the results tables.")
+    return None
+
+
+def _white_matter_status(project: Project) -> dict:
+    from stainid.v2 import white_matter
+
+    skipped = _white_not_needed(project, "cores")
+    if skipped:
+        return skipped
+    found = white_matter.cached_progress(project)
+    outdated = found["outdated"]
+    return _state(found["done"], found["total"], "cores", f"{outdated:,} cores are out of date." if outdated else "", outdated=bool(outdated))
+
+
+def _grey_matter_status(project: Project) -> dict:
+    from stainid.v2 import grey_matter
+
+    skipped = _white_not_needed(project, "core images")
+    if skipped:
+        return skipped
+    white = _white_matter_status(project)
+    behind = white["state"] != "done" or white["outdated"]
+    found = grey_matter.cached_progress(project)
+    outdated = found["outdated"]
+    note = f"{outdated:,} core images are out of date." if outdated else "The white matter must be made again first." if behind else ""
+    if found["total"]:
+        return _state(found["done"], found["total"], "core images", note, outdated=bool(outdated) or behind)
+    if white["state"] != "done":
+        return _state(0, 0, "core images", "After the white matter.")
+    return {**_not_needed("core images", note or "No white matter found, so there is nothing to redo."), "outdated": behind}
+
+
+def _measures_status(project: Project) -> dict:
+    """With the white matter left out, the tables are also out of date when the white matter or the grey-matter burdens
+    changed after them, or have to be made again."""
+    path = project.output("v2") / "measures" / "results_donor_region.csv"
+    out = _state(int(_has_content(path)), 1, "table")
+    if not out["done"] or not _excludes_white(project) or _white_not_needed(project, ""):
+        return out
+    from stainid.v2 import grey_matter, white_matter
+
+    white, grey = _white_matter_status(project), _grey_matter_status(project)
+    behind = any(s["state"] != "done" or s["outdated"] for s in (white, grey))
+    newest = max(white_matter.cached_progress(project)["written"], grey_matter.cached_progress(project)["written"])
+    if behind or path.stat().st_mtime < newest:
+        out |= {"outdated": True, "note": "The white matter or the grey-matter burdens changed after these tables were made."}
+    return out
+
+
 def _has_content(path: Path) -> bool:
     """A file, or a folder with something in it (kept until the folder changes: output folders hold thousands)."""
     def look() -> bool:
@@ -339,6 +412,10 @@ RESOURCES = {r.id: r for r in (
              "the neuropil threads and stained areas nothing proposed.", lambda p: p.output("v2") / "proposals"),
     Resource("v2_calls", "Calls", "Detection's call on every candidate: kept or rejected, why, and its class.", lambda p: p.output("v2") / "calls"),
     Resource("v2_outlines", "Exact outlines", "Segment Anything's three outline sizes for the likely objects.", lambda p: p.output("v2") / "outlines"),
+    Resource("v2_white_matter", "White matter", "Where each core's white matter lies, found by the algorithm from the NeuN+ neurons, per stain image.",
+             lambda p: p.output("v2") / "white_matter" / "white_matter.csv"),
+    Resource("v2_grey_matter", "Grey-matter burdens", "The 6E10 and AT8 stained areas of tiles reaching white matter, measured again without it.",
+             lambda p: p.output("v2") / "white_matter" / "grey_tiles"),
     Resource("v2_measures", "Results tables", "One row per donor and brain region (and per core) with every measurement, made from the calls (v2/measures).",
              lambda p: p.output("v2") / "measures" / "results_donor_region.csv"),
 )}
@@ -349,6 +426,8 @@ FRESH = Option("fresh", "Start over", "bool", False, "Move existing results asid
                "Use this after switching to a different model.", advanced=True)
 DEVICE = Option("device", "Processor", "select", GPU, "mps = Apple GPU (Apple-silicon Macs), cuda = NVIDIA GPU, cpu works everywhere but is slower.",
                 ("cpu", "mps", "cuda"))
+
+GREY_WORKERS = 4  # core images the grey-matter pass works on at once, by default (`stainid.jobs.queue.needs_of`)
 
 STEPS = (
     Step("slides", "1 · Set up", "Register slides", "Tell stainID which scan is which TMA and stain.",
@@ -470,11 +549,30 @@ STEPS = (
                  "cuda, cuda:1 or cpu (empty: a GPU when there is one).", advanced=True),
           Option("redo", "Redo all", "bool", False, advanced=True), *SHARD),
          heavy=True, view="/cohort", duration="about a minute per core image on a GPU", status=lambda p: _v2_status(p, "outlines")),
+    Step("v2_white_matter", RESULTS, "Find white matter", "Find where each core reaches into the white matter, from its NeuN+ neurons.",
+         "Looks for tissue with far fewer NeuN+ neurons than the core's own grey matter, checks it with the cells of all three "
+         "sections, and carries the area to the core's 6E10 and AT8 images. Detection is not touched. People's grey / white matter "
+         "labels only tune and score this step; the results always use its area. With the setting “exclude” the results leave this "
+         "area out; otherwise it is only shown and flagged. A project without NeuN images has nothing to do here. Cores already "
+         "done and up to date are skipped.",
+         ("v2_proposals", "v2_calls"), ("v2_white_matter",), ("v2", "white-matter"),
+         (Option("redo", "Redo all", "bool", False, "Redo every core, not only new and out-of-date ones.", advanced=True),),
+         heavy=True, view="/cohort", duration="5–10 s per core with white matter to check, under a second for the others",
+         status=_white_matter_status, uses=("v2_outlines",)),
+    Step("v2_grey_matter", RESULTS, "Measure grey-matter burdens", "Measure the 6E10 and AT8 stained areas again without the white matter.",
+         "Stage 2 keeps each tile's stained area as one total, so the results can only leave white matter out of a burden by "
+         "measuring again. This step reads each 6E10 and AT8 core image with white matter once and repeats those measurements on "
+         "its tiles, with no new candidates, models or outlines. Needed only when the results leave white matter out. Core images "
+         "already done and up to date are skipped.",
+         ("v2_white_matter", "v2_proposals", "calibration", "nuclei"), ("v2_grey_matter",), ("v2", "grey-matter"),
+         (Option("workers", "Core images at once", "number", GREY_WORKERS, "About 1 processor and 2.5 GB each.", advanced=True),
+          Option("redo", "Redo all", "bool", False, "Redo every core image, not only new and out-of-date ones.", advanced=True)),
+         heavy=True, view="/cohort", duration="2–3 minutes per core image with white matter (several at once)", status=_grey_matter_status),
     Step("v2_measures", RESULTS, "Make results tables", "Count and measure from the calls, per core and per donor-region.",
          "Writes the results tables (and the tables the R analyses read) from the saved candidates, calls, outlines and thread "
          "skeletons, under the v2 folder (v2/measures); the legacy results tables are not touched.",
          ("v2_calls",), ("v2_measures",), ("v2", "measures"), (), view="/results", duration="a few minutes", uses=("v2_outlines",),
-         status=lambda p: _state(int(_has_content(p.output("v2") / "measures" / "results_donor_region.csv")), 1, "table")),
+         status=_measures_status, uses_when=_white_matter_inputs),
     Step("download_models", "Models", "Download public models", "Fetch the Cellpose-SAM, Segment Anything and Phikon weights.",
          "These models are published by their authors and are the same for every study. The NeuN, 6E10 and AT8 models are specific to "
          "your staining and are trained on the Models page instead.", (), ("model_cellpose", "model_sam", "model_phikon"), ("download-models",),
@@ -515,6 +613,7 @@ STEPS = (
          uses=("label_store", "field_results", "neun_results", "mask_results", "nuclei", "model_cellpose"), waits_for_uses=False),
 )
 BY_ID = {s.id: s for s in STEPS}
+_NO_MORE_USES = BY_ID["slides"].uses_when
 
 
 def to_argv(step_id: str, options: dict) -> list[str]:
@@ -549,9 +648,26 @@ def wait_reason(earlier: Step, later: Step, running_from: str = "") -> str:
     return f"Waits for {which} to finish (both write: {RESOURCES[sorted(shared)[0]].label})" if shared else ""
 
 
+def for_project(step: Step, project: Project) -> Step:
+    """The step as this project's settings make it (`uses_when`)."""
+    more = step.uses_when(project)
+    return replace(step, uses=(*step.uses, *more)) if more else step
+
+
+def for_project_at(step: Step, root: str) -> Step:
+    """`for_project` for the queue, which knows a job's project by its folder; a folder that cannot be read: as declared."""
+    if not root or step.uses_when is _NO_MORE_USES:
+        return step
+    try:
+        return for_project(step, load_project(root))
+    except Exception:  # noqa: BLE001 - the queue reports a project that is gone when the job would start (`_missing`)
+        return step
+
+
 def steps_for(project: Project) -> tuple[Step, ...]:
-    """The steps of this project's kind (a TMA study finds and exports cores; image sets and whole slides prepare images)."""
-    return tuple(s for s in STEPS if project.kind in s.kinds)
+    """The steps of this project's kind (a TMA study finds and exports cores; image sets and whole slides prepare images),
+    as its settings make them."""
+    return tuple(for_project(s, project) for s in STEPS if project.kind in s.kinds)
 
 
 def depends_on(step: Step, steps: tuple[Step, ...] = STEPS) -> list[str]:
@@ -578,7 +694,7 @@ def describe(project: Project) -> list[dict]:
     out = []
     steps = steps_for(project)
     for step in steps:
-        info = {k: v for k, v in asdict(step).items() if k not in ("status", "kinds")}
+        info = {k: v for k, v in asdict(step).items() if k not in ("status", "kinds", "uses_when")}
         info["options"] = [asdict(o) for o in step.options]
         info["needs"] = [resource_info(project, r) for r in step.needs]
         info["uses"] = [resource_info(project, r) for r in step.uses]
