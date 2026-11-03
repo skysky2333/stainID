@@ -16,12 +16,12 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+from scipy import ndimage
 
 MIN_UM2, MAX_UM2 = 10.0, 200.0  # the size of a cell's nucleus (`nucleus_centroids`' rule)
 DENSE_DAB_STAINS = ("6E10", "AT8")  # where a nucleus with more DAB than hematoxylin is a stained object, not a cell
 COLUMNS = ["tile_id", "x_core", "y_core", "area_um2", "eccentricity", "solidity", "major_um", "minor_um", "hematoxylin_mean", "dab_mean",
            "counted"]
-SHAPE_MARGIN = 96  # px around the tile: a nucleus centred in it reaches at most ~30 px beyond
 
 
 def _all(field) -> pd.DataFrame:
@@ -30,24 +30,19 @@ def _all(field) -> pd.DataFrame:
     if "cells_all" in field.memo:
         return field.memo["cells_all"]
     labels = field.nuclei
-    frame = pd.DataFrame(columns=["label", "x", "y", "area_px", "hematoxylin_mean", "dab_mean"])
-    flat = labels.ravel()
-    top = int(flat.max()) if flat.size else 0
-    if top:
-        count = np.bincount(flat, minlength=top + 1).astype(np.float64)
-        width = labels.shape[1]
-        position = np.arange(flat.size, dtype=np.int64)
-        cy = np.bincount(flat, weights=position // width, minlength=top + 1)
-        cx = np.bincount(flat, weights=position % width, minlength=top + 1)
-        del position
-        hematoxylin = np.bincount(flat, weights=field.hematoxylin.ravel(), minlength=top + 1)
-        dab = np.bincount(flat, weights=field.dab.ravel(), minlength=top + 1)
-        um2 = count * field.pixel_size_um ** 2
-        index = np.flatnonzero((um2 >= MIN_UM2) & (um2 <= MAX_UM2))
-        index = index[index > 0]
-        n = count[index]
-        frame = pd.DataFrame({"label": index, "x": (cx[index] / n).astype(int), "y": (cy[index] / n).astype(int), "area_px": n.astype(int),
-                              "hematoxylin_mean": hematoxylin[index] / n, "dab_mean": dab[index] / n})
+    um2 = field.pixel_size_um ** 2
+    found = []
+    for label, bounds in enumerate(ndimage.find_objects(labels), start=1):  # as `nucleus_centroids`: one look per nucleus
+        if bounds is None:
+            continue
+        local = labels[bounds] == label
+        area = int(local.sum())
+        if not MIN_UM2 <= area * um2 <= MAX_UM2:
+            continue
+        ys, xs = np.nonzero(local)
+        found.append((label, int(bounds[1].start + xs.mean()), int(bounds[0].start + ys.mean()), area,
+                      float(field.hematoxylin[bounds][local].mean()), float(field.dab[bounds][local].mean())))
+    frame = pd.DataFrame(found, columns=["label", "x", "y", "area_px", "hematoxylin_mean", "dab_mean"])
     field.memo["cells_all"] = frame
     return frame
 
@@ -67,10 +62,27 @@ def centroids(field, valid: np.ndarray, stain: str) -> np.ndarray:
     return frame.loc[keep, ["x", "y"]].to_numpy(int).reshape(-1, 2)
 
 
+def _shape(local: np.ndarray) -> tuple[float, float, float, float]:
+    """Eccentricity, solidity and major / minor axis (px) of one nucleus mask, as skimage's `regionprops` defines them
+    (the ellipse of the same second moments; solidity over the filled convex hull of the pixel centres, within about
+    0.02 of skimage's)."""
+    import cv2  # noqa: PLC0415
+
+    ys, xs = np.nonzero(local)
+    if len(xs) < 2:
+        return 0.0, 1.0, 0.0, 0.0
+    cov = np.cov(np.vstack([xs, ys]).astype(np.float64), bias=True)
+    low, high = np.linalg.eigvalsh(cov)
+    low, high = max(low, 0.0), max(high, 0.0)
+    eccentricity = float(np.sqrt(1.0 - low / high)) if high > 0 else 0.0
+    hull = cv2.convexHull(np.c_[xs, ys].astype(np.int32))
+    filled = np.zeros(local.shape, np.uint8)
+    cv2.fillConvexPoly(filled, hull, 1)
+    return eccentricity, float(len(xs) / max(1, int(filled.sum()))), float(4 * np.sqrt(high)), float(4 * np.sqrt(low))
+
+
 def tile_cells(field, valid: np.ndarray, stain: str) -> pd.DataFrame:
     """The cells of the tile's own area whose centre lies in `valid` (counted or not), with shape and stain, in core px."""
-    from skimage.measure import regionprops_table  # noqa: PLC0415
-
     frame = _all(field)
     if not frame.empty:
         xs, ys = frame.x.to_numpy(), frame.y.to_numpy()
@@ -80,19 +92,16 @@ def tile_cells(field, valid: np.ndarray, stain: str) -> pd.DataFrame:
         frame = frame[own]
     if frame.empty:
         return pd.DataFrame(columns=COLUMNS)
-    y0, x0 = max(0, field.inner[0].start - SHAPE_MARGIN), max(0, field.inner[1].start - SHAPE_MARGIN)
-    crop = field.nuclei[y0: field.inner[0].stop + SHAPE_MARGIN, x0: field.inner[1].stop + SHAPE_MARGIN]
-    crop = np.where(np.isin(crop, frame.label.to_numpy()), crop, 0)
-    shape = pd.DataFrame(regionprops_table(crop, properties=("label", "eccentricity", "solidity", "major_axis_length", "minor_axis_length")))
-    frame = frame.merge(shape, on="label", how="left")
+    boxes = ndimage.find_objects(field.nuclei)
+    shape = np.array([_shape(field.nuclei[boxes[label - 1]] == label) for label in frame.label], np.float64).reshape(-1, 4)
     ps = field.pixel_size_um
     ox, oy = field.origin
     return pd.DataFrame({
         "tile_id": field.tile["tile_id"], "x_core": frame.x.to_numpy() + ox, "y_core": frame.y.to_numpy() + oy,
-        "area_um2": (frame.area_px * ps * ps).astype(np.float32), "eccentricity": frame.eccentricity.astype(np.float32),
-        "solidity": frame.solidity.astype(np.float32), "major_um": (frame.major_axis_length * ps).astype(np.float32),
-        "minor_um": (frame.minor_axis_length * ps).astype(np.float32), "hematoxylin_mean": frame.hematoxylin_mean.astype(np.float32),
-        "dab_mean": frame.dab_mean.astype(np.float32), "counted": _counted(frame, stain)}, columns=COLUMNS)
+        "area_um2": (frame.area_px.to_numpy() * ps * ps).astype(np.float32), "eccentricity": shape[:, 0].astype(np.float32),
+        "solidity": shape[:, 1].astype(np.float32), "major_um": (shape[:, 2] * ps).astype(np.float32),
+        "minor_um": (shape[:, 3] * ps).astype(np.float32), "hematoxylin_mean": frame.hematoxylin_mean.to_numpy(np.float32),
+        "dab_mean": frame.dab_mean.to_numpy(np.float32), "counted": _counted(frame, stain)}, columns=COLUMNS)
 
 
 # ---------------------------------------------------------------- stage 5: the NeuN section's cells
