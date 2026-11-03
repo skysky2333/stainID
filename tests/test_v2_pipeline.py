@@ -672,3 +672,43 @@ def test_tile_processes_fit_the_queue_jobs_budget(monkeypatch):
     assert run.default_processes(3, threads=2) == 12
     monkeypatch.setenv("STAINID_JOB_RAM_GB", "200")
     assert run.default_processes(3) == 24
+
+
+def test_the_tissue_boundary_rule(tmp_path):
+    """A large connected non-tissue area within the radius flags; a small hole, or a large area further away, does not."""
+    from stainid import exclusions
+    from stainid.v2 import organisation
+
+    pixel_um = 0.25  # a mask cell is 2 µm: 4 µm² each
+    bits = np.full((400, 400), exclusions.TISSUE, np.uint8)
+    bits[:, :100] = 0  # glass: 400 x 100 cells, 160,000 µm²
+    bits[200:205, 300:305] = 0  # a hole: 25 cells, 100 µm²
+    at = lambda cell_x, cell_y: (cell_x * 8.0 + 4, cell_y * 8.0 + 4)  # noqa: E731
+    points = [at(106, 50), at(120, 50), at(303, 203), at(303, 300)]  # 12 µm from the glass, 40 µm from it, in the hole, nowhere near
+    x, y = np.array(points).T
+    area = organisation.nearby_nontissue_um2(bits, x, y, pixel_um, 15.0)
+    assert area[0] == pytest.approx(160000) and area[1] == 0 and area[2] == pytest.approx(100) and area[3] == 0
+    assert np.isnan(organisation.nearby_nontissue_um2(bits, np.array([np.nan]), np.array([1.0]), pixel_um, 15.0)[0])
+    assert organisation.nearby_nontissue_um2(np.zeros((4, 4), np.uint8), np.array([9.0]), np.array([9.0]), pixel_um, 15.0)[0] == 16 * 4  # no tissue at all
+    assert organisation.nearby_nontissue_um2(np.ones((4, 4), np.uint8), np.array([9.0]), np.array([9.0]), pixel_um, 15.0)[0] == 0  # all tissue
+
+
+def test_the_boundary_columns():
+    from stainid.v2 import organisation
+
+    tally = {"accepted": 4, "boundary_known": 4, "boundary_flagged": 1}
+    row = organisation.boundary_columns([tally], 2.0)
+    assert np.isnan(row["tau_neuron_boundary_fraction"]) and row["tau_neuron_density_no_boundary_mm2"] == 1.5  # under 5 neurons: no share
+    row = organisation.boundary_columns([tally, tally], 2.0)
+    assert row["tau_neuron_boundary_fraction"] == 0.25 and row["tau_neuron_density_no_boundary_mm2"] == 3.0
+    assert organisation.boundary_columns([{"accepted": 0, "boundary_known": 0, "boundary_flagged": 0}], 2.0)["tau_neuron_density_no_boundary_mm2"] == 0  # zeros are zeros
+    unknown = organisation.boundary_columns([{"accepted": 9, "boundary_known": 0, "boundary_flagged": 0}], 2.0)  # no stage-2 mask
+    assert np.isnan(unknown["tau_neuron_boundary_fraction"]) and np.isnan(unknown["tau_neuron_density_no_boundary_mm2"])
+    from stainid.analysis.dictionary import describe, measure
+
+    for column in ("tau_neuron_boundary_fraction", "tau_neuron_density_no_boundary_mm2"):
+        assert describe(column) and measure(column)["topic"] != "other"
+    from stainid.v2 import missing
+
+    assert missing._reason("tau_neuron_boundary_fraction", "a", {"a": {"tiles_AT8": 1, "tau_neurons": 3}}, None) == ("too_few_objects", 3)
+    assert missing._reason("tau_neuron_density_no_boundary_mm2", "a", {"a": {"tiles_AT8": 0}}, None) == ("no_image", 0)

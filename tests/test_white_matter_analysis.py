@@ -201,3 +201,44 @@ def test_a_project_without_neun_images_has_nothing_to_do(detected):
     found = white_matter.run(project, log=lambda text: None)
     assert found.empty and not white_matter.root(project).exists()  # nothing written: no flags, no empty columns in the tables
     assert white_matter.progress(project)["total"] == 0 and grey_matter.todo(project) == [] and grey_matter.run(project, log=lambda text: None) == []
+
+
+def _measured(project, folder: str, **flag) -> dict:
+    project.config.setdefault("v2", {})["boundary_flag"] = flag
+    target = store.root(project) / folder
+    write_measures(project, target)
+    return {name: pd.read_csv(target / name, low_memory=False) for name in ("results_core.csv", "results_donor_region.csv", "objects_AT8.csv")}
+
+
+def test_the_boundary_flag_only_adds_columns(detected):
+    """Whatever the flag decides, every other column of every table stays the same."""
+    project = detected
+    none, every = _measured(project, "none", min_nontissue_um2=1e12), _measured(project, "every", min_nontissue_um2=0.0)
+    new = {"tau_neuron_boundary_fraction", "tau_neuron_density_no_boundary_mm2", "tissue_boundary", "nearby_nontissue_um2"}
+    for name, table in none.items():
+        old = [c for c in table.columns if c not in new]
+        pd.testing.assert_frame_equal(table[old], every[name][old])
+    accepted = store.read_core(project, "AT8", CORE)
+    accepted = accepted[accepted.decision == "accepted"]
+    assert len(accepted) and set(none["objects_AT8.csv"].candidate_id) == set(accepted.candidate_id)
+    assert (none["objects_AT8.csv"].tissue_boundary == 0).all() and (every["objects_AT8.csv"].tissue_boundary == 1).all()
+    plain, flagged = none["results_core.csv"].iloc[0], every["results_core.csv"].iloc[0]
+    assert plain.tau_neuron_density_no_boundary_mm2 == pytest.approx(plain.tau_neuron_density_mm2)  # nothing flagged
+    assert flagged.tau_neuron_density_no_boundary_mm2 == 0 and flagged.tau_neuron_density_mm2 == plain.tau_neuron_density_mm2
+
+
+def test_the_boundary_columns_are_grey_matter_and_whole_core_and_say_why_they_are_missing(detected):
+    project = detected
+    _white(project)
+    grey_matter.run(project, log=lambda text: None)
+    project.config.setdefault("v2", {})["white_matter"] = {"analysis": "exclude", "min_grey_mm2": 0.001}
+    tables = _measured(project, "grey", min_nontissue_um2=0.0)
+    core = tables["results_core.csv"].iloc[0]
+    assert core.tau_neuron_density_no_boundary_mm2 == 0 and "tau_neuron_density_no_boundary_mm2_whole_core" in core
+    assert core.tau_neuron_density_no_boundary_mm2_whole_core == 0
+    folder = store.root(project) / "grey"
+    grey, whole = pd.read_csv(folder / "objects_AT8.csv"), pd.read_csv(folder / "whole_core" / "objects_AT8.csv")
+    assert set(grey.candidate_id) <= set(whole.candidate_id)
+    missing = pd.read_csv(folder / "results_missing_core.csv")
+    if core.tau_neuron_count < 5:
+        assert missing[missing.measure == "tau_neuron_boundary_fraction"].reason.tolist() == ["too_few_objects"]

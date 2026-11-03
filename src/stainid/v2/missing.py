@@ -69,7 +69,7 @@ MEASURES: dict[str, Needs] = {
     **_family(("tau_processes_per_neuron_pretangle", "tau_attached_thread_um_per_neuron_pretangle"), Needs("owned_pretangle", 5)),
     **_family(("neun_edge_touch_fraction", "neun_edge_mostly_fraction"), Needs("neun_neurons", 20)),
     **_family(("plaque_edge_touch_fraction", "plaque_edge_mostly_fraction"), Needs("plaques", 10)),
-    **_family(("tau_neuron_edge_touch_fraction", "tau_neuron_edge_mostly_fraction"), Needs("tau_neurons", 5)),
+    **_family(("tau_neuron_edge_touch_fraction", "tau_neuron_edge_mostly_fraction", "tau_neuron_boundary_fraction"), Needs("tau_neurons", 5)),
 }
 WHITE_MATTER_MEASURES = ("plaque_density_white_mm2", "plaque_area_fraction_white", "amyloid_positive_area_fraction_white", "tau_neuron_density_white_mm2",
                          "thread_density_white_mm_per_mm2", "at8_positive_area_fraction_white", "plaque_white_area_mm2", "tau_white_area_mm2")

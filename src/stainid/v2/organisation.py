@@ -18,6 +18,11 @@ thread; the two densities are 0 when nothing was found.
 `EDGE_QC`: the share of accepted objects whose outline touches the 5 µm band along a tissue edge or hole or an excluded
 area, and of those mostly in the band (at least 0.5, the cut of `rule:edge`). A quality number only: docs/pipeline_v2.md
 has what the band does and does not mean.
+
+Tissue-boundary flag (`mark_boundary`, `v2.boundary_flag`): an accepted tau+ neuron whose centre lies within `radius_um` of a
+connected non-tissue area of at least `min_nontissue_um2` on the stage-2 mask (glass outside the core, a tear; small holes
+are too small). A flag only: flagged objects stay in every count. `boundary_columns` gives the flagged share and the tau+
+neuron density without them, over the same area.
 """
 from __future__ import annotations
 
@@ -44,6 +49,10 @@ OUTLINE_COLUMNS = ["candidate_id", "decision", "subtype", "outline", "outline_de
 EDGE_QC = {"NeuN": ("neun_edge_touch_fraction", "neun_edge_mostly_fraction", 20),
            "6E10": ("plaque_edge_touch_fraction", "plaque_edge_mostly_fraction", 10),
            "AT8": ("tau_neuron_edge_touch_fraction", "tau_neuron_edge_mostly_fraction", MIN_NEURONS)}
+
+
+BOUNDARY_FLAG, BOUNDARY_AREA = "tissue_boundary", "nearby_nontissue_um2"  # per accepted object
+BOUNDARY_FRACTION, BOUNDARY_DENSITY = "tau_neuron_boundary_fraction", "tau_neuron_density_no_boundary_mm2"  # per row of the results tables
 
 
 def valid_tissue(project, core_id: str, stain: str, white: np.ndarray | None = None) -> np.ndarray | None:
@@ -190,6 +199,68 @@ def edge_columns(stain: str, tallies: list[dict]) -> dict:
     if accepted < minimum:
         return {touch: float("nan"), mostly: float("nan")}
     return {touch: sum(t["touching"] for t in tallies) / accepted, mostly: sum(t["mostly"] for t in tallies) / accepted}
+
+
+def boundary_settings(project) -> tuple[float, float]:
+    """`v2.boundary_flag`: how near (µm) and how large (µm²) a non-tissue area makes a tissue boundary."""
+    from stainid.v2.params import params  # noqa: PLC0415
+
+    found = params(project)["boundary_flag"]
+    return float(found["radius_um"]), float(found["min_nontissue_um2"])
+
+
+def nearby_nontissue_um2(bits: np.ndarray, x: np.ndarray, y: np.ndarray, pixel_um: float, radius_um: float) -> np.ndarray:
+    """At each point (core px): the area (µm²) of the largest connected non-tissue area of the stage-2 mask `bits` within
+    `radius_um`, 0 when there is none, NaN for a point without coordinates."""
+    from stainid import exclusions  # noqa: PLC0415
+
+    cell_um = SCALE * pixel_um
+    _, labels, stats, _ = cv2.connectedComponentsWithStats(((bits & exclusions.TISSUE) == 0).astype(np.uint8), connectivity=8)
+    areas = stats[:, cv2.CC_STAT_AREA].astype(np.float64) * cell_um ** 2
+    areas[0] = 0.0  # label 0 is the tissue
+    largest = cv2.dilate(areas[labels].astype(np.float32), _kernel(max(1, int(round(radius_um / cell_um)))))
+    x, y = np.asarray(x, float), np.asarray(y, float)
+    known = np.isfinite(x) & np.isfinite(y)
+    out = np.full(len(x), np.nan)
+    cx = (x[known] // SCALE).astype(int).clip(0, largest.shape[1] - 1)
+    cy = (y[known] // SCALE).astype(int).clip(0, largest.shape[0] - 1)
+    out[known] = largest[cy, cx]
+    return out
+
+
+def mark_boundary(project, core_id: str, found: pd.DataFrame) -> pd.DataFrame:
+    """The AT8 candidates of a core image with `BOUNDARY_FLAG` (1 / 0) and `BOUNDARY_AREA` (the non-tissue area that
+    decides it, µm²) on the accepted ones; NaN on the others, and on all of them without a stage-2 mask."""
+    from stainid import exclusions  # noqa: PLC0415
+
+    found = found.assign(**{BOUNDARY_FLAG: np.nan, BOUNDARY_AREA: np.nan})
+    accepted = (found.decision == "accepted").to_numpy() if "decision" in found else np.zeros(len(found), bool)
+    layer = exclusions.automatic(project, core_id, "AT8") if accepted.any() else None
+    if layer is None:
+        return found
+    radius_um, minimum = boundary_settings(project)
+    area = nearby_nontissue_um2(layer.bits, found.x_core.to_numpy(float)[accepted], found.y_core.to_numpy(float)[accepted], project.pixel_size_um, radius_um)
+    found.loc[accepted, BOUNDARY_AREA] = area
+    found.loc[accepted, BOUNDARY_FLAG] = np.where(np.isfinite(area), (area >= minimum).astype(float), np.nan)
+    return found
+
+
+def boundary_tally(found: pd.DataFrame) -> dict:
+    """Accepted objects `mark_boundary` could judge, and those it flagged."""
+    if found.empty or BOUNDARY_FLAG not in found or "decision" not in found:
+        return {"boundary_known": 0, "boundary_flagged": 0}
+    flags = found[BOUNDARY_FLAG][found.decision == "accepted"]
+    return {"boundary_known": int(flags.notna().sum()), "boundary_flagged": int((flags == 1).sum())}
+
+
+def boundary_columns(tallies: list[dict], area_mm2: float) -> dict:
+    """The flagged share (of at least `MIN_NEURONS`) and the tau+ neuron density without the flagged ones, over the same
+    area as `tau_neuron_density_mm2`; the density is 0 when nothing was found, missing when some objects could not be judged."""
+    accepted = sum(t["accepted"] for t in tallies)
+    known = sum(t["boundary_known"] for t in tallies)
+    flagged = sum(t["boundary_flagged"] for t in tallies)
+    return {BOUNDARY_FRACTION: flagged / known if known >= MIN_NEURONS else float("nan"),
+            BOUNDARY_DENSITY: (accepted - flagged) / area_mm2 if area_mm2 and known == accepted else float("nan")}
 
 
 def _per_neuron(rows: list[dict], suffix: str = "") -> dict:

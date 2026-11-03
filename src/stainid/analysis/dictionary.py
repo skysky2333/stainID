@@ -75,6 +75,8 @@ COLUMNS = {
     "plaque_edge_mostly_fraction": "Quality check: share of counted plaques lying mostly within 5 µm of a tissue edge or hole.",
     "tau_neuron_edge_touch_fraction": "Quality check: share of counted tau+ neurons touching a tissue edge, a hole or an excluded area (mostly small holes next to real neurons; differs between slides).",
     "tau_neuron_edge_mostly_fraction": "Quality check: share of counted tau+ neurons lying mostly within 5 µm of a tissue edge or hole.",
+    "tau_neuron_boundary_fraction": "Quality check: share of counted tau+ neurons at a tissue boundary (a large area without tissue, such as the core's edge or a tear, within 15 µm). Most objects that are not real cell bodies sit there.",
+    "tau_neuron_density_no_boundary_mm2": "Tau+ neurons per mm², leaving out those at a tissue boundary. The main density still counts them.",
 }
 MASK_PREFIX = {"neun_soma": "NeuN+ neuron", "tau_neuron": "tau+ neuron", "plaque": "plaque"}
 MASK_SUFFIX = {
@@ -190,6 +192,8 @@ LABELS = {  # column: (label, unit, topic)
     "plaque_edge_mostly_fraction": ("Plaques mostly at an edge or hole", FRACTION, "tissue"),
     "tau_neuron_edge_touch_fraction": ("Tau+ neurons touching an edge or excluded area", FRACTION, "tissue"),
     "tau_neuron_edge_mostly_fraction": ("Tau+ neurons mostly at an edge or hole", FRACTION, "tissue"),
+    "tau_neuron_boundary_fraction": ("Tau+ neurons at a tissue boundary", FRACTION, "tissue"),
+    "tau_neuron_density_no_boundary_mm2": ("Tau+ neuron density, without those at a tissue boundary", "tau+ neurons per mm²", "tau"),
 }
 # the continuous type scores of stage 5 (`stainid.v2.scores`): per score its object, what 0 and 1 mean, its topic, bins
 TYPE_SCORES = {

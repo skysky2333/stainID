@@ -17,7 +17,9 @@ object (`type_scores_<stain>.csv`) and summarised as new columns of `results_<le
 they add columns only, every other column is as without them.
 
 The tangle spacing, the thread ownership and the share of objects at an edge (`stainid.v2.organisation`) and the
-pathology inside the white matter (`_attach_white`) are new columns of `results_<level>.csv` too.
+pathology inside the white matter (`_attach_white`) are new columns of `results_<level>.csv` too. So are the share of
+accepted tau+ neurons flagged at a tissue boundary and their density without the flagged ones
+(`organisation.mark_boundary`); the flag itself is per object in `objects_AT8.csv`, and nothing leaves any other count.
 
 `results_missing_<level>.csv` says why each empty cell of the results tables is empty (`stainid.v2.missing`). A count, a
 density or an area fraction is 0 when nothing was found in measured tissue; only fractions and shape measures under their
@@ -206,7 +208,10 @@ def tau_rows(project, tiles: pd.DataFrame, found: pd.DataFrame, threads: pd.Data
         })
         meta = {k: tile[k] for k in REGION_KEYS if k in tile} | {"tile_id": tile["tile_id"], "stain": "AT8"}
         for row in neurons.to_dict("records"):
-            objects.append({**meta, "soma_area_um2": row["area_um2"]})
+            flag = row.get(organisation.BOUNDARY_FLAG, np.nan)
+            objects.append({**meta, "soma_area_um2": row["area_um2"], "candidate_id": row["candidate_id"],
+                            organisation.BOUNDARY_FLAG: "" if pd.isna(flag) else int(flag),
+                            organisation.BOUNDARY_AREA: "" if pd.isna(flag) else float(row[organisation.BOUNDARY_AREA])})
     return tile_rows, objects
 
 
@@ -275,11 +280,13 @@ def results_tables(folder: Path, tile_rows: dict[str, list[dict]], objects: dict
             for key in {row[level] for row in tile_rows[stain]}:
                 merged[key].update(organisation.edge_columns(stain, tallies.get(key, [])))
         tau_cores, tau_neurons, tau_tiles = _group(organised["cores"], level), _group(organised["neurons"], level), _group(tile_rows["AT8"], level)
+        tau_tallies = _group(organised["tallies"]["AT8"], level)
         extra_counts = {key: organisation.counts(tau_cores.get(key, []), tau_neurons.get(key, [])) for key in tau_tiles}
         for key, group in tau_tiles.items():
             merged[key].update(organisation.summarize(tau_cores.get(key, []), tau_neurons.get(key, []),
                                                       sum(float(r["thread_ridge_length_mm"]) for r in group),
                                                       sum(float(r["v2_tissue_area_mm2"]) for r in group)))
+            merged[key].update(organisation.boundary_columns(tau_tallies.get(key, []), sum(float(r["v2_tissue_area_mm2"]) for r in group)))
         rows = [merged[k] for k in sorted(merged)]
         if level != "core_id":
             for row in rows:
@@ -411,6 +418,7 @@ def _organised(project, stain: str, core_id: str, tiles: pd.DataFrame, found: pd
     meta = {k: str(first[k]) for k in LEVELS if k in tiles}
     out = {"tally": {**meta, **organisation.edge_tally(found)}}
     if stain == "AT8":
+        out["tally"] |= organisation.boundary_tally(found)
         pixel_um = project.pixel_size_um
         kept = found.candidate_id[found.decision == "accepted"] if len(found) else []
         mine = bodies[bodies.candidate_id.isin(kept)] if bodies is not None and len(bodies) else pd.DataFrame(columns=organisation.OUTLINE_COLUMNS)
@@ -526,6 +534,8 @@ def write_measures(project, folder: Path | None = None) -> list[str]:
                 if column not in found:
                     found[column] = np.nan
             found["area_um2"] = store.shown_area_um2(found)  # each object as the views draw it (the stain's default outline)
+            if stain == "AT8":
+                found = organisation.mark_boundary(project, core_id, found)
             threads = store.threads(project, core_id) if stain == "AT8" else None
             before = len(whole.tiles[stain])
             _core_rows(project, stain, core_id, tiles, found, threads, models, morphotype, addition, between, whole)

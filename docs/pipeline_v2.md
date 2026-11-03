@@ -445,6 +445,8 @@ in `measures.py`). In the grey-matter tables they are grey matter only; the spac
 | `tau_neuron_density_white_mm2`, `thread_density_white_mm_per_mm2`, `at8_positive_area_fraction_white` | the same on AT8 | 1 mm² of white matter |
 | `plaque_white_area_mm2`, `tau_white_area_mm2` | the white matter measured on that stain's image; 0 without white matter | none |
 | `<neun,plaque,tau_neuron>_edge_touch_fraction`, `_edge_mostly_fraction` | QC: the share of accepted objects whose outline touches the 5 µm band along a tissue edge or hole or an excluded area, and of those mostly (≥ 0.5) in the band | 20 neurons, 10 plaques, 5 tau+ neurons |
+| `tau_neuron_boundary_fraction` | QC: the share of accepted tau+ neurons flagged at a tissue boundary (below) | 5 tau+ neurons |
+| `tau_neuron_density_no_boundary_mm2` | tau+ neurons without the flagged ones, over the same area as `tau_neuron_density_mm2` | none: 0 when nothing was found |
 
 The white-matter columns are the whole-core numbers less the grey-matter ones; their grey-matter counterparts are the main
 columns of the same row. An empty one is `not_measured` in `results_missing_<level>.csv`. `tau_neuron_threads.csv` keeps
@@ -478,3 +480,30 @@ re-measures AT8 and NeuN candidates from the images (stage 2 on: the full re-run
 mask (no image read, stage 4 and 5: largest non-tissue area of at least 10,000 µm² within 15 µm) flags 6.3 % of accepted
 tau+ neurons (LIP-1 2.8 %, LIP-3 12 %, LIP-12 12 %), catches 15 of the 18 not-a-body and costs 5 of the 76 real. With it
 the tangle spacing moves little (176 cores: median change L excess 3 µm, nearest neighbour 1 µm; Spearman 0.985, 0.975).
+
+### Tissue-boundary flag on AT8 tau+ neurons
+
+The rule of the check above, as a flag: stage 5 flags an accepted tau+ neuron when a connected non-tissue area of at least
+`v2.boundary_flag.min_nontissue_um2` (10,000 µm²) lies within `v2.boundary_flag.radius_um` (15 µm) of its centre, on the
+stage-2 mask, whose cells are 2.2 µm (`organisation.mark_boundary`; no image read). **It only flags.** Flagged objects stay in
+every count and every other column; detection and stages 2–4 are not touched; a changed setting changes only the flag's
+columns. `objects_AT8.csv` gains `candidate_id`, `tissue_boundary` (1 / 0) and `nearby_nontissue_um2` (the area that decides
+it, 0 with none near), and the results tables the two columns above (with `exclude` also as `_whole_core`). The flag does
+not depend on the white matter: the grey-matter tables simply hold fewer objects. On whole slides the rule sees one region's
+mask at a time, so glass cut by a region's edge counts only its part inside that region.
+
+On the study (stage 5 from the live outputs into `/run/media/sky/Untitled/alzh/work/boundary_flag/`, 2026-11-03; every old
+cell of all 42 tables identical, as text; the missing-value tables only gain rows for the new columns): 2,285 of 36,367
+accepted tau+ neurons flagged whole-core (6.3 %), 2,234 of 35,407 in grey matter. By TMA (whole core) LIP-1 2.8 %, LIP-5
+3.2 %, LIP-10 3.3 %, LIP-7 4.1 %, LIP-2 5.0 %, LIP-9 5.1 %, LIP-6 5.1 %, LIP-13 5.2 %, LIP-11 5.6 %, LIP-4 7.1 %, LIP-8
+7.5 %, LIP-12 11.8 %, LIP-3 12.1 %. By group: AD 6.2 %, ASYMP 4.0 % (11 of 273), CT 30 % (45 of 148: few tau+ neurons, so
+the edge artefacts weigh more). On the graded sample it catches 15 of 18 not-a-body and flags 5 of 76 real (and 5 of 35
+doubtful). AD vs ASYMAD (LIP-1–7, `workspace/scripts/table_contrasts.R`: log density, burden, age, APOE ε4, region, TMA
+and donor), grey matter, flagged in → out: tau+ neuron density standardised effect 1.837 (t 13.4) → 1.833 (t 13.3),
+mature tangles 1.825 → 1.820, pretangles 1.624 → 1.598, mature share −0.31 → −0.34, maturity median −0.45 → −0.60 (p 0.24
+→ 0.11); whole core alike. The flagged share itself does not differ (0.50, p 0.26). So the main tau results do not rest on
+the boundary objects.
+
+The viewer does not show the flag: the outline layer reads the candidate store, and stage 5's flag is not in it. Showing
+it means carrying the flag into the store's view and a new legend entry in the web app, so `objects_AT8.csv` is its only
+place for now.

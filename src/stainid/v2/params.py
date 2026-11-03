@@ -85,6 +85,10 @@ DEFAULTS: dict = {
     # pretangle / intermediate / mature, 6E10 diffuse / intermediate / compact): where the study's typed labels give
     # the two classes 2:1 odds either way. Changing them changes only the score columns of the measures
     "scores": {"AT8": {"bins": [0.29, 0.62]}, "6E10": {"bins": [0.48, 0.79]}},
+    # stage 5's flag on accepted AT8 tau+ neurons at a tissue boundary (`stainid.v2.organisation.mark_boundary`), from the
+    # stage-2 mask, no image read: a connected non-tissue area of at least min_nontissue_um2 within radius_um of the
+    # object's centre. Flag only: nothing leaves any count. Changing it changes only the flag's columns of the measures
+    "boundary_flag": {"radius_um": 15.0, "min_nontissue_um2": 10000.0},
     "rules": {
         # edge_band: a candidate found only by the new sources lying mostly within 5 µm of a tissue edge or hole (brown rims)
         "NeuN": {"excluded_fraction": 0.5, "near_profile": True, "pale_nucleus": True, "profile_shape": True, "edge_band": 0.5,
