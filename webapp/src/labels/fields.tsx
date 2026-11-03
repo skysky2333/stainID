@@ -9,7 +9,7 @@ import { useFetch, useFlash } from '../hooks'
 import { ConfirmDialog } from '../labelling'
 import { useProject } from '../project'
 
-export const FIELD_TEXT = 'A field is one square of tissue about 560 µm across (a 2048-pixel tile of a core), shown to people as one picture. '
+export const FIELD_TEXT = 'A field is one piece of tissue up to about 560 µm across (a tile of a core, 2048 pixels or narrower at its edge), shown to people as one picture. '
   + 'A core holds about 15–40 fields.'
 
 export const STATE_TEXT: Record<FieldState, string> = { preparing: 'Being prepared', not_started: 'Not started', in_progress: 'In progress', done: 'Done' }

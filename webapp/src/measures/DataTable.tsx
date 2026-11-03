@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { GroupBadge } from '../components'
 import { useStored } from '../hooks'
-import type { Measure, RowsPage, TableColumns } from './data'
-import { ID_LABELS, formatNumber, measureHover, tableUrl, useShared } from './data'
-import { Pager, Waiting } from './parts'
+import type { Measure, RowsPage, TableColumns, TableGaps } from './data'
+import { ID_LABELS, formatNumber, measureHover, reasonCounts, tableUrl, useShared } from './data'
+import { NoValue, Pager, Waiting } from './parts'
 
 const PAGE = 50
 const ALL = '__all'
@@ -70,13 +70,14 @@ export function DataTable({ table, info, plain = false }: { table: string; info:
       <Waiting state={{ ...page, data: shown }} label="Loading the table…">
         {(data) => (
           <>
+            {data.gaps && <GapLine gaps={data.gaps} what={info.columns.includes('core_id') ? 'core' : 'region'} />}
             <div className={`table-wrap${page.data ? '' : ' stale'}`} style={{ marginTop: 10 }}>
               <table>
                 <thead><tr>{data.columns.map(head)}</tr></thead>
                 <tbody>{data.rows.map((r, i) => (
                   <tr key={offset + i}>{data.columns.map((c) => (
                     <td key={c} className={info.numeric.includes(c) || typeof r[c] === 'number' ? 'num' : ''}>
-                      {c === 'disease_group' && r[c] ? <GroupBadge group={String(r[c])} /> : formatNumber(r[c])}
+                      {data.reasons?.[i]?.[c] ? <NoValue reason={data.reasons[i][c]} /> : c === 'disease_group' && r[c] ? <GroupBadge group={String(r[c])} /> : formatNumber(r[c])}
                     </td>
                   ))}</tr>
                 ))}</tbody>
@@ -88,5 +89,18 @@ export function DataTable({ table, info, plain = false }: { table: string; info:
         )}
       </Waiting>
     </div>
+  )
+}
+
+/** How many rows the table holds, the ones it has none for, and how many of the columns shown are empty and why. */
+function GapLine({ gaps, what }: { gaps: TableGaps; what: string }) {
+  const absent = Object.values(gaps.absent).reduce((a, b) => a + b, 0)
+  const total = gaps.rows + absent
+  const empty = Object.keys(gaps.cells).length > 0
+  return (
+    <p className="small secondary" style={{ margin: '8px 0 0' }}>
+      Shown <b>{gaps.rows.toLocaleString()} of {total.toLocaleString()}</b> {what}s{absent ? `: ${reasonCounts(gaps.absent)}` : ''}.
+      {empty && <> A cell with no value says why ({reasonCounts(gaps.cells)}).</>}
+    </p>
   )
 }

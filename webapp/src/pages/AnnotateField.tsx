@@ -119,7 +119,7 @@ function SessionOverview({ detail, reload }: { detail: SessionDetail; reload: ()
         <div className="row"><b>{done} of {fields.length} fields finished by you</b><span className="spacer" />
           <span className="small secondary">{left ? `${left} left` : 'All done — thank you!'}{preparing ? ` · ${preparing} still being prepared (this page checks again by itself)` : ''}</span></div>
         <Progress done={done} total={fields.length} />
-        <p className="small muted" style={{ margin: 0 }}>A field is one square of tissue (about 560 µm across). {meta.stain} · {AI_VIEW_FOR_LABELLERS[meta.ai_view]}.</p>
+        <p className="small muted" style={{ margin: 0 }}>A field is one piece of tissue (up to about 560 µm across). {meta.stain} · {AI_VIEW_FOR_LABELLERS[meta.ai_view]}.</p>
         {nothing && <p className="small secondary" style={{ margin: 0 }}>Every field still to do is being checked by someone else right now or is still being prepared; try again in a minute.</p>}
       </div>
       <SessionFieldMap detail={detail} />

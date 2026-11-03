@@ -105,6 +105,13 @@ def read_table(path: Path) -> pd.DataFrame:
     return frame
 
 
+def _whole_cores(frame: pd.DataFrame) -> pd.DataFrame:
+    """Tables with one row per tile subset: the whole cores."""
+    if "sampling_extent" not in frame or frame.empty:
+        return frame
+    return frame[frame.sampling_extent == ("whole_core" if "whole_core" in set(frame.sampling_extent) else frame.sampling_extent.iloc[0])]
+
+
 def tables_root() -> Path:
     return get_state().project.output("tables")
 
@@ -114,6 +121,92 @@ def resolve(name: str) -> Path:
     if tables_root().resolve() not in path.parents or path.suffix != ".csv" or not path.exists():
         raise HTTPException(404, name)
     return path
+
+
+# ---------------------------------------------------------------- values a results table does not have, and why
+
+MISSING_TABLES = {"results_core.csv": ("results_missing_core.csv", "core_id"),
+                  "results_donor_region.csv": ("results_missing_donor_region.csv", "sample_region_id")}
+NOT_MEASURED = "not_measured"  # also the reason of an empty cell the table of reasons does not list
+OBJECT_WORDS = {"neurons": "neurons", "plaques": "plaques", "tau": "tau objects"}  # by the measure's topic
+REASON_WORDS = {"no_grey_matter": ("no grey matter", "This tissue has no grey matter, so there is nothing to measure here."),
+                "no_image": ("no image", "There is no image of this stain here, so nothing could be measured."),
+                NOT_MEASURED: ("not measured", "This was not measured here.")}
+
+
+def _missing(path: Path) -> tuple[pd.DataFrame, str] | None:
+    """The table of reasons beside a main results table (one row per value it lacks: the row's id columns, `measure`,
+    `reason`, `n_objects`) and the column naming a row; None when the project has no such table."""
+    name, key = MISSING_TABLES.get(path.name, (None, None))
+    file = path.with_name(name) if name else None
+    if file is None or not file.exists():
+        return None
+    frame = _whole_cores(read_table(file))
+    if not {key, "measure", "reason"} <= set(frame.columns):
+        return None
+    frame = frame.assign(**{key: frame[key].astype(str), "measure": frame.measure.astype(str), "reason": frame.reason.fillna(NOT_MEASURED).astype(str)})
+    if "n_objects" not in frame:
+        frame = frame.assign(n_objects=float("nan"))
+    return frame.drop_duplicates([key, "measure"]), key
+
+
+def _reason_text(reason: str, column: str) -> str:
+    """A reason in plain words, for this measure ("too few plaques")."""
+    if reason == "too_few_objects":
+        return f"too few {OBJECT_WORDS.get(measure(column).get('topic'), 'objects')}"
+    return REASON_WORDS[reason][0] if reason in REASON_WORDS else reason.replace("_", " ")
+
+
+def _reason_why(reason: str, column: str, n_objects) -> str:
+    """The same as a sentence, for hovering."""
+    if reason == "too_few_objects":
+        found = f" ({int(n_objects):,} found)" if pd.notna(n_objects) else ""
+        return f"Too few {OBJECT_WORDS.get(measure(column).get('topic'), 'objects')} here to measure this{found}."
+    return REASON_WORDS[reason][1] if reason in REASON_WORDS else f"No value here: {reason.replace('_', ' ')}."
+
+
+def _empty_cells(frame: pd.DataFrame, measures: list[str], missing: pd.DataFrame, key: str) -> pd.DataFrame:
+    """Every empty cell of these measures as a row (`key`, `measure`, `reason`, `n_objects`): a value the table has is
+    never counted as missing, an empty cell without a listed reason is "not measured"."""
+    cells = frame[[key, *measures]].astype({key: str}).melt(id_vars=key, var_name="measure", value_name="value")
+    cells = cells[cells.value.isna()].drop(columns="value").astype({"measure": str})
+    cells = cells.merge(missing[[key, "measure", "reason", "n_objects"]], on=[key, "measure"], how="left")
+    return cells.assign(reason=cells.reason.fillna(NOT_MEASURED))
+
+
+def _counted(texts: pd.Series) -> dict[str, int]:
+    return {str(text): int(n) for text, n in texts.value_counts().items()}
+
+
+def _table_gaps(frame: pd.DataFrame, shown: pd.DataFrame, page: pd.DataFrame, columns: list[str], found: tuple[pd.DataFrame, str]) -> dict:
+    """What a page of a results table lacks: the reason of each empty cell of each row of the page (`reasons`) and over
+    all rows asked for (`cells`), how many rows the table has, and the rows that have none in it (`absent`, by reason)."""
+    missing, key = found
+    numeric = set(measure_columns(frame))
+    measures = [c for c in columns if c in numeric]
+    cells = _empty_cells(shown, measures, missing, key)
+    texts = {pair: _reason_text(pair[1], pair[0]) for pair in set(zip(cells.measure, cells.reason, strict=True))}
+    on_page: dict[str, dict[str, dict]] = {}
+    keys = set(page[key].astype(str))
+    for cell in cells[cells[key].isin(keys)].itertuples(index=False):
+        on_page.setdefault(getattr(cell, key), {})[cell.measure] = {"text": texts[cell.measure, cell.reason], "why": _reason_why(cell.reason, cell.measure, cell.n_objects)}
+    absent = missing[~missing[key].isin(set(frame[key].astype(str)))].drop_duplicates(key)
+    return {"reasons": [on_page.get(k, {}) for k in page[key].astype(str)],
+            "gaps": {"rows": len(frame), "cells": _counted(pd.Series([texts[pair] for pair in zip(cells.measure, cells.reason, strict=True)], dtype=object)),
+                     "absent": _counted(pd.Series([_reason_text(r, m) for r, m in zip(absent.reason, absent.measure, strict=True)], dtype=object))}}
+
+
+def _feature_gaps(frame: pd.DataFrame, column: str, keep: list[str], found: tuple[pd.DataFrame, str]) -> list[dict]:
+    """The rows with no value of this measure, with their id columns and why: those of the table and those it has no row for."""
+    missing, key = found
+    listed = missing[missing.measure == column]
+    empty = frame[frame[column].isna()].astype({key: str})
+    rows = empty[[c for c in keep if c != column]].merge(listed[[key, "reason", "n_objects"]], on=key, how="left")
+    absent = listed[~listed[key].isin(set(frame[key].astype(str)))]
+    rows = pd.concat([rows, absent[[c for c in [*keep, "reason", "n_objects"] if c in absent and c != column]]], ignore_index=True)
+    rows = rows.assign(reason=rows.reason.fillna(NOT_MEASURED))
+    rows = rows.assign(text=[_reason_text(r, column) for r in rows.reason], why=[_reason_why(r, column, n) for r, n in zip(rows.reason, rows.n_objects, strict=True)])
+    return records(rows)
 
 
 @router.get("/tables")
@@ -151,7 +244,8 @@ def columns(name: str) -> dict:
 @router.get("/tables/{name:path}/rows")
 def rows(name: str, offset: int = 0, limit: int = 100, sort: str = "", desc: bool = False, q: str = "", columns: str = "") -> dict:
     """One page of a table, optionally sorted by a column and filtered to rows whose names contain `q`."""
-    frame = read_table(resolve(name))
+    path = resolve(name)
+    whole = frame = read_table(path)
     if q:
         text = [c for c in frame.columns if c in ID_COLUMNS or not pd.api.types.is_numeric_dtype(frame[c])]
         hit = pd.Series(False, index=frame.index)
@@ -160,23 +254,24 @@ def rows(name: str, offset: int = 0, limit: int = 100, sort: str = "", desc: boo
         frame = frame[hit]
     if sort in frame:
         frame = frame.sort_values(sort, ascending=not desc, na_position="last", kind="stable")
-    if columns:
-        keep = [c for c in dict.fromkeys(columns.split(",")) if c in frame]
-        frame = frame[keep]
+    keep = [c for c in dict.fromkeys(columns.split(",")) if c in frame] if columns else list(frame.columns)
     limit = max(1, min(limit, 5000))
-    return {"total": len(frame), "offset": offset, "columns": list(frame.columns), "rows": records(frame.iloc[offset: offset + limit])}
+    page = frame.iloc[offset: offset + limit]
+    found = _missing(path)
+    gaps = _table_gaps(whole, frame, page, keep, found) if found else {}
+    return {"total": len(frame), "offset": offset, "columns": keep, "rows": records(page[keep]), **gaps}
 
 
 @router.get("/tables/{name:path}/feature")
 def feature(name: str, column: str, group: str = "disease_group", facet: str | None = None) -> dict:
-    frame = read_table(resolve(name))
-    if "sampling_extent" in frame and len(frame):  # tables with one row per tile subset: the whole cores
-        extents = set(frame.sampling_extent)
-        frame = frame[frame.sampling_extent == ("whole_core" if "whole_core" in extents else frame.sampling_extent.iloc[0])]
+    path = resolve(name)
+    frame = _whole_cores(read_table(path))
     if column not in frame or group not in frame:
         raise HTTPException(400, "unknown column")
     keep = [c for c in dict.fromkeys(["sample_region_id", "core_id", "donor_id", group, facet, column]) if c and c in frame]
-    return {"column": column, "group": group, "facet": facet, "points": records(frame[keep].dropna(subset=[column]))}
+    found = _missing(path)  # `gaps`: every row with no value and why, when the project has the table of reasons; else null
+    return {"column": column, "group": group, "facet": facet, "points": records(frame[keep].dropna(subset=[column])),
+            "gaps": _feature_gaps(frame, column, keep, found) if found else None}
 
 
 # ---------------------------------------------------------------- reproducibility and group differences per measure

@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { ErrorNote, Loading } from '../components'
+import type { NoValueReason } from './data'
 
 /** Like `Loaded`, with a "Try again" button when the request failed. */
 export function Waiting<T>({ state, label, children }: {
@@ -35,4 +36,9 @@ export function Choice<T extends string>({ value, options, onChange, label }: {
       ))}
     </div>
   )
+}
+
+/** In place of a value a table does not have: why, in plain words. */
+export function NoValue({ reason }: { reason: NoValueReason }) {
+  return <span className="no-value" title={reason.why}>{reason.text}</span>
 }

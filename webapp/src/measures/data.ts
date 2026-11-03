@@ -9,7 +9,14 @@ export interface TableColumns {
   columns: string[]; numeric: string[]; groupable: string[]; descriptions: Record<string, string>
   measures: Measure[]; topics: Record<string, string>; rows: number
 }
-export interface RowsPage { total: number; offset: number; columns: string[]; rows: Row[] }
+/** Why a value is missing, in plain words: `text` to show ("too few plaques"), `why` the sentence for hovering. */
+export interface NoValueReason { text: string; why: string }
+/** What a main results table lacks (only with the table of reasons): `cells` empty cells and `absent` rows it has none for, by reason. */
+export interface TableGaps { rows: number; cells: Record<string, number>; absent: Record<string, number> }
+export interface RowsPage { total: number; offset: number; columns: string[]; rows: Row[]; reasons?: Record<string, NoValueReason>[]; gaps?: TableGaps }
+
+/** "68 too few plaques, 2 no grey matter", largest first. */
+export const reasonCounts = (counts: Record<string, number>) => Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([text, n]) => `${n.toLocaleString()} ${text}`).join(', ')
 
 export const DONOR_REGION_TABLE = 'results_donor_region.csv'
 export const CORE_TABLE = 'results_core.csv'

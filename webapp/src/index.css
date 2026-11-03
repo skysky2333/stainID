@@ -744,6 +744,10 @@ g:hover > .chart-dot { stroke: var(--text-primary); }
 .swatch.round { border-radius: 50%; }
 .chart-tip-value { font-weight: 650; font-variant-numeric: tabular-nums; }
 .chart-note { margin: 0; max-width: 760px; }
+.chart-no-value-strip { fill: color-mix(in srgb, var(--text-muted) 8%, transparent); stroke: var(--border); stroke-dasharray: 3 3; }
+.chart-no-value { fill: none; stroke-width: 1.4; }
+.shown-lines { list-style: none; margin: 6px 0; padding: 0; color: var(--text-secondary); }
+.no-value { color: var(--text-muted); font-style: italic; font-variant-numeric: normal; white-space: nowrap; cursor: help; }
 .results-block { margin-top: 14px; min-width: 0; }
 .results-block h3 { margin-bottom: 8px; }
 .results-block .table-wrap { max-height: none; }

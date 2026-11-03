@@ -3,6 +3,8 @@ import { fmt } from './components'
 import { useProject } from './project'
 
 export interface Point { group: string; value: number; facet?: string; id?: string }
+/** One row with no value of the measure: never on the axis, a mark in the "no value" strip. */
+export interface NoValuePoint { group: string; facet?: string; id?: string; text: string; why: string }
 
 interface Tip { x: number; y: number; lines: string[] }
 
@@ -13,6 +15,11 @@ export function quantile(sorted: number[], q: number) {
   const hi = Math.ceil(pos)
   return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo)
 }
+
+const STRIP_GAP = 12  // between the axis and the "no value" strip, so the strip cannot be read as a low value
+const STRIP_STEP = 7
+const STRIP_MIN = 22
+const STRIP_MAX = 72
 
 function niceTicks(min: number, max: number, count = 5) {
   const span = max - min || 1
@@ -58,15 +65,17 @@ export function useGroupOrder(points: { group: string }[]) {
 }
 
 /** Dot + box plot of one measure by diagnosis group, optionally side by side for each facet (e.g. brain region).
- *  Each dot is one value; the box is the middle half, the thick line the median, whiskers reach 1.5 box-lengths. */
-export function GroupStrip({ points, yLabel, facetLabel, log = false, format = (v) => fmt(v, 3), height = 320 }: {
-  points: Point[]; yLabel: string; facetLabel?: string; log?: boolean; format?: (v: number) => string; height?: number
+ *  Each dot is one value; the box is the middle half, the thick line the median, whiskers reach 1.5 box-lengths.
+ *  `gaps`, when known, are the rows with no value: hollow marks in a strip below the axis, and "4 of 74" under each column. */
+export function GroupStrip({ points, gaps, yLabel, facetLabel, log = false, format = (v) => fmt(v, 3), height = 320 }: {
+  points: Point[]; gaps?: NoValuePoint[] | null; yLabel: string; facetLabel?: string; log?: boolean; format?: (v: number) => string; height?: number
 }) {
   const [tip, setTip] = useState<Tip | null>(null)
   const [wrap, available] = useWidth<HTMLDivElement>()
   const { groupColor, groupLabel } = useProject()
-  const groups = useGroupOrder(points)
-  const facets = useMemo(() => Array.from(new Set(points.map((p) => p.facet ?? ''))).sort(), [points])
+  const everyRow = useMemo(() => [...points, ...(gaps ?? [])], [points, gaps])
+  const groups = useGroupOrder(everyRow)
+  const facets = useMemo(() => Array.from(new Set(everyRow.map((p) => p.facet ?? ''))).sort(), [everyRow])
   const tx = (v: number) => (log ? Math.log10(Math.max(v, 0) + 1) : v)
   const values = points.map((p) => tx(p.value))
   const ticks = log ? logTicks(Math.max(...values, 1)) : niceTicks(Math.min(...values, 0), Math.max(...values, 1e-9))
@@ -78,17 +87,28 @@ export function GroupStrip({ points, yLabel, facetLabel, log = false, format = (
   const width = Math.max(available, m.l + m.r + slots * 64)
   const slot = (width - m.l - m.r) / Math.max(slots, 1)
   const box = Math.min(40, slot * 0.5)
+  const stripColumns = Math.max(1, Math.floor((slot * 0.85) / STRIP_STEP))
+  const inSlot = (group: string, facet: string) => (gaps ?? []).filter((p) => p.group === group && (p.facet ?? '') === facet).sort((a, b) => a.text.localeCompare(b.text))
+  const stripRows = gaps?.length ? Math.max(...facets.flatMap((f) => groups.map((g) => Math.ceil(inSlot(g, f).length / stripColumns)))) : 0
+  const strip = stripRows ? Math.max(STRIP_MIN, Math.min(STRIP_MAX, stripRows * STRIP_STEP + 8)) : 0
+  const below = strip ? strip + STRIP_GAP : 0  // what the strip adds to the plot's height
+  const stripTop = height - m.b + STRIP_GAP
+  const stripRowStep = stripRows ? Math.min(STRIP_STEP, (strip - 8) / stripRows) : 0
   const y = (v: number) => m.t + (height - m.t - m.b) * (1 - (v - lo) / (hi - lo || 1))
   const tickText = (t: number) => (log ? format(Math.round(10 ** t - 1)) : format(t))
   const show = (e: React.MouseEvent, p: Point) => setTip({
     x: e.clientX > window.innerWidth - 220 ? e.clientX - 200 : e.clientX + 14, y: e.clientY + 14,
     lines: [p.id ?? '', [groupLabel(p.group), p.facet].filter(Boolean).join(' · '), format(p.value)],
   })
+  const showGap = (e: React.MouseEvent, p: NoValuePoint) => setTip({
+    x: e.clientX > window.innerWidth - 220 ? e.clientX - 200 : e.clientX + 14, y: e.clientY + 14,
+    lines: [p.id ?? '', [groupLabel(p.group), p.facet].filter(Boolean).join(' · '), `No value: ${p.why}`],
+  })
 
   return (
     <div ref={wrap} className="chart-wrap">
       {available > 0 && (
-        <svg width={width} height={height} role="img" aria-label={`${yLabel} by diagnosis group${faceted ? ` and ${facetLabel ?? 'facet'}` : ''}`}>
+        <svg width={width} height={height + below} role="img" aria-label={`${yLabel} by diagnosis group${faceted ? ` and ${facetLabel ?? 'facet'}` : ''}`}>
           {ticks.map((t) => (
             <g key={t}>
               <line x1={m.l} x2={width - m.r} y1={y(t)} y2={y(t)} className="chart-grid" />
@@ -98,12 +118,18 @@ export function GroupStrip({ points, yLabel, facetLabel, log = false, format = (
           <text x={14} y={(height - m.b + m.t) / 2} transform={`rotate(-90 14 ${(height - m.b + m.t) / 2})`} textAnchor="middle" className="chart-axis-title">
             {yLabel}{log ? ', log scale' : ''}
           </text>
+          {strip > 0 && (
+            <g>
+              <rect x={m.l} y={stripTop} width={width - m.l - m.r} height={strip} rx={4} className="chart-no-value-strip" />
+              <text x={m.l - 8} y={stripTop + strip / 2 + 4} textAnchor="end" className="chart-tick">no value</text>
+            </g>
+          )}
           {facets.map((facet, fi) => {
             const x0 = m.l + slot * fi * groups.length
             return (
               <g key={facet}>
-                {fi > 0 && <line x1={x0} x2={x0} y1={m.t} y2={height - m.b + 30} className="chart-divider" />}
-                {faceted && <text x={x0 + (slot * groups.length) / 2} y={height - 10} textAnchor="middle" className="chart-facet">{facet || '—'}</text>}
+                {fi > 0 && <line x1={x0} x2={x0} y1={m.t} y2={height + below - m.b + 30} className="chart-divider" />}
+                {faceted && <text x={x0 + (slot * groups.length) / 2} y={height + below - 10} textAnchor="middle" className="chart-facet">{facet || '—'}</text>}
                 {groups.map((group, gi) => {
                   const cx = x0 + slot * gi + slot / 2
                   const vals = points.filter((p) => p.group === group && (p.facet ?? '') === facet)
@@ -132,8 +158,23 @@ export function GroupStrip({ points, yLabel, facetLabel, log = false, format = (
                           </g>
                         )
                       })}
-                      <text x={cx} y={height - m.b + 18} textAnchor="middle" className="chart-group">{groupLabel(group)}</text>
-                      <text x={cx} y={height - m.b + 32} textAnchor="middle" className="chart-tick">n = {vals.length}</text>
+                      {inSlot(group, facet).map((p, i, all) => {
+                        const rows = Math.ceil(all.length / stripColumns)
+                        const row = Math.floor(i / stripColumns)
+                        const across = row < rows - 1 ? stripColumns : all.length - row * stripColumns
+                        const mx = cx + ((i % stripColumns) - (across - 1) / 2) * STRIP_STEP
+                        const my = stripTop + strip / 2 + (row - (rows - 1) / 2) * stripRowStep
+                        return (
+                          <g key={i} onMouseMove={(e) => showGap(e, p)} onMouseLeave={() => setTip(null)}>
+                            <circle cx={mx} cy={my} r={2.6} stroke={groupColor(group)} className="chart-no-value" />
+                            <circle cx={mx} cy={my} r={5} fill="transparent" />
+                          </g>
+                        )
+                      })}
+                      <text x={cx} y={height + below - m.b + 18} textAnchor="middle" className="chart-group">{groupLabel(group)}</text>
+                      <text x={cx} y={height + below - m.b + 32} textAnchor="middle" className="chart-tick">
+                        {gaps ? `${vals.length} of ${vals.length + inSlot(group, facet).length}` : `n = ${vals.length}`}
+                      </text>
                     </g>
                   )
                 })}
