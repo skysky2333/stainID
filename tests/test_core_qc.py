@@ -34,6 +34,25 @@ class TissueQcTest(unittest.TestCase):
         self.assertEqual(qc.status, "substantial")
         self.assertGreater(qc.tissue_fraction, 0.8)
 
+    def test_a_core_that_fills_its_picture_is_not_empty(self):
+        # tissue to the picture's edges, white padding in two corners (a slide edge), a little glass in the third:
+        # the corner cut-off took the whole core for glass
+        rng = np.random.default_rng(0)
+        image = rng.normal(200, 18, (1024, 1024, 3)).clip(0, 255).astype(np.uint8)
+        image[:200, :200] = 255
+        image[-200:, -200:] = 255
+        image[:120, -120:] = 236
+        qc, _, _ = measure_tissue(image)
+        self.assertNotEqual(qc.status, "empty")
+        self.assertGreater(qc.tissue_fraction, 0.5)
+
+    def test_glass_stays_empty_and_a_core_with_glass_corners_keeps_its_cut_off(self):
+        rng = np.random.default_rng(1)
+        glass = rng.normal(236, 2, (1024, 1024, 3)).clip(0, 255).astype(np.uint8)
+        self.assertEqual(measure_tissue(glass)[0].status, "empty")
+        qc, _, _ = measure_tissue(synthetic_core(1.0))
+        self.assertEqual(qc.threshold, 0.025)
+
     def test_fragment_is_retained(self):
         qc, mask, _ = measure_tissue(synthetic_core(0.35))
         self.assertEqual(qc.status, "partial")

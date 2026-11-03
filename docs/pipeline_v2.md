@@ -178,6 +178,18 @@ of machine time; 8 tile processes take 393 s and leave three quarters of the pro
 alone now finishes in about half the time (LIP-1 F-3 NeuN: 161 s -> 81 s with 8 processes). More throughput needs
 less memory traffic per tile (float64 temporaries, whole-field pictures made for a few crops), not more processes.
 
+**A core that fills its picture.** Core QC (`qc.core_qc.tissue_mask`, which the whole-core tiling also uses) takes the
+glass from the picture's corners outside the core's circle, with a cut-off of the corners' median darkness + 8 MAD. A
+core that fills its picture leaves tissue (or a neighbour core, or white padding at a slide edge) in the corners, and
+that cut-off (up to 0.6) took the whole core for glass: LIP-3 A-5, LIP-7 A-5 and E-5 and LIP-11 A-3 NeuN and LIP-11 A-3
+AT8 were called empty (no tiles, no analysis) though they hold 60-90 % tissue. When the corner cut-off is above 0.1 and
+leaves the core empty, the glass is now the 99th percentile of the whole picture (white and black padding left out) with
+a fixed cut-off of 0.04 (the study's median is 0.043). Of the 1,134 core pictures only these five and one orientation
+control change; every other mask is identical. The v2c re-run QCs and tiles the five again and runs their stage-1 nuclei
+(`fix_empty.py` in the re-run's chain), the other core images' rows and tiles checked unchanged. Some cores at the array
+edge called sparse or partial have the same high corner cut-off (LIP-1 A-5 AT8, LIP-10 F-1 6E10, LIP-11 A-5 and B-5
+AT8, LIP-9 C-5 AT8): their tiles may miss tissue; left for after the re-run.
+
 **Pure black is no tissue.** Scan padding and the slide's edge are pure black (RGB 0, 0, 0); the fixed tissue cut-off took
 them for tissue, and at the fixed threshold they read as stained. `field_tissue_mask` (so the tissue of detection, the
 areas, the calibration and the viewer) leaves them out before its opening and closing, so a stray black pixel inside

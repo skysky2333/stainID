@@ -64,23 +64,54 @@ def circular_footprint(
     return (xx - (width - 1) / 2) ** 2 + (yy - (height - 1) / 2) ** 2 <= radius**2
 
 
+# A core that fills its picture leaves no glass in the corners: tissue (or a neighbour core, or the white padding at
+# a slide edge) there makes the corner darkness spread wide, and its median + 8 MAD cut-off (up to 0.6) takes the
+# whole core for glass. When that cut-off is above CORNER_TISSUE_THRESHOLD and leaves the core empty, the glass is
+# taken from the brightest pixels of the whole picture instead (99th percentile, padding left out), with the fixed
+# cut-off GLASS_THRESHOLD (the study's cores have a median cut-off of 0.043). Every other core keeps the corner glass.
+CORNER_TISSUE_THRESHOLD = 0.1
+GLASS_THRESHOLD = 0.04
+EMPTY_FRACTION = 0.02
+
+
+def _cleaned(mask: np.ndarray) -> np.ndarray:
+    kernel_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+    mask = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_OPEN, kernel_open)
+    return cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel_close)
+
+
+def _darkness(rgb: np.ndarray, background: np.ndarray) -> np.ndarray:
+    return np.max(np.clip(background - rgb.astype(np.float32) / 255.0, 0.0, None), axis=2)
+
+
+def fragments(mask: np.ndarray, footprint_area: int) -> tuple[np.ndarray, list[int]]:
+    """The tissue fragments QC counts (at least 0.02 % of the footprint): their mask and areas."""
+    components, labels, stats, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8), 8)
+    minimum_fragment_area = max(16, round(footprint_area * 0.0002))
+    kept_labels = [index for index in range(1, components) if stats[index, cv2.CC_STAT_AREA] >= minimum_fragment_area]
+    return np.isin(labels, kept_labels), [int(stats[index, cv2.CC_STAT_AREA]) for index in kept_labels]
+
+
 def tissue_mask(rgb: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
     footprint = circular_footprint(rgb.shape[:2])
     background_pixels = rgb[~footprint].astype(np.float32) / 255.0
     background = np.quantile(background_pixels, 0.9, axis=0)
-    darkness = np.max(
-        np.clip(background - rgb.astype(np.float32) / 255.0, 0.0, None),
-        axis=2,
-    )
+    darkness = _darkness(rgb, background)
     background_darkness = darkness[~footprint]
     median = float(np.median(background_darkness))
     mad = float(np.median(np.abs(background_darkness - median)))
     threshold = max(0.025, median + 8.0 * mad)
-    mask = (darkness >= threshold) & footprint
-    kernel_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
-    mask = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_OPEN, kernel_open)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel_close)
+    mask = _cleaned((darkness >= threshold) & footprint)
+    if threshold > CORNER_TISSUE_THRESHOLD:
+        area = int(footprint.sum())
+        if fragments(mask, area)[0].sum() < EMPTY_FRACTION * area:  # the corners are no glass (see above)
+            pixels = rgb.reshape(-1, 3)
+            picture = pixels[(pixels.min(axis=1) < 250) & (pixels.max(axis=1) > 5)]  # no white or black padding
+            if len(picture):
+                glass = np.quantile(picture.astype(np.float32) / 255.0, 0.99, axis=0)
+                threshold = GLASS_THRESHOLD
+                mask = _cleaned((_darkness(rgb, glass) >= threshold) & footprint)
     return mask.astype(bool), footprint, threshold
 
 
@@ -97,18 +128,7 @@ def classify_coverage(tissue_fraction: float) -> str:
 def measure_tissue(rgb: np.ndarray) -> tuple[TissueQc, np.ndarray, np.ndarray]:
     mask, footprint, threshold = tissue_mask(rgb)
     footprint_area = int(footprint.sum())
-    components, labels, stats, _ = cv2.connectedComponentsWithStats(
-        mask.astype(np.uint8),
-        8,
-    )
-    minimum_fragment_area = max(16, round(footprint_area * 0.0002))
-    kept_labels = [
-        index
-        for index in range(1, components)
-        if stats[index, cv2.CC_STAT_AREA] >= minimum_fragment_area
-    ]
-    fragment_areas = [int(stats[index, cv2.CC_STAT_AREA]) for index in kept_labels]
-    kept = np.isin(labels, kept_labels)
+    kept, fragment_areas = fragments(mask, footprint_area)
     tissue_fraction = float(kept.sum() / footprint_area)
     largest_fragment_fraction = float(max(fragment_areas, default=0) / footprint_area)
     background_brightness = float(np.median(rgb[~footprint]) / 255.0)
