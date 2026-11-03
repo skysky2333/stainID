@@ -56,6 +56,7 @@ MEASURES: dict[str, Needs] = {
     **_family(("neun_median_profile_area_um2", "neun_median_profile_dab_od"), Needs("neun_neurons", 1)),
     "neun_positive_fraction_of_candidates": Needs("neun_candidates", 1),
     "neun_local_density_cv_100um": Needs("neun_windows", 4),
+    "neun_neuron_fraction_of_cells": Needs("neun_cells", 20),
     "v2_plaque_mean_area_um2": Needs("plaques", 1),
     "plaque_dense_core_area_fraction": Needs("plaques", 10),
     **_family(("compact_fraction_v2", "plaque_median_dense_core_fraction", "plaque_circularity_median"), Needs("plaques_ge15um", 10)),
@@ -103,6 +104,8 @@ def group_counts(tiles: dict[str, list[dict]], objects: dict[str, list[dict]], m
             "neun_neurons": len(objects.get("NeuN", [])),
             "neun_candidates": round(sum(_number(r, "candidate_profile_count") for r in neurons)),
             "neun_windows": round(sum(_number(r, "neun_local_density_window_count") for r in neurons)),
+            "neun_cells": round(sum(_number(r, "neun_positive_profile_count") + _number(r, "nonneuronal_cell_count") for r in neurons
+                                    if r.get("nonneuronal_cell_count", "") not in ("", None))),
             "plaques": round(sum(_number(r, "v2_plaque_count") for r in plaques)),
             "plaques_ge15um": sum(_number(r, "equivalent_diameter_um") >= 15.0 for r in objects.get("6E10", [])),
             "plaques_with_nuclei": round(sum(_number(r, "v2_plaque_count") for r in plaques if r.get("nuclei_available", "true") == "true")),

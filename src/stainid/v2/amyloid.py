@@ -6,11 +6,10 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from stainid.nuclei import nucleus_centroids
 from stainid.stains.amyloid.classifier import MORPHOLOGY_FEATURES
 from stainid.stains.amyloid.model import identity_features, outer_boundary_contact
 from stainid.stains.amyloid.segmentation import _radial_features, _remove_small_components, _shape_features, segment_amyloid_candidates
-from stainid.v2 import scaled
+from stainid.v2 import cells, scaled
 from stainid.v2.geometry import Occupancy, Region, label_regions, same_object
 from stainid.v2.tree import coarse_regions, tree_regions, walk_roots
 
@@ -140,7 +139,7 @@ def extras(field, regions: list[Region], ring_um: float = 15.0) -> list[dict]:
     inside it and in rings of 15 and 45 µm around it (the plaque-niche measures)."""
     non_tissue = ~field.tissue
     valid = field.tissue & ~field.exclusion
-    points = nucleus_centroids(field.nuclei, valid, field.pixel_size_um)
+    points = cells.centroids(field, valid, "6E10")  # cells only: no plaque core Cellpose took for a nucleus (`cells`)
     point_map = np.zeros(field.shape, np.int32)
     if len(points):
         np.add.at(point_map, (points[:, 1], points[:, 0]), 1)

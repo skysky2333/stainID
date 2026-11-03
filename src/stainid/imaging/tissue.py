@@ -152,7 +152,9 @@ def _field_tissue_mask(rgb: np.ndarray, glass: float | None) -> np.ndarray:
     else:
         darkness = np.max(_darkness(rgb), axis=2)
     threshold = TISSUE_DARKNESS if glass is None else max(TISSUE_DARKNESS, glass + GLASS_MARGIN)
-    mask = (darkness >= threshold).astype(np.uint8)
+    # pure black (0, 0, 0) is no tissue: scan padding and the slide's edge, which would read as stained; a stray black
+    # pixel inside tissue is closed over below
+    mask = ((darkness >= threshold) & (rgb.max(axis=2) > 0)).astype(np.uint8)
     mask = cv2.morphologyEx(
         mask,
         cv2.MORPH_OPEN,

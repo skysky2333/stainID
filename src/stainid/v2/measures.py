@@ -52,7 +52,7 @@ from stainid import candidates as store
 from stainid.analysis import aggregation, field_aggregation, mask_aggregation
 from stainid.analysis.aggregation import summarize_stain_group
 from stainid.tables import read_csv, write_records
-from stainid.v2 import grey_matter, manifest, missing, organisation, scores, white_matter
+from stainid.v2 import cells, grey_matter, manifest, missing, organisation, scores, white_matter
 from stainid.v2.classify import load_model
 from stainid.v2.params import STAINS
 
@@ -243,6 +243,30 @@ def _group(rows: list[dict], level: str) -> dict[str, list[dict]]:
     return out
 
 
+CELL_COLUMNS = ("neun_cell_density_mm2", "neun_nonneuronal_cell_density_mm2", "neun_neuron_fraction_of_cells")
+MIN_CELLS = 20  # the neuron share of cells needs at least this many cells
+
+
+def cell_columns(group: list[dict]) -> dict:
+    """The NeuN section's cells (`cells`) over its tiles with nuclei: all cells (accepted neurons and the counterstain
+    nuclei in no accepted neuron) per mm², the other cells per mm², and the neurons' share of all cells. A neuron is
+    counted once whatever the nuclei inside it, so the share does not depend on whether Cellpose found its nucleus.
+    Missing where no tile has nuclei (and the share under `MIN_CELLS` cells)."""
+    def number(row, key):
+        value = row.get(key, "")
+        return float(value) if value not in ("", None) and value == value else np.nan
+
+    have = [r for r in group if np.isfinite(number(r, "nonneuronal_cell_count"))]
+    area = sum(number(r, "tissue_area_mm2") for r in have)
+    if not have or area <= 0:
+        return dict.fromkeys(CELL_COLUMNS, np.nan)
+    neurons = sum(number(r, "neun_positive_profile_count") for r in have)
+    other = sum(number(r, "nonneuronal_cell_count") for r in have)
+    total = neurons + other
+    return {"neun_cell_density_mm2": total / area, "neun_nonneuronal_cell_density_mm2": other / area,
+            "neun_neuron_fraction_of_cells": neurons / total if total >= MIN_CELLS else np.nan}
+
+
 def results_tables(folder: Path, tile_rows: dict[str, list[dict]], objects: dict[str, list[dict]], masks: dict[str, list[dict]],
                    scored: dict[str, list[dict]] | None = None, organised: dict | None = None) -> list[str]:
     """The stainID results tables (`results_<level>.csv` and their parts) from the legacy-shaped rows; `scored`: the
@@ -257,6 +281,7 @@ def results_tables(folder: Path, tile_rows: dict[str, list[dict]], objects: dict
             summary = summarize_stain_group(group, neun_objects.get(key, []))
             del summary["stain"]
             merged.setdefault(key, {k: group[0][k] for k in REGION_KEYS}).update({k if k.startswith("neun_") else f"neun_{k}": v for k, v in summary.items()})
+            merged[key].update(cell_columns(group))
         for stain in ("6E10", "AT8"):
             tiles_, objects_ = _group(tile_rows[stain], level), _group(objects[stain], level)
             for key, group in tiles_.items():
@@ -444,6 +469,43 @@ def _bodies(project, stain: str, core_id: str, found: pd.DataFrame) -> pd.DataFr
     return frame
 
 
+def _in_white(white: np.ndarray, x, y) -> np.ndarray:
+    """Whether each point (core px) lies in the core image's white matter (`white_matter.read`, `grey_matter.SCALE`)."""
+    size = grey_matter.SCALE
+    x, y = np.asarray(x, float), np.asarray(y, float)
+    ok = np.isfinite(x) & np.isfinite(y)
+    cx, cy = np.where(ok, x // size, -1).astype(int), np.where(ok, y // size, -1).astype(int)
+    inside = (cx >= 0) & (cy >= 0) & (cx < white.shape[1]) & (cy < white.shape[0])
+    out = np.zeros(len(cx), bool)
+    out[inside] = white[cy[inside], cx[inside]]
+    return out
+
+
+def _neun_cells(project, core_id: str) -> tuple[pd.DataFrame | None, np.ndarray]:
+    """The NeuN core image's cells (stage 2's per-nucleus table) and whether each lies inside an accepted neuron's own
+    outline (the one the views draw, `candidates.outline_rings`)."""
+    table = cells.read(project, "NeuN", core_id)
+    if table is None or table.empty:
+        return table, np.zeros(0, bool)
+    frame = store.read_core(project, "NeuN", core_id, organisation.OUTLINE_COLUMNS)
+    frame = frame[frame.decision == "accepted"] if "decision" in frame else frame.iloc[0:0]
+    for column in organisation.OUTLINE_COLUMNS:
+        if column not in frame:
+            frame[column] = "" if column in store.TEXT_COLUMNS else np.nan
+    for column in store.TEXT_COLUMNS:
+        if column in frame:
+            frame[column] = frame[column].fillna("")
+    return table, cells.in_outlines(table, [store.outline_rings(r) for r in frame.to_dict("records")])
+
+
+def _with_cells(tiles: pd.DataFrame, table: pd.DataFrame, neuronal: np.ndarray, white: np.ndarray | None = None) -> pd.DataFrame:
+    """NeuN tile rows with their cell counts (`cells.tile_counts`); `white`: the cells in it left out (grey matter)."""
+    if white is not None and table is not None and len(table):
+        keep = ~_in_white(white, table.x_core, table.y_core)
+        table, neuronal = table[keep], neuronal[keep]
+    return cells.tile_counts(tiles, table, neuronal)
+
+
 def _totals(stain: str, tile_rows: list[dict]) -> dict:
     """What the white-matter columns need of a core image's tile rows, summed."""
     def total(column: str) -> float:
@@ -537,6 +599,9 @@ def write_measures(project, folder: Path | None = None) -> list[str]:
             if stain == "AT8":
                 found = organisation.mark_boundary(project, core_id, found)
             threads = store.threads(project, core_id) if stain == "AT8" else None
+            if stain == "NeuN":  # the NeuN section's cells, neuronal or not (`cells`)
+                cell_table, neuronal = _neun_cells(project, core_id)
+                tiles = _with_cells(tiles, cell_table, neuronal)
             before = len(whole.tiles[stain])
             _core_rows(project, stain, core_id, tiles, found, threads, models, morphotype, addition, between, whole)
             bodies = _bodies(project, stain, core_id, found)
@@ -544,6 +609,8 @@ def write_measures(project, folder: Path | None = None) -> list[str]:
             whole.add(stain, as_whole)
             if grey is not None:
                 changed = grey_inputs(project, stain, core_id, tiles, found, threads)
+                if changed is not None and stain == "NeuN":
+                    changed = (_with_cells(changed[0], cell_table, neuronal, white_matter.read(project, core_id, stain)), *changed[1:])
                 if changed is None:
                     _core_rows(project, stain, core_id, tiles, found, threads, models, morphotype, addition, between, grey)
                     grey.add(stain, as_whole)

@@ -36,7 +36,7 @@ import pandas as pd
 
 from stainid import cache
 
-KINDS = ("candidates", "proposals", "outlines", "calls", "unproposed", "tiles")  # per stain and core image
+KINDS = ("candidates", "proposals", "outlines", "calls", "unproposed", "tiles", "cells")  # per stain and core image
 MATCH_RADIUS_UM = {"NeuN": 4.0, "6E10": 6.0, "AT8": 4.0}
 DEFAULT_MATCH_RADIUS_UM = 5.0
 TEXT_COLUMNS = ("candidate_id", "stain", "core_id", "tile_id", "bbox", "sources", "source", "outline", "outline_default", "sam_outline", "sam_status",

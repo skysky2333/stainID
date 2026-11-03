@@ -54,7 +54,7 @@ def sample_core(root: str, image_path: str, tiles: list[dict], stride: int = STR
             dab = field.dab[inner]
             everything.append(dab[tissue][::stride].astype(np.float32))
             excluded = excluded_of(field, str(tile["stain"]))[inner] & tissue if leave_out else np.zeros_like(tissue)
-            clean = tissue & ~excluded
+            clean = tissue & ~excluded & (field.rgb[inner].max(axis=2) > 0)  # pure black (scan padding, slide edge) is no tissue
             kept.append(dab[clean][::stride].astype(np.float32))
             tissue_px += int(tissue.sum())
             excluded_px += int(excluded.sum())
