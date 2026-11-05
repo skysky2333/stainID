@@ -379,3 +379,22 @@ def test_share_link_uses_the_public_address_behind_a_tunnel(client):
     assert tunnelled["network"] is True
     local = client.get("/api/labels/share", headers={"host": "127.0.0.1:7070"}).json()
     assert not any("example.org" in link for link in local["links"])
+
+
+def test_a_fields_stain_overlay_follows_the_slides_calibration(client, synthetic_project):
+    """The DAB overlay of a field is kept per slide threshold: after the slide is calibrated again the field shows the
+    overlay of the new threshold, never the one made before."""
+    import numpy as np
+    from PIL import Image
+
+    from stainid.api import render
+
+    project_state = state.get_state()
+    before = render.dab_overlay(project_state, TILE)
+    assert render.dab_overlay(project_state, TILE) == before  # kept
+    lit = int((np.asarray(Image.open(before))[..., 3] > 0).sum())
+    table = synthetic_project / "data/analysis/slide_dab_calibration.csv"
+    pd.DataFrame([{"tma": 1, "stain": s, "threshold_dab_od": 0.25 if s == "6E10" else 0.05} for s in ("NeuN", "6E10", "AT8")]).to_csv(table, index=False)
+    after = render.dab_overlay(project_state, TILE)
+    assert after != before and after.exists()
+    assert int((np.asarray(Image.open(after))[..., 3] > 0).sum()) < lit  # a higher threshold: fewer pixels

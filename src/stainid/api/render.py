@@ -241,13 +241,19 @@ def exclusion_overlay(state: ProjectState, tile_id: str) -> Path:
     return target
 
 
+def _threshold_tag(threshold: float) -> str:
+    """A slide's DAB threshold in an overlay's file name (no dot: the part of a cache name before the first dot names
+    one picture, `disk_cache`), so an overlay made before the slide was calibrated again is never shown."""
+    return f"t{round(threshold * 100000):d}"
+
+
 def dab_overlay(state: ProjectState, tile_id: str) -> Path:
     """Pixels above the slide's calibrated DAB threshold."""
-    target = state.cache_dir("overlays") / f"{tile_id}_dab.png"
+    tile = state.tile(tile_id)
+    cal = state.calibration()
+    threshold = float(cal[(cal.tma == str(tile["tma"])) & (cal.stain == tile["stain"])].threshold_dab_od.iloc[0])
+    target = state.cache_dir("overlays") / f"{tile_id}_dab-{_threshold_tag(threshold)}.png"  # a recalibrated slide: new pictures
     if not target.exists():
-        tile = state.tile(tile_id)
-        cal = state.calibration()
-        threshold = float(cal[(cal.tma == str(tile["tma"])) & (cal.stain == tile["stain"])].threshold_dab_od.iloc[0])
         rgb = field_rgb(state, tile_id)
         _rgba_png(np.maximum(rgb_to_hed(rgb)[..., 2], 0) >= threshold, palette.overlay("dab"), 120, target)
     disk_cache.used(target)
@@ -255,14 +261,14 @@ def dab_overlay(state: ProjectState, tile_id: str) -> Path:
 
 
 def thread_overlay(state: ProjectState, tile_id: str) -> Path:
-    target = state.cache_dir("overlays") / f"{tile_id}_threads.png"
+    tile = state.tile(tile_id)
+    cal = state.calibration()
+    threshold = float(cal[(cal.tma == str(tile["tma"])) & (cal.stain == "AT8")].threshold_dab_od.iloc[0])
+    target = state.cache_dir("overlays") / f"{tile_id}_threads-{_threshold_tag(threshold)}.png"  # a recalibrated slide: new pictures
     if not target.exists():
         from stainid.nuclei import clean_nuclei
         from stainid.stains.tau.threads import thread_network
 
-        tile = state.tile(tile_id)
-        cal = state.calibration()
-        threshold = float(cal[(cal.tma == str(tile["tma"])) & (cal.stain == "AT8")].threshold_dab_od.iloc[0])
         rgb = field_rgb(state, tile_id)
         nuclei_path = state.project.output("nuclei") / f"{tile_id}.npz"
         nuclei = clean_nuclei(np.load(nuclei_path)["masks"], rgb) if nuclei_path.exists() else None

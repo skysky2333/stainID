@@ -236,9 +236,44 @@ def file_names(state: ProjectState, stain: str, spots: pd.DataFrame) -> pd.Serie
     return spots.tile_id.astype(str) + "_" + rounded(spots.x) + "_" + rounded(spots.y) + f"_{size_px(state, stain)}.jpg"
 
 
-def outline(state: ProjectState, spot: Spot) -> list[list[float]] | None:
-    """The AI's outline of the object (its Segment Anything mask), in crop pixels, when the field has masks. Kept next
-    to the crop until the masks change."""
+def _store_row(state: ProjectState, spot: Spot, place: tuple[str, float, float], candidate: str | None):
+    """The candidate store's row of the object at `spot` (`place`: its core image and position there): the named
+    `candidate` when the store has it, else the candidate nearest the position within the match radius; None when
+    there is none. Field spots read their field's rows (kept per field until the store file changes)."""
+    from stainid.labels import candidate_store  # noqa: PLC0415
+
+    core_id, cx, cy = place
+    radius = candidate_store.match_px(spot.stain, state.project.pixel_size_um)
+    if frame(state, spot.tile_id, spot.stain) == frames.FIELD:
+        rows = candidate_store.field_rows(state.project, spot.stain, state.tile(spot.tile_id), state.project.context_px)
+    else:
+        rows = candidate_store.read_box(state.project, spot.stain, core_id, cx - radius, cy - radius, cx + radius, cy + radius)
+    if rows is None or rows.empty:
+        return None
+    if candidate:
+        named = rows[rows.candidate_id == candidate]
+        if len(named):
+            return named.iloc[0]
+    distance = np.hypot(rows.x_core.astype(float) - cx, rows.y_core.astype(float) - cy)
+    nearest = int(np.argmin(distance.to_numpy()))
+    return rows.iloc[nearest] if float(distance.iloc[nearest]) <= radius else None
+
+
+def outline(state: ProjectState, spot: Spot, candidate: str | None = None) -> list[list[float]] | None:
+    """The AI's outline of the object, in crop pixels: on a core image with a candidate store, the outline the store
+    shows for its candidate (`candidate`, else the one at its position: `candidate_store.ai_outline`, what every other
+    view draws); on a field of an older project without a store, its Segment Anything mask, when the field has masks
+    (kept next to the crop until the masks change)."""
+    from stainid.labels import candidate_store  # noqa: PLC0415
+
+    place = core_of(state, spot)
+    if place is not None and candidate_store.path(state.project, spot.stain, place[0]) is not None:
+        row = _store_row(state, spot, place, candidate)
+        points = candidate_store.ai_outline(row) if row is not None else None
+        if not points or len(points) < 3:
+            return None
+        x0, y0, _ = _box(state, spot, place[1], place[2])
+        return [[float(px) - x0, float(py) - y0] for px, py in points]
     if frame(state, spot.tile_id, spot.stain) != frames.FIELD:
         return None
     masks = state.project.output("masks") / spot.stain / "labels" / f"{spot.tile_id}.npz"

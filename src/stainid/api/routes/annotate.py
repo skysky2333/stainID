@@ -455,14 +455,15 @@ def _place(state, tile_id: str, kind: str | None, facts: dict[str, dict]) -> dic
     return {}
 
 
-def _outline(state, spot: label_crops.Spot, outlines: pd.DataFrame, size: int) -> tuple[list | None, str | None]:
-    """The object's outline in crop pixels: one a person drew, else the AI's mask outline."""
+def _outline(state, spot: label_crops.Spot, outlines: pd.DataFrame, size: int, candidate: str | None = None) -> tuple[list | None, str | None]:
+    """The object's outline in crop pixels: one a person drew, else the AI's (`label_crops.outline`: the candidate
+    store's outline of `candidate`, the object's key)."""
     near = outlines[(outlines.tile_id == spot.tile_id) & (np.hypot(outlines.x.astype(float) - spot.x, outlines.y.astype(float) - spot.y) <= pool.MATCH_PX)]
     if len(near) and isinstance(near.points.iloc[-1], list):
         x0, y0 = round(spot.x) - size // 2, round(spot.y) - size // 2
         return [[float(px) - x0, float(py) - y0] for px, py in near.points.iloc[-1]], "person"
     try:
-        found = label_crops.outline(state, spot)
+        found = label_crops.outline(state, spot, candidate)
     except (OSError, ValueError, KeyError):
         found = None
     return (found, "AI") if found else (None, None)
@@ -515,7 +516,7 @@ def session_objects(name: str, request: Request, stain: str = "", values: str = 
         crop = label_crops.status(state, spot) if kind else {"state": "missing"}
         if crop["state"] in ("waiting", "preparing"):
             waiting.append((label_crops.core_of(state, spot) or ("",))[0])
-        points, drawn_by = _outline(state, spot, outlines, size) if kind else (None, None)
+        points, drawn_by = _outline(state, spot, outlines, size, str(r.object)) if kind else (None, None)
         on_core = label_crops.core_of(state, spot) if kind else None
         items.append({"tile_id": r.tile_id, "x": float(r.x), "y": float(r.y), "frame": kind, "value": r.shown, "identity": r.identity,
                       "subtype": r.subtype, "labels": r.labels, "time": r.time, "ai_value": words.describe(r.ai_value) if r.ai_value else r.ai_value,

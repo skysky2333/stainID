@@ -117,3 +117,42 @@ def test_every_label_source_gets_a_crop_centred_on_its_object(client):
     assert [(o["tile_id"], round(o["x"])) for o in only["objects"]] == [(TILE, 100)]
     assert client.get("/api/labels/sessions/reference/objects", params={"stain": "6E10", "values": "-"}).json()["objects"] == []
     assert client.get("/api/labels/crops/6E10/nowhere.jpg", params={"x": 1, "y": 1}).status_code == 404
+
+
+def test_the_ai_outline_of_a_labelled_object_is_its_candidates_outline_in_the_store(client):
+    """On a core image with a candidate store, the AI outline under a label is the store's outline of the candidate the
+    label is about (in crop pixels), whatever frame the label uses; written again (a re-run of detection), the store's
+    new outline shows. A label where the store has no candidate gets none."""
+    from stainid.labels import candidate_store, store
+
+    project = state.get_state().project
+    far = (900, 880)  # a second candidate, labelled by its core id (whole-core pixels)
+
+    def write(half: int) -> None:
+        rows = []
+        for x, y in (DOT, far):
+            ring = f"{x - half} {y - half} {x + half} {y - half} {x + half} {y + half} {x - half} {y + half}"
+            rows.append({"candidate_id": candidate_store.candidate_id("6E10", "LIP-1_B-2", x, y), "x_core": x, "y_core": y, "tile_id": TILE,
+                         "area_um2": 300.0, "radius_px": 10.0, "sources": "dab@1", "proposal_threshold": 1.0, "outline": ring, "sam_outline": "",
+                         "sam_status": "", "probability": 0.9, "model_id": "m@1", "decision": "accepted", "reason": "accepted", "class": "plaque",
+                         "subtype": "compact"})
+        candidate_store.write_core(project, "6E10", "LIP-1_B-2", pd.DataFrame(rows))
+
+    write(10)
+    store.append(project.output("reviews"), [
+        _label("import: round3_6e10", TILE, 328.0, 348.0, "compact plaque"),  # field picture: the dot
+        _label("import: reference_6e10", "LIP-1_B-2", *map(float, far), "compact plaque"),
+        _label("import: round3_6e10", TILE, 100.0, 200.0, "not a plaque"),  # no candidate there
+    ])
+    page = _objects(client)
+    by = {(o["tile_id"], round(o["x"]), round(o["y"])): o for o in page["objects"]}
+    c = page["crop"]["size_px"] // 2
+    for key in ((TILE, 328, 348), ("LIP-1_B-2", *far)):
+        found = by[key]
+        assert found["outline_by"] == "AI", key
+        assert sorted(map(tuple, found["outline"])) == sorted([(c - 10, c - 10), (c + 10, c - 10), (c + 10, c + 10), (c - 10, c + 10)]), key
+    assert by[(TILE, 100, 200)]["outline"] is None
+
+    write(20)  # detection ran again: its new outline, not the one shown before
+    again = {(o["tile_id"], round(o["x"]), round(o["y"])): o for o in _objects(client)["objects"]}
+    assert max(px for px, _ in again[(TILE, 328, 348)]["outline"]) == c + 20
