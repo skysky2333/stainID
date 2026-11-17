@@ -33,3 +33,4 @@ old_tma.yaml
 
 # ---- local tool folders (agent worktrees) ----
 .claude/
+_archive/

@@ -507,7 +507,7 @@ images and antibodies than between their two classes (PHF-1 Pre-NFTs median 0.69
 scaling by the slide threshold does not change that (0.40), as the AT8 thresholds there are bounded. Raters box cored
 plaques narrowly (see the public scores), so the other plaques of Keiser and Plaquebox include many dense ones; the
 score separates cored plaques better within a slide than pooled. Montages along each score (low to high, ten bands):
-`/run/media/sky/wd6t/scores_check/montages/`.
+`/run/media/sky/wd6t/alzh/experiments/score_checks/montages/`.
 
 ### Biology readouts (`stainid.v2.biology_measures`)
 

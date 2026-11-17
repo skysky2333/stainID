@@ -1,6 +1,6 @@
 """Outline models compared on a small panel of candidates, each prompted exactly as stage 3 (`v2.outlines`) prompts SAM.
 
-    python -m stainid.masks.model_compare --project ROOT --out DIR [--candidates-root ROOT/data/analysis/v2.before_v2b]
+    python -m stainid.masks.model_compare --project ROOT --out DIR [--candidates-root ROOT/data/analysis/_snapshots/v2.before_v2b]
         [--panel DIR/panel.csv] [--size 100] [--cores-per-stain 6] [--models a,b,…]
         [--expert /path/adnp15=import-adnp15-expert --expert-size 300] [--notes recommendation.md]
 
@@ -824,7 +824,7 @@ def main(argv: list[str] | None = None) -> None:
 
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--project", required=True)
-    parser.add_argument("--candidates-root", default=None, help="the project's v2 folder to read candidates from (e.g. data/analysis/v2.before_v2b)")
+    parser.add_argument("--candidates-root", default=None, help="the project's v2 folder to read candidates from (e.g. data/analysis/_snapshots/v2.before_v2b)")
     parser.add_argument("--panel", default=None, help="a panel.csv of an earlier run to use as it is (default: make the panel)")
     parser.add_argument("--stains", default="6E10,AT8,NeuN")
     parser.add_argument("--size", type=int, default=100, help="candidates per stain (the human-changed ones first)")
