@@ -152,10 +152,11 @@ def _earlier_ai_cores(project: Project) -> dict[str, set[str]]:
     return out
 
 
-def taken(project: Project, stain: str, tiles: pd.DataFrame, labels: pd.DataFrame) -> tuple[set[str], set[str]]:
+def taken(project: Project, stain: str, tiles: pd.DataFrame, labels: pd.DataFrame, session_fields: bool = True) -> tuple[set[str], set[str]]:
     """The fields (and whole cores) this batch leaves out: fields with any label of the stain (or overlapping a sampled
     field that has one), cores labelled as whole cores or by the earlier AI rounds (their images were whole cores),
-    the fields of every labelling session and the tutorial's field."""
+    the fields of every labelling session and the tutorial's field. `session_fields=False` keeps the sessions' fields
+    nobody has labelled yet (a session whose scope is every field would otherwise leave nothing to choose)."""
     mine = tiles[tiles.stain == stain]
     boxes = mine.drop_duplicates("tile_id").set_index("tile_id")
     fields: set[str] = set()
@@ -171,7 +172,7 @@ def taken(project: Project, stain: str, tiles: pd.DataFrame, labels: pd.DataFram
             same = mine[mine.core_id == row.core_id]
             fields |= {t for t, r in zip(same.tile_id, same.to_dict("records")) if _overlaps(_box(r), _box(row))}
     root = project.output("reviews")
-    for name in sessions.names(root):
+    for name in sessions.names(root) if session_fields else ():
         meta = sessions.meta(root, name)
         fields |= set(meta.get("fields") or []) | set(meta.get("scope") or [])
     try:
@@ -592,8 +593,11 @@ def _safe_code(stain: str) -> str:
 
 
 def build_stain(project: Project, stain: str, round_: int = ROUND, n_fields: int = FIELDS, seed: int = 0, log=print,
-                most: int = MOST, fewest: int = FEWEST) -> dict:
-    """Choose a stain's fields and write its batch (`stain_folder`); returns its summary."""
+                most: int = MOST, fewest: int = FEWEST, tmas: set[str] | None = None, session_fields: bool = True,
+                mix=MIX) -> dict:
+    """Choose a stain's fields and write its batch (`stain_folder`); returns its summary. `tmas`: only fields of these
+    arrays (their numbers, e.g. {"8", "9"}; default: every array). `mix`: the shares of rich, sparse and near-threshold
+    fields (default `MIX`; e.g. (("rich", 0.5), ("threshold", 0.5)) for a round aimed at the stain's object)."""
     from stainid.sampling.tiles import known_tiles  # noqa: PLC0415
 
     tiles = known_tiles(project)
@@ -601,11 +605,13 @@ def build_stain(project: Project, stain: str, round_: int = ROUND, n_fields: int
     out = stain_folder(project, stain, round_)
     if (out / "manifest.csv").exists():
         raise FileExistsError(f"{out} has a batch already: remove it (or choose another round) to build it again")
-    skip_fields, skip_cores = taken(project, stain, tiles, labels)
+    skip_fields, skip_cores = taken(project, stain, tiles, labels, session_fields)
     stats = field_stats(project, stain, tiles)
     stats = stats[~stats.tile_id.isin(skip_fields) & ~stats.core_id.astype(str).isin(skip_cores)]
+    if tmas:
+        stats = stats[stats.tma.astype(str).str.extract(r"(\d+)$")[0].isin({str(t) for t in tmas})]
     checked = {c for (c, s) in status.areas_checked(labels, stain)}
-    chosen = choose_fields(stats, n_fields, seed, checked)
+    chosen = choose_fields(stats, n_fields, seed, checked, mix)
     if chosen.empty:
         raise ValueError(f"no {stain} field can be chosen (none is ready and free)")
     chosen = chosen.iloc[np.random.default_rng(seed + 1).permutation(len(chosen))].reset_index(drop=True)
@@ -747,11 +753,12 @@ def _assignments(stain: str, out: Path, manifest: pd.DataFrame, fields: pd.DataF
     return made
 
 
-def build(project: Project, stains: list[str], round_: int = ROUND, n_fields: int = FIELDS, seed: int = 0, log=print) -> dict:
+def build(project: Project, stains: list[str], round_: int = ROUND, n_fields: int = FIELDS, seed: int = 0, log=print,
+          tmas: set[str] | None = None, session_fields: bool = True, mix=MIX) -> dict:
     """Every stain's batch, and the list of the reviewers' assignments (`ASSIGNMENTS.md`)."""
     summaries = {}
     for stain in stains:
-        summaries[stain] = build_stain(project, stain, round_, n_fields, seed, log)
+        summaries[stain] = build_stain(project, stain, round_, n_fields, seed, log, tmas=tmas, session_fields=session_fields, mix=mix)
         log(f"{stain}: {summaries[stain]['objects']} objects in {summaries[stain]['fields']} fields", flush=True)
     top = folder(project, round_)
     rows = ["# AI review round %d: assignments" % round_, "",

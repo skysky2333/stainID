@@ -164,6 +164,11 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--stain", action="append", choices=("NeuN", "6E10", "AT8"), help="repeat for several (default: every one)")
     a.add_argument("--round", type=int, default=4, help="the review round (its folder: <reviews>/ai_review_round<N>)")
     a.add_argument("--fields", type=int, default=8, help="build: fields per stain")
+    a.add_argument("--tma", action="append", help="build: only fields of this array (its number; repeat for several; default: every array)")
+    a.add_argument("--unlabelled-session-fields", action="store_true",
+                   help="build: also choose among the labelling sessions' fields nobody has labelled yet (default: every session field is left out)")
+    a.add_argument("--mix", default="", help="build: shares of the kinds of field, e.g. rich=0.5,threshold=0.5 "
+                   "(kinds: rich, sparse, threshold; default: rich=0.5,sparse=0.25,threshold=0.25)")
     a.add_argument("--seed", type=int, default=0)
     a.add_argument("--csv", action="append", type=Path, default=[], help="ingest: these CSVs (default: the batch's review_labels_*.csv)")
     a.add_argument("--dry-run", action="store_true", help="ingest: report what would be written, write nothing")
@@ -364,7 +369,11 @@ def run(args: argparse.Namespace, project) -> None:
 
         stains = args.stain or ["6E10", "AT8", "NeuN"]
         if args.action == "build":
-            ai_batch.build(project, stains, args.round, args.fields, args.seed)
+            mix = tuple((k.strip(), float(v)) for k, v in (part.split("=") for part in args.mix.split(",") if part.strip())) or ai_batch.MIX
+            if {k for k, _ in mix} - {"rich", "sparse", "threshold"}:
+                raise SystemExit("--mix: the kinds of field are rich, sparse and threshold")
+            ai_batch.build(project, stains, args.round, args.fields, args.seed, tmas=set(args.tma) if args.tma else None,
+                           session_fields=not args.unlabelled_session_fields, mix=mix)
         else:
             for stain in stains:
                 if (ai_batch.stain_folder(project, stain, args.round) / "manifest.csv").exists():
