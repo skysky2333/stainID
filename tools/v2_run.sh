@@ -8,6 +8,7 @@
 #   tools/v2_run.sh decide     only stages 4 and 5 (and, with exclude, white matter and burdens, which redo only what the
 #                              new calls changed): after a new model, cut-off or rule (minutes without exclude, no image read)
 #   tools/v2_run.sh proposals | calls | outlines | white-matter | grey-matter | measures | status    one stage (or how far each has got)
+#   tools/v2_run.sh radiomics  object texture (pyradiomics, optional, not part of `all`; then `measures`), $GREY_WORKERS at once
 #
 # Extra arguments go to every stage, e.g. `tools/v2_run.sh all --core cores.txt` or `--stain AT8`.
 # Settings (environment): STAINID_PROJECT (the project folder), STAINID_PYTHON (python with stainid installed),
@@ -77,6 +78,7 @@ case $what in
   proposals) v2 proposals --workers "$WORKERS" --processes "$PROCESSES" --threads "${THREADS:-0}" --tiles-at-once "${TILES_AT_ONCE:-1}" "$@" ;;
   outlines) outlines "$@" ;;
   grey-matter) v2 grey-matter --workers "$GREY_WORKERS" "$@" ;;
+  radiomics) v2 radiomics --workers "$GREY_WORKERS" "$@" ;;
   calls | white-matter | measures | status) v2 "$what" "$@" ;;
-  *) echo "unknown: $what (all, decide, proposals, calls, outlines, white-matter, grey-matter, measures, status)" >&2; exit 2 ;;
+  *) echo "unknown: $what (all, decide, proposals, calls, outlines, white-matter, grey-matter, radiomics, measures, status)" >&2; exit 2 ;;
 esac

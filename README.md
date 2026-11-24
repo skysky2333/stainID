@@ -301,6 +301,7 @@ one started there.
 | | Outline objects | three Segment Anything outline sizes for the likely objects | `stainid v2 outlines` |
 | **Results** | Find white matter | where each core reaches into the white matter, from its NeuN+ neurons (needed when the results leave it out; no NeuN images: nothing to do) | `stainid v2 white-matter` |
 | | Measure grey-matter burdens | the 6E10 and AT8 stained areas again without the white matter (only when the results leave it out) | `stainid v2 grey-matter` |
+| | Measure object texture | pyradiomics texture of every outlined object and field on its DAB stain (optional: the `radiomics` extra, `v2.radiomics.enabled`) | `stainid v2 radiomics` |
 | | Make results tables | one row per donor and region (and per core), every stain, from the calls | `stainid v2 measures` |
 | **Models** | Download public models | Cellpose-SAM, Segment Anything, Phikon | `stainid download-models` |
 | | Prepare fields for labelling | candidates for the older kinds of labelling session | `stainid labels prepare` |

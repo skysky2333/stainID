@@ -58,7 +58,8 @@ from stainid import candidates as store
 from stainid.analysis import aggregation, field_aggregation, mask_aggregation
 from stainid.analysis.aggregation import summarize_stain_group
 from stainid.tables import read_csv, write_records
-from stainid.v2 import biology_measures, cells, grey_matter, interactions, manifest, missing, organisation, reliability, scores, white_matter
+from stainid.v2 import (biology_measures, cells, grey_matter, interactions, manifest, missing, organisation, radiomics, reliability, scores,
+                       white_matter)
 from stainid.v2.classify import load_model
 from stainid.v2.params import STAINS
 
@@ -222,20 +223,48 @@ def tau_rows(project, tiles: pd.DataFrame, found: pd.DataFrame, threads: pd.Data
     return tile_rows, objects
 
 
-def mask_rows(found: pd.DataFrame, tiles: pd.DataFrame, stain: str, morphotype: float | None) -> list[dict]:
-    """Accepted objects with a kept Segment Anything outline, in the column names of the legacy outline step."""
+def mask_rows(found: pd.DataFrame, tiles: pd.DataFrame, stain: str, morphotype: float | None, texture: dict | None = None) -> list[dict]:
+    """Accepted objects with a kept Segment Anything outline, in the column names of the legacy outline step;
+    `texture`: their pyradiomics features by candidate_id (`stainid.v2.radiomics`), added as `rad_<feature>`."""
     meta = {tile["tile_id"]: {k: tile[k] for k in REGION_KEYS if k in tile} for tile in tiles.to_dict("records")}
     rows = []
     for row in found[(found.decision == "accepted") & (found.sam_status == "ok")].to_dict("records"):
-        out = {**meta[row["tile_id"]], "tile_id": row["tile_id"], "mask_status": "ok",
+        out = {**meta[row["tile_id"]], "tile_id": row["tile_id"], "candidate_id": row["candidate_id"], "mask_status": "ok",
                "area_um2": row["sam_area_um2"], "solidity": row["sam_solidity"], "circularity": row["sam_circularity"],
                "elongation": row["sam_elongation"], "normalized_mean_dab": row["sam_normalized_mean_dab"]}
         if stain == "6E10":
             out["dense_core_fraction"] = fraction_at_least(row["sam_core_dab_q"], morphotype)
         if stain == "AT8":
             out["seed_mature"] = str(row["subtype"] == "mature tangle").lower()
+        if texture is not None:
+            out |= texture.get(str(row["candidate_id"]), {})
         rows.append(out)
     return rows
+
+
+def _texture(found: tuple[pd.DataFrame, pd.DataFrame] | None) -> dict[str, dict]:
+    """A core image's per-object pyradiomics features as {candidate_id: {rad_<feature>: value}} (empty values left out)."""
+    if found is None or found[0].empty:
+        return {}
+    objects = found[0]
+    names = [c for c in objects.columns if c not in ("candidate_id", "tile_id")]
+    return {str(row["candidate_id"]): {f"rad_{n}": float(row[n]) for n in names if pd.notna(row[n])} for row in objects.to_dict("records")}
+
+
+def _texture_fields(found: tuple[pd.DataFrame, pd.DataFrame] | None, tiles: pd.DataFrame, scope: str) -> list[dict]:
+    """A core image's per-field pyradiomics rows of `scope` ("whole"; "grey" falls back to "whole" where the core image has
+    no white matter) for the tiles in `tiles`, with their region keys."""
+    if found is None or found[1].empty:
+        return []
+    fields = found[1]
+    if scope == "grey" and not (fields.scope == "grey").any():
+        scope = "whole"
+    meta = {str(tile["tile_id"]): {k: tile[k] for k in REGION_KEYS if k in tile} for tile in tiles.to_dict("records")}
+    out = []
+    for row in fields[fields.scope == scope].to_dict("records"):
+        if str(row["tile_id"]) in meta:
+            out.append({**meta[str(row["tile_id"])], **{k: v for k, v in row.items() if k != "scope"}})
+    return out
 
 
 def _write(path: Path, rows: list[dict]) -> Path:
@@ -275,12 +304,18 @@ def cell_columns(group: list[dict]) -> dict:
 
 
 def results_tables(folder: Path, tile_rows: dict[str, list[dict]], objects: dict[str, list[dict]], masks: dict[str, list[dict]],
-                   scored: dict[str, list[dict]] | None = None, organised: dict | None = None) -> list[str]:
+                   scored: dict[str, list[dict]] | None = None, organised: dict | None = None,
+                   texture_fields: dict[str, list[dict]] | None = None) -> list[str]:
     """The stainID results tables (`results_<level>.csv` and their parts) from the legacy-shaped rows; `scored`: the
     type scores' object rows per stain (`scores.object_rows`), summarised as their own columns; `organised`:
-    `_Rows.organised`, the columns of `stainid.v2.organisation`."""
+    `_Rows.organised`, the columns of `stainid.v2.organisation`; `texture_fields`: `_Rows.texture_fields`, the per-field
+    pyradiomics rows (the per-object features come in `masks` as `rad_<feature>`). A stain gets texture columns only
+    when `stainid v2 radiomics` measured some of its objects or fields."""
     organised = organised or {"tallies": {s: [] for s in STAINS}, "cores": [], "neurons": []}
     organised.setdefault("bio", {s: [] for s in STAINS})
+    texture_fields = texture_fields or {s: [] for s in STAINS}
+    object_texture = {s: sorted({k[4:] for r in masks[s] for k, v in r.items() if k.startswith("rad_") and v not in ("", None)}) for s in STAINS}
+    field_texture = {s: sorted({k for r in texture_fields[s] for k in r} - {*REGION_KEYS, "tile_id", "n_objects", "mask_px"}) for s in STAINS}
     lines = []
     for level, name in LEVELS.items():
         merged: dict[str, dict] = {}
@@ -300,7 +335,12 @@ def results_tables(folder: Path, tile_rows: dict[str, list[dict]], objects: dict
                 area[(row[level], stain)] += float(row["tissue_area_mm2"])
             by_key = _group(masks[stain], level)
             for key in {row[level] for row in tile_rows[stain]}:  # no outline in measured tissue is 0, not missing
-                merged[key].update(mask_aggregation.summarize(stain, by_key.get(key, []), area[(key, stain)]))
+                merged[key].update(mask_aggregation.summarize(stain, by_key.get(key, []), area[(key, stain)], object_texture[stain]))
+            if field_texture[stain]:
+                prefix, by_field = radiomics.PREFIX[stain], _group(texture_fields[stain], level)
+                for key in {row[level] for row in tile_rows[stain]}:
+                    means = radiomics.field_means(by_field.get(key, []), field_texture[stain])
+                    merged[key].update({f"{prefix}_rad_field_{name}": value for name, value in means.items()})
         for stain, rows_ in (scored or {}).items():  # the area of the stain's density columns (v2_tissue_area_mm2)
             measured = defaultdict(float)
             for row in tile_rows[stain]:
@@ -332,9 +372,10 @@ def results_tables(folder: Path, tile_rows: dict[str, list[dict]], objects: dict
                 row.pop("core_id", None)
         target = folder / f"results_{name}.csv"
         write_records(target, rows)
-        tiled, objected, masked, scored_ = ({s: _group(rows_[s], level) for s in rows_} for rows_ in (tile_rows, objects, masks, scored or {}))
+        tiled, objected, masked, scored_, textured = ({s: _group(rows_[s], level) for s in rows_}
+                                                      for rows_ in (tile_rows, objects, masks, scored or {}, texture_fields))
         write_records(folder / missing.COUNTS.format(name),
-                      [{level: k, **missing.group_counts(*({s: by[s].get(k, []) for s in by} for by in (tiled, objected, masked, scored_))),
+                      [{level: k, **missing.group_counts(*({s: by[s].get(k, []) for s in by} for by in (tiled, objected, masked, scored_, textured))),
                         **extra_counts.get(k, {})} for k in sorted(merged)])
         lines.append(f"{len(rows)} {name} rows -> {target}")
     return lines
@@ -421,6 +462,7 @@ class _Rows:
         self.masks = {s: [] for s in STAINS}
         self.scored = {s: [] for s in scores.SCORES}
         self.organised = {"tallies": {s: [] for s in STAINS}, "cores": [], "neurons": [], "bio": {s: [] for s in STAINS}}
+        self.texture_fields = {s: [] for s in STAINS}  # per-field pyradiomics rows (`stainid.v2.radiomics`)
 
     def add(self, stain: str, organised: dict) -> None:
         """What `_organised` measured on one core image."""
@@ -433,7 +475,9 @@ class _Rows:
 
 
 def _core_rows(project, stain: str, core_id: str, tiles: pd.DataFrame, found: pd.DataFrame, threads, models: dict, morphotype: float,
-               addition: float, between: dict, into: _Rows) -> None:
+               addition: float, between: dict, into: _Rows, texture=None, scope: str = "whole") -> None:
+    """`texture`: the core image's pyradiomics tables (`radiomics.current`, None: none up to date); `scope`: which of its
+    field rows these tiles take ("grey" for the grey-matter tables of a core image with white matter)."""
     if stain == "NeuN":
         t, o = neun_rows(tiles, found, addition)
         v1 = o
@@ -445,7 +489,8 @@ def _core_rows(project, stain: str, core_id: str, tiles: pd.DataFrame, found: pd
     into.tiles[stain] += t
     into.objects[stain] += o
     into.v1_objects[stain] += v1
-    into.masks[stain] += mask_rows(found, tiles, stain, morphotype if stain == "6E10" else None)
+    into.masks[stain] += mask_rows(found, tiles, stain, morphotype if stain == "6E10" else None, _texture(texture) if texture is not None else None)
+    into.texture_fields[stain] += _texture_fields(texture, tiles, scope)
     if stain in into.scored:
         meta = {tile["tile_id"]: {k: tile[k] for k in REGION_KEYS if k in tile} for tile in tiles.to_dict("records")}
         into.scored[stain] += scores.object_rows(stain, found, models[stain].bundle, between[stain], meta)
@@ -602,6 +647,7 @@ def write_measures(project, folder: Path | None = None) -> list[str]:
     floor = float(white_matter.settings(project)["min_grey_mm2"]) if exclude else 0.0
     too_small: set[tuple[str, str]] = set()
     white_rows: list[dict] = []
+    texture_on, texture_behind = radiomics.root(project).is_dir(), 0  # object texture: only where `stainid v2 radiomics` ran
     for stain, cores in images.items():
         for core_id in cores:
             tiles = _tiles(project, stain, core_id)
@@ -620,8 +666,11 @@ def write_measures(project, folder: Path | None = None) -> list[str]:
             if stain == "NeuN":  # the NeuN section's cells, neuronal or not (`cells`)
                 cell_table, neuronal = _neun_cells(project, core_id)
                 tiles = _with_cells(tiles, cell_table, neuronal)
+            texture = radiomics.current(project, stain, core_id) if texture_on else None
+            if texture_on and texture is None and radiomics.manifest_path(project, stain, core_id).exists():
+                texture_behind += 1
             before = len(whole.tiles[stain])
-            _core_rows(project, stain, core_id, tiles, found, threads, models, morphotype, addition, between, whole)
+            _core_rows(project, stain, core_id, tiles, found, threads, models, morphotype, addition, between, whole, texture)
             bodies = _bodies(project, stain, core_id, found)
             neun_cells = (cell_table, neuronal) if stain == "NeuN" else None
             as_whole = _organised(project, stain, core_id, tiles, found, threads, bodies, None, neun_cells)
@@ -631,7 +680,7 @@ def write_measures(project, folder: Path | None = None) -> list[str]:
                 if changed is not None and stain == "NeuN":
                     changed = (_with_cells(changed[0], cell_table, neuronal, white_matter.read(project, core_id, stain)), *changed[1:])
                 if changed is None:
-                    _core_rows(project, stain, core_id, tiles, found, threads, models, morphotype, addition, between, grey)
+                    _core_rows(project, stain, core_id, tiles, found, threads, models, morphotype, addition, between, grey, texture)
                     grey.add(stain, as_whole)
                 else:
                     left_out += 1
@@ -640,8 +689,10 @@ def write_measures(project, folder: Path | None = None) -> list[str]:
                     if float(pd.to_numeric(changed[0]["analysis_area_mm2"], errors="coerce").sum()) < floor:
                         too_small.add((str(core_id), stain))  # a sliver of grey matter: not measured (NA), see the docstring
                     else:
-                        _core_rows(project, stain, core_id, *changed, models, morphotype, addition, between, grey)
+                        _core_rows(project, stain, core_id, *changed, models, morphotype, addition, between, grey, texture, "grey")
                         grey.add(stain, _organised(project, stain, core_id, *changed, bodies, white_matter.read(project, core_id, stain), neun_cells))
+    if texture_behind:
+        lines.append(f"object texture: {texture_behind} core images out of date, their texture columns left empty; run `stainid v2 radiomics`")
     if grey is None:
         lines += _write_tables(folder, whole, between)
     else:
@@ -811,7 +862,7 @@ def _write_tables(folder: Path, collected: _Rows, between: dict) -> list[str]:
     text_objects = {s: read_csv(folder / f"objects_{s}.csv") if objects[s] else [] for s in STAINS}
     _write(folder / "masks_objects.csv", [r | {"stain": s} for s in STAINS for r in masks[s]])
     text_masks = {s: [r for r in read_csv(folder / "masks_objects.csv") if r["stain"] == s] if any(masks.values()) else [] for s in STAINS}
-    lines += results_tables(folder, text_tiles, text_objects, text_masks, scored, collected.organised)
+    lines += results_tables(folder, text_tiles, text_objects, text_masks, scored, collected.organised, collected.texture_fields)
     _write_neurons(folder, collected.organised["neurons"])
     for stain, rows in scored.items():
         named = scores.SCORES[stain]

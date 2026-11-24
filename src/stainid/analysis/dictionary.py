@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import re
 
+from stainid.v2 import radiomics as _radiomics
+
 COLUMNS = {
     "core_id": "Core: TMA and grid position (e.g. LIP-3_B-2).",
     "sample_region_id": "Donor and brain region (all replicate cores of that region pooled).",
@@ -407,6 +409,20 @@ MASK_LABEL = {  # suffix: (label with {} for the object, unit)
     "multicore_fraction": ("{}s with several dense cores", FRACTION),
     "mask_mature_fraction": ("Mature tangles from outlines", FRACTION),
 }
+# object texture (`stainid.v2.radiomics`): pyradiomics features of each object's outline on its DAB stain, per object
+# (median) and per field (one mask of all the field's objects); listed with the outline measures
+TEXTURE_COLUMNS: set[str] = set()
+for _stain, _prefix in _radiomics.PREFIX.items():
+    _noun, _topic = MASK_OBJECT[_prefix]
+    for _key, (_stem, _label, _unit, _meaning) in _radiomics.FEATURES.items():
+        _median, _field = f"{_prefix}_rad_{_stem}_median", f"{_prefix}_rad_field_{_stem}"
+        COLUMNS[_median] = (f"Median over {_noun}s of their texture (pyradiomics {_key.split('_')[1]}): {_meaning}; each {_noun} measured inside "
+                            f"its own Segment Anything outline on the DAB stain (0–255 scale).")
+        COLUMNS[_field] = (f"Texture (pyradiomics {_key.split('_')[1]}) of all {_noun}s of a field together, one mask per field: {_meaning}; "
+                           f"mean over fields weighted by outlined area.")
+        LABELS[_median] = (f"{_sentence_noun(_noun)} texture: {_label}, median", _unit, _topic)
+        LABELS[_field] = (f"{_sentence_noun(_noun)} texture, whole field: {_label}", _unit, _topic)
+        TEXTURE_COLUMNS |= {_median, _field}
 UNIT_SUFFIX = (  # for other columns: (suffix, words it becomes in the label, unit)
     ("_density_mm2", " density", "per mm²"), ("_mm_per_mm2", "", "mm per mm²"), ("_um2", "", "µm²"), ("_mm2", "", "mm²"),
     ("_um", "", "µm"), ("_mm", "", "mm"), ("_fraction", " fraction", FRACTION), ("_count", " count", "count"),
@@ -419,7 +435,7 @@ def _sentence(text: str) -> str:
 
 def measure(column: str) -> dict:
     """How to show one table column: a readable label, its unit, its topic and what it means."""
-    info = {"column": column, "description": describe(column), "key": column in KEY_MEASURES, "outline": False}
+    info = {"column": column, "description": describe(column), "key": column in KEY_MEASURES, "outline": column in TEXTURE_COLUMNS}
     if column in LABELS:
         label, unit, topic = LABELS[column]
         return {**info, "label": label, "unit": unit, "topic": topic}

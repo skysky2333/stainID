@@ -87,7 +87,7 @@ STEP_NEEDS = {
     "nuclei": {"cpus": 4, "gpus": 1, "ram_gb": 8}, "neun": {"cpus": 8, "ram_gb": 8}, "fields": {"cpus": 4, "gpus": 1, "ram_gb": 8},
     "masks": {"cpus": 2, "gpus": 1, "ram_gb": 8}, "v2_proposals": {"cpus": 8, "ram_gb": 16}, "v2_calls": {"cpus": 4, "ram_gb": 6},
     "v2_outlines": {"cpus": 2, "gpus": 1, "ram_gb": 8}, "v2_measures": {"cpus": 2, "ram_gb": 8},
-    "v2_white_matter": {"cpus": 2, "ram_gb": 6}, "v2_grey_matter": {"cpus": 4, "ram_gb": 11},
+    "v2_white_matter": {"cpus": 2, "ram_gb": 6}, "v2_grey_matter": {"cpus": 4, "ram_gb": 11}, "v2_radiomics": {"cpus": 4, "ram_gb": 7},
     "download_models": {"cpus": 0, "ram_gb": 1, "network": True}, "prepare_labels": {"cpus": 2, "ram_gb": 4},
     "train": {"cpus": 4, "ram_gb": 6}, "score_segmentation": {"cpus": 2, "ram_gb": 4},
 }
@@ -197,6 +197,8 @@ def needs_of(workflow: str, options: dict | None = None) -> dict:
             need["cpus"], need["ram_gb"] = 2 * workers, round(1.3 * 2 * workers + 1.4 * workers + 1, 1)
     if workflow == "v2_grey_matter" and int(options.get("workers") or 0) > 0:
         need["cpus"], need["ram_gb"] = int(options["workers"]), round(2.5 * int(options["workers"]) + 1, 1)
+    if workflow == "v2_radiomics" and int(options.get("workers") or 0) > 0:
+        need["cpus"], need["ram_gb"] = int(options["workers"]), round(1.5 * int(options["workers"]) + 1, 1)
     return {"cpus": 0, "gpus": 0, "ram_gb": 0, "network": False, **need}
 
 

@@ -12,7 +12,9 @@ def values(rows, key):
     return np.asarray([float(r[key]) for r in rows if r.get(key) not in ("", "nan", None)], dtype=float)
 
 
-def summarize(stain: str, objects: list[dict[str, str]], tissue_mm2: float) -> dict[str, float]:
+def summarize(stain: str, objects: list[dict[str, str]], tissue_mm2: float, texture: list[str] | tuple[str, ...] = ()) -> dict[str, float]:
+    """`texture`: the pyradiomics features the objects carry (`rad_<feature>`, `stainid.v2.radiomics`), each summarised as
+    `<prefix>_rad_<feature>_median` over the objects with a value, with the outline measures' minimum count."""
     prefix = {"NeuN": "neun_soma", "AT8": "tau_neuron", "6E10": "plaque"}[stain]
     enough = len(objects) >= MINIMUM_OBJECTS[stain]
     med = lambda key: float(np.median(values(objects, key))) if enough else float("nan")
@@ -40,4 +42,8 @@ def summarize(stain: str, objects: list[dict[str, str]], tissue_mm2: float) -> d
     if stain == "AT8":
         mature = [r.get("seed_mature", "").lower() == "true" for r in objects]
         out["tau_neuron_mask_mature_fraction"] = float(np.mean(mature)) if enough else float("nan")
+    for name in texture:
+        found = values(objects, f"rad_{name}")
+        found = found[np.isfinite(found)]
+        out[f"{prefix}_rad_{name}_median"] = float(np.median(found)) if len(found) >= MINIMUM_OBJECTS[stain] else float("nan")
     return out

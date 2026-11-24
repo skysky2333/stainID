@@ -321,11 +321,41 @@ def _grey_matter_status(project: Project) -> dict:
     return {**_not_needed("core images", note or "No white matter found, so there is nothing to redo."), "outdated": behind}
 
 
+def _texture_on(project: Project) -> bool:
+    """Whether "Run what's left" runs the object texture step (`v2.radiomics.enabled`); it can always be run by hand."""
+    return bool(((project.config.get("v2") or {}).get("radiomics") or {}).get("enabled"))
+
+
+def _texture_inputs(project: Project) -> tuple[str, ...]:
+    return (*_white_matter_inputs(project), *(("v2_radiomics",) if _texture_on(project) else ()))
+
+
+def _radiomics_status(project: Project) -> dict:
+    from stainid.v2 import radiomics
+
+    if not radiomics.available():
+        return _not_needed("core images", 'Needs pyradiomics: pip install -e ".[radiomics]" in the app\'s environment, then run it here.')
+    found = radiomics.cached_progress(project)
+    outdated = found["outdated"]
+    note = f"{outdated:,} core images are out of date." if outdated else ""
+    if not _texture_on(project) and not found["done"]:
+        return _not_needed("core images", "Off: run it here by hand, or set v2.radiomics.enabled: true so “Run what's left” runs it. "
+                                          "Its texture columns then appear in the results tables.")
+    if not found["total"]:
+        return _state(0, 0, "core images", "After the outlines.")
+    return _state(found["done"], found["total"], "core images", note, outdated=bool(outdated))
+
+
 def _measures_status(project: Project) -> dict:
     """With the white matter left out, the tables are also out of date when the white matter or the grey-matter burdens
-    changed after them, or have to be made again."""
+    changed after them, or have to be made again; and when object texture was measured after them."""
     path = project.output("v2") / "measures" / "results_donor_region.csv"
     out = _state(int(_has_content(path)), 1, "table")
+    if out["done"] and (project.output("v2") / "radiomics").is_dir():
+        from stainid.v2 import radiomics
+
+        if path.stat().st_mtime < radiomics.cached_progress(project)["written"]:
+            out |= {"outdated": True, "note": "Object texture was measured after these tables were made."}
     if not out["done"] or not _excludes_white(project) or _white_not_needed(project, ""):
         return out
     from stainid.v2 import grey_matter, white_matter
@@ -416,6 +446,8 @@ RESOURCES = {r.id: r for r in (
              lambda p: p.output("v2") / "white_matter" / "white_matter.csv"),
     Resource("v2_grey_matter", "Grey-matter burdens", "The 6E10 and AT8 stained areas of tiles reaching white matter, measured again without it.",
              lambda p: p.output("v2") / "white_matter" / "grey_tiles"),
+    Resource("v2_radiomics", "Object texture", "pyradiomics texture features of every outlined object on its DAB stain, per object and per field.",
+             lambda p: p.output("v2") / "radiomics"),
     Resource("v2_measures", "Results tables", "One row per donor and brain region (and per core) with every measurement, made from the calls (v2/measures).",
              lambda p: p.output("v2") / "measures" / "results_donor_region.csv"),
 )}
@@ -428,6 +460,7 @@ DEVICE = Option("device", "Processor", "select", GPU, "mps = Apple GPU (Apple-si
                 ("cpu", "mps", "cuda"))
 
 GREY_WORKERS = 4  # core images the grey-matter pass works on at once, by default (`stainid.jobs.queue.needs_of`)
+RADIOMICS_WORKERS = 4  # core images the object texture step works on at once, by default
 
 STEPS = (
     Step("slides", "1 · Set up", "Register slides", "Tell stainID which scan is which TMA and stain.",
@@ -568,11 +601,22 @@ STEPS = (
          (Option("workers", "Core images at once", "number", GREY_WORKERS, "About 1 processor and 2.5 GB each.", advanced=True),
           Option("redo", "Redo all", "bool", False, "Redo every core image, not only new and out-of-date ones.", advanced=True)),
          heavy=True, view="/cohort", duration="2–3 minutes per core image with white matter (several at once)", status=_grey_matter_status),
+    Step("v2_radiomics", RESULTS, "Measure object texture", "Measure pyradiomics texture features of every outlined object.",
+         "Runs pyradiomics on each accepted object's Segment Anything outline, on its DAB stain (0–255, the same scale for every "
+         "slide), and once per field on all the field's objects together, with the features of v2/radiomics_params.yaml. The "
+         "results tables then carry each feature's median over objects and its mean over fields, plotted by group on the "
+         "Results page. Optional: off unless v2.radiomics.enabled is true, and it needs the pyradiomics extra. Core images "
+         "already done and up to date are skipped.",
+         ("v2_outlines",), ("v2_radiomics",), ("v2", "radiomics"),
+         (Option("stain", "Stains", "stains", list(STAINS), choices=tuple(STAINS)),
+          Option("workers", "Core images at once", "number", RADIOMICS_WORKERS, "About 1 processor and 1.5 GB each.", advanced=True),
+          Option("redo", "Redo all", "bool", False, "Redo every core image, not only new and out-of-date ones.", advanced=True)),
+         heavy=True, view="/results", duration="about a second per 50 objects (several core images at once)", status=_radiomics_status),
     Step("v2_measures", RESULTS, "Make results tables", "Count and measure from the calls, per core and per donor-region.",
          "Writes the results tables (and the tables the R analyses read) from the saved candidates, calls, outlines and thread "
          "skeletons, under the v2 folder (v2/measures); the legacy results tables are not touched.",
          ("v2_calls",), ("v2_measures",), ("v2", "measures"), (), view="/results", duration="a few minutes", uses=("v2_outlines",),
-         status=_measures_status, uses_when=_white_matter_inputs),
+         status=_measures_status, uses_when=_texture_inputs),
     Step("download_models", "Models", "Download public models", "Fetch the Cellpose-SAM, Segment Anything and Phikon weights.",
          "These models are published by their authors and are the same for every study. The NeuN, 6E10 and AT8 models are specific to "
          "your staining and are trained on the Models page instead.", (), ("model_cellpose", "model_sam", "model_phikon"), ("download-models",),
