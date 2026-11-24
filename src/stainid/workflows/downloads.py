@@ -19,12 +19,15 @@ PUBLIC = ("cellpose", "sam", "huggingface_home")
 def _tls() -> ssl.SSLContext:
     """Certificates to check the download servers with: certifi's bundle. Python from the python.org installer on macOS
     does not read the system's certificates (until its "Install Certificates" script is run), so the default context
-    fails with CERTIFICATE_VERIFY_FAILED; the OpenSSL defaults when certifi is missing."""
+    fails with CERTIFICATE_VERIFY_FAILED. certifi's are added to the system's (and SSL_CERT_FILE / SSL_CERT_DIR), not
+    put in their place, so an institution's own certificate authority keeps working."""
+    context = ssl.create_default_context()
     try:
         import certifi
     except ImportError:
-        return ssl.create_default_context()
-    return ssl.create_default_context(cafile=certifi.where())
+        return context
+    context.load_verify_locations(cafile=certifi.where())
+    return context
 
 
 def _fetch(url: str, target: Path) -> None:

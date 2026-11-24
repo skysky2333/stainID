@@ -36,7 +36,9 @@ app = ["fastapi>=0.115", "uvicorn[standard]>=0.30", "python-multipart>=0.0.9", "
 dev = ["pytest>=8", "ruff>=0.6", "httpx>=0.27"]
 # Object texture (`stainid v2 radiomics`). pyradiomics ships only a source package: install with
 # pip install versioneer && pip install --no-build-isolation -c constraints.txt -e ".[radiomics]"
-radiomics = ["pyradiomics>=3.0.1", "SimpleITK>=2.3"]
+# Its 3.0.1 build script needs a module Python 3.12 removed, so from 3.12 on it is built from its v3.1.0 tag.
+radiomics = ["pyradiomics>=3.0.1; python_version < '3.12'",
+             "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiomics@v3.1.0 ; python_version >= '3.12'", "SimpleITK>=2.3"]
 
 [project.scripts]
 stainid = "stainid.cli:main"

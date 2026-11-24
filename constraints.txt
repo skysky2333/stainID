@@ -15,5 +15,5 @@ torchvision==0.23.0
 cellpose==4.2.1
 segment-anything==1.0
 # object texture (the radiomics extra): the versions `stainid v2 radiomics` was checked with
-pyradiomics==3.0.1
+pyradiomics==3.0.1; python_version < "3.12"  # 3.12 and later: the v3.1.0 tag (pyproject)
 SimpleITK==2.5.7

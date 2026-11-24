@@ -660,7 +660,7 @@ and the group tests are the Results page's.
 - **Image.** The DAB optical density (`imaging.color.rgb_to_hed`, as stage 3 measures it) on 0–255, with a fixed ceiling
   of `v2.radiomics.od_ceiling` (default 0.3 OD: the darkest brown is about 0.25, slide thresholds 0.02–0.05). The scale is
   the same for every slide, so the parameter file's `binWidth: 25` gives about ten grey levels. Spacing: the tile's µm per pixel.
-- **Features.** Those of `src/stainid/v2/radiomics_params.yaml` (or `v2.radiomics.params_file`), 2D forced: first-order
+- **Features.** Those of `src/stainid/v2/radiomics_params.yaml` (or `v2.radiomics.params_file`), in the image plane (every in-plane direction): first-order
   mean, GLCM joint entropy, GLRLM long-run high-grey-level emphasis, GLSZM large-area emphasis, GLDM large-dependence
   emphasis. A feature added to the file gets a column named after it (`radiomics.stem`).
 - **Per object.** Each object on a crop around its outline (4 px margin, `v2.radiomics.margin_px`). Stage 5:

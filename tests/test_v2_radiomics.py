@@ -164,3 +164,15 @@ def test_the_step_end_to_end_into_the_results_tables(v2_project):  # noqa: F811 
     table = pd.read_csv(folder / "results_core.csv")
     assert not [c for c in table.columns if "_rad_" in c]
     assert json.loads(radiomics.manifest_path(project, "6E10", CORE).read_text())["inputs"]["od_ceiling"] == 0.3
+
+
+def test_texture_does_not_depend_on_the_object_orientation():
+    engine = _engine()
+    rng = np.random.default_rng(3)
+    grey = np.zeros((80, 80), np.float32)
+    grey[:, ::3] = 200
+    grey += rng.integers(0, 40, grey.shape)
+    yy, xx = np.ogrid[:80, :80]
+    mask = (((yy - 40) / 30) ** 2 + ((xx - 40) / 12) ** 2 < 1).astype(np.uint8)
+    turned = radiomics.features(engine, np.ascontiguousarray(np.rot90(grey)), np.ascontiguousarray(np.rot90(mask)), (0.27, 0.27))
+    assert radiomics.features(engine, grey, mask, (0.27, 0.27)) == pytest.approx(turned)

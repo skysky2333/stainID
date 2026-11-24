@@ -14,7 +14,8 @@ Two units, as stage 5 reports them:
 The image is the DAB optical density (`imaging.color.rgb_to_hed`, as stage 3 measures it) mapped onto 0–255 with a fixed
 ceiling (`v2.radiomics.od_ceiling`, default 0.3: the darkest brown is about 0.25), the same for every slide, so the
 parameter file's `binWidth: 25` gives about ten grey levels. The features and settings are those of the parameter file
-(`radiomics_params.yaml` beside this module, or `v2.radiomics.params_file`); 2D is forced. An object pyradiomics refuses
+(`radiomics_params.yaml` beside this module, or `v2.radiomics.params_file`), in the image plane (every in-plane
+direction). An object pyradiomics refuses
 (a mask of one pixel, a flat crop) gets no values: empty, never 0.
 
 Outputs, under `<outputs.v2>/radiomics/`: `objects/<stain>/<core_id>.csv` (`candidate_id`, `tile_id`, a column per
@@ -35,7 +36,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-VERSION = 1
+VERSION = 2  # 2: texture in every in-plane direction (1 kept only left-right neighbours)
 STAINS = ("NeuN", "6E10", "AT8")
 PREFIX = {"NeuN": "neun_soma", "6E10": "plaque", "AT8": "tau_neuron"}  # the outline measures' column prefixes
 PARAMS_FILE = Path(__file__).with_name("radiomics_params.yaml")
@@ -109,7 +110,11 @@ def expected(project, stain: str, core_id: str) -> dict | None:
         return None
     found = settings(project)
     out = {"version": VERSION, "candidates": made.get("digest"), "od_ceiling": float(found["od_ceiling"]),
-           "margin_px": int(found["margin_px"]), "params_file": hashlib.sha256(params_file(project).read_bytes()).hexdigest()[:16]}
+           "margin_px": int(found["margin_px"])}
+    try:
+        out["params_file"] = hashlib.sha256(params_file(project).read_bytes()).hexdigest()[:16]
+    except OSError:  # v2.radiomics.params_file names no readable file: nothing can be made (the step stays empty)
+        return None
     if white_matter.read(project, core_id, stain) is not None:
         out["white_matter"] = white_matter.digest(project, core_id, stain)
     return out
@@ -168,11 +173,12 @@ def progress(project) -> dict:
 def cached_progress(project) -> dict:
     """`progress`, made once while its inputs stay the same."""
     from stainid import cache, disk_cache  # noqa: PLC0415
-    from stainid.v2 import manifest  # noqa: PLC0415
+    from stainid.v2 import manifest, white_matter  # noqa: PLC0415
 
     upstream = manifest.root(project) / "manifests"
     inputs = [*(root(project) / "manifests" / s for s in STAINS), *(upstream / "candidates" / s for s in STAINS),
-              *(upstream / "outlines" / s for s in STAINS), params_file(project)]
+              *(upstream / "outlines" / s for s in STAINS), params_file(project), project.config_file,
+              *(white_matter.mask_path(project, "", s).parent for s in STAINS)]  # what `expected` reads
     return cache.memo(("radiomics progress", str(project.root)), inputs, lambda: progress(project), every=10.0, folders=True,
                       persist=disk_cache.answer_file(project.root, "v2-radiomics.pkl"), background=True)
 
@@ -195,15 +201,16 @@ def current(project, stain: str, core_id: str) -> tuple[pd.DataFrame, pd.DataFra
 # ---------------------------------------------------------------- measuring
 
 def extractor(project):
-    """A pyradiomics feature extractor from the parameter file, 2D forced, its log quiet."""
+    """A pyradiomics feature extractor from the parameter file, measuring in the image plane, its log quiet."""
     import logging  # noqa: PLC0415
 
     from radiomics import featureextractor  # noqa: PLC0415
 
     logging.getLogger("radiomics").setLevel(logging.ERROR)
     found = featureextractor.RadiomicsFeatureExtractor(str(params_file(project)))
-    found.settings["force2D"] = True
-    found.settings["force2Ddimension"] = 0
+    # the images are 2D already, so pyradiomics measures them in the plane, in every in-plane direction; force2D with
+    # force2Ddimension 0 is for 3D volumes (z first): on a 2D image it drops the y axis and keeps only left-right neighbours
+    found.settings["force2D"] = False
     return found
 
 
