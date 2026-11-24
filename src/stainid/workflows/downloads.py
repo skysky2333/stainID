@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import ssl
 import urllib.request
 from pathlib import Path
 
@@ -15,6 +16,17 @@ URLS = {
 PUBLIC = ("cellpose", "sam", "huggingface_home")
 
 
+def _tls() -> ssl.SSLContext:
+    """Certificates to check the download servers with: certifi's bundle. Python from the python.org installer on macOS
+    does not read the system's certificates (until its "Install Certificates" script is run), so the default context
+    fails with CERTIFICATE_VERIFY_FAILED; the OpenSSL defaults when certifi is missing."""
+    try:
+        import certifi
+    except ImportError:
+        return ssl.create_default_context()
+    return ssl.create_default_context(cafile=certifi.where())
+
+
 def _fetch(url: str, target: Path) -> None:
     """Download `url` to `target` through `<target>.part`, which a new run continues (an HTTP range request) after a
     pause, a restart or a broken connection; the file appears under its name only once it is whole."""
@@ -22,7 +34,7 @@ def _fetch(url: str, target: Path) -> None:
     partial = target.with_name(target.name + ".part")
     have = partial.stat().st_size if partial.exists() else 0
     request = urllib.request.Request(url, headers={"Range": f"bytes={have}-"} if have else {})
-    with urllib.request.urlopen(request) as response:
+    with urllib.request.urlopen(request, context=_tls()) as response:
         resumed = have and response.status == 206
         if have and not resumed:
             print(f"{target.name}: the server cannot continue a partial download; starting again", flush=True)
