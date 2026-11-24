@@ -11,14 +11,15 @@ from stainid.v2 import scores
 TAU_BUNDLE = {"mature_p90_threshold": 0.16, "mature_feature": "soma_dab_p90"}
 PLAQUE_BUNDLE = {"morphotype_threshold": 1.5}
 QUANTILES = " ".join(f"{v:.4f}" for v in np.linspace(0.5, 3.0, 21))  # 0.5 … 3.0 slide thresholds
+CENTRE = {t.name: t.centre for s in scores.SCORES.values() for t in s.terms}  # the fitted centres: a median object
 
 
-def _tau(p90, contrast=2.83, cv=0.597) -> pd.DataFrame:
+def _tau(p90, contrast=CENTRE["contrast"], cv=CENTRE["texture"]) -> pd.DataFrame:
     p90 = np.atleast_1d(np.asarray(p90, float))
     return pd.DataFrame({"m_soma_dab_p90": p90, "m_normalized_contrast": contrast, "m_soma_dab_cv": cv})
 
 
-def _plaque(inner, quantiles=QUANTILES, radial=0.777, edge=0.717) -> pd.DataFrame:
+def _plaque(inner, quantiles=QUANTILES, radial=0.74, edge=CENTRE["edge_contrast"]) -> pd.DataFrame:
     inner = np.atleast_1d(np.asarray(inner, float))
     return pd.DataFrame({"normalized_inner_dab": inner, "core_dab_q": quantiles, "s_radial_dab_contrast": radial, "boundary_contrast": edge})
 
@@ -36,8 +37,7 @@ def test_scores_are_monotone_in_every_feature():
         frame = _tau(np.full(20, 0.16))
         frame[column] = np.linspace(0.0, 5.0, 20)
         assert np.all(np.diff(scores.compute("AT8", frame, TAU_BUNDLE)) > 0)
-    for column, values in (("normalized_inner_dab", np.linspace(0.5, 4, 20)), ("s_radial_dab_contrast", np.linspace(-1, 3, 20)),
-                           ("boundary_contrast", np.linspace(-1, 3, 20))):
+    for column, values in (("normalized_inner_dab", np.linspace(0.5, 4, 20)), ("boundary_contrast", np.linspace(-1, 3, 20))):
         frame = _plaque(np.full(20, 1.5))
         frame[column] = values
         assert np.all(np.diff(scores.compute("6E10", frame, PLAQUE_BUNDLE)) > 0)
@@ -91,7 +91,7 @@ def test_cuts_come_from_the_project(tmp_path):
 
     write_default_config(tmp_path)
     project = load_project(tmp_path)
-    assert scores.cuts(project, "AT8") == (0.29, 0.62) and scores.cuts(project, "6E10") == (0.48, 0.79)
+    assert scores.cuts(project, "AT8") == (0.11, 0.33) and scores.cuts(project, "6E10") == (0.96, 0.99)
     project.config["v2"] = {"scores": {"AT8": {"bins": [0.7, 0.2]}}}
     with pytest.raises(ValueError):
         scores.cuts(project, "AT8")

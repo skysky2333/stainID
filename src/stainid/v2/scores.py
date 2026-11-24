@@ -13,13 +13,21 @@ The DAB term is the feature stage 4's type rule cuts, as the log of its ratio to
 thresholds), so it is 0 at the cut; the other features are centred on the study's accepted objects' medians. An
 object with those median features therefore scores exactly 0.5 at stage 4's cut, and 0.5 is where the score's two
 classes meet the existing ones (on the study 94.8 % of accepted tau+ neurons and 95.2 % of typed plaques fall on the
-same side). A retrained model moves the cut and the score with it.
+same side; with the set-4 weights 93.1 % and 86.2 %; with the 2026-11-20 weights, on the network's tau+ neurons and the
+retrained 6E10 model's plaques, 93.0 % and 88.4 %; with the 2026-11-22 6E10 weights 86.5 %). A retrained model moves the
+cut and the score with it.
 
-The weights were fitted once on the study's typed labels (label set "ai": 412 tau+ neurons, 387 plaques of at least
-15 µm) by a logistic regression with non-negative weights on features divided by their interquartile range over the
+The weights were fitted on label set 4 (sessions set4_<stain>, Fable 5.2 high, blind; AT8 refit 2026-11-20 on the
+network's calls: 706 typed tau+ neurons, 544 mature tangles, held-out AUC 0.87; 6E10 refit 2026-11-22 on the model
+retrained on set 4 + the first cored-enriched round (the second retired): 2,249 plaques of at least 15 µm, 412 compact,
+495 of them picked by a network for the round (they teach the weights; the bins use the intercept of the other 1,754,
+65 compact), held-out AUC 0.82 on those; before, with both rounds, 2,838 plaques and the same AUC; on 2026-11-19 1,659
+plaques, 60 compact; before that on label set "ai": 412 tau+ neurons, 387 plaques) by a logistic regression with non-negative weights on features divided by their interquartile range over the
 accepted objects (`tools/type_scores.py` refits them; docs/pipeline_v2.md has the validation); features the fit gave
-no weight were left out (AT8: the soma's stained share and the share of it a nucleus covers; 6E10: solidity). A
-missing feature counts as its centre.
+no weight were left out (AT8: the soma's stained share and the share of it a nucleus covers; 6E10: solidity and, since
+the 2026-11-20 refit, the core contrast, inner minus outer radial DAB, which `features` still computes; weight 0 again
+in the 2026-11-22 refit). A missing feature
+counts as its centre.
 
 Bins (`v2.scores.<stain>.bins`, two cut points): the score where the label set's own calibration (the fitted
 intercept added back) gives the labelled classes 2:1 odds either way, rounded to 0.01; between them the labelled
@@ -51,16 +59,15 @@ class Score:
 
 
 TAU = Score("AT8", "tau_maturity", (
-    Term("dab", 3.70, 0.0, "ln(soma DAB 90th percentile / the model's mature-tangle cut-off)"),
-    Term("contrast", 0.281, 2.83, "soma mean DAB minus its 2-10 µm ring's median, in slide thresholds (m_normalized_contrast)"),
-    Term("texture", 1.43, 0.597, "the soma's DAB coefficient of variation: a fibrillar, uneven fill (m_soma_dab_cv)"),
+    Term("dab", 3.07, 0.0, "ln(soma DAB 90th percentile / the model's mature-tangle cut-off)"),
+    Term("contrast", 0.382, 2.6, "soma mean DAB minus its 2-10 µm ring's median, in slide thresholds (m_normalized_contrast)"),
+    Term("texture", 1.89, 0.574, "the soma's DAB coefficient of variation: a fibrillar, uneven fill (m_soma_dab_cv)"),
 ), ("pretangle", "intermediate", "mature"), 5)
 
 PLAQUE = Score("6E10", "plaque_compactness", (
-    Term("core_density", 0.749, 0.0, "ln(inner mean DAB in slide thresholds / the model's morphotype cut-off)"),
-    Term("core_contrast", 1.47, 0.777, "inner minus outer mean DAB (radial profile), in slide thresholds (s_radial_dab_contrast)"),
-    Term("core_fraction", 5.18, 0.197, "share of the deposit at or above the morphotype cut-off (smoothed DAB): the dense-core fraction"),
-    Term("edge_contrast", 1.39, 0.717, "deposit mean DAB minus its surrounding ring's, in slide thresholds (boundary_contrast): edge sharpness"),
+    Term("core_density", 0.892, 0.0, "ln(inner mean DAB in slide thresholds / the model's morphotype cut-off)"),
+    Term("core_fraction", 4.08, 0.144, "share of the deposit at or above the morphotype cut-off (smoothed DAB): the dense-core fraction"),
+    Term("edge_contrast", 2.17, 0.696, "deposit mean DAB minus its surrounding ring's, in slide thresholds (boundary_contrast): edge sharpness"),
 ), ("diffuse", "intermediate", "compact"), 10)
 
 SCORES = {"AT8": TAU, "6E10": PLAQUE}

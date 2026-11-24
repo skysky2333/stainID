@@ -50,14 +50,14 @@ def forest():
 
 def labelled(project: Project, stain: str, sessions: list[str] | None = None, mapping_from: Project | None = None) -> tuple[pd.DataFrame, list[str]]:
     """Consensus-labelled objects with their candidate features (one row per object), from the labels of these
-    sessions (`labels.sessions.in_sessions`; all labels when None). Simple labels train through the mapping of
+    sessions (`labels.sessions.for_training`; every session but the retired ones when None). Simple labels train through the mapping of
     `mapping_from` (the project whose model is trained; default this one)."""
     labels = frames.in_field_frame(excluded_areas.drop_excluded(project, store.current(project.output("reviews"))), known_tiles(project),
                                   project.context_px)
     counts = added.measure(project, stain)
     if any(counts.values()):
         print(f"measured {counts['measured']} object(s) people added; {counts['could_not_be_measured']} could not be measured", flush=True)
-    chosen = label_sessions.in_sessions(labels, sessions)
+    chosen = label_sessions.for_training(labels, sessions, project.retired_label_sets())
     mapper = mapping_from or project
     mapping = simple.used_mapping(chosen, mapper, stain)  # simple sessions' labels train through the mapping on the Models page
     chosen = simple.with_training_rows(chosen, mapper, stain)
@@ -162,8 +162,11 @@ def _current(project: Project, stain: str, x: np.ndarray, names: list[str]) -> t
     path = project.model(MODEL_KEY[stain])
     if not path.exists():
         return None, {}
+    bundle = load(path)
+    if bundle.get("kind") == "network":  # scores images, not these features: no like-for-like comparison here; the settings
+        return None, {**bundle, "probability_threshold": bundle["fallback_threshold"]}  # a forest inherits are its forest's
     probability, _ = pool.model_probability(project, stain, x, names)
-    return probability, load(path)
+    return probability, bundle
 
 
 def slide_scaled(project: Project, stain: str) -> bool:
@@ -344,11 +347,12 @@ def train_model(project: Project, stain: str, sessions: list[str] | None = None,
 
 
 def trained_on(project: Project, stain: str, sessions: list[str] | None, mapping_from: Project | None = None) -> list[dict]:
-    """The sessions whose labels a training used (every session with labels of this stain when None): name, title and
+    """The sessions whose labels a training used (every session but the retired ones when None): name, title and
     how many objects each labelled, for the model's report (simple labels counted through `mapping_from`'s mapping)."""
     root = project.output("reviews")
     titles = {name: label_sessions.meta(root, name).get("title", name) for name in label_sessions.names(root)}
-    used = label_sessions.label_sets(label_sessions.in_sessions(excluded_areas.drop_excluded(project, store.current(root)), sessions), stain, titles,
+    used = label_sessions.label_sets(label_sessions.for_training(excluded_areas.drop_excluded(project, store.current(root)), sessions,
+                                                                 project.retired_label_sets()), stain, titles,
                                      simple=simple.of(mapping_from or project, stain))
     return [{"name": s["name"], "title": s["title"], "objects": s["objects"]} for s in used]
 

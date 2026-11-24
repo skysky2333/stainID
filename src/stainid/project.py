@@ -48,7 +48,7 @@ DEFAULTS: dict = {
     "analysis": {"tiles": "whole_core"},
     # Probability a NeuN candidate or tau-neuron candidate needs to be counted. null keeps the cut-off stored in the model.
     # Random audits of accepted objects found many non-neurons at the model defaults (NeuN 0.5, AT8 0.4):
-    # workspace/docs/object_acceptance_audit.md.
+    # the study's object_acceptance_audit.md.
     "acceptance": {"neun": None, "tau": None},
     # Arithmetic of the deep models on CUDA (cpu always runs fp32): fp32, tf32 or bf16. Measured on an A100-class card:
     # Cellpose bf16 2.9 s/tile (about 1% of cells differ from fp32), tf32 3.8 s (fp32 masks cell for cell), fp32 10 s;
@@ -62,7 +62,10 @@ DEFAULTS: dict = {
     # Model training (`stainid.training.train`): other stainID projects whose labels (and their candidates) every model
     # of this project is also fitted on, as training-only cases (folders, relative to this project or absolute; the
     # toggle on the Models page). They are never in the out-of-fold check or any analysis of this project.
-    "training": {"extra_projects": []},
+    # `retired_sets`: label sets (session names; "reference" for the labels made outside sessions) a model no longer
+    # learns from unless they are named: kept in the label log, left out when no session is chosen (`stainid train`
+    # without --session, the Models page's Train dialog, which does not list them), still trained on when named.
+    "training": {"extra_projects": [], "retired_sets": []},
     # The dataset package a project was made from (id, title, licence, citation, package folder); {} for your own data.
     "dataset": {},
     # Space the pictures the app makes for viewing (data/cache/) may take, in GB; the least recently used are deleted
@@ -179,6 +182,10 @@ class Project:
     def analysis_tiles(self) -> Path:
         """The tiles detection runs on: every tissue tile of each core."""
         return self.input("whole_core_manifest")
+
+    def retired_label_sets(self) -> set[str]:
+        """Label sets models no longer learn from by default (`training.retired_sets`)."""
+        return {str(name) for name in (self.config["training"].get("retired_sets") or [])}
 
     def acceptance(self, model: str, bundle: dict) -> float:
         """The probability cut-off for counting an object: the project setting if given, else the model's own."""

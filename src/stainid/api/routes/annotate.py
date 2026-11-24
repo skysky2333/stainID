@@ -396,8 +396,12 @@ def _titles() -> dict[str, str]:
 
 @router.get("/labels/sets", dependencies=admin)
 def label_sets(stain: str) -> list[dict]:
-    """The sessions (and the reference labels) with object labels of this stain, to choose what a model learns from."""
-    return sessions.label_sets(store.current(root()), stain, _titles(), vocabulary(stain), simple.of(get_state().project, stain))
+    """The sessions (and the reference labels) with object labels of this stain, to choose what a model learns from;
+    not the retired ones (`training.retired_sets`)."""
+    project = get_state().project
+    retired = project.retired_label_sets()
+    return [s for s in sessions.label_sets(store.current(root()), stain, _titles(), vocabulary(stain), simple.of(project, stain))
+            if s["name"] not in retired]
 
 
 OBJECTS_PAGE = 60

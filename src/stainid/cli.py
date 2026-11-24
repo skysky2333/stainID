@@ -113,11 +113,12 @@ def build_parser() -> argparse.ArgumentParser:
     _shard(p)
 
     p = sub.add_parser("v2", help="v2 detection: proposals, calls, outlines and measures (outputs.v2); resumable, redoes what is outdated; "
+                       "network: a network model's scores for stage 4 (GPU; only for a stain whose active model is a network); "
                        "white-matter: the algorithm's grey / white matter from the NeuN calls; grey-matter: the 6E10 / AT8 burdens "
                        "with the white matter left out, for measures when v2.white_matter.analysis is exclude; register: line up "
                        "every NeuN core image with its 6E10 / AT8 images where the registration table has no row (kept in the "
                        "project's registration cache, read by measures' spatial interactions); run it before measures")
-    p.add_argument("stage", choices=("proposals", "calls", "outlines", "measures", "white-matter", "grey-matter", "register", "status"))
+    p.add_argument("stage", choices=("proposals", "network", "calls", "outlines", "measures", "white-matter", "grey-matter", "register", "status"))
     p.add_argument("--stain", action="append", choices=("NeuN", "6E10", "AT8"))
     p.add_argument("--core", action="append", help="only this core (repeat for several; a file with one core id per line works too)")
     p.add_argument("--workers", type=int, default=0,
@@ -131,7 +132,7 @@ def build_parser() -> argparse.ArgumentParser:
                         "processors the workers leave idle, at most 4)")
     p.add_argument("--tiles-at-once", type=int, default=1,
                    help="proposals with --processes 0: tiles of a core image worked on at once (threads sharing the decoded image; ~0.7 GB each)")
-    p.add_argument("--device", default="", help="outlines: cuda, cuda:1 or cpu (default: a GPU when there is one)")
+    p.add_argument("--device", default="", help="outlines, network: cuda, cuda:1 or cpu (default: a GPU when there is one)")
     p.add_argument("--redo", action="store_true", help="redo every core image, not only missing and outdated ones")
     p.add_argument("--out", type=Path, default=None,
                    help="measures: write the tables into this folder instead of <outputs.v2>/measures (to compare a change)")
@@ -176,7 +177,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("train", help="train a stain model from the labels in the label store")
     p.add_argument("--stain", required=True, choices=("NeuN", "6E10", "AT8"))
     p.add_argument("--session", action="append", help="train only on the labels of this session (repeat for several; \"reference\" = the "
-                   "imported reference labels); default: every session")
+                   "imported reference labels); default: every session except training.retired_sets")
     p.add_argument("--no-extra-projects", dest="no_extra_projects", action="store_true",
                    help="fit on this project's labels only, not also on those of the projects under training.extra_projects")
 
@@ -421,6 +422,8 @@ def run_v2(args: argparse.Namespace, project) -> None:
     elif args.stage == "proposals":
         run.run_proposals(project, stains, cores, args.workers or None, args.shard_index, args.shard_count, args.redo, args.threads or None,
                           max(1, args.tiles_at_once), None if args.processes < 0 else args.processes)
+    elif args.stage == "network":
+        run.run_network(project, stains, cores, args.device or None, args.shard_index, args.shard_count, args.redo)
     elif args.stage == "calls":
         run.run_calls(project, stains, cores, args.workers or None, args.redo)
     elif args.stage == "outlines":

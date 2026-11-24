@@ -59,7 +59,7 @@ def proposal_inputs(project, fresh: bool = True):
 
 def todo(project, stage: str, stains, cores: set[str] | None = None, redo: bool = False) -> list[tuple[str, str, list[dict], str]]:
     """(core_id, stain, tiles, why) of every core image the stage has to (re)do: why is "missing" or "outdated"."""
-    from stainid.v2 import classify, outlines, proposals
+    from stainid.v2 import classify, network, outlines, proposals
 
     out = []
     found = groups(project, stains, cores)
@@ -74,10 +74,13 @@ def todo(project, stage: str, stains, cores: set[str] | None = None, redo: bool 
             if threshold is None:
                 continue
             made = proposals.expected(project, stain, core_id, tiles, threshold, nuclei)
-        elif stage == "calls":
+        elif stage in ("calls", "network"):
             if stain not in models:
                 models[stain] = classify.load_model(project, stain)
-            made = classify.expected(project, stain, core_id, models[stain])
+            if stage == "network":
+                made = network.expected(project, stain, core_id, models[stain])
+            else:
+                made = classify.expected(project, stain, core_id, models[stain])
         else:
             made = outlines.expected(project, stain, core_id)
         if made is None:  # its upstream stage has not run
@@ -380,6 +383,13 @@ def _calls_worker(root: str, stain: str, core_id: str) -> dict:
 
 
 def run_calls(project, stains=STAINS, cores: set[str] | None = None, workers: int | None = None, redo: bool = False) -> None:
+    from stainid.v2.classify import load_model
+
+    for stain in stains:  # a network decides from stage 4a's scores: every core image must have them, up to date
+        if load_model(project, stain).network:
+            left = todo(project, "network", [stain], cores)
+            if left:
+                raise SystemExit(f"stage 4 (calls): {len(left)} {stain} core images have no up-to-date network scores; run stainid v2 network first")
     jobs = todo(project, "calls", stains, cores, redo)
     workers = workers or max(1, min(8, (os.cpu_count() or 2) // 4))
     print(f"[0/{len(jobs)}] stage 4 (calls): {len(jobs)} core images to do", flush=True)
@@ -399,6 +409,41 @@ def run_calls(project, stains=STAINS, cores: set[str] | None = None, workers: in
             except Exception as error:  # noqa: BLE001
                 print(f"[{number}/{len(jobs)}] {core} {stain}: failed: {type(error).__name__}: {error}", flush=True)
     units.boundary("stage 4")
+
+
+# ---------------------------------------------------------------- stage 4a
+
+def run_network(project, stains=STAINS, cores: set[str] | None = None, device: str | None = None, shard_index: int = 0,
+                shard_count: int = 1, redo: bool = False) -> None:
+    """Stage 4a on every core image to do, for each stain whose active model is a network (one process per GPU:
+    `--shard-index i --shard-count 2` with CUDA_VISIBLE_DEVICES)."""
+    from stainid.v2 import network
+    from stainid.v2.classify import load_model
+
+    for stain in stains:
+        model = load_model(project, stain)
+        if not model.network:
+            continue
+        jobs = todo(project, "network", [stain], cores, redo)[shard_index::shard_count]
+        print(f"[0/{len(jobs)}] stage 4a (network scores, {stain}, {model.model_id}): {len(jobs)} core images to do", flush=True)
+        if not jobs:
+            continue
+        scorer = network.Scorer(model, device)
+        started, scored = time.time(), 0
+        for number, (core, _, tiles, why) in enumerate(jobs, start=1):
+            units.boundary(f"{number - 1} core images scored")
+            claim = _claim(project, "network", stain, core)
+            if claim is None:
+                continue
+            try:
+                result = network.score_core(project, stain, core, tiles, model, scorer)
+                scored += result["scored"]
+                print(f"[{number}/{len(jobs)}] {core} {stain} ({why}): {result['scored']} of {result['candidates']} candidates scored, "
+                      f"{result['seconds']:.0f} s ({scored / (time.time() - started):.0f} per s so far)", flush=True)
+            except Exception as error:  # noqa: BLE001 - one bad core must not stop the others
+                print(f"[{number}/{len(jobs)}] {core} {stain}: failed: {type(error).__name__}: {error}", flush=True)
+            finally:
+                claim.unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------- stage 3

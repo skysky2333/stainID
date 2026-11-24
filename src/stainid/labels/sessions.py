@@ -74,6 +74,12 @@ def in_sessions(labels: pd.DataFrame, chosen: list[str] | None) -> pd.DataFrame:
     return labels[session_of(labels).isin(set(chosen))] if chosen else labels
 
 
+def for_training(labels: pd.DataFrame, chosen: list[str] | None, retired: set[str]) -> pd.DataFrame:
+    """The labels a model learns from: the chosen sessions' (named retired ones included), or with none chosen every
+    session's except the retired ones (`Project.retired_label_sets`)."""
+    return in_sessions(labels, chosen) if chosen else labels[~session_of(labels).isin(retired)]
+
+
 def label_sets(labels: pd.DataFrame, stain: str, titles: dict[str, str], vocabulary: Vocabulary | None = None, simple=None) -> list[dict]:
     """Every session with object labels of this stain: how many labels of each class (identity and subtype, as
     `Vocabulary.display` names them), from how many objects, fields and people. `titles` names the real sessions; the

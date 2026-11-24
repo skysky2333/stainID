@@ -60,8 +60,8 @@ def _folder(folder: Path) -> tuple[list[Path], list[Path]]:
         for entry in entries:
             if entry.is_dir():
                 folders.append(Path(entry.path))
-            elif entry.name.endswith(".csv") and entry.is_file():
-                files.append(Path(entry.path))
+            elif entry.name.endswith(".csv") and ".before_" not in entry.name and entry.is_file():  # a rebuild's kept
+                files.append(Path(entry.path))  # earlier version (<table>.before_<tag>.csv) is not a current table
     with _lock:
         _folders[folder] = (mtime, time.monotonic(), sorted(files), sorted(folders))
     return sorted(files), sorted(folders)

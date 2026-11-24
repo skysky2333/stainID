@@ -9,7 +9,8 @@ change to a model, a threshold or a rule re-runs only the cheap stages after it.
 |---|---|---|---|---|
 | 1 Nuclei | `stainid nuclei` (unchanged) | core images | `tile_nuclei/<tile>.npz` | GPU, run once |
 | 2 Proposals | `stainid v2 proposals` | core images, nuclei, slide thresholds, exclusions | `proposals/`, `tiles/`, `threads/`, `unproposed/`, `masks/`, `cells/` | CPU, the expensive stage |
-| 4 Calls | `stainid v2 calls` | `proposals/`, the stain models, `v2.rules` | `calls/`, `candidates/` | minutes for the cohort, no image read |
+| 4a Network scores | `stainid v2 network` | `proposals/`, `v2.rules`, core images, a network model | `network/` | GPU, only for a stain whose active model is a network (AT8 since 2026-11-20: about an hour on two GPUs) |
+| 4 Calls | `stainid v2 calls` | `proposals/`, the stain models (a network: `network/`), `v2.rules` | `calls/`, `candidates/` | minutes for the cohort, no image read |
 | 3 Outlines | `stainid v2 outlines` | `proposals/`, `calls/` (which to outline), core images, SAM | `outlines/`, `candidates/` | GPU, optional |
 | 5 Measures | `stainid v2 measures` | `candidates/`, `tiles/`, `threads/` | `measures/` | minutes, no image read |
 | White matter | `stainid v2 white-matter` | NeuN `candidates/`, `masks/` of the three stains, the NeuN images of cores to check, the registration | `white_matter/` | seconds per core; read by stage 5 (with `exclude`, also what it counts; docs/white_matter.md) |
@@ -194,7 +195,7 @@ AT8, LIP-9 C-5 AT8): their tiles may miss tissue; left for after the re-run.
 them for tissue, and at the fixed threshold they read as stained. `field_tissue_mask` (so the tissue of detection, the
 areas, the calibration and the viewer) leaves them out before its opening and closing, so a stray black pixel inside
 tissue is closed over, and `stainid calibrate` also leaves every pure-black pixel out of the slide's sample
-(`workflows.calibrate.sample_core`). Tested on 333 slides (`/run/media/sky/Untitled/alzh/work/calibration_guard/`): two
+(`workflows.calibrate.sample_core`). Tested on 333 slides: two
 Plaquebox training slides move (0.43 → 0.048 and 0.35 → 0.055 OD); the study's thresholds move by at most 6e-6 OD.
 
 **Cells: the per-nucleus table** (`cells/<stain>/<core_id>.parquet`, `stainid.v2.cells`). Every Cellpose nucleus of the
@@ -245,7 +246,7 @@ same labels metrics and the same 784 per-core measures as the code before them.
   wall band, 4 any other lumen).
 
 Seconds per tile (median of 12 tiles per stain, 2 core images each, one processor, after stage 2's own pictures are
-made): see "Biology measurements: pilots" under stage 5. Pilots and scripts: `/run/media/sky/Untitled/alzh/work/bio_features/`.
+made): see "Biology measurements: pilots" under stage 5.
 
 Stained regions no candidate proposes (`unproposed/`, per stain `proposals.<stain>.unproposed`): NeuN and AT8 as
 before (smoothed DAB ≥ the threshold, ≥ 15 / 20 µm², touching no candidate); 6E10 the DAB smoothed over 4 µm at
@@ -320,6 +321,25 @@ The stain model scores every candidate from `m_` columns (`stainid.candidates.mo
 | AT8 | `rule:excluded` (also a centre outside valid tissue), `rule:low_contrast` (< 0.3, the legacy bar), `rule:small` (new-source bodies < 40 µm²), `rule:edge`, `rule:irregular` (new-source bodies less compact than legacy bodies: solidity < 0.7 or circularity < 0.35; both off with `min_body_um2: 0`, `body_min_solidity: 0`, `body_min_circularity: 0`. Flame-shaped tangles fail them, so a project of such slides whose forest is refitted on its own labels may turn them off; on the study they stop few real cells, and without them the forest accepts about 7 % more objects, mostly dense thread swellings) | `rule:duplicate` (12 µm suppression, now over the whole core); subtype mature tangle / pretangle by the model's p90 threshold |
 
 `class` and `subtype` are label-vocabulary ids (`stainid.labels.vocabulary`); `threshold` is the cut-off the call used.
+
+### Stage 4a: a network model's scores (AT8 since 2026-11-20)
+
+A model bundle with `kind: network` (`stainid.v2.network`) scores images, not stored features. Stage 4a cuts, for every
+candidate the rules above leave to the model, its 192 µm surroundings and its central 72 µm from the core image (the
+inputs the network was trained on) and stores the network's score (`network/<stain>/<core>.parquet`, one manifest per
+core: the proposals, the rules, the weights' sha256). Stage 4 then decides from these scores exactly as from a forest's
+probabilities: the same rules, cut-off (`acceptance.tau`), duplicate radius and subtype rule, which the bundle carries
+over from the forest it replaced. Stage 4 refuses to run while a core image has no up-to-date network scores. The bundle
+also keeps that forest (`classifier`, `feature_names`, `fallback_threshold`) for the places that can score only stored
+features: the labelling pool and imports of review batches; training compares a new forest with nothing then.
+
+The AT8 network (`data/models/trained/AT8_20261120-185205_network` in the study, built by its `make_network_bundle.py`): the
+benchmark's two-scale ConvNeXt-Tiny (public/benchmark/comparison, run df3d82785f) trained on label set 4; cut-off 0.486,
+the best out-of-fold F1 (the forest's rule); out of fold AUC 0.987, precision 0.69, recall 0.84, F1 0.76 (the forest at
+its cut-off 0.3: AUC 0.96, precision 0.56, recall 0.65, F1 0.60). On the set-4 fresh check (Fable 5.2 high, weighted to all candidates), as the pipeline calls
+(duplicate rule included): precision 0.80, recall 0.87, count ratio 1.08 against the forest's 0.52 / 0.69 / 1.34
+(`data/annotations/relabel_fable/network_check.md`). The exploration's 0.75 / 0.99 scored the network without the
+duplicate rule (`experiments/study_network/README.md`).
 
 ## Stage 3: outlines
 
@@ -412,11 +432,25 @@ neurons are):
 
 A neuron counts once whatever the nuclei inside it, so the share does not depend on whether Cellpose found the neuron's
 nucleus. The tile rows carry `cell_count` (all counted nuclei) and `nonneuronal_cell_count`; a core image whose stage 2
-predates the table has them missing. Proposed in `/run/media/sky/Untitled/alzh/work/feature_explore/PROPOSAL.md` (pilot:
+predates the table has them missing. Proposed from a pilot (results:
 NeuN+ share CT 0.24, ASYMAD 0.19, AD 0.17; non-neuronal cells 550, 605, 840 per mm²; a shape-only neuron-versus-other
 nucleus model from this table reached leave-one-TMA-out AUC 0.87).
 
 ### Continuous type scores: tau maturity and plaque compactness
+
+Refit 2026-11-20 (`tools/type_scores.py`, output kept in experiments/rerun_network/type_scores_refit.txt), on the new
+calls (AT8 by the network, 6E10 retrained) and, for 6E10, label set 4 plus the two cored-enriched rounds (2,838 plaques
+of at least 15 µm, 808 compact; 990 of the labels were picked by a network for looking cored, so they teach the weights
+but the bins use the intercept refitted on the other 1,848, 69 compact). Held-out AUC unchanged: tau maturity 0.87,
+plaque compactness 0.82; the compactness core contrast lost its weight and was dropped; bins AT8 0.11 / 0.33, 6E10
+0.95 / 0.99. The extra compact labels did not sharpen this hand-built score (our network on the same labels: cored
+AP 0.76 held out, benchmark v5b).
+
+Refit 2026-11-22 (experiments/rerun_cored1/type_scores_refit.txt), 6E10 only, after the second cored round was retired
+(`training.retired_sets`; it had not helped on our own held-out data) and 6E10 retrained on set 4 + the first round
+(`6E10_20261122-111808`): 2,249 plaques of at least 15 µm, 412 compact, 495 network-picked (bins from the other 1,754,
+65 compact); held-out AUC 0.86 (0.82 on the representative labels); core contrast again weight 0; bins 0.96 / 0.99.
+`tools/type_scores.py --labels set4` now leaves out retired sessions. AT8 unchanged.
 
 Stage 4 types each accepted tau+ neuron as *mature tangle* or *pretangle* and each plaque of at least 15 µm as
 *compact* or *diffuse* by one cut on one feature. Both are gradients, so stage 5 also gives every accepted object a
@@ -443,8 +477,11 @@ median other features scores exactly 0.5 at stage 4's cut, and a retrained model
 and 95.2 % of the 144,023 typed plaques fall on the same side of 0.5 as their type. A missing feature counts as its
 centre (31 plaques without a ring).
 
-The weights were fitted on the study's typed labels (label set "ai": 412 tau+ neurons, 240 mature tangles; 387 plaques
-of at least 15 µm, 160 compact): a logistic regression with non-negative weights on the features divided by their
+The weights were fitted on label set 4 (2026-11-19; sessions set4_<stain>, Fable 5.2 high, blind: 706 typed tau+
+neurons, 544 mature tangles; 1,659 plaques of at least 15 µm, 60 compact; leave-one-TMA-out AUC 0.87 and 0.82; on the
+accepted objects 93.1 % of tau+ neurons and 86.2 % of typed plaques fall on the same side of 0.5 as their type). Before
+that they were fitted on label set "ai" (412 tau+ neurons, 240 mature tangles; 387 plaques, 160 compact), which the
+paragraph above and the table below describe where they give numbers: a logistic regression with non-negative weights on the features divided by their
 interquartile range over the accepted objects. Features the fit gave no weight were dropped: AT8 the soma's stained
 share (`m_positive_fraction`) and the share of it a nucleus covers (`nucleus_overlap_fraction`, the nearest stored
 measure of a hidden or displaced nucleus; no displacement is measured); 6E10 solidity. No fibrillar-texture measure
@@ -452,12 +489,14 @@ other than the DAB coefficient of variation is stored. `python tools/type_scores
 prints the terms and bin cuts (read-only); on the study it reproduces the table.
 
 **Bins** (`v2.scores.<stain>.bins`, two cut points): the scores at which the label set's own calibration (the fitted
-intercept added back: AT8 +0.20, 6E10 −0.61) gives the two labelled classes 2:1 odds either way, rounded to 0.01.
+intercept added back) gives the two labelled classes 2:1 odds either way, rounded to 0.01. The cuts depend on how
+common each class is in the label set: label set 4 (intercepts AT8 +1.51, 6E10 −3.69; 77 % mature tangles, 3.6 %
+compact plaques) puts them far from 0.5, label set "ai" (intercepts +0.20, −0.61) did not.
 
-| Score | Low bin | Intermediate | High bin |
-|---|---|---|---|
-| tau maturity | pretangle < 0.29 | 0.29–0.62 | mature ≥ 0.62 |
-| plaque compactness | diffuse < 0.48 | 0.48–0.79 | compact ≥ 0.79 |
+| Score | Low bin | Intermediate | High bin | label set "ai" (before 2026-11-19) |
+|---|---|---|---|---|
+| tau maturity | pretangle < 0.10 | 0.10–0.31 | mature ≥ 0.31 | 0.29 / 0.62 |
+| plaque compactness | diffuse < 0.95 | 0.95–0.99 | compact ≥ 0.99 | 0.48 / 0.79 |
 
 On the study (the October re-run's store): tau+ neurons 6,442 pretangle, 8,423 intermediate, 21,502 mature (stage 4:
 10,633 pretangles, 25,734 mature tangles; the intermediate bin holds 4,092 of the pretangles and 4,331 of the mature
@@ -506,8 +545,7 @@ rises with the number of the five experts who called a plaque cored: 0.55 (none,
 images and antibodies than between their two classes (PHF-1 Pre-NFTs median 0.69, iNFTs 0.65; AT8 0.08 and 0.46);
 scaling by the slide threshold does not change that (0.40), as the AT8 thresholds there are bounded. Raters box cored
 plaques narrowly (see the public scores), so the other plaques of Keiser and Plaquebox include many dense ones; the
-score separates cored plaques better within a slide than pooled. Montages along each score (low to high, ten bands):
-`/run/media/sky/wd6t/alzh/experiments/score_checks/montages/`.
+score separates cored plaques better within a slide than pooled. Montages along each score (low to high, ten bands) were checked by eye.
 
 ### Biology readouts (`stainid.v2.biology_measures`)
 
@@ -535,8 +573,7 @@ in `results_counts_<level>.csv`).
 
 #### Biology measurements: pilots (2026-11-03)
 
-Scripts and outputs: `/run/media/sky/Untitled/alzh/work/bio_features/` (`scripts/pilot_features.py` measures stored
-candidates on their cores with this code; `analyse_*.py`).
+The pilot measured stored candidates on their cores with this code.
 
 - **The tangle's nucleus.** Of 1,155 accepted tau+ neurons sampled from the study, a nucleus is visible in 6.6 % of the
   mature tangles and 33.5 % of the pretangles; on the 412 labelled ones a hidden nucleus picks the mature tangles with
@@ -640,8 +677,7 @@ ownership per neuron (`processes`, `attached_thread_um`). Neither these columns 
 ### Check of the AT8 edge band (2026-11-02)
 
 Why do so many accepted tau+ neurons touch the 5 µm band along a tissue edge or hole? Measured on the whole store and on
-287 crops graded by eye (`/run/media/sky/Untitled/alzh/work/feature_explore/edge/`: `grades.csv`, the pages, the scripts in
-`../scripts/edge_*.py`). No detection was changed.
+287 crops graded by eye. No detection was changed.
 
 - Cohort: 28.0 % of accepted tau+ neurons touch the band (NeuN 15.1 %, plaques 10.9 %), 2.7 % lie mostly in it (NeuN
   4.4 %, plaques 0.05 %). It depends on the slide (LIP-6 2.6 % to LIP-11 49 %), and falls as the glass level rises
@@ -676,13 +712,13 @@ it, 0 with none near), and the results tables the two columns above (with `exclu
 not depend on the white matter: the grey-matter tables simply hold fewer objects. On whole slides the rule sees one region's
 mask at a time, so glass cut by a region's edge counts only its part inside that region.
 
-On the study (stage 5 from the live outputs into `/run/media/sky/Untitled/alzh/work/boundary_flag/`, 2026-11-03; every old
+On the study (stage 5 from the live outputs into a scratch folder, 2026-11-03; every old
 cell of all 42 tables identical, as text; the missing-value tables only gain rows for the new columns): 2,285 of 36,367
 accepted tau+ neurons flagged whole-core (6.3 %), 2,234 of 35,407 in grey matter. By TMA (whole core) LIP-1 2.8 %, LIP-5
 3.2 %, LIP-10 3.3 %, LIP-7 4.1 %, LIP-2 5.0 %, LIP-9 5.1 %, LIP-6 5.1 %, LIP-13 5.2 %, LIP-11 5.6 %, LIP-4 7.1 %, LIP-8
 7.5 %, LIP-12 11.8 %, LIP-3 12.1 %. By group: AD 6.2 %, ASYMP 4.0 % (11 of 273), CT 30 % (45 of 148: few tau+ neurons, so
 the edge artefacts weigh more). On the graded sample it catches 15 of 18 not-a-body and flags 5 of 76 real (and 5 of 35
-doubtful). AD vs ASYMAD (LIP-1–7, `workspace/scripts/table_contrasts.R`: log density, burden, age, APOE ε4, region, TMA
+doubtful). AD vs ASYMAD (LIP-1–7, the study's `table_contrasts.R`: log density, burden, age, APOE ε4, region, TMA
 and donor), grey matter, flagged in → out: tau+ neuron density standardised effect 1.837 (t 13.4) → 1.833 (t 13.3),
 mature tangles 1.825 → 1.820, pretangles 1.624 → 1.598, mature share −0.31 → −0.34, maturity median −0.45 → −0.60 (p 0.24
 → 0.11); whole core alike. The flagged share itself does not differ (0.50, p 0.26). So the main tau results do not rest on
@@ -695,10 +731,8 @@ place for now.
 ### Spatial interactions
 
 New columns of `results_<level>.csv` from stored results, no image read (`stainid.v2.interactions`, after the other
-columns; the topic "Spatial interactions" of the Results page). They come from the literature review
-`/run/media/sky/Untitled/alzh/reports/Spatial interaction features for AD TMAs.md` (its ranked shortlist; items 6, the
-6E10 neuritic halo, and 10, vessels, are stage-2 features and not here) and the pilot
-`/run/media/sky/Untitled/alzh/work/feature_explore/PROPOSAL.md`. With `v2.white_matter.analysis: exclude` they are grey
+columns; the topic "Spatial interactions" of the Results page). They come from a literature review (its ranked shortlist; items 6, the
+6E10 neuritic halo, and 10, vessels, are stage-2 features and not here) and a pilot. With `v2.white_matter.analysis: exclude` they are grey
 matter only (no `_whole_core` version); a core image left with too little grey matter is not measured. Every random
 placement or shift is seeded by the core id and the grid distances are made exact (OpenCV's differ by 1e-6 with
 memory alignment), so a re-run gives the same numbers. `interactions_<level>.csv` holds the

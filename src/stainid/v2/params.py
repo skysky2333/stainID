@@ -83,8 +83,10 @@ DEFAULTS: dict = {
     "training": {"NeuN": {"slide_scaled": False}, "6E10": {"slide_scaled": False}, "AT8": {"slide_scaled": False}},
     # stage 5's continuous type scores (`stainid.v2.scores`): the two cut points of each score's three bins (AT8
     # pretangle / intermediate / mature, 6E10 diffuse / intermediate / compact): where the study's typed labels give
-    # the two classes 2:1 odds either way. Changing them changes only the score columns of the measures
-    "scores": {"AT8": {"bins": [0.29, 0.62]}, "6E10": {"bins": [0.48, 0.79]}},
+    # the two classes 2:1 odds either way (label set 4 since 2026-11-19, refit 2026-11-20 on the network's AT8 calls: AT8
+    # 0.10 / 0.31 before; 6E10 refit 2026-11-22 on set 4 + cored round 1: 0.95 / 0.99 before; label set "ai" gave AT8
+    # 0.29 / 0.62, 6E10 0.48 / 0.79). Changing them changes only the score columns of the measures
+    "scores": {"AT8": {"bins": [0.11, 0.33]}, "6E10": {"bins": [0.96, 0.99]}},
     # stage 5's flag on accepted AT8 tau+ neurons at a tissue boundary (`stainid.v2.organisation.mark_boundary`), from the
     # stage-2 mask, no image read: a connected non-tissue area of at least min_nontissue_um2 within radius_um of the
     # object's centre. Flag only: nothing leaves any count. Changing it changes only the flag's columns of the measures

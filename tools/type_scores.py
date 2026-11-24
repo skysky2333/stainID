@@ -2,7 +2,16 @@
 to put in the module (and `v2.scores.<stain>.bins`). Reads only: the label log, the candidate store and the active
 models; no cache or table of the project is written.
 
-    python tools/type_scores.py [--project .] [--labels ai|all] [--extra]
+    python tools/type_scores.py [--project .] [--labels set4|ai|all] [--extra]
+
+`--labels set4` (the default since 2026-11-19): only label set 4, the sessions `set4_<stain>` (Fable 5.2 high, blind),
+and since 2026-11-20 its later rounds `set4_<stain>_*` (6E10: the cored-enriched rounds), the labels the active models
+were trained on. `ai` is every AI-made label (the fit of 2026-11 before set 4).
+
+Since 2026-11-20 the 6E10 labels include the cored-enriched rounds, whose strata enriched and band were picked by a
+network for being cored: they teach the weights, but would raise the labels' share of compact plaques far above the
+cohort's and with it the intercept, so the bins use the intercept refitted, weights fixed, on the other labels (the
+usual correction for outcome-enriched sampling); both intercepts are printed.
 
 `--extra` offers stage 2's biology measurements (`scores.EXTRA`: the tangle's nucleus, the plaque's radial profile) to
 the fit as well, to see what they add before a score adopts them.
@@ -53,6 +62,14 @@ def labelled(project, stain: str, which: str) -> pd.DataFrame:
     labels = store.current(project.output("reviews"))
     if which == "ai":
         labels = labels[labels.source.map(store.is_ai_label)]
+    elif which == "set4":
+        from stainid.labels import sessions as label_sessions
+
+        prefix = f"set4_{stain.lower()}"
+        retired = project.retired_label_sets()  # e.g. set4_6e10_cored2, retired 2026-11-22
+        names = [n for n in label_sessions.names(project.output("reviews"))
+                 if (n == prefix or n.startswith(prefix + "_")) and n not in retired]
+        labels = label_sessions.in_sessions(labels, names)
     tiles = known_tiles(project)
     labels = frames.in_field_frame(drop_excluded(project, labels), tiles, project.context_px)
     truth = decisions.consensus(project, stain, labels, tiles)
@@ -62,10 +79,26 @@ def labelled(project, stain: str, which: str) -> pd.DataFrame:
 TYPES = {"AT8": ("mature tangle", "pretangle"), "6E10": ("compact", "diffuse")}
 
 
+def network_picked(project) -> set[str]:
+    """Candidates of the cored-enriched rounds' strata a network picked (enriched, band), from the label log."""
+    import json
+
+    out = set()
+    for f in sorted((project.output("reviews") / "labels" / "ai").glob("set4_*_cored*.jsonl")):
+        if f.stem in project.retired_label_sets():
+            continue
+        for line in f.read_text().splitlines():
+            r = json.loads(line)
+            if r.get("candidate") and any(f"stratum {s}" in str((r.get("meta") or {}).get("origin", "")) for s in ("enriched", "band")):
+                out.add(r["candidate"])
+    return out
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--project", default=".")
-    parser.add_argument("--labels", choices=("ai", "all"), default="ai", help="the AI-made labels only (default) or every label")
+    parser.add_argument("--labels", choices=("set4", "ai", "all"), default="set4",
+                        help="label set 4 only (default), every AI-made label, or every label")
     parser.add_argument("--extra", action="store_true", help="also offer stage 2's biology measurements (`scores.EXTRA`) to the fit")
     args = parser.parse_args()
     from sklearn.metrics import roc_auc_score
@@ -102,16 +135,25 @@ def main() -> None:
             p = fit(x[train], y[train])
             held[~train] = p[0] + x[~train] @ p[1:]
         p = fit(x, y)
+        rep = ~rows.candidate.isin(network_picked(project)).to_numpy()
+        intercept = p[0]
+        if not rep.all():  # enriched labels: the intercept of the representative ones, weights fixed
+            from scipy.optimize import minimize_scalar
+            z0 = x[rep] @ p[1:]
+            intercept = float(minimize_scalar(lambda b: (np.logaddexp(0, b + z0) - y[rep] * (b + z0)).mean()).x)
+            print(f"{stain}: {int((~rep).sum())} network-picked labels (cored rounds) teach the weights; intercept of all labels {p[0]:.3f}, "
+                  f"of the other {int(rep.sum())} ({int(y[rep].sum())} {POSITIVE[stain]}) {intercept:.3f}; held-out AUC on those "
+                  f"{roc_auc_score(y[rep], held[rep]):.3f}")
         weights = p[1:] / spread[names].where(spread[names] > 0, 1.0).to_numpy()
         logit = ((reference[names] - centre[names]).fillna(0.0).to_numpy() @ weights)
         agree = ((logit >= 0) == (accepted.subtype == POSITIVE[stain]).to_numpy()).mean()
         odds = np.log(2.0)
-        low, high = (1 / (1 + np.exp(-(v - p[0]))) for v in (-odds, odds))
+        low, high = (1 / (1 + np.exp(-(v - intercept))) for v in (-odds, odds))
         print(f"{stain}: {len(rows)} labelled ({int(y.sum())} {POSITIVE[stain]}), leave-one-TMA-out AUC {roc_auc_score(y, held):.3f}, "
               f"same side of 0.5 as stage 4's type: {agree:.1%} of {len(accepted)} accepted")
         for name, w, c in zip(names, weights, centre[names]):
             print(f"    Term({name!r}, {w:.3g}, {c:.3g})")
-        print(f"    intercept of the labels {p[0]:.3f}; bins at {low:.2f} / {high:.2f}")
+        print(f"    intercept {intercept:.3f}; bins at {low:.2f} / {high:.2f}")
 
 
 if __name__ == "__main__":

@@ -50,8 +50,11 @@ def _check_names(project: Project, stain: str, names: list[str]) -> None:
 
 
 def model_probability(project: Project, stain: str, matrix: np.ndarray, names: list[str]) -> tuple[np.ndarray, float]:
-    """The active model's probability for each candidate, and its decision threshold."""
+    """The active model's probability for each candidate, and its decision threshold. A network model scores images,
+    not these features: its bundle's forest (the model it replaced) stands in, at that forest's own cut-off."""
     bundle = load(project.model(MODEL_KEY[stain]))
+    if bundle.get("kind") == "network":
+        return bundle["classifier"].predict_proba(matrix)[:, 1], float(bundle["fallback_threshold"])
     if stain == "NeuN":
         return bundle["classifier"].predict_proba(matrix[:, bundle["usable_features"]])[:, 1], float(bundle["context_threshold"])
     if stain == "6E10":

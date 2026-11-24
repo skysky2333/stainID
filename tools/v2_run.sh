@@ -6,8 +6,10 @@
 #                              ($PER_GPU processes per GPU, $GPUS GPUs), white matter and grey-matter burdens (only with
 #                              v2.white_matter.analysis: exclude), stage 5 measures
 #   tools/v2_run.sh decide     only stages 4 and 5 (and, with exclude, white matter and burdens, which redo only what the
-#                              new calls changed): after a new model, cut-off or rule (minutes without exclude, no image read)
-#   tools/v2_run.sh proposals | calls | outlines | white-matter | grey-matter | measures | status    one stage (or how far each has got)
+#                              new calls changed): after a new model, cut-off or rule (minutes without exclude, no image read;
+#                              with a network model, stage 4a first scores the candidates on the GPUs: about an hour for AT8)
+#   tools/v2_run.sh proposals | network | calls | outlines | white-matter | grey-matter | measures | status    one stage (or how far each has got)
+#                              (network: stage 4a, a network model's scores, one process per GPU; nothing to do for a forest)
 #
 # Extra arguments go to every stage, e.g. `tools/v2_run.sh all --core cores.txt` or `--stain AT8`.
 # Settings (environment): STAINID_PROJECT (the project folder), STAINID_PYTHON (python with stainid installed),
@@ -54,6 +56,19 @@ outlines() {  # stage 3 on every GPU at once, PER_GPU processes each (a process 
   return $failed
 }
 
+network() {  # stage 4a on every GPU at once, one process each (nothing to do unless a stain's active model is a network)
+  local pids=()
+  for ((i = 0; i < GPUS; i++)); do
+    CUDA_VISIBLE_DEVICES=$i "$PY" -m stainid.cli --project "$PROJECT" v2 network --device cuda --shard-index "$i" --shard-count "$GPUS" "$@" \
+      > >(grep --line-buffered -v Warning >> "$LOGS/network_gpu$i.log") 2>&1 &
+    pids+=($!)
+  done
+  echo "== $(date '+%F %T') stage network on $GPUS GPUs (logs: $LOGS/network_gpu*.log)"
+  local failed=0
+  for pid in "${pids[@]}"; do wait "$pid" || failed=1; done
+  return $failed
+}
+
 white_matter() {  # what stage 5 reads when the project leaves white matter out; every core image, redoing what is out of date
   if "$PY" -c 'import sys; from stainid.project import load_project; from stainid.v2 import white_matter; sys.exit(0 if white_matter.excluded(load_project(sys.argv[1])) else 1)' "$PROJECT"; then
     v2 white-matter
@@ -64,19 +79,22 @@ white_matter() {  # what stage 5 reads when the project leaves white matter out;
 case $what in
   all)
     v2 proposals --workers "$WORKERS" --processes "$PROCESSES" --threads "${THREADS:-0}" --tiles-at-once "${TILES_AT_ONCE:-1}" "$@"
+    network "$@"
     v2 calls "$@"
     if [[ $OUTLINES == 1 ]]; then outlines "$@"; fi
     white_matter
     v2 measures
     v2 status ;;
   decide)
+    network "$@"
     v2 calls "$@"
     white_matter
     v2 measures
     v2 status ;;
   proposals) v2 proposals --workers "$WORKERS" --processes "$PROCESSES" --threads "${THREADS:-0}" --tiles-at-once "${TILES_AT_ONCE:-1}" "$@" ;;
   outlines) outlines "$@" ;;
+  network) network "$@" ;;
   grey-matter) v2 grey-matter --workers "$GREY_WORKERS" "$@" ;;
   calls | white-matter | measures | status) v2 "$what" "$@" ;;
-  *) echo "unknown: $what (all, decide, proposals, calls, outlines, white-matter, grey-matter, measures, status)" >&2; exit 2 ;;
+  *) echo "unknown: $what (all, decide, proposals, network, calls, outlines, white-matter, grey-matter, measures, status)" >&2; exit 2 ;;
 esac

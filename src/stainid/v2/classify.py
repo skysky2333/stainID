@@ -15,6 +15,10 @@ counted one, in an excluded area, a rim along a tissue edge, on a fold). The res
 a speck (6E10 has no speck class), the model's rejects. The analysis counts accepted ones only; CAA is counted apart
 (`v2_vascular_or_edge_count`, stage 5), never as plaques.
 
+A network model (`stainid.v2.network`, a bundle with `kind: network`) is not scored here: its scores are made by stage 4a
+from the core image and read from <outputs.v2>/network/; the rules, the cut-off, the duplicate radius and the type rule
+are applied to them exactly as to a forest's probabilities.
+
 Also here: assembling the candidate store (proposals + outlines + calls) of a core image.
 """
 from __future__ import annotations
@@ -52,9 +56,15 @@ class Model:
     threshold: float
     names: list[str]
 
+    @property
+    def network(self) -> bool:
+        return isinstance(self.bundle, dict) and self.bundle.get("kind") == "network"
+
     def probability(self, frame: pd.DataFrame) -> np.ndarray:
         if frame.empty:
             return np.zeros(0)
+        if self.network:
+            raise RuntimeError(f"{self.model_id} is a network: its scores come from stage 4a (stainid v2 network), not from the stored features")
         matrix = store.model_matrix(frame, self.names)
         if self.stain == "NeuN":
             usable = np.asarray(self.bundle.get("usable_features", np.ones(len(self.names), bool)))
@@ -182,9 +192,9 @@ def types_if_passed(project, stain: str, frame: pd.DataFrame, model: Model) -> n
     return subtype
 
 
-def call(project, stain: str, frame: pd.DataFrame, model: Model, rules: dict) -> pd.DataFrame:
-    """The calls of one core image's candidates."""
-    probability = model.probability(frame)
+def call(project, stain: str, frame: pd.DataFrame, model: Model, rules: dict, probability: np.ndarray | None = None) -> pd.DataFrame:
+    """The calls of one core image's candidates (`probability`: given, e.g. a network's stored scores; else the model's)."""
+    probability = model.probability(frame) if probability is None else np.asarray(probability, float)
     reason = pre_rules(stain, frame, rules)
     scored = reason == ""
     passed = scored & (probability >= model.threshold)
@@ -226,13 +236,27 @@ def expected(project, stain: str, core_id: str, model: Model, settings: dict | N
     upstream = manifest.read(project, "proposals", stain, core_id) if upstream is manifest.READ else upstream
     if upstream is None:
         return None
-    return manifest.make("calls", stage_params(project, "calls", stain) if settings is None else settings,
-                         {"proposals": upstream["digest"], "model": model.model_id, "threshold": model.threshold})
+    inputs = {"proposals": upstream["digest"], "model": model.model_id, "threshold": model.threshold}
+    if model.network:  # the network's scores of this core (stage 4a): none yet, nothing to decide from
+        scored = manifest.read(project, "network", stain, core_id)
+        if scored is None:
+            return None
+        inputs["network"] = scored["digest"]
+    return manifest.make("calls", stage_params(project, "calls", stain) if settings is None else settings, inputs)
 
 
 def classify_core(project, stain: str, core_id: str, model: Model) -> dict:
     frame = store.read_table(store.path(project, stain, core_id, "proposals"))
-    calls = call(project, stain, frame, model, stage_params(project, "calls", stain)) if not frame.empty else pd.DataFrame(columns=CALL_COLUMNS)
+    rules = stage_params(project, "calls", stain)
+    probability = None
+    if model.network and not frame.empty:
+        from stainid.v2 import network
+
+        probability = network.read_scores(project, stain, frame, core_id)
+        missing = (pre_rules(stain, frame, rules) == "") & ~np.isfinite(probability)
+        if missing.any():
+            raise RuntimeError(f"{core_id} {stain}: {int(missing.sum())} candidates have no network score (run stainid v2 network)")
+    calls = call(project, stain, frame, model, rules, probability) if not frame.empty else pd.DataFrame(columns=CALL_COLUMNS)
     store.write_table(store.root(project) / "calls" / stain / f"{core_id}.csv.gz", calls)
     made = expected(project, stain, core_id, model)
     manifest.write(project, "calls", stain, core_id, made, accepted=int((calls.decision == "accepted").sum()), candidates=len(calls))
