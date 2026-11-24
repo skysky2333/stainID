@@ -119,7 +119,7 @@ matter on a visual check, the lower part a torn edge). The earlier 329-field rev
 AI-assisted, sampled from low-density fields) mostly labels NeuN-pale grey matter as white matter and is not used.
 
 A visual check (of the prototype, which flagged 93 of the same cores; the step adds LIP-11_F-3 and LIP-3_B-1, 4-10 %) of every core the first version flagged and of 36 random grey cores (whole-core picture plus a 550 µm
-crop deep in the flagged area, montages under `/run/media/sky/wd6t/alzh/experiments/white_matter_detection_2026-11-11/`):
+crop deep in the flagged area, montages kept with the study's working notes):
 
 | | cores |
 |---|---|
@@ -160,7 +160,7 @@ LIP-7_C-2, LIP-6_E-2, LIP-6_C-4, LIP-8_C-2, ...) and some false positives of thr
 tissue (LIP-2_C-1, LIP-10_A-5, LIP-1_A-3), bands along the pia or a sulcus (LIP-5_F-1, LIP-5_F-4, LIP-12_A-4,
 LIP-6_F-4) and patchy neuron loss in AD cores with a low reference (LIP-12_D-4, LIP-10_F-3). LIP-3_E-2 stays grey: its
 upper right looks like white matter but its centre has dark pyramidal perikarya and the candidate parts keep 0.7 x the
-grey matter's neuron-sized nuclei. Per-core tables and montages: `/run/media/sky/Untitled/alzh/work/wm_detect/`.
+grey matter's neuron-sized nuclei.
 
 ### NeuN-pale cores
 
@@ -180,7 +180,7 @@ cores that are grey matter by their plaques and tangles, so the 6E10 and AT8 sec
 like grey matter (LIP-2_A-4, LIP-2_A-5, LIP-7_D-1, D-2, E-1, E-2, LIP-11_D-2, LIP-11_B-2); LIP-8_D-4 and LIP-8_E-4 (both
 cores of donor 2152, occipital) look like pure white matter (small dark round nuclei in rows along parallel fibres, no
 neuron-sized nuclei on any section); LIP-11_C-2 (vacuolated, small nuclei only) probably white matter; LIP-6_E-5
-unclear. `scripts`: `/run/media/sky/wd6t/alzh/experiments/white_matter_detection_2026-11-11/scripts/pale_check.py`, montages `pale_ct_*.jpg`.
+unclear.
 
 Version 2 decides these cores with the same rules (point 4, the cohort comparison): 7 of the 43 become white matter as a
 whole (LIP-8_D-4, LIP-8_E-4, LIP-11_C-2 (its upper fragment), LIP-6_E-5, LIP-6_D-4, LIP-8_E-5, LIP-4_F-3), the other 36
@@ -218,7 +218,7 @@ needs NeuN's detection first (it is made from NeuN's calls), so it is applied at
    (`grey_too_small_cores`: how many were left out) and is NA, `grey_too_small` 1, when it has none left, never 0. Why
    1 mm²: in grey cores, the density of random compact windows against the whole core's is off by a median 98 % (AT8),
    57 % (6E10) and 25 % (NeuN) at 0.1 mm², 43 / 43 / 20 % at 0.5 mm², 35 / 44 / 16 % at 1 mm² and 31 / 37 / 14 % at
-   2 mm², so the error stops falling steeply at about 1 mm² (`/run/media/sky/Untitled/alzh/work/wm_detect/floor/`).
+   2 mm², so the error stops falling steeply at about 1 mm².
    With version 2 only the 6 cores that are white matter as a whole fall under it (0.03-0.13 mm² of grey matter
    left: LIP-6_D-4, LIP-8_E-5, LIP-8_D-4, LIP-8_E-4, LIP-6_E-5, LIP-4_F-3); no core has between 0.13 and 1.5 mm². The
    same setting tells the white-matter step when a core has too little grey matter of its own to compare with.
@@ -232,7 +232,7 @@ flagged, never left out: they are grey matter whose NeuN failed.
 
 ### Effect on the study (2026-10-29, scratch run of stage 5 and the primary R model)
 
-Stage 5 with `exclude` from the live outputs into `/run/media/sky/wd6t/alzh/experiments/white_matter_detection_2026-11-11/analysis/` (`measures/` grey matter,
+Stage 5 with `exclude` from the live outputs into a scratch folder (`measures/` grey matter,
 `measures/whole_core/`, `group_means.csv`, `group_ratios.csv`, `r_*.csv`): 284 core images lose white matter. Mean
 donor-region NeuN density rises 4-12 % in AD, 5-12 % in ASYMP and 7-22 % in CT (most in CT occipital, the region with
 the most white matter), so the AD/CT neuron ratio falls from 0.84 to 0.82 (frontal) and 0.71 to 0.65 (occipital).
@@ -244,8 +244,7 @@ density with local amyloid in the two-region model shrinks (0.29, t 2.2, to 0.21
 
 ### Expected effect (estimated before the pass, counts and densities only)
 
-From the stored outputs (stage-4 accepted objects, stage-2 counted area, the step's areas; objects by their centre;
-`/run/media/sky/wd6t/alzh/experiments/white_matter_detection_2026-11-11/scripts/effects.py`, table `step_full/effects.csv`). Cores without white matter do not
+From the stored outputs (stage-4 accepted objects, stage-2 counted area, the step's areas; objects by their centre). Cores without white matter do not
 change. In the 95 cores with white matter (median share 28 %, quartiles 22-44 %):
 
 | per core with white matter, median | NeuN neurons /mm² | 6E10 plaques /mm² | AT8 objects /mm² |

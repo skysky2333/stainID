@@ -380,9 +380,13 @@ src/stainid/
   disk_cache.py     the space limit for pictures made for viewing
   api/              FastAPI backend (and the built web app in api/static)
 webapp/             React + TypeScript front end
-tools/              v2_run.sh, build_webapp.sh, demo/ (synthetic demo project, screenshots), qupath/
+tools/              v2_run.sh, type_scores.py, v2_to_parquet.py, build_webapp.sh, demo/ (synthetic demo project,
+                    screenshots), qupath/
 tests/              pytest suite (synthetic data only)
 ```
+
+The repository holds the software only. A project (its `stainid.yaml`, input tables, data and results) is a folder of
+its own anywhere on disk: open it in the app, or pass it to the command line with `stainid --project <folder>`.
 
 ## Acknowledgements
 

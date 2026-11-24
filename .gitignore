@@ -1,9 +1,6 @@
-# ---- Not published: study data, models and working area ----
-data/
-workspace/
-deliveries/
-/results*/
+# ---- Projects live in their own folders; never commit one made inside the clone ----
 stainid.yaml
+data/
 *.rsync*.log
 
 # ---- Python ----
@@ -28,9 +25,6 @@ webapp/dist/
 .idea/
 *.swp
 *~
-old_tma.yaml
-*.yaml.before_*
 
-# ---- local tool folders (agent worktrees) ----
+# ---- local tool folders ----
 .claude/
-_archive/

@@ -3,7 +3,7 @@
 
 - `icc`: the replicate-core intraclass correlation, the share of a measure's variance between donor-regions over the
   donor-regions with at least two cores measured (one-way random effects, ANOVA estimator with unequal group sizes,
-  ICC(1); as `workspace/scripts/v2_reliability.R` fits it with `lmer(v ~ 1 + (1 | donor-region))`, floored at 0).
+  ICC(1); as the study's `v2_reliability.R` fits it with `lmer(v ~ 1 + (1 | donor-region))`, floored at 0).
   Densities and counts are on the log scale, log10(x + 1). `pairs`: those donor-regions; missing under `MIN_PAIRS`.
 - `unique_variance`: the share of the measure's rank variance across donor-regions that the ranks of the primary
   measures (`PRIMARY`, each but the measure itself) do not explain (least squares); low means it restates burden or
