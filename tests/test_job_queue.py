@@ -176,7 +176,8 @@ def test_stainid_jobs_command_line(tmp_path):
     (tmp_path / "stainid.yaml").write_text(yaml.safe_dump({"name": "cli", "dataset": {"id": "x"}}))
     run = lambda *words: subprocess.run([sys.executable, "-m", "stainid.cli", "--project", str(tmp_path), "jobs", *words],  # noqa: E731
                                         capture_output=True, text=True, env=_env())
-    done = run("submit", "--", "nuclei", "--stain", "AT8", "--device", "cuda")  # a GPU job whatever this machine has
+    assert run("budget", "--gpus", "1").returncode == 0  # a GPU to give, whatever this machine has (else needs are capped at 0)
+    done = run("submit", "--", "nuclei", "--stain", "AT8", "--device", "cuda")  # and a GPU job (the default is the CPU without one)
     assert done.returncode == 0, done.stderr
     assert "Queued" in done.stdout and "Public datasets" in done.stdout  # a public dataset's steps go in the public class
     done = run("submit", "--exec", "--class", "downloads", "--network", "--title", "Big downloads", "--", "bash", "-c", "echo hi")

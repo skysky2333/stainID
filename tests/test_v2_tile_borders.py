@@ -333,7 +333,7 @@ def test_objects_cut_by_the_first_window_are_the_whole_windows_objects(tmp_path,
             if pd.api.types.is_numeric_dtype(want[column]):
                 assert np.allclose(got[column].astype(float), want[column].astype(float), rtol=1e-6, equal_nan=True), column
             else:
-                text, wanted = got[column].astype(str), want[column].astype(str)
+                text, wanted = (frame[column].map(lambda v: "nan" if pd.isna(v) else str(v)) for frame in (got, want))  # pandas 3 keeps NaN
                 # a profile kept as text (radial_dab_um, "0.1797 0.0802 ..."): 4 decimals, so the last one may differ where
                 # the two ways add the same pixels in another order (another machine's BLAS); the numbers must agree
                 pairs = [(np.array(x.split(), float), np.array(y.split(), float)) for x, y in zip(text, wanted) if x != y]
