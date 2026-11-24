@@ -117,8 +117,10 @@ def build_parser() -> argparse.ArgumentParser:
                        "white-matter: the algorithm's grey / white matter from the NeuN calls; grey-matter: the 6E10 / AT8 burdens "
                        "with the white matter left out, for measures when v2.white_matter.analysis is exclude; register: line up "
                        "every NeuN core image with its 6E10 / AT8 images where the registration table has no row (kept in the "
-                       "project's registration cache, read by measures' spatial interactions); run it before measures")
-    p.add_argument("stage", choices=("proposals", "network", "calls", "outlines", "measures", "white-matter", "grey-matter", "register", "status"))
+                       "project's registration cache, read by measures' spatial interactions); run it before measures; radiomics: "
+                       "pyradiomics texture of every outlined object and field, for measures (needs the radiomics extra)")
+    p.add_argument("stage", choices=("proposals", "network", "calls", "outlines", "measures", "white-matter", "grey-matter", "register",
+                                     "radiomics", "status"))
     p.add_argument("--stain", action="append", choices=("NeuN", "6E10", "AT8"))
     p.add_argument("--core", action="append", help="only this core (repeat for several; a file with one core id per line works too)")
     p.add_argument("--workers", type=int, default=0,
@@ -451,6 +453,11 @@ def run_v2(args: argparse.Namespace, project) -> None:
 
         done = grey_matter.run(project, cores=cores, redo=args.redo, workers=max(1, args.workers), log=lambda text: print(text, flush=True))
         print(f"grey-matter burdens: {len(done)} core images -> {grey_matter.root(project)}", flush=True)
+    elif args.stage == "radiomics":
+        from stainid.v2 import radiomics
+
+        done = radiomics.run(project, stains, cores=cores, redo=args.redo, workers=max(1, args.workers), log=lambda text: print(text, flush=True))
+        print(f"object texture: {len(done)} core images -> {radiomics.root(project)}; run `stainid v2 measures` for the results tables", flush=True)
     else:
         run.run_measures(project, args.out)
 

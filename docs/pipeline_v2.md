@@ -15,6 +15,7 @@ change to a model, a threshold or a rule re-runs only the cheap stages after it.
 | 5 Measures | `stainid v2 measures` | `candidates/`, `tiles/`, `threads/` | `measures/` | minutes, no image read |
 | White matter | `stainid v2 white-matter` | NeuN `candidates/`, `masks/` of the three stains, the NeuN images of cores to check, the registration | `white_matter/` | seconds per core; read by stage 5 (with `exclude`, also what it counts; docs/white_matter.md) |
 | Grey-matter burdens | `stainid v2 grey-matter` | `white_matter/`, the 6E10 / AT8 images with white matter, nuclei, slide thresholds | `white_matter/grey_tiles/` | 2-3 min per core image with white matter; read by stage 5 only with `v2.white_matter.analysis: exclude` (docs/white_matter.md) |
+| Object texture | `stainid v2 radiomics` | `candidates/` (accepted objects with a kept SAM outline), core images, `white_matter/` | `radiomics/` | CPU, about a second per 50 objects; optional (the `radiomics` extra); read by stage 5 when up to date ([Object texture](#object-texture-pyradiomics)) |
 
 Stage 3 runs after stage 4 because by default it outlines the candidates stage 4 accepted or scored at least 0.2
 (`v2.outlines.select`); candidates outlined before are kept when a later model selects more.
@@ -646,6 +647,37 @@ scored and binned objects for the type scores (10 plaques, 5 tau+ neurons), plaq
 fraction (10), tau+ neurons for the mature fraction (5), density windows for the patchiness (4), thread pieces for the
 thread width and branching (whose minimum is 0.5 mm of thread); 0 for `no_image` and `no_grey_matter`. `results_counts_<level>.csv`
 holds these counts per row. Under `measures/whole_core/` the same tables describe the whole-core results.
+The object texture columns are `not_measured` where `stainid v2 radiomics` has not run (or is out of date), otherwise
+`too_few_objects` under the outline measures' minimum of objects with features.
+
+### Object texture (pyradiomics)
+
+`stainid v2 radiomics` (`stainid.v2.radiomics`; the Workflow page's *Measure object texture*) runs
+[pyradiomics](https://pyradiomics.readthedocs.io) on the objects of the outline measures: accepted, with a kept Segment
+Anything outline. It replaces the standalone `pyradiomics_feature_extract.py` of the older workflow; its plots by group
+and the group tests are the Results page's.
+
+- **Image.** The DAB optical density (`imaging.color.rgb_to_hed`, as stage 3 measures it) on 0–255, with a fixed ceiling
+  of `v2.radiomics.od_ceiling` (default 0.3 OD: the darkest brown is about 0.25, slide thresholds 0.02–0.05). The scale is
+  the same for every slide, so the parameter file's `binWidth: 25` gives about ten grey levels. Spacing: the tile's µm per pixel.
+- **Features.** Those of `src/stainid/v2/radiomics_params.yaml` (or `v2.radiomics.params_file`), 2D forced: first-order
+  mean, GLCM joint entropy, GLRLM long-run high-grey-level emphasis, GLSZM large-area emphasis, GLDM large-dependence
+  emphasis. A feature added to the file gets a column named after it (`radiomics.stem`).
+- **Per object.** Each object on a crop around its outline (4 px margin, `v2.radiomics.margin_px`). Stage 5:
+  `<object>_rad_<feature>_median` per core and donor-region, over objects with values, with the outline measures' minimum
+  (20 NeuN, 10 plaques, 5 tau+ neurons). An object pyradiomics cannot measure (one pixel, one grey level) has no values, never 0.
+- **Per field.** One mask per tile holding all its objects, as the older workflow did. Stage 5:
+  `<object>_rad_field_<feature>`, the mean over the fields with objects weighted by their mask area. Where the core image
+  has white matter a second mask leaves out the objects whose centre lies in it; the grey-matter tables use that one.
+- **Outputs.** `radiomics/objects/<stain>/<core_id>.csv`, `radiomics/fields/<stain>/<core_id>.csv` (every tile, `scope`
+  whole / grey), `radiomics/manifests/<stain>/<core_id>.json`. A core image is redone when its candidates (calls,
+  outlines), its white matter, the parameter file or `v2.radiomics` change. Stage 5 reads only up-to-date core images
+  and says how many it left empty.
+- **Running it.** Off in "Run what's left" unless `v2.radiomics.enabled: true`; it can always be run by hand. Install:
+  `pip install versioneer && pip install --no-build-isolation -c constraints.txt -e ".[radiomics]"` (pyradiomics ships
+  only a source package). The texture columns appear under each stain's outline measures on the Results page.
+- **Statistics.** The Results page's group tests correct across every measure in the table (Benjamini–Hochberg), so the
+  30 texture columns (5 features × 2 units × 3 stains) widen that family for every measure.
 
 ### Tangle spacing, thread ownership, pathology in white matter
 

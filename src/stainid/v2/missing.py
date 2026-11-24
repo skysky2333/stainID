@@ -41,10 +41,11 @@ COUNTS = "results_counts_{}.csv"  # per row of the results table: its tiles per 
 @dataclass(frozen=True)
 class Needs:
     """What a measure needs: `count` the objects it rests on (`n_objects`), and at least `minimum` of `tested` (default
-    `count`) for a value."""
+    `count`) for a value; `ran`: a count that is 0 where the step making the measure has not run (then `not_measured`)."""
     count: str
     minimum: float
     tested: str = ""
+    ran: str = ""
 
 
 def _family(names: tuple[str, ...], needs: Needs) -> dict[str, Needs]:
@@ -102,6 +103,21 @@ for _prefix, _count, _minimum in (("tau_maturity", "tau_scored", 5), ("plaque_co
     _bins = {"tau_maturity": ("pretangle", "intermediate", "mature"), "plaque_compactness": ("diffuse", "intermediate", "compact")}[_prefix]
     MEASURES |= _family(tuple(f"{_prefix}_score_{s}" for s in ("median", "iqr", "mean")) + tuple(f"{_prefix}_{b}_fraction" for b in _bins),
                         Needs(_count, _minimum))
+TEXTURE_PREFIX = {"NeuN": "neun_soma", "6E10": "plaque", "AT8": "tau_neuron"}  # `stainid.v2.radiomics.PREFIX`
+TEXTURE_MINIMUM = {"NeuN": 20, "6E10": 10, "AT8": 5}  # `mask_aggregation.MINIMUM_OBJECTS`
+
+
+def texture_needs(name: str) -> Needs | None:
+    """The object-texture columns (`<prefix>_rad_<feature>_median`, `<prefix>_rad_field_<feature>`): named after the
+    parameter file's features, so matched by pattern. Empty where `stainid v2 radiomics` has not run: `not_measured`."""
+    for stain, prefix in TEXTURE_PREFIX.items():
+        if name.startswith(f"{prefix}_rad_field_"):
+            return Needs(f"{prefix}_textured", 1, f"{prefix}_texture_fields_with_objects", f"{prefix}_texture_fields")
+        if name.startswith(f"{prefix}_rad_") and name.endswith("_median"):
+            return Needs(f"{prefix}_textured", TEXTURE_MINIMUM[stain], ran=f"{prefix}_texture_fields")
+    return None
+
+
 STAIN_PREFIX = (("neun_", "NeuN"), ("white_matter_", "NeuN"), ("tau_", "AT8"), ("tangle_", "AT8"), ("thread_", "AT8"), ("at8_", "AT8"), ("plaque_", "6E10"),
                 ("amyloid_", "6E10"), ("v2_plaque", "6E10"), ("compact_fraction", "6E10"), ("periplaque_", "6E10"), ("caa_", "6E10"), ("nuclei_per_plaque", "6E10"),
                 ("vascular_or_edge_", "6E10"))
@@ -120,8 +136,19 @@ def _number(row: dict, key: str) -> float:
     return 0.0 if value in ("", None) else float(value)
 
 
-def group_counts(tiles: dict[str, list[dict]], objects: dict[str, list[dict]], masks: dict[str, list[dict]], scored: dict[str, list[dict]]) -> dict:
-    """One row of the results table's counts, from its rows per stain (stage 5's text rows)."""
+def _textured(row: dict) -> bool:
+    return any(k.startswith("rad_") and v not in ("", None, "nan") for k, v in row.items())
+
+
+def _field_measured(row: dict) -> bool:
+    skip = {*IDS, "tile_id", "n_objects", "mask_px"}
+    return float(row.get("n_objects") or 0) > 0 and any(k not in skip and v not in ("", None) and np.isfinite(float(v)) for k, v in row.items())
+
+
+def group_counts(tiles: dict[str, list[dict]], objects: dict[str, list[dict]], masks: dict[str, list[dict]], scored: dict[str, list[dict]],
+                 texture_fields: dict[str, list[dict]] | None = None) -> dict:
+    """One row of the results table's counts, from its rows per stain (stage 5's text rows); `texture_fields`: the
+    per-field pyradiomics rows (`stainid.v2.radiomics`)."""
     plaques, taus, neurons = tiles.get("6E10", []), tiles.get("AT8", []), tiles.get("NeuN", [])
     out: dict[str, float] = {f"tiles_{stain}": len(tiles.get(stain, [])) for stain in STAINS}
     out |= {"neun_masks": len(masks.get("NeuN", [])), "plaque_masks": len(masks.get("6E10", [])), "tau_masks": len(masks.get("AT8", [])),
@@ -138,6 +165,10 @@ def group_counts(tiles: dict[str, list[dict]], objects: dict[str, list[dict]], m
             "thread_mm": sum(_number(r, "thread_ridge_length_mm") for r in taus),
             "tau_scored": sum(bool(r.get("tau_maturity_bin")) for r in scored.get("AT8", [])),
             "plaque_scored": sum(bool(r.get("plaque_compactness_bin")) for r in scored.get("6E10", []))}
+    for stain, prefix in TEXTURE_PREFIX.items():
+        fields = (texture_fields or {}).get(stain, [])
+        out |= {f"{prefix}_textured": sum(_textured(r) for r in masks.get(stain, [])), f"{prefix}_texture_fields": len(fields),
+                f"{prefix}_texture_fields_with_objects": sum(_field_measured(r) for r in fields)}
     return out
 
 
@@ -171,8 +202,10 @@ def _reason(measure: str, row_id: str, measured: dict, whole: dict | None) -> tu
             if have < minimum:
                 return reason, round(have) if reason == "too_few_objects" else first
         return "not_measured", first
-    needs = MEASURES.get(name)
+    needs = MEASURES.get(name) or texture_needs(name)
     if needs is None:
+        return "not_measured", 0
+    if needs.ran and not counts.get(needs.ran, 0):
         return "not_measured", 0
     n_objects = round(counts.get(needs.count, 0))
     if counts.get(needs.tested or needs.count, 0) < needs.minimum:
