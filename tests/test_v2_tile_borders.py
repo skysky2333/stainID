@@ -333,6 +333,10 @@ def test_objects_cut_by_the_first_window_are_the_whole_windows_objects(tmp_path,
             if pd.api.types.is_numeric_dtype(want[column]):
                 assert np.allclose(got[column].astype(float), want[column].astype(float), rtol=1e-6, equal_nan=True), column
             else:
-                assert (got[column].astype(str) == want[column].astype(str)).all(), column
+                text, wanted = got[column].astype(str), want[column].astype(str)
+                # a profile kept as text (radial_dab_um, "0.1797 0.0802 ..."): 4 decimals, so the last one may differ where
+                # the two ways add the same pixels in another order (another machine's BLAS); the numbers must agree
+                pairs = [(np.array(x.split(), float), np.array(y.split(), float)) for x, y in zip(text, wanted) if x != y]
+                assert all(len(x) == len(y) and np.allclose(x, y, rtol=0, atol=2e-4, equal_nan=True) for x, y in pairs), column
     big = covering(found[True][0], 800, 800)
     assert len(big) == 1 and big.iloc[0].area_um2 >= 0.95 * np.pi * 560 * 140 * PS ** 2

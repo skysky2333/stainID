@@ -146,7 +146,7 @@ def test_projects_share_one_budget(tmp_path, monkeypatch):
     monkeypatch.setattr(queue.Scheduler, "_start", lambda self, job, gpus: (started.append((job.project_name, job.workflow)), setattr(job, "status", "running")))
     scheduler = queue.Scheduler(tmp_path / "queue", budget=queue.Budget(5, 1, 32))
     a, b = (load_project(_project(tmp_path / name, title)) for name, title in (("a", "Study A"), ("b", "Study B")))
-    first = scheduler.submit_step(a, "nuclei", {})
+    first = scheduler.submit_step(a, "nuclei", {"device": "cuda"})  # a GPU job whatever this machine has
     waiting = scheduler.submit_step(b, "export", {})
     light = scheduler.submit_step(b, "summarize", {})
     scheduler._schedule()
@@ -172,6 +172,6 @@ def test_command_line_runs_in_projects_not_open_count_too(tmp_path, monkeypatch)
     monkeypatch.setattr(queue.Scheduler, "_missing", lambda self, job, step: "")
     monkeypatch.setattr(queue.Scheduler, "_start", lambda self, job, gpus: (started.append(job.workflow), setattr(job, "status", "running")))
     scheduler = queue.Scheduler(queue.queue_dir(), budget=queue.Budget(32, 1, 32))
-    job = scheduler.submit_step(load_project(_project(tmp_path / "here", "Here")), "nuclei", {})
+    job = scheduler.submit_step(load_project(_project(tmp_path / "here", "Here")), "nuclei", {"device": "cuda"})  # a GPU job here too
     scheduler._schedule()
     assert started == [] and "GPUs" in job.waiting

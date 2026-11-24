@@ -65,7 +65,9 @@ def test_queue_respects_step_order_and_the_budget(tmp_path, monkeypatch):
 
     scheduler, project = _queue(tmp_path, monkeypatch, queue.Budget(8, 1, 32))
     monkeypatch.setattr(queue.Scheduler, "_missing", lambda self, job, step: "")
-    nuclei, neun, fields, masks = (scheduler.submit_step(project, step, {}) for step in ("nuclei", "neun", "fields", "masks"))
+    gpu = {"device": "cuda"}  # GPU jobs whatever this machine has (the default device is the CPU without one)
+    nuclei, neun, fields, masks = (scheduler.submit_step(project, step, gpu if step in ("nuclei", "masks") else {})
+                                   for step in ("nuclei", "neun", "fields", "masks"))
     for job, when in zip((nuclei, neun, fields, masks), range(4)):
         job.created = job.order = when
     scheduler._schedule()
