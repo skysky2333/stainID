@@ -7,7 +7,6 @@ from stainid.imaging.color import rgb_to_hed
 from stainid.imaging.parallel import map_all
 from stainid.imaging.shared import remembered
 
-
 LINEAR_DARKNESS = 0.35  # a linear artifact (fold band, knife line, scratch) is at least this dark (1 - grey level)
 
 

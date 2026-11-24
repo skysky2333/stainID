@@ -64,11 +64,10 @@ def factors_of(wide: bool) -> tuple[float, ...]:
 
 def _ladder_networks(project, tile_id: str, core_id: str, factors=FACTORS):
     """(stage 2's field of the tile, its `tau.maps`, the network at every step) or None when stage 2 cannot run there."""
+    from stainid.api import render  # noqa: PLC0415
     from stainid.imaging.shared import shared_pictures  # noqa: PLC0415
     from stainid.stains.tau.threads import thread_ladder  # noqa: PLC0415
     from stainid.v2 import proposals, tau  # noqa: PLC0415
-
-    from stainid.api import render  # noqa: PLC0415
 
     render.yield_to_people()  # a core decode: after the pictures people wait for
     tiles, threshold, nuclei = _stage2_tiles(project, core_id)

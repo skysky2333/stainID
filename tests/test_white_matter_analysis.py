@@ -165,7 +165,8 @@ def test_the_steps_run_their_outputs_track_what_they_are_made_from_and_people_ch
     assert (found["done"], found["outdated"], found["total"]) == (2, 0, 2) and found["written"] > 0
 
     inputs = white_matter._inputs(project, CORE, ["NeuN", "6E10", "AT8"])
-    from stainid.labels import matter, store as labels
+    from stainid.labels import matter
+    from stainid.labels import store as labels
 
     stamp = {"source": "a", "session": "s", "tile_id": CORE, "x": None, "y": None}
     labels.append(project.output("reviews"), matter.records(CORE, "NeuN", [[[0, 0], [99, 0], [99, 99]]], [], stamp, None, False, None))

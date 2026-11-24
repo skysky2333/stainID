@@ -58,8 +58,19 @@ from stainid import candidates as store
 from stainid.analysis import aggregation, field_aggregation, mask_aggregation
 from stainid.analysis.aggregation import summarize_stain_group
 from stainid.tables import read_csv, write_records
-from stainid.v2 import (biology_measures, cells, grey_matter, interactions, manifest, missing, organisation, radiomics, reliability, scores,
-                       white_matter)
+from stainid.v2 import (
+    biology_measures,
+    cells,
+    grey_matter,
+    interactions,
+    manifest,
+    missing,
+    organisation,
+    radiomics,
+    reliability,
+    scores,
+    white_matter,
+)
 from stainid.v2.classify import load_model
 from stainid.v2.params import STAINS
 

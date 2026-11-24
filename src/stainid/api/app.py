@@ -23,9 +23,9 @@ from stainid.api import ahead, state, work
 from stainid.api.routes import accounts as account_routes
 from stainid.api.routes import analysis, annotate, cohort, images, imageset, jobs, models, project, projects, session, setup, slides, whole_slides
 from stainid.api.routes import areas as area_routes
-from stainid.api.routes import matter as matter_routes
 from stainid.api.routes import cache as cache_routes
 from stainid.api.routes import classes as label_classes
+from stainid.api.routes import matter as matter_routes
 from stainid.api.routes import outline as outline_routes
 from stainid.api.routes import rounds as round_routes
 from stainid.api.routes import users as user_routes

@@ -120,7 +120,7 @@ def _steps_project(tmp_path, analysis=None, tile_stains=("NeuN", "AT8")):
 
 
 def test_white_matter_runs_between_the_outlines_and_the_tables():
-    from stainid.workflows.steps import STEPS, depends_on, BY_ID
+    from stainid.workflows.steps import BY_ID, STEPS, depends_on
 
     order = [s.id for s in STEPS]
     assert order.index("v2_calls") < order.index("v2_outlines") < order.index("v2_white_matter") < order.index("v2_grey_matter") < order.index("v2_measures")
