@@ -1,7 +1,12 @@
 """Slides table: which whole-slide scan is which TMA and stain (`slide_path,tma,stain`), and optionally the slide's
 own core grid when it differs from the project's TMA layout: `rows`, `columns` (empty = found automatically by Find
 cores, which then writes the size it chose with `grid_source` = auto) and `orientation` (empty = as scanned, or
-rotate_180 / flip_left_right / flip_top_bottom when the slide lies turned or mirrored on the scan)."""
+rotate_180 / flip_left_right / flip_top_bottom when the slide lies turned or mirrored on the scan).
+
+`slide_path` is kept relative to the project folder (`stainid.project.stored_path`: `../scans/x.vsi`, absolute only for
+a scan that shares no folder with the project); the functions given the project folder (`root`) read and take full
+paths and write the kept form, so the project can be moved together with its scans. Without `root` the paths are read
+and written as they are."""
 from __future__ import annotations
 
 import os
@@ -10,6 +15,7 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
+from stainid.project import located_path, stored_path
 from stainid.tables import read_csv, write_records
 
 SLIDE_SUFFIXES = (".vsi", ".svs", ".ndpi", ".scn", ".mrxs", ".czi", ".tif", ".tiff")
@@ -87,21 +93,35 @@ def guess_prefix(paths: list[Path], stains: list[str]) -> str:
     return common[0][0] if common and common[0][1] * 2 > len(paths) else ""
 
 
-def read_slides(path: Path) -> list[dict[str, str]]:
-    return read_csv(path) if Path(path).exists() else []
+def located_rows(rows: list[dict], root: Path | None, column: str = "slide_path") -> list[dict]:
+    """`rows` with `column` as full paths (a relative one taken from the project folder `root`); None: as they are."""
+    if root is None:
+        return rows
+    return [{**row, column: str(located_path(root, row[column]))} if row.get(column) else row for row in rows]
 
 
-def scan_slides(folder: Path, table: Path, stains: list[str], prefix: str = "") -> list[dict[str, str]]:
+def stored_rows(rows: list[dict], root: Path | None, column: str = "slide_path") -> list[dict]:
+    """`rows` with `column` as a table keeps it (relative to the project folder `root`); None: as they are."""
+    if root is None:
+        return rows
+    return [{**row, column: stored_path(root, located_path(root, row[column]))} if row.get(column) else row for row in rows]
+
+
+def read_slides(path: Path, root: Path | None = None) -> list[dict[str, str]]:
+    return located_rows(read_csv(path), root) if Path(path).exists() else []
+
+
+def scan_slides(folder: Path, table: Path, stains: list[str], prefix: str = "", root: Path | None = None) -> list[dict[str, str]]:
     """Known slides keep their assignment; new files in the folder get what their file name says clearly."""
-    known = {row["slide_path"]: row for row in read_slides(table)}
+    known = {row["slide_path"]: row for row in read_slides(table, root)}
     return [known.get(str(p)) or guess(p, stains, prefix) for p in find_slides(folder)]
 
 
-def slide_rows(folder: Path, table: Path, stains: list[str], prefix: str = "") -> list[dict]:
+def slide_rows(folder: Path, table: Path, stains: list[str], prefix: str = "", root: Path | None = None) -> list[dict]:
     """The rows of the slides editor: every scan in the folder with its TMA and stain and whether it is new; for a new
     scan also which values came from its file name (`from_name`) and, where the name is unclear, what it might mean
     (`options`)."""
-    known = {row["slide_path"]: row for row in read_slides(table)}
+    known = {row["slide_path"]: row for row in read_slides(table, root)}
     rows = []
     for path in find_slides(folder):
         if str(path) in known:
@@ -125,32 +145,34 @@ def _still_need(paths: list[str], what: str) -> str:
     return f"{len(paths)} slide{'s still need' if len(paths) != 1 else ' still needs'} {what} ({names})"
 
 
-def _write(table: Path, rows: list[dict[str, str]]) -> None:
+def _write(table: Path, rows: list[dict[str, str]], root: Path | None = None) -> None:
     grid = [c for c in GRID_COLUMNS if any(row.get(c) for row in rows)]
-    write_records(table, [{c: row.get(c, "") for c in COLUMNS + grid} for row in rows], COLUMNS + grid)
+    write_records(table, [{c: row.get(c, "") for c in COLUMNS + grid} for row in stored_rows(rows, root)], COLUMNS + grid)
 
 
-def save_slides(table: Path, rows: list[dict[str, str]], stains: list[str]) -> None:
-    rows = [{**r, "tma": str(r.get("tma") or "").strip()} for r in rows]
+def save_slides(table: Path, rows: list[dict[str, str]], stains: list[str], root: Path | None = None) -> None:
+    rows = [{**r, "tma": str(r.get("tma") or "").strip()} for r in located_rows(rows, root)]
     missing = missing_values(rows, stains)
     problems = [_still_need(paths, what) for paths, what in ((missing["tma"], "a TMA"), (missing["stain"], "a stain")) if paths]
     pairs = [(r["tma"], r["stain"]) for r in rows if r["tma"] and r["stain"] in stains]
     problems += [f"TMA {t} has more than one {s} slide" for t, s in sorted(set(pairs)) if pairs.count((t, s)) > 1]
     if problems:
         raise ValueError("; ".join(problems))
-    known = {row["slide_path"]: row for row in read_slides(table)}
+    known = {row["slide_path"]: row for row in read_slides(table, root)}
     # a slide's grid set in the table is kept when the editor does not send it back
-    _write(table, [{**row, **{c: row[c] if c in row else known.get(row["slide_path"], {}).get(c, "") for c in GRID_COLUMNS}} for row in rows])
+    _write(table, [{**row, **{c: row[c] if c in row else known.get(row["slide_path"], {}).get(c, "") for c in GRID_COLUMNS}} for row in rows], root)
 
 
-def set_slide_grid(table: Path, slide_path: str, rows: int | None, columns: int | None, orientation: str = "", source: str = "manual") -> None:
+def set_slide_grid(table: Path, slide_path: str, rows: int | None, columns: int | None, orientation: str = "", source: str = "manual",
+                   root: Path | None = None) -> None:
     """Give one slide its own grid (`source` manual), record the size Find cores chose (`source` auto), or clear it
-    (rows / columns None: found automatically next time)."""
-    slides = read_slides(table)
+    (rows / columns None: found automatically next time). With `root`, `slide_path` may be in full or as the table keeps it."""
+    slides = read_slides(table, root)
+    slide_path = str(located_path(root, slide_path)) if root is not None else slide_path
     if not any(s["slide_path"] == slide_path for s in slides):
         raise KeyError(slide_path)
     for slide in slides:
         if slide["slide_path"] == slide_path:
             slide.update({"rows": str(rows or ""), "columns": str(columns or ""), "orientation": orientation,
                           "grid_source": source if rows and columns else ""})
-    _write(table, slides)
+    _write(table, slides, root)

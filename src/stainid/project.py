@@ -110,6 +110,42 @@ DEFAULTS: dict = {
 }
 
 
+def stored_path(root: Path | str, path: Path | str) -> str:
+    """How a table (or stainid.yaml) keeps a file's path: relative to the project folder `root` whenever the file and the
+    project share a folder below the filesystem root (`/data/alzh/scans/x.vsi` for a project in `/data/alzh/study` is
+    `../scans/x.vsi`), so the project can be moved together with its scans; else absolute (`/scans/x.vsi` for a project
+    in `/home/me/study`, or a file on another drive). A relative path is kept as it is (it is relative to the project
+    already)."""
+    path = Path(path)
+    if not path.is_absolute():
+        return str(path)
+    try:
+        common = Path(os.path.commonpath([Path(root), path]))
+    except ValueError:  # another drive letter
+        return str(path)
+    if common.parent == common or _device(path) != _device(Path(root)):  # only the root in common, or another drive
+        return str(path)
+    return Path(os.path.relpath(path, root)).as_posix()
+
+
+def _device(path: Path) -> int | None:
+    """The filesystem a path is on (that of its nearest existing folder): two drives mounted side by side
+    (`/media/me/a`, `/media/me/b`) share a folder but must not be tied together by `../../b/...`."""
+    for folder in (path, *path.parents):
+        try:
+            return os.stat(folder).st_dev
+        except OSError:
+            continue
+    return None
+
+
+def located_path(root: Path | str, stored: Path | str) -> Path:
+    """A path as a table keeps it, as a full path: an absolute one as it is, a relative one taken from the project folder
+    `root` with `..` folded in (`stored_path` turned back)."""
+    path = Path(stored)
+    return path if path.is_absolute() else Path(os.path.normpath(Path(root) / path))
+
+
 def _merge(base: dict, override: dict) -> dict:
     out = copy.deepcopy(base)
     for key, value in override.items():
@@ -197,8 +233,7 @@ class Project:
     def resolve(self, section: str, key: str) -> Path:
         """A configured path, relative ones taken from the project folder; `..` is folded in (`stainID/../scans` is
         `scans`), so the same file always has the same name, e.g. in the slides table and in a folder listing."""
-        path = Path(self.config[section][key])
-        return path if path.is_absolute() else Path(os.path.normpath(self.root / path))
+        return self.locate(self.config[section][key])
 
     def input(self, key: str) -> Path:
         return self.resolve("inputs", key)
@@ -209,9 +244,14 @@ class Project:
     def output(self, key: str) -> Path:
         return self.resolve("outputs", key)
 
-    def relative(self, path: Path) -> str:
-        path = Path(path)
-        return str(path.relative_to(self.root)) if path.is_absolute() and path.is_relative_to(self.root) else str(path)
+    def relative(self, path: Path | str) -> str:
+        """A path as tables and stainid.yaml keep it (`stored_path`): relative to the project folder unless the file
+        shares no folder with it below the filesystem root."""
+        return stored_path(self.root, path)
+
+    def locate(self, stored: Path | str) -> Path:
+        """A path as a table keeps it, as a full path (`located_path`)."""
+        return located_path(self.root, stored)
 
     def tma_name(self, tma: str) -> str:
         return f"{self.tma_prefix}{tma}"

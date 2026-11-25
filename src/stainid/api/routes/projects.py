@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from stainid import disk_cache
 from stainid.api import registry, state
 from stainid.imageset import package
-from stainid.project import CONFIG_NAME, DEFAULTS, KINDS, Project, load_project, save_project
+from stainid.project import CONFIG_NAME, DEFAULTS, KINDS, Project, load_project, save_project, stored_path
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -91,9 +91,10 @@ def open_folder(request: OpenRequest) -> dict:
     return describe(_entry(opened.id))
 
 
-def copied_settings(source: Project, keys: list[str]) -> dict:
+def copied_settings(source: Project, keys: list[str], root: Path | None = None) -> dict:
     """The parts of another project's settings to start a new study with. Model files stay where they are: their
-    locations are written out in full, so the new study uses the same files."""
+    locations are written relative to the new study's folder `root` (`stored_path`; in full without `root`, or when
+    they share no folder with it), so the new study uses the same files."""
     out: dict = {}
     for key in keys:
         if key not in COPYABLE:
@@ -101,7 +102,7 @@ def copied_settings(source: Project, keys: list[str]) -> dict:
         for setting in COPYABLE[key][1]:
             out[setting] = source.config[setting]
     if "models" in out:
-        out["models"] = {name: str(source.model(name)) for name in out["models"]}
+        out["models"] = {name: stored_path(root, source.model(name)) if root is not None else str(source.model(name)) for name in out["models"]}
     return out
 
 
@@ -122,7 +123,7 @@ def create(request: CreateRequest) -> dict:
                     "imaging": {"rescale": "on_the_fly" if request.kind == "slides" else "on_import"}}
     if request.copy_from:
         source = _entry(request.copy_from)
-        changes = {**copied_settings(load_project(source.path), request.settings), **changes}
+        changes = {**copied_settings(load_project(source.path), request.settings, path.resolve()), **changes}
     save_project(Project(root=path.resolve(), config=DEFAULTS), changes)
     opened = state.open_project(path)
     return describe(_entry(opened.id))

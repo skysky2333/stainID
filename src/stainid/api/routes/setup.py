@@ -171,7 +171,8 @@ def set_grid(request: GridRequest) -> dict:
     if bool(request.rows) != bool(request.columns) or any(v is not None and not 1 <= v <= 26 for v in (request.rows, request.columns)):
         raise HTTPException(400, "Give both the rows and the columns (1-26), or neither to have them found automatically")
     try:
-        set_slide_grid(state.project.input("slides_table"), request.slide_path, request.rows, request.columns, request.orientation)
+        set_slide_grid(state.project.input("slides_table"), request.slide_path, request.rows, request.columns, request.orientation,
+                       root=state.project.root)
     except KeyError:
         raise HTTPException(404, f"{request.slide_path} is not in the slides table")
     job = state.jobs.describe(state.jobs.submit("dearray", {"slide": Path(request.slide_path).name})) if request.run else None
@@ -233,7 +234,7 @@ def _sizes() -> dict[str, tuple[int, int]]:
         old = sizes.get(row["tma"], (0, 0))
         sizes[row["tma"]] = (max(old[0], r + 1), max(old[1], c + 1))
     default = (int(project.config["tma"]["rows"]), int(project.config["tma"]["columns"]))
-    for slide in read_slides(project.input("slides_table")):
+    for slide in read_slides(project.input("slides_table"), project.root):
         if slide.get("tma") and slide["tma"] not in sizes:
             sizes[slide["tma"]] = (int(slide["rows"]), int(slide["columns"])) if slide.get("rows") and slide.get("columns") else default
     return sizes
@@ -249,7 +250,7 @@ def map_overview() -> dict:
         positions.setdefault(row["tma"], [])
         if row["core_label"] not in positions[row["tma"]]:
             positions[row["tma"]].append(row["core_label"])
-    slides = read_slides(project.input("slides_table"))
+    slides = read_slides(project.input("slides_table"), project.root)
     tmas = sorted(set(sizes) | {r["tma"] for r in layout}, key=lambda t: (len(t), t))
     out = []
     for tma in tmas:
@@ -377,7 +378,7 @@ def _sheet(request: DonorRequest):
         sheet = donors.read_donors(request.rows, _groups(), _style(), mapping or None, donors.prefixes(on_map) if layout else None)
     except ValueError as error:
         raise HTTPException(400, str(error))
-    study = {r["tma"] for r in layout} | {s["tma"] for s in read_slides(project.input("slides_table"))}
+    study = {r["tma"] for r in layout} | {s["tma"] for s in read_slides(project.input("slides_table"), project.root)}
     kept = donors.select_donors(sheet.records, on_map, study, request.keep)
     return sheet, kept, on_map
 

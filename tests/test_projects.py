@@ -110,7 +110,9 @@ def test_new_study_can_start_with_another_projects_settings(server, tmp_path):
                                                         "settings": ["groups", "models", "naming"]}).json()
     config = server.get(f"/api/projects/{created['id']}/project").json()["config"]
     assert config["name"] == "Study C" and config["groups"] == [{"code": "AD", "label": "AD"}] and config["donor_ids"]["digits"] == 5
-    assert config["models"]["neun"] == str(server.roots["a"] / "data" / "models" / "neun.joblib")  # the same model file
+    neun = server.roots["a"] / "data" / "models" / "neun.joblib"  # the same model file, kept relative to the new study
+    assert config["models"]["neun"] == os.path.relpath(neun, (tmp_path / "study-c").resolve())
+    assert load_project(tmp_path / "study-c").model("neun") == neun
     assert server.post("/api/projects/create", json={"path": str(tmp_path / "study-c")}).status_code == 409
     assert server.post("/api/projects/open", json={"path": str(tmp_path / "nowhere")}).status_code == 404
 

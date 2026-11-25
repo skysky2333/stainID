@@ -258,7 +258,7 @@ def import_package_labels(project: Project, redo: bool = True, log=print) -> Pat
     """Place the package's annotations on the tiles, write the imported table and one read-only session per rater (and
     the consensus). Run again (after the tiles change or the class map is edited) it replaces what it made before."""
     dataset = project.config.get("dataset", {})
-    package = read_package(dataset["package"])
+    package = read_package(project.locate(dataset["package"]))
     class_map = dict(dataset.get("class_map") or {})
     placed, notes = place(project, package.annotations(), class_map)
     raters = sorted(set(placed.rater) - {CONSENSUS})

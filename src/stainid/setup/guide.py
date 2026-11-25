@@ -32,16 +32,16 @@ def _rows(path: Path) -> list[dict[str, str]]:
 
 def slide_reports(project: Project) -> list[dict]:
     """Every slide in the slides table with what Find cores did on it (grid size, how it was chosen, fit) and whether
-    someone has said the grid looks right."""
+    someone has said the grid looks right. Slide paths in full (the tables keep them relative to the project)."""
     folder = project.output("qc") / "grids"
-    in_manifest = {r["slide_path"] for r in _rows(project.input("core_manifest"))}
+    in_manifest = {str(project.locate(path)) for path in {r["slide_path"] for r in _rows(project.input("core_manifest"))}}
     out = []
     for slide in _rows(project.input("slides_table")):
-        path = Path(slide["slide_path"])
+        path = project.locate(slide["slide_path"])
         slug = slide_slug(path)
         report_path = folder / f"{slug}.json"
         report = json.loads(report_path.read_text()) if report_path.exists() else {}
-        out.append({"slide_path": slide["slide_path"], "name": path.name, "tma": slide["tma"], "stain": slide["stain"],
+        out.append({"slide_path": str(path), "name": path.name, "tma": slide["tma"], "stain": slide["stain"],
                     "rows": slide.get("rows", ""), "columns": slide.get("columns", ""), "grid_source": slide.get("grid_source", ""),
                     "orientation": slide.get("orientation", ""), "image": f"{slug}.jpg" if (folder / f"{slug}.jpg").exists() else "",
                     "report": report, "checked": bool(report.get("checked")),
@@ -51,7 +51,8 @@ def slide_reports(project: Project) -> list[dict]:
 
 def mark_checked(project: Project, slide_path: str, checked: bool = True) -> None:
     path = project.output("qc") / "grids" / f"{slide_slug(Path(slide_path))}.json"
-    report = json.loads(path.read_text()) if path.exists() else {"slide_path": slide_path}
+    report = json.loads(path.read_text()) if path.exists() else {}
+    report["slide_path"] = project.relative(project.locate(report.get("slide_path") or slide_path))
     report["checked"] = checked
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, indent=1))
@@ -202,7 +203,7 @@ def screens(project: Project, steps: list[dict] | None = None) -> list[dict]:
     by_id = {s["id"]: s for s in steps}
     in_folder = find_slides(project.input("slides_dir"))
     slides = _rows(project.input("slides_table"))
-    known = {s["slide_path"] for s in slides}
+    known = {str(project.locate(s["slide_path"])) for s in slides}
     new = [p for p in in_folder if str(p) not in known]
     reports = slide_reports(project)
     found = [r for r in reports if r["found"] and not r["error"]]

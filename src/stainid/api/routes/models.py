@@ -140,8 +140,8 @@ def set_extra_projects(request: ExtraProjects) -> dict:
             raise HTTPException(400, "A project cannot lend its labels to itself")
         if not (path / CONFIG_NAME).exists():
             raise HTTPException(404, f"{path} is not a stainID project (it has no {CONFIG_NAME})")
-        if str(path) not in paths:
-            paths.append(str(path))
+        if project.relative(path) not in paths:
+            paths.append(project.relative(path))  # relative to this project, unless it shares no folder with it
     reload_project(save_project(project, {"training": {"extra_projects": paths}}).root)
     return extra_projects()
 

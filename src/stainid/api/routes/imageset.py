@@ -234,7 +234,7 @@ def imported_labels() -> dict:
     summary = folder / "import.json"
     placed = annotations.imported(project)
     try:
-        preview = package.preview(dataset["package"])
+        preview = package.preview(project.locate(dataset["package"]))
     except (ValueError, OSError) as error:
         preview = {"error": str(error)}
     return {"dataset": {k: dataset.get(k, "") for k in ("id", "title", "licence", "citation", "doi", "package")},

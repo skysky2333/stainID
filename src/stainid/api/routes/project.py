@@ -70,10 +70,20 @@ def project_info() -> dict:
             "id": state.id, "kind": project.kind, "kind_label": KINDS[project.kind]}
 
 
+def _kept_paths(project: Project, changes: dict) -> dict:
+    """The changes with every chosen input, model and output path as stainid.yaml keeps it: relative to the project
+    unless it shares no folder with it (`Project.relative`; a folder picked in the app comes in full)."""
+    out = dict(changes)
+    for section in ("inputs", "models", "outputs"):
+        if isinstance(out.get(section), dict):
+            out[section] = {k: project.relative(Path(v).expanduser()) if isinstance(v, str) and v.strip() else v for k, v in out[section].items()}
+    return out
+
+
 @router.put("/project/config")
 def update_config(request: ConfigChange) -> dict:
     state = get_state()
-    reload_project(save_project(state.project, request.changes).root)
+    reload_project(save_project(state.project, _kept_paths(state.project, request.changes)).root)
     return project_info()
 
 

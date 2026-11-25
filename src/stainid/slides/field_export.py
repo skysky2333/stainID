@@ -10,6 +10,7 @@ from pathlib import Path
 from aicsimageio.readers.bioformats_reader import BioFile
 from PIL import Image
 
+from stainid.project import located_path
 from stainid.slides.export import read_core, write_png
 
 
@@ -22,8 +23,7 @@ def read_rows(path: Path) -> list[dict[str, str]]:
 
 
 def resolve_image_path(project_root: Path, value: str) -> Path:
-    path = Path(value)
-    return path if path.is_absolute() else project_root / path
+    return located_path(project_root, value)
 
 
 def build_export_rows(

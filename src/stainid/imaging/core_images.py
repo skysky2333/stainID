@@ -3,7 +3,8 @@ brown-on-blue picture every step reads, made from the lab's own file without cop
 
 An image that is already at the analysis scale and in DAB is used where it lies (its path goes straight into the core
 image table). Any other becomes a small *link* file, `data/images/links/<id>.json`, saying how to make the picture: the
-source file, the box on it (level-0 pixels), the enlargement to the analysis scale and the colour recipe
+source file (kept relative to the project folder, `stainid.project.stored_path`), the box on it (level-0 pixels), the
+enlargement to the analysis scale and the colour recipe
 (`stainid.imaging.chromogens`). Every step opens core images with `open_image` / `read_bgr`, which make the picture from
 a link. With `imaging.rescale: on_import` the picture is kept as a cache file (kind `images`, through
 `stainid.disk_cache`, written only by `_kept_picture`): made again whenever it is missing (the cache may delete it to
@@ -22,6 +23,7 @@ from PIL import Image
 
 from stainid import disk_cache
 from stainid.imaging.chromogens import Recipe, to_analysis_rgb
+from stainid.project import located_path, stored_path
 
 Image.MAX_IMAGE_PIXELS = None
 LINKS = Path("data") / "images" / "links"
@@ -47,21 +49,36 @@ def safe_name(text: str) -> str:
 def write_link(path: Path, source: Path | str, box: tuple[int, int, int, int], scale: float, recipe: Recipe, keep: bool,
                size: tuple[int, int]) -> Path:
     """Say how a core image is made; `size` is the picture's (width, height) at the analysis scale; `keep`: keep the
-    picture once made (on_import) instead of making it at every read (on_the_fly)."""
-    data = {"stainid_core_image": 1, "source": str(source), "box": [int(v) for v in box], "scale": float(scale), "recipe": recipe.as_dict(),
-            "keep_picture": bool(keep), "width_px": int(size[0]), "height_px": int(size[1])}
+    picture once made (on_import) instead of making it at every read (on_the_fly). The source is written relative to
+    the project folder; a link that already says the same (its source written in full, as links were before) is left
+    as it is."""
+    root = project_root(path)
+    data = {"stainid_core_image": 1, "source": stored_path(root, located_path(root, source)), "box": [int(v) for v in box], "scale": float(scale),
+            "recipe": recipe.as_dict(), "keep_picture": bool(keep), "width_px": int(size[0]), "height_px": int(size[1])}
     path.parent.mkdir(parents=True, exist_ok=True)
     text = json.dumps(data, indent=1)
-    if not path.exists() or path.read_text() != text:  # unchanged links keep their time, so their kept pictures stay fresh
+    # unchanged links keep their time (stage 2 and the kept picture go by it), so their outputs and pictures stay fresh
+    old = path.read_text() if path.exists() else None
+    if old != text and (old is None or _meaning(old, root) != _meaning(text, root)):
         path.write_text(text)
     return path
 
 
+def _meaning(text: str, root: Path) -> dict | None:
+    """What a link's text says, its source in full."""
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return None
+    return {**data, "source": str(located_path(root, data["source"]))} if data.get("source") else data
+
+
 def read_link(path: Path) -> dict:
+    """What a link says, its source in full (a relative one taken from the project folder the link is in)."""
     data = json.loads(Path(path).read_text())
     if not data.get("stainid_core_image"):
         raise ValueError(f"{path} is not a stainID core image link")
-    return data
+    return {**data, "source": str(located_path(project_root(path), data["source"]))} if data.get("source") else data
 
 
 def project_root(link: Path) -> Path:

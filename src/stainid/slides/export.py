@@ -11,6 +11,7 @@ from aicsimageio.readers.bioformats_reader import BioFile
 from PIL import Image
 
 from stainid.imaging import thumbnails
+from stainid.project import located_path
 from stainid.qc.core_qc import QC_FIELDS
 
 EXPORT_FIELDS = [
@@ -225,9 +226,11 @@ def export_cores(
     write_workers: int = 2,
     tma_prefix: str = "TMA-",
     thumbs: Path | None = None,
+    root: Path | None = None,
 ) -> None:
     """Cut the cores out of their slides into `cores/<TMA>/<core>/<stain>.png` beside the manifest; with `thumbs` (a
-    folder), each newly cut core's thumbnail base is written there too (see `stainid.imaging.thumbnails`)."""
+    folder), each newly cut core's thumbnail base is written there too (see `stainid.imaging.thumbnails`). A relative
+    `slide_path` is taken from the project folder `root` (None: from the current folder)."""
     if write_workers < 1:
         raise ValueError("write_workers must be at least 1")
     fields, rows = read_manifest(manifest_path)
@@ -246,7 +249,7 @@ def export_cores(
             grouped[slide],
             key=lambda row: (int(row["row"]), int(row["column"])),
         )
-        source_path = Path(slide_rows[0]["slide_path"])
+        source_path = located_path(root, slide_rows[0]["slide_path"]) if root is not None else Path(slide_rows[0]["slide_path"])
         series = int(slide_rows[0]["full_scene"])
         pending: list[
             tuple[

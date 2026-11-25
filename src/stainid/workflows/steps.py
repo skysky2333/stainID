@@ -146,8 +146,10 @@ def _slides_status(project: Project) -> dict:
 
 
 def _dearray_status(project: Project) -> dict:
-    slides = {str(Path(s["slide_path"]).resolve()) for s in _rows(project.input("slides_table"))}
-    found = {r["slide_path"] for r in _rows(project.input("core_manifest"))}
+    """Slides with cores found: the tables keep each scan's path relative to the project or absolute, so both are
+    compared in full."""
+    slides = {str(project.locate(s["slide_path"]).resolve()) for s in _rows(project.input("slides_table"))}
+    found = {str(project.locate(path)) for path in {r["slide_path"] for r in _rows(project.input("core_manifest"))}}
     return _state(len(slides & found), len(slides), "slides")
 
 
@@ -199,7 +201,8 @@ def _neun_status(project: Project) -> dict:
 
 def _fields_status(project: Project) -> dict:
     names = _expected(project, {"6E10", "AT8"}, _field_file)
-    outdated = _made_with_other_model(project, "fields", lambda r: r, {k: project.relative(project.model(k)) for k in ("amyloid", "tau")})
+    outdated = _made_with_other_model(project, "fields", lambda r: {k: str(project.locate(v)) if isinstance(v, str) else v for k, v in r.items()},
+                                      {k: str(project.model(k)) for k in ("amyloid", "tau")})
     return _state(_count_files(project.output("fields") / "parts", names), len(names), "core images", outdated=outdated)
 
 

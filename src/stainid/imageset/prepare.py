@@ -177,7 +177,7 @@ def core_rows(project: Project, log=print) -> tuple[list[dict], list[str]]:
                          "image_id": name, "slide_id": row.get("slide_id", ""), "site": row.get("site", ""), "split": row.get("split", ""),
                          "image_path": image_path, "native_width_px": size[0], "native_height_px": size[1],
                          "pixel_width_um": project.pixel_size_um, "pixel_height_um": project.pixel_size_um,
-                         "source_path": str(source.path), "source_pixel_size_um": native, "source_box": " ".join(map(str, box)),
+                         "source_path": project.relative(source.path), "source_pixel_size_um": native, "source_box": " ".join(map(str, box)),
                          "scale": round(scale, 6), "chromogen": recipe.interest, "tissue_status": "complete", "tissue_fraction": "",
                          "review_required": "false"})
         log(f"[{number}/{len(images)}] {name}: {len(boxes)} {'core image' if len(boxes) == 1 else 'core images'}", flush=True)

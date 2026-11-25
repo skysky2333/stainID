@@ -4,6 +4,7 @@ used; simple labels train through the study's own mapping."""
 from __future__ import annotations
 
 import json
+import os
 
 import numpy as np
 import pandas as pd
@@ -150,7 +151,8 @@ def test_the_models_page_chooses_the_extra_projects(two_projects, monkeypatch):
     chosen = app.put("/api/models/extra-projects", json={"projects": [str(extra.root)]}).json()
     on = next(p for p in chosen["projects"] if p["enabled"])
     assert on["name"] == "JOG whole slides" and on["labels"] == {"NeuN": 0, "6E10": 0, "AT8": 40}
-    assert yaml.safe_load((study.root / "stainid.yaml").read_text())["training"] == {"extra_projects": [str(extra.root.resolve())]}
+    kept = os.path.relpath(extra.root.resolve(), study.root.resolve())  # relative to the study (both in tmp_path)
+    assert yaml.safe_load((study.root / "stainid.yaml").read_text())["training"] == {"extra_projects": [kept]}
     assert app.put("/api/models/extra-projects", json={"projects": [str(study.root)]}).status_code == 400
     assert app.put("/api/models/extra-projects", json={"projects": [str(study.root.parent)]}).status_code == 404
     off = app.put("/api/models/extra-projects", json={"projects": []}).json()

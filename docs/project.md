@@ -78,6 +78,13 @@ is downloaded at run time.
 You provide the TMA map, and optionally donor information and hand-drawn exclusions. The other tables are made by the
 steps.
 
+File paths in the tables (`slide_path` of the slides table, the core table and `core_images`; `image_path`; the image
+list's `path`; a core image link's `source`) are kept relative to the project folder, also when the file lies beside
+it (`../raw_scans/x.vsi` for a study in `alzh/tma_study` and scans in `alzh/raw_scans`), so the project can be moved
+together with its scans. Only a file that shares no folder with the project below the filesystem root (or lies on
+another drive) is kept absolute. Paths chosen in the app for `stainid.yaml` are kept the same way. Tables written with
+absolute paths are read as they are; the next write keeps the relative form.
+
 | Table | Made by |
 |---|---|
 | `tma_layout.csv` | the guided setup's Map screen (from your Excel, Word or CSV maps), or you (template on the *Attach TMA map* card) |
@@ -87,7 +94,8 @@ steps.
 | tiles (`whole_core_manifest`), `core_images` | *Cut cores into tiles* |
 | `calibration` | *Calibrate stain thresholds* |
 
-**`slides.csv`**: one row per scan, written by the *Register slides* step: `slide_path`, `tma`, `stain`. Optional:
+**`slides.csv`**: one row per scan, written by the *Register slides* step: `slide_path` (relative to the project, see
+above), `tma`, `stain`. Optional:
 
 | column | |
 |---|---|

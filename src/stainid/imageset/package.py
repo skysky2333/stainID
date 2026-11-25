@@ -31,7 +31,7 @@ from stainid import cache
 from stainid.imaging import chromogens
 from stainid.imaging.settings import FAMILIES, family_of
 from stainid.labels import vocabulary as vocab
-from stainid.project import DEFAULTS, Project, save_project
+from stainid.project import DEFAULTS, Project, save_project, stored_path
 from stainid.tables import write_csv
 
 KIND_OF = {"tiles": "images", "regions": "images", "images": "images", "wsi": "slides", "slides": "slides"}
@@ -293,7 +293,7 @@ def create_project(path: Path | str, folder: Path | str, name: str = "", class_m
     mapping = {**default_class_map(package), **(class_map or {})}
     changes = {"name": name.strip() or package.title, "kind": package.kind, "imaging": imaging_settings(package, stains),
                "donor_ids": {"digits": 0, "prefixed_digits": 0}, "tma": {"prefix": ""}, "cache_limit_gb": CACHE_LIMIT_GB,
-               "dataset": {"id": package.id, "title": package.title, "package": str(package.folder),
+               "dataset": {"id": package.id, "title": package.title, "package": stored_path(root, package.folder),
                            "licence": str(package.meta.get("licence") or package.meta.get("license") or ""),
                            "citation": str(package.meta.get("citation") or ""), "doi": str(package.meta.get("doi") or ""),
                            "class_map": mapping}}
@@ -318,7 +318,7 @@ def project_package(project: Project) -> Package | None:
     if not folder:
         return None
     try:
-        return read_package(folder)
+        return read_package(project.locate(folder))
     except (ValueError, OSError, yaml.YAMLError):
         return None
 

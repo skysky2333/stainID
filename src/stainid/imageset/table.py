@@ -4,7 +4,7 @@ or slide, with the donor it comes from and its stain.
 | column | |
 |---|---|
 | `image_id` | a short unique name (made from the file name when empty) |
-| `path` | the file (absolute, or relative to the project folder); it is read where it lies, never copied |
+| `path` | the file, kept relative to the project folder (absolute only when it shares no folder with the project); it is read where it lies, never copied |
 | `stain` | the stain as the lab calls it (6E10, 4G8, AT8, PHF-1, NeuN, ...); `imaging.stains` says how it is read |
 | `donor_id` | the donor; `region` the brain region (optional) |
 | `slide_id`, `site`, `batch` | optional: which slide, lab or staining run the image comes from. Stain thresholds are set per batch (else per slide, else per site, else one for the whole stain) |
@@ -28,13 +28,15 @@ SCAN_LIMIT = 20_000  # files listed from one folder at most
 
 
 def read_images(project: Project) -> list[dict[str, str]]:
+    """The image list's rows, each `path` in full."""
     path = project.input("image_list")
-    return [{k: (v or "").strip() for k, v in row.items() if k} for row in read_csv(path)] if path.exists() else []
+    rows = [{k: (v or "").strip() for k, v in row.items() if k} for row in read_csv(path)] if path.exists() else []
+    return [{**row, "path": str(resolve(project, row))} if row.get("path") else row for row in rows]
 
 
 def resolve(project: Project, row: dict) -> Path:
-    path = Path(row["path"]).expanduser()
-    return path if path.is_absolute() else Path(project.root / path)
+    """The row's file in full: an absolute path as it is, a relative one taken from the project folder."""
+    return project.locate(Path(row["path"]).expanduser())
 
 
 def image_id(row: dict, taken: set[str]) -> str:
@@ -61,7 +63,7 @@ def clean_rows(rows: list[dict]) -> list[dict[str, str]]:
 
 
 def save_images(project: Project, rows: list[dict]) -> int:
-    rows = clean_rows(rows)
+    rows = [{**row, "path": project.relative(resolve(project, row))} for row in clean_rows(rows)]  # kept relative to the project
     if not rows:
         raise ValueError("No images to save: every row needs a file")
     columns = list(dict.fromkeys(COLUMNS + [k for r in rows for k in r]))

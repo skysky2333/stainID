@@ -22,10 +22,14 @@ TILE_KEYS = ("tile_id", "core_id", "tma", "donor_id", "sample_region_id", "regio
 
 
 def check_models(project: Project, path, models: dict) -> None:
-    """Refuse to mix results from different models in one results folder."""
+    """Refuse to mix results from different models in one results folder (the models' paths compared in full: one kept
+    absolute before and relative now is the same model)."""
     used = {key: project.relative(value) for key, value in models.items()}
     if path.exists():
-        if json.loads(path.read_text()) != used:
+        def full(paths: dict) -> dict:
+            return {k: str(project.locate(v)) if isinstance(v, str) else v for k, v in paths.items()}
+
+        if full(json.loads(path.read_text())) != full(used):
             raise ValueError("These results were made with a different model. Run the step again with 'Start over' to redo them with the current model.")
         return
     write_text_atomic(path, json.dumps(used, indent=1))

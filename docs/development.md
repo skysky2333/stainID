@@ -202,4 +202,6 @@ routes:
 
 - Errors are not caught to be hidden; a failing step fails loudly and the job shows its log.
 - Tables are CSV, written atomically (`stainid.tables.write_csv` / `write_records`).
-- Paths in tables are relative to the project root.
+- Paths in tables are relative to the project root (`Project.relative` / `stainid.project.stored_path`; absolute only for a
+  file that shares no folder with the project), and read back with `Project.locate` (`located_path`). Code works with
+  full paths and converts only where a table is read or written.

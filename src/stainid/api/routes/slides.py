@@ -28,7 +28,7 @@ def _tma_key(tma: str) -> tuple:
 
 def known_tmas(project) -> list[str]:
     """The TMAs the project already knows: in the slides table, on a saved map or in the core table."""
-    found = {r.get("tma", "") for r in read_slides(project.input("slides_table"))}
+    found = {r.get("tma", "") for r in read_slides(project.input("slides_table"), project.root)}
     for key in ("tma_layout", "core_manifest"):
         path = project.input(key)
         if path.exists():
@@ -48,10 +48,10 @@ def slides() -> dict:
     project = get_state().project
     folder = project.input("slides_dir")
     stains = list(project.stains)
-    rows = slide_rows(folder, project.input("slides_table"), stains, _prefix(project, folder))
+    rows = slide_rows(folder, project.input("slides_table"), stains, _prefix(project, folder), project.root)
     return {"folder": project.relative(folder), "folder_path": str(folder), "folder_exists": folder.is_dir(), "stains": stains,
             "saved": project.input("slides_table").exists(), "rows": rows, "tmas": known_tmas(project),
-            "missing": [r for r in read_slides(project.input("slides_table")) if not Path(r["slide_path"]).exists()],
+            "missing": [r for r in read_slides(project.input("slides_table"), project.root) if not Path(r["slide_path"]).exists()],
             "tma_prefix": project.tma_prefix, "prefix_guess": guess_prefix(find_slides(folder), stains),
             "table": project.relative(project.input("slides_table"))}
 
@@ -60,7 +60,8 @@ def slides() -> dict:
 def save(request: SlideRows) -> dict:
     project = get_state().project
     try:
-        save_slides(project.input("slides_table"), [{k: v for k, v in r.items() if isinstance(v, str)} for r in request.rows], list(project.stains))
+        save_slides(project.input("slides_table"), [{k: v for k, v in r.items() if isinstance(v, str)} for r in request.rows], list(project.stains),
+                    project.root)
     except ValueError as error:
         raise HTTPException(400, str(error))
     reload_project(project.root)
@@ -72,7 +73,8 @@ def picture(path: str, size: int = 320) -> Response:
     """A small picture of one scan (its overview and label, or the Find cores preview), for recognising it by its label."""
     state = get_state()
     project = state.project
-    known = {str(p) for p in find_slides(project.input("slides_dir"))} | {r["slide_path"] for r in read_slides(project.input("slides_table"))}
+    known = ({str(p) for p in find_slides(project.input("slides_dir"))}
+             | {r["slide_path"] for r in read_slides(project.input("slides_table"), project.root)})
     if path not in known:
         raise HTTPException(404, "not a scan of this project")
     slide = Path(path)

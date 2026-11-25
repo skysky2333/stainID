@@ -25,7 +25,7 @@ the file name where it says it) or from an uploaded spreadsheet.
 | column | |
 |---|---|
 | `image_id` | a unique name, kept exactly as written (a dataset's annotations name images by it); made from the file name when empty |
-| `path` | the file, absolute or relative to the project; it is read where it lies and never copied or changed |
+| `path` | the file, relative to the project (absolute only when it shares no folder with it); it is read where it lies and never copied or changed |
 | `stain` | the stain as the lab calls it (6E10, 4G8, NAB228, AT8, PHF-1, NeuN, …); a slide with two stains is written `AT8+pTDP-43` |
 | `donor_id` | the donor (required) |
 | `region` | brain region (optional); results are per donor and region (`sample_region_id = <donor>_<region>`) |
@@ -148,8 +148,8 @@ check which model family each stain is and which stainID class each label means,
 
 - its kind (`tiles` and `regions` → image set, `wsi` → whole slides) and imaging settings from dataset.yaml (a pixel
   size written as text, e.g. "per image", is left to images.csv; measured colour vectors are kept);
-- the image list, pointing at the package's files (absolute paths; nothing is copied), with the images that are
-  present now;
+- the image list, pointing at the package's files (relative to the project when the package shares a folder with it,
+  else absolute; nothing is copied), with the images that are present now;
 - a space of 20 GB for its pictures for viewing (`cache_limit_gb`, changed in Settings), so many dataset projects fit on
   one drive (and whatever the limits, every drive keeps a floor of free space: see docs/development.md);
 - the donor table from donors.csv (the diagnosis is the group when there is no group column), donor ids kept as
