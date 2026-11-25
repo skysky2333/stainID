@@ -161,7 +161,11 @@ def test_a_picture_asked_before_it_was_made_is_cut_at_once(queue, monkeypatch):
         crop.unlink()
     response = ann.get(f"/api/annotate/quick/object.jpg?tile_id={TILE}&x={DOT[0]}&y={DOT[1]}")
     assert response.status_code == 200
-    assert len(list(state.get_state().cache_dir("label_crops").glob("*.jpg"))) == 12  # the rest of the core on the way
+    crops = state.get_state().cache_dir("label_crops")
+    end = time.time() + 30  # the asked picture at once; the rest of the core is cut in the background (slower on a small machine)
+    while len(list(crops.glob("*.jpg"))) < 12 and time.time() < end:
+        time.sleep(0.1)
+    assert len(list(crops.glob("*.jpg"))) == 12
     assert ann.get("/api/annotate/quick/object.jpg?tile_id=nowhere&x=1&y=1").status_code == 404
 
 
