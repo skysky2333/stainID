@@ -80,9 +80,7 @@ def test_object_medians_need_the_outline_measures_minimum():
 
 
 def test_texture_columns_are_labelled_and_say_why_they_are_missing():
-    from stainid.analysis.dictionary import describe, measure
-
-    from stainid.analysis.dictionary import TOPICS, family
+    from stainid.analysis.dictionary import TOPICS, describe, family, measure
 
     for prefix in ("plaque", "tau_neuron", "neun_soma"):
         for column in (f"{prefix}_rad_glcm_joint_entropy_median", f"{prefix}_rad_field_firstorder_mean"):
