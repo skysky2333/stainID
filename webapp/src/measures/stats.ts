@@ -4,14 +4,19 @@
 export interface Icc { icc: number; pairs: number; source: 'results' | 'study' | 'computed'; scale: 'log' | 'raw' | null; file?: string; unique_variance?: number }
 export interface GroupTest {
   effect: number; p: number; fdr: number; n: number | null; n_first: number | null; n_second: number | null; terms: string[]; file?: string
+  family?: string; family_size?: number  // corrected within a family of its own (object texture), not with every measure
 }
 export interface TestModel { key: string; terms: string[]; adjusted: string; source: 'study' | 'quick'; default: boolean }
 export interface Comparison {
   key: string; first: string; second: string; within: string; models: TestModel[]; tests: Record<string, Record<string, GroupTest>>
 }
-export interface TableStats { icc: Record<string, Icc>; comparisons: Comparison[]; icc_files: string[]; contrast_files: string[] }
+export interface TableStats { icc: Record<string, Icc>; comparisons: Comparison[]; icc_files: string[]; contrast_files: string[]; families?: Record<string, string> }
 
 export const QUICK = 'quick'
+
+/** " FDR among the object texture measures only (60 tested)." for a test corrected within a family of its own, else ''. */
+export const familyNote = (stats: TableStats, test: GroupTest) =>
+  test.family ? ` FDR among ${stats.families?.[test.family] ?? `the ${test.family} measures`} only (${test.family_size} tested).` : ''
 
 /** What the measure list shows: everything (the default), or only measures that differ between two groups and/or whose
  *  replicate cores agree well enough. A measure with no agreement measured is never hidden by the second. */

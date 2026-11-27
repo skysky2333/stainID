@@ -10,7 +10,7 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException
 
 from stainid.analysis import measure_stats as ms
-from stainid.analysis.dictionary import TOPICS, describe, measure
+from stainid.analysis.dictionary import FAMILIES, TOPICS, describe, family, measure
 from stainid.api.state import get_state
 from stainid.api.util import records
 from stainid.setup.naming import Groups
@@ -358,7 +358,7 @@ def table_stats(name: str) -> dict:
             for first, second in ms.comparisons(present, kinds):
                 comparisons.append(_comparison(shown, tested, (first, second), kinds, specs, inputs_read))
     result = {"icc": icc, "comparisons": comparisons, "icc_files": [project.relative(p) for p in [*([given] if given else []), *icc_files]],
-              "contrast_files": [project.relative(base / s.file) for s in specs]}
+              "contrast_files": [project.relative(base / s.file) for s in specs], "families": FAMILIES}
     with _lock:
         _stats[name] = (stamp, result)
     return result
@@ -378,7 +378,7 @@ def _comparison(shown: pd.DataFrame, measures: list[str], pair: tuple[str, str],
             for model, test in by_model.items():
                 tests.setdefault(column, {}).setdefault(model, {**test, "file": project.relative(base / spec.file)})
         within = within or spec.within
-    quick = ms.quick_tests(shown, [m for m in measures if m not in tests], *pair)
+    quick = ms.quick_tests(shown, [m for m in measures if m not in tests], *pair, family=family)
     for column, test in quick.items():
         tests.setdefault(column, {})[ms.QUICK] = test
     models = sorted({m for by_model in tests.values() for m in by_model if m != ms.QUICK}, key=lambda m: len(ms.model_terms(m)))

@@ -69,6 +69,11 @@ def test_fdr_and_quick_test():
     assert ms.quick_test(few, "tau_neuron_density_mm2", "AD", "CT") is None
     only_ad_tmas = regions[~((regions.tma == "3") & (regions.disease_group == "ASYMP"))]  # TMA 3 without ASYMAD donors is left out
     assert ms.quick_test(only_ad_tmas, "tau_neuron_density_mm2", "AD", "ASYMP")["n"] == 48
+    together = ms.quick_tests(regions, ["tau_neuron_density_mm2", "noise_um2"], "AD", "ASYMP")
+    apart = ms.quick_tests(regions, ["tau_neuron_density_mm2", "noise_um2"], "AD", "ASYMP", family=lambda column: column)
+    assert together["tau_neuron_density_mm2"]["fdr"] > together["tau_neuron_density_mm2"]["p"]  # corrected for the two measures
+    assert all(np.isclose(test["fdr"], test["p"]) for test in apart.values())  # a family each: nothing to correct for
+    assert "family" not in together["noise_um2"] and apart["noise_um2"]["family"] == "noise_um2" and apart["noise_um2"]["family_size"] == 1
     assert ms.comparisons(["CT", "ASYMP", "AD"], {"AD": "AD", "ASYMP": "ASYMP", "CT": "CT"}) == [("AD", "ASYMP"), ("AD", "CT"), ("ASYMP", "CT")]
     assert ms.comparisons(["A", "B"], {}) == [("B", "A")]
     assert ms.adjustment(ms.model_terms(ms.FULL_MODEL)) == "amyloid burden, age, APOE ε4, brain region and TMA"

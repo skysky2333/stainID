@@ -287,11 +287,18 @@ def study_tests(shown: pd.DataFrame, spec: StudyContrasts, table: pd.DataFrame, 
     return out
 
 
-def quick_tests(shown: pd.DataFrame, columns: list[str], first: str, second: str) -> dict[str, dict]:
+def quick_tests(shown: pd.DataFrame, columns: list[str], first: str, second: str,
+                family: Callable[[str], str] = lambda column: "") -> dict[str, dict]:
+    """The quick test of every column, each with its FDR within its family of measures (`family` names a column's:
+    measures of one family are corrected together, apart from the others; a test of a named family says which and how
+    many measures it was corrected for)."""
     tests = {c: t for c in columns if (t := quick_test(shown, c, first, second))}
-    adjusted = fdr(pd.Series({c: t["p"] for c, t in tests.items()}, dtype=float))
-    for column, test in tests.items():
-        test["fdr"] = float(adjusted[column])
+    p = pd.Series({c: t["p"] for c, t in tests.items()}, dtype=float)
+    for name, members in p.groupby(p.index.map(family)):
+        for column, adjusted in fdr(members).items():
+            tests[column]["fdr"] = float(adjusted)
+            if name:
+                tests[column] |= {"family": name, "family_size": len(members)}
     return tests
 
 

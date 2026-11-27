@@ -1,7 +1,7 @@
 import { useProject } from '../project'
 import { Advanced } from '../setup/parts'
 import type { Comparison, Icc, MeasureFilter, TableStats } from './stats'
-import { ICC_HELP, ICC_MEANING, NO_ICC_HELP, QUICK, chosenComparison, chosenModel, formatEffect, formatP, iccHover, iccLevel, isSignificant, testOf, testSource } from './stats'
+import { ICC_HELP, ICC_MEANING, NO_ICC_HELP, QUICK, chosenComparison, chosenModel, familyNote, formatEffect, formatP, iccHover, iccLevel, isSignificant, testOf, testSource } from './stats'
 
 /** "ICC 0.74", coloured good / fair / weak, with what it means on hover; "not measured" without one. */
 export function IccChip({ icc, long = false }: { icc: Icc | undefined; long?: boolean }) {
@@ -38,7 +38,7 @@ export function TestLine({ stats, filter, column }: { stats: TableStats; filter:
     <p className="small test-line">
       <span className={`test-mark${significant ? ' significant' : ''}`}>{significant ? `Significant, ${filter.basis === 'p' ? 'p' : 'FDR'} < ${filter.level}` : 'Not significant'}</span>
       {' '}<b>{name(comparison)}: {formatEffect(test.effect)}</b>, p {formatP(test.p)}, FDR {formatP(test.fdr)}
-      <span className="secondary"> — {testSource(model, quick, test.terms)}. {comparison.within}</span>
+      <span className="secondary"> — {testSource(model, quick, test.terms)}. {comparison.within}{familyNote(stats, test)}</span>
     </p>
   )
 }
@@ -71,7 +71,7 @@ export function GroupDifferences({ stats, filter, column }: { stats: TableStats;
         </table>
       </div>
       <p className="muted small chart-note">Difference: first group minus second, in standard deviations of the measure (densities on a log scale).
-        FDR is the p value corrected for testing many measures. {rows[0].comparison.within}</p>
+        FDR is the p value corrected for testing many measures.{familyNote(stats, rows[0].found!.test)} {rows[0].comparison.within}</p>
     </section>
   )
 }

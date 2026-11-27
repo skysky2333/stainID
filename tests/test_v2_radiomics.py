@@ -82,10 +82,15 @@ def test_object_medians_need_the_outline_measures_minimum():
 def test_texture_columns_are_labelled_and_say_why_they_are_missing():
     from stainid.analysis.dictionary import describe, measure
 
-    for prefix, topic in (("plaque", "plaques"), ("tau_neuron", "tau"), ("neun_soma", "neurons")):
+    from stainid.analysis.dictionary import TOPICS, family
+
+    for prefix in ("plaque", "tau_neuron", "neun_soma"):
         for column in (f"{prefix}_rad_glcm_joint_entropy_median", f"{prefix}_rad_field_firstorder_mean"):
-            found = measure(column)
-            assert describe(column) and found["topic"] == topic and found["outline"] and "texture" in found["label"]
+            found, whole = measure(column), measure(f"{column}_whole_core")
+            assert describe(column) and found["topic"] == "texture" in TOPICS and "texture" in found["label"]  # a section of their own
+            assert whole["topic"] == "texture" and whole["label"] == f"{found['label']}, whole core" and whole["description"]
+            assert family(column) == family(f"{column}_whole_core") == "texture"  # and their own FDR family
+    assert family("plaque_area_median_um2") == family("plaque_area_median_um2_whole_core") == ""
     ran = {"tiles_6E10": 2, "plaque_texture_fields": 4, "plaque_textured": 3, "plaque_texture_fields_with_objects": 2}
     assert missing._reason("plaque_rad_glcm_joint_entropy_median", "a", {"a": ran}, None) == ("too_few_objects", 3)
     assert missing._reason("plaque_rad_field_glcm_joint_entropy", "a", {"a": {**ran, "plaque_texture_fields_with_objects": 0}}, None) == \

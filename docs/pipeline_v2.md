@@ -675,9 +675,12 @@ and the group tests are the Results page's.
   and says how many it left empty.
 - **Running it.** Off in "Run what's left" unless `v2.radiomics.enabled: true`; it can always be run by hand. Install:
   `pip install versioneer && pip install --no-build-isolation -c constraints.txt -e ".[radiomics]"` (pyradiomics ships
-  only a source package). The texture columns appear under each stain's outline measures on the Results page.
-- **Statistics.** The Results page's group tests correct across every measure in the table (Benjamini–Hochberg), so the
-  30 texture columns (5 features × 2 units × 3 stains) widen that family for every measure.
+  only a source package). The texture columns are a section of their own on the Results page (*Object texture*).
+- **Statistics.** The Results page's quick group tests correct the texture measures among themselves
+  (Benjamini–Hochberg; `stainid.analysis.dictionary.family`) and every other measure without them. The 30 texture
+  columns (5 features × 2 units × 3 stains; 60 with their whole-core twins) therefore do not widen the other measures'
+  family. They overlap heavily (on the TMA study, 30 columns behave like about 11 independent tests, and each stain's
+  follow that stain's density, dense-core share or maturity), so read a texture difference next to the measure it follows.
 
 ### Tangle spacing, thread ownership, pathology in white matter
 

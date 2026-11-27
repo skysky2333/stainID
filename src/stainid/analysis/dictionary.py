@@ -150,6 +150,7 @@ TOPICS = {
     "neurons": "Neurons (NeuN)",
     "plaques": "Amyloid plaques (6E10)",
     "tau": "Tau (AT8)",
+    "texture": "Object texture (pyradiomics)",
     "tissue": "Tissue measured and quality",
     "spatial": "Spatial interactions (what lies next to what)",
     "other": "Other measures",
@@ -410,18 +411,21 @@ MASK_LABEL = {  # suffix: (label with {} for the object, unit)
     "mask_mature_fraction": ("Mature tangles from outlines", FRACTION),
 }
 # object texture (`stainid.v2.radiomics`): pyradiomics features of each object's outline on its DAB stain, per object
-# (median) and per field (one mask of all the field's objects); listed with the outline measures
+# (median) and per field (one mask of all the field's objects). They are a section of their own on the Results page
+# and their own family for the FDR of the group tests (`family`): each stain's five features largely repeat one
+# another and the stain's amount, so they should neither widen the other measures' family nor borrow from it.
+WHOLE = "_whole_core"  # `stainid.v2.missing.WHOLE`: the same measure with the white matter counted
 TEXTURE_COLUMNS: set[str] = set()
 for _stain, _prefix in _radiomics.PREFIX.items():
-    _noun, _topic = MASK_OBJECT[_prefix]
+    _noun = MASK_OBJECT[_prefix][0]
     for _key, (_stem, _label, _unit, _meaning) in _radiomics.FEATURES.items():
         _median, _field = f"{_prefix}_rad_{_stem}_median", f"{_prefix}_rad_field_{_stem}"
         COLUMNS[_median] = (f"Median over {_noun}s of their texture (pyradiomics {_key.split('_')[1]}): {_meaning}; each {_noun} measured inside "
                             f"its own Segment Anything outline on the DAB stain (0–255 scale).")
         COLUMNS[_field] = (f"Texture (pyradiomics {_key.split('_')[1]}) of all {_noun}s of a field together, one mask per field: {_meaning}; "
                            f"mean over fields weighted by outlined area.")
-        LABELS[_median] = (f"{_sentence_noun(_noun)} texture: {_label}, median", _unit, _topic)
-        LABELS[_field] = (f"{_sentence_noun(_noun)} texture, whole field: {_label}", _unit, _topic)
+        LABELS[_median] = (f"{_sentence_noun(_noun)} texture: {_label}, median", _unit, "texture")
+        LABELS[_field] = (f"{_sentence_noun(_noun)} texture, whole field: {_label}", _unit, "texture")
         TEXTURE_COLUMNS |= {_median, _field}
 UNIT_SUFFIX = (  # for other columns: (suffix, words it becomes in the label, unit)
     ("_density_mm2", " density", "per mm²"), ("_mm_per_mm2", "", "mm per mm²"), ("_um2", "", "µm²"), ("_mm2", "", "mm²"),
@@ -433,9 +437,26 @@ def _sentence(text: str) -> str:
     return text[:1].upper() + text[1:]
 
 
+def texture(column: str) -> bool:
+    """An object texture measure (grey matter only or whole core)."""
+    return column.removesuffix(WHOLE) in TEXTURE_COLUMNS
+
+
+FAMILIES = {"texture": "the object texture measures"}  # family: how the Results page names it
+
+
+def family(column: str) -> str:
+    """The family of measures a column's group tests are corrected within: the object texture measures are one of
+    their own, every other measure is in the main family ("")."""
+    return "texture" if texture(column) else ""
+
+
 def measure(column: str) -> dict:
     """How to show one table column: a readable label, its unit, its topic and what it means."""
-    info = {"column": column, "description": describe(column), "key": column in KEY_MEASURES, "outline": column in TEXTURE_COLUMNS}
+    info = {"column": column, "description": describe(column), "key": column in KEY_MEASURES, "outline": False}
+    if texture(column) and column not in LABELS:  # the whole-core twin of a texture measure: same section
+        label, unit, topic = LABELS[column.removesuffix(WHOLE)]
+        return {**info, "description": describe(column.removesuffix(WHOLE)), "label": f"{label}, whole core", "unit": unit, "topic": topic}
     if column in LABELS:
         label, unit, topic = LABELS[column]
         return {**info, "label": label, "unit": unit, "topic": topic}
